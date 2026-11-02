@@ -30,12 +30,11 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 /** 在独立页面上下文执行列表的实际生命周期，模拟详情卸载后列表仍然存活。 */
 function homeFixture(consumeArchiveSuccessNotice) {
   const source = fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8');
-  const lifecycle = source.slice(source.indexOf('// 归档反馈属于列表页面'), source.indexOf('// 列表状态来自实际读取结果'));
-  const timers = new Map(), callbacks = {};
-  let timerId = 0;
-  const context = { consumeArchiveSuccessNotice, archiveSuccessVisible: { value: false }, archiveSuccessTimer: 0, pageVisible: { value: false }, editingNewConversation: { value: false }, statusTimer: 0, restoreThreadScroll() {}, updateClock() {}, closeComputerMenu() {}, clearInterval() {}, setInterval: () => 1, setTimeout: (callback, duration) => { timers.set(++timerId, { callback, duration }); return timerId; }, clearTimeout: id => timers.delete(id), onShow: callback => { callbacks.show = callback; }, onHide: callback => { callbacks.hide = callback; }, onUnload: callback => { callbacks.unload = callback; } };
+  const lifecycle = source.slice(source.indexOf('// 归档反馈由列表页显示'), source.indexOf('// 列表状态来自实际读取结果'));
+  const renders = [], toasts = [], callbacks = {};
+  const context = { consumeArchiveSuccessNotice, archiveToastRequest: 0, pageVisible: { value: false }, editingNewConversation: { value: false }, statusTimer: 0, restoreThreadScroll() {}, updateClock() {}, closeComputerMenu() {}, clearInterval() {}, setInterval: () => 1, nextTick: callback => renders.push(callback), uni: { showToast: options => toasts.push(options) }, onShow: callback => { callbacks.show = callback; }, onHide: callback => { callbacks.hide = callback; }, onUnload: callback => { callbacks.unload = callback; } };
   vm.runInNewContext(stripTypeScriptTypes(lifecycle, { mode: 'transform' }), context);
-  return { ...callbacks, visible: context.archiveSuccessVisible, timers };
+  return { ...callbacks, toasts, render: () => { renders.splice(0).forEach(callback => callback()); } };
 }
 
 test('菜单归档可取消，重复点击不叠加提交，确认成功后才返回列表且保留草稿', async () => {
@@ -49,10 +48,14 @@ test('菜单归档可取消，重复点击不叠加提交，确认成功后才�
   assert.equal(f.context.returned, 1); assert.deepEqual(Array.from(f.context.connection.threads, item => item.id), ['other']);
   assert.equal(f.context.connection.snapshot, null); assert.equal(f.context.connection.activeThreadId, ''); assert.equal(f.context.draft, '保留的草稿');
   assert.equal(f.context.loadingEvents.at(-1), '关闭'); assert.equal(f.context.notices.length, 0);
-  assert.equal(f.home.visible.value, true);
+  assert.equal(f.home.toasts.length, 0);
+  f.home.render();
+  assert.equal(f.home.toasts.length, 1);
+  assert.equal(f.home.toasts[0].title, '归档成功');
+  assert.equal(f.home.toasts[0].icon, 'success');
 });
 
-test('返回或重开列表由列表生命周期显示成功提示，详情卸载和加载框清理不移除提示', async () => {
+test('返回或重开列表渲染完成后才调用自带成功图标 Toast，调用不属于已卸载详情', async () => {
   for (const reopen of [false, true]) {
     const f = fixture();
     let navigation;
@@ -62,20 +65,20 @@ test('返回或重开列表由列表生命周期显示成功提示，详情卸�
     f.respond({ threadId: 'thread', archived: true }); await flush();
     assert.ok(navigation);
     if (reopen) assert.equal(navigation.url, '/pages/index/index');
-    assert.equal(f.home.visible.value, false, '列表显示前只交接结果');
+    assert.equal(f.home.toasts.length, 0, '列表显示前只交接结果');
     assert.equal(f.context.notices.length, 0, '详情页不显示成功提示');
     const home = reopen ? f.createHome() : f.home;
     home.show();
     f.context.unloadCallbacks.forEach(callback => callback());
     f.context.uni.hideLoading();
-    assert.equal(home.visible.value, true, '提示属于列表，不随详情和全局加载框销毁');
-    assert.equal(home.timers.size, 1);
-    const timer = [...home.timers.values()][0];
-    assert.equal(timer.duration, 3000);
-    timer.callback();
-    assert.equal(home.visible.value, false);
-    home.show();
-    assert.equal(home.visible.value, false, '旧结果只能消费一次');
+    assert.equal(home.toasts.length, 0, '列表渲染完成前不弹出提示');
+    home.render();
+    assert.equal(home.toasts.length, 1);
+    assert.equal(home.toasts[0].title, '归档成功');
+    assert.equal(home.toasts[0].icon, 'success');
+    assert.equal(home.toasts[0].duration, 3000);
+    home.show(); home.render();
+    assert.equal(home.toasts.length, 1, '旧结果只能消费一次');
   }
 });
 
@@ -85,19 +88,19 @@ test('导航失败时在详情提示实际归档结果，并清除待交接提�
   f.archiveFromMenu(); f.modal().success({ confirm: true });
   f.respond({ threadId: 'thread', archived: true }); await flush();
   assert.deepEqual(f.context.notices, ['归档成功']);
-  f.home.show();
-  assert.equal(f.home.visible.value, false);
+  f.home.show(); f.home.render();
+  assert.equal(f.home.toasts.length, 0);
 });
 
-test('列表隐藏或卸载时停止提示计时，再次显示不会重复提示', async () => {
+test('列表在渲染前隐藏或卸载时取消待显示 Toast，再次显示不会重复提示', async () => {
   for (const leave of ['hide', 'unload']) {
     const f = fixture();
     f.archiveFromMenu(); f.modal().success({ confirm: true });
     f.respond({ threadId: 'thread', archived: true }); await flush();
-    assert.equal(f.home.visible.value, true);
+    assert.equal(f.home.toasts.length, 0);
     f.home[leave]();
-    assert.equal(f.home.visible.value, false); assert.equal(f.home.timers.size, 0);
-    f.home.show(); assert.equal(f.home.visible.value, false);
+    f.home.render(); assert.equal(f.home.toasts.length, 0);
+    f.home.show(); f.home.render(); assert.equal(f.home.toasts.length, 0);
   }
 });
 
@@ -115,7 +118,7 @@ test('明确失败和未知结果均保留当前页面、列表与草稿，未�
     assert.equal(f.context.operationError.value, unknown ? '结果待核对' : '归档失败');
     assert.equal(f.context.connection.error, '');
     assert.equal(f.context.loadingEvents.at(-1), '关闭'); assert.notEqual(f.context.notices.at(-1), '归档成功');
-    f.home.show(); assert.equal(f.home.visible.value, false);
+    f.home.show(); f.home.render(); assert.equal(f.home.toasts.length, 0);
   }
 });
 
@@ -126,7 +129,7 @@ test('离开页面后的成功回执不导航其他页面，也不清空另一�
   f.respond({ threadId: 'thread', archived: true }); await flush();
   assert.equal(f.context.returned, 0); assert.equal(f.context.connection.threads.length, 2); assert.equal(f.context.connection.activeThreadId, 'thread');
   assert.equal(f.context.loadingEvents.length, count); assert.equal(f.context.notices.length, 0);
-  f.home.show(); assert.equal(f.home.visible.value, false);
+  f.home.show(); f.home.render(); assert.equal(f.home.toasts.length, 0);
 });
 
 test('归档后使在途多电脑列表回执失效，同号会话只从归档电脑移除', async () => {

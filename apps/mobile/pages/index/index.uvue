@@ -43,7 +43,6 @@
     <view v-if="!editingNewConversation" class="new-entry-dock"><view class="new-entry action-frame"><text class="new-entry-plus">＋</text><text class="new-entry-placeholder">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="openNewConversation"></button></view><view class="entry-safe-area"></view></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
     <new-conversation v-if="editingNewConversation" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
-    <view v-if="archiveSuccessVisible" class="archive-success" role="status" aria-label="归档成功"><app-icon name="check" :size="22" tone="light" /><text class="archive-success-text">归档成功</text></view>
   </view>
 </template>
 
@@ -94,8 +93,7 @@ const dayStart = ref(0)
 const currentTime = ref(Date.now())
 let statusTimer = 0
 const pageVisible = ref(false)
-const archiveSuccessVisible = ref(false)
-let archiveSuccessTimer = 0
+let archiveToastRequest = 0
 // 筛选只影响列表；当前执行电脑在打开会话或新建编辑区时才切换。
 const selectedComputers = computed((): ComputerThreads[] => threadList.computers.filter((entry: ComputerThreads): boolean => selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value))
 const allVisibleThreads = computed((): ComputerThread[] => visibleComputerThreads(selectedComputerId.value, ''))
@@ -134,13 +132,13 @@ function updateClock() {
 // 显隐期间原生滚动容器可能收紧最大偏移，恢复时显式回到用户离开的位置。
 function restoreThreadScroll() { restoringThreadScroll = true; nextTick(() => { threadScrollTop.value = savedThreadScrollTop; nextTick(() => { restoringThreadScroll = false }) }) }
 
-// 归档反馈属于列表页面，自行渲染并计时，避免被详情页关闭时的全局提示清理影响。
-function hideArchiveSuccessNotice() { clearTimeout(archiveSuccessTimer); archiveSuccessTimer = 0; archiveSuccessVisible.value = false }
+// 归档反馈由列表页显示；等列表渲染完成后调用原生接口，避免绑定到正在关闭的详情页。
 function showArchiveSuccessNotice() {
   if (!consumeArchiveSuccessNotice()) return
-  hideArchiveSuccessNotice()
-  archiveSuccessVisible.value = true
-  archiveSuccessTimer = setTimeout(() => { archiveSuccessVisible.value = false; archiveSuccessTimer = 0 }, 3000)
+  const request = ++archiveToastRequest
+  nextTick(() => {
+    if (pageVisible.value && request == archiveToastRequest) uni.showToast({ title: '归档成功', icon: 'success', duration: 3000 })
+  })
 }
 
 onShow(() => {
@@ -151,8 +149,8 @@ onShow(() => {
   clearInterval(statusTimer)
   statusTimer = setInterval(() => { updateClock() }, 60000)
 })
-onHide(() => { pageVisible.value = false; hideArchiveSuccessNotice(); closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
-onUnload(() => { hideArchiveSuccessNotice(); closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
+onHide(() => { pageVisible.value = false; archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
+onUnload(() => { pageVisible.value = false; archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
 
 // 列表状态来自实际读取结果，当前订阅会话优先采用实时快照。
 function threadState(thread: ComputerThread): string {
@@ -245,9 +243,6 @@ onBackPress((): boolean => { if (editingComputerId.value.length > 0) { if (!conn
 .clear-search { width: 44px; height: 44px; align-items: center; justify-content: center; }
 .notice { margin: 8px 16px 0; padding: 12px; border-radius: 12px; background-color: #fff1e9; flex-shrink: 0; }
 .notice-text { font-size: 12px; line-height: 18px; color: #8d4d2b; }
-/* 提示由列表节点持有，独立于 uni.showToast 和详情页生命周期。 */
-.archive-success { position: absolute; left: 100px; right: 100px; bottom: 110px; padding: 12px; border-radius: 12px; background-color: #202c28; flex-direction: row; align-items: center; justify-content: center; z-index: 20; }
-.archive-success-text { color: #ffffff; font-size: 14px; line-height: 22px; margin-left: 8px; }
 .thread-list { flex: 1; height: 0; min-height: 0; }
 .list-content { padding: 0 16px; }
 .thread-group { margin-top: 8px; }
