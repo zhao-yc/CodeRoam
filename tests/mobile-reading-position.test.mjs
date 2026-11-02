@@ -9,8 +9,8 @@ const message=(id,text=id)=>({id,text,role:'assistant',turnId:'turn',phase:'comm
 /** 使用真实页面的布局链，控制 DOM 更新时机，覆盖手势与异步回调的竞态。 */
 function fixture(){
  const ticks=[],watches=[],unloads=[],rects=new Map([['message-a',{top:-20,bottom:80}],['message-b',{top:100,bottom:600}]]);
- const state={bottom:600},connection={hostId:'pc',activeThreadId:'thread',connected:true,snapshot:{threadId:'thread',messages:[message('a'),message('b')],turns:[],approvals:[],questionGroups:[],activeTurnId:'turn'}};
- const c=vm.createContext({setTimeout,clearTimeout,connection,bridge:{cancelOpen(){}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),nextTick:fn=>ticks.push(fn),onLoad(){},onShow(){},onHide(){},onResize(){},onBackPress(){},onUnload:fn=>unloads.push(fn),readDraft:()=>'',uni:{getWindowInfo:()=>({windowWidth:390}),getElementById:id=>{const rect=id==='conversation-timeline'?{top:0,bottom:500,height:500}:id==='timeline-bottom'||id==='timeline-message-end'?{top:state.bottom,bottom:state.bottom}:rects.get(id);return rect?{getBoundingClientRect:()=>rect}:null;}}});
+ const state={bottom:600,scrollTop:undefined},connection={hostId:'pc',activeThreadId:'thread',connected:true,snapshot:{threadId:'thread',messages:[message('a'),message('b')],turns:[],approvals:[],questionGroups:[],activeTurnId:'turn'}};
+ const c=vm.createContext({setTimeout,clearTimeout,connection,bridge:{cancelOpen(){}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),nextTick:fn=>ticks.push(fn),onLoad(){},onShow(){},onHide(){},onResize(){},onBackPress(){},onUnload:fn=>unloads.push(fn),readDraft:()=>'',uni:{getWindowInfo:()=>({windowWidth:390}),getElementById:id=>{const rect=id==='conversation-timeline'?{top:0,bottom:500,height:500}:id==='timeline-bottom'||id==='timeline-message-end'?{top:state.bottom,bottom:state.bottom}:rects.get(id);return rect?{getBoundingClientRect:()=>rect,...(id==='conversation-timeline'?{scrollTop:state.scrollTop}:{})}:null;}}});
  for(const name of ['history','turn-failure','annotations','message-attachments','message-presentations','executions'])vm.runInContext(stripTypeScriptTypes(uts(name),{mode:'transform'}),c);
  const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.p={pageHostId,pageThreadId,pageVisible,following,hasUnseenBelow,atTimelineBottom,readingFloor,historyScrollTop,scrollTarget,displayConversation,expandedReportIds,beforeMarkdownLayout,afterMarkdownLayout,beginTimelineTouch,endTimelineTouch,onTimelineScroll,updateTimelinePosition,resumeFollowing,rememberReadingPosition};',c);
@@ -24,6 +24,11 @@ test('完全相同的快照与骨架消失不滚动、不产生未读，仍保�
  const f=fixture();f.p.onTimelineScroll({detail:{scrollTop:300,scrollHeight:900}});f.update(()=>{});f.flush();
  assert.equal(f.p.historyScrollTop.value,0);assert.equal(f.p.hasUnseenBelow.value,false);assert.equal(f.p.following.value,false);assert.equal(f.p.readingFloor.value,800);
  f.p.beforeMarkdownLayout();f.state.bottom=550;f.p.afterMarkdownLayout();f.flush();assert.equal(f.p.historyScrollTop.value,0);assert.equal(f.p.hasUnseenBelow.value,false);
+});
+
+test('程序定位已完成而 scroll 回调尚未到达时，使用实际距离，不跳回旧事件位置',()=>{
+ const f=fixture();f.state.scrollTop=300;f.p.beforeMarkdownLayout();f.rects.set('message-a',{top:32,bottom:132});f.rects.set('message-b',{top:152,bottom:652});f.state.bottom=652;f.p.afterMarkdownLayout();f.flush();
+ assert.equal(f.p.historyScrollTop.value,352);assert.equal(f.p.readingFloor.value,852);assert.equal(f.p.hasUnseenBelow.value,false);
 });
 
 test('下方追加与流式增长显示原有箭头；手动到底只清提示，箭头显式恢复跟随',()=>{

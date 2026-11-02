@@ -684,6 +684,8 @@ let readingPosition: ReadingPosition | null = null
 let pendingReadingPosition: ReadingPosition | null = null
 let readingCorrectionRevision = 0
 let readingCorrectionPending = false
+// 锚点定位可能先于 scroll 回调完成，保位必须读取容器当前距离，不能只信任上次事件。
+function timelineScrollPosition(): number { return (uni.getElementById('conversation-timeline') as UniScrollViewElement | null)?.scrollTop ?? lastScrollTop }
 // 以消息编号和视口偏移保存后续候选；首条被移除时顺延，全部失效则保留滚动距离。
 function captureReadingPosition(entries: TimelineEntry[] = timeline.value): ReadingPosition | null {
   const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
@@ -697,7 +699,7 @@ function captureReadingPosition(entries: TimelineEntry[] = timeline.value): Read
     if (visible) anchors.push({ id: entryAnchor(entry), offset: rect.top - viewport.top })
   })
   const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect()
-  return { anchors, top: lastScrollTop, gesture: historyGesture, height: viewport.height, bottom: bottom == null ? 0 : bottom.bottom - viewport.top }
+  return { anchors, top: timelineScrollPosition(), gesture: historyGesture, height: viewport.height, bottom: bottom == null ? 0 : bottom.bottom - viewport.top }
 }
 function rememberReadingPosition() { if (!readingCorrectionPending && !touchingTimeline) readingPosition = captureReadingPosition() }
 function cancelReadingCorrection() { readingCorrectionRevision++; readingCorrectionPending = false; pendingReadingPosition = null; readingPosition = null }
@@ -732,17 +734,18 @@ function afterMarkdownLayout() {
     if (viewport == null) { readingCorrectionPending = false; return }
     const anchor = saved.anchors.find((item: ReadingAnchor): boolean => uni.getElementById(item.id) != null)
     const rect = anchor == null ? null : uni.getElementById(anchor.id)?.getBoundingClientRect()
-    const target = Math.max(0, rect == null ? saved.top : lastScrollTop + rect.top - viewport.top - anchor!.offset)
+    const actualTop = timelineScrollPosition()
+    const target = Math.max(0, rect == null ? saved.top : actualTop + rect.top - viewport.top - anchor!.offset)
     readingFloor.value = target + viewport.height
     const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect()
-    const actualBottom = bottom == null ? saved.bottom : bottom.bottom - viewport.top - (target - lastScrollTop)
+    const actualBottom = bottom == null ? saved.bottom : bottom.bottom - viewport.top - (target - actualTop)
     // 骨架与保位空间均位于真实内容之后，不计入新增内容。
     if (actualBottom > saved.bottom + 2 && bottom != null && bottom.bottom > viewport.bottom + 2) hasUnseenBelow.value = true
     layoutUntil = Date.now() + 350
     const finish = () => { if (!isCurrentPage() || revision != readingCorrectionRevision || saved.gesture != historyGesture || touchingTimeline) return; readingCorrectionPending = false; pendingReadingPosition = null; updateTimelinePosition(); rememberReadingPosition() }
-    if (Math.abs(target - lastScrollTop) < 0.5) { finish(); return }
+    if (Math.abs(target - actualTop) < 0.5) { lastScrollTop = actualTop; finish(); return }
     // 属性可能与上一次补偿相同，先写当前实际位置，不使用 -1 造成无意义的上下滚动。
-    historyScrollTop.value = lastScrollTop
+    historyScrollTop.value = actualTop
     nextTick(() => { if (!isCurrentPage() || revision != readingCorrectionRevision || touchingTimeline || saved.gesture != historyGesture) return; lastScrollTop = target; historyScrollTop.value = target; nextTick(finish) })
   })
 }
