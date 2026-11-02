@@ -11,7 +11,7 @@ export function computerIcon(computer: Computer | null): string { const icon = c
 export type NotificationAction = { kind: string, id: string, turnId: string }
 export type NotificationSnapshot = { latestTurnId: string, latestTurnStatus: string, pending: NotificationAction[] }
 export type LatestTurn = { turnId: string, status: string }
-export type ThreadSummary = { latestTurn?: LatestTurn, notificationState?: NotificationSnapshot, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
+export type ThreadSummary = { contentRevision?: string, latestTurn?: LatestTurn, notificationState?: NotificationSnapshot, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
 export type ChatMessage = { id: string, role: string, kind?: string, summary?: string, phase?: string, imageCount?: number, text: string, turnId: string, status: string }
 export type ConversationTurn = { turnId: string, status: string, durationMs?: number, errorMessage?: string }
 export type Approval = { id: string, kind: string, turnId: string, title: string, detail: string, cwd: string }
@@ -410,6 +410,12 @@ class MobileBridge {
 
   request(method: string, params: UTSJSONObject, write: boolean = false): Promise<UTSJSONObject> {
     return this.requestForComputer(connection.hostId, method, params, write)
+  }
+
+  // 静默预加载只读指定电脑，不改变当前电脑、聊天、订阅或已读状态。
+  prefetchConversation(hostId: string, threadId: string): Promise<UTSJSONObject> {
+    if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
+    return this.requestForComputer(hostId, 'thread.history', { threadId, view: 'prefetch' }, false)
   }
 
   // 应用级任务先持久化原编号，再发送一次删除；请求参数仍只有 threadId。

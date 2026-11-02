@@ -16,6 +16,7 @@ import { DesktopArchiveController } from './desktop-archive.mjs';
 import { deleteThread, deletionCommandStatus, retainDeletionTarget } from './thread-delete.mjs';
 import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
+import { prefetchConversation } from './conversation-prefetch.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
@@ -120,6 +121,8 @@ export class BridgeAgent extends EventEmitter {
           this.threadListFeed.schedule();return result;
         }
         if(message.method==='thread.prediction.read')return this.predictions.read(this.adapter,message.params.threadId,message.deviceId);
+        // 静默预加载在通用历史订阅之前短路；只读取已有状态，不发布事件或改变订阅。
+        if(message.method==='thread.history'&&message.params.view==='prefetch')return prefetchConversation(this.adapter,message.params.threadId,{isDeleting:()=>this.deletingIds.has(message.params.threadId)});
         if(message.method==='thread.history'&&message.params.view==='file-report')return this.fileReports.read(this.adapter,message.params,message.deviceId);
         if(message.method==='thread.settings.read')return this.adapter.readSettings(message.params.threadId,message.deviceId);
         if(message.method==='thread.goal.read')return this.adapter.readGoal(message.params.threadId,message.deviceId);
@@ -129,7 +132,7 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='threads.list') {
           // 通过已有白名单接口扩展只读信息；显式归档标记供手机识别旧服务。
           const threads=await this.adapter.list(message.params);
-          return {threads,...(message.params.archived===true?{archived:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
+          return {threads:message.params.archived===true?threads:threads.map(row=>this.threadListFeed.contentSummary(row)),...(message.params.archived===true?{archived:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
         }
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);

@@ -68,6 +68,12 @@ export function validateRequest(message) {
     if (/[\u0000-\u001f\u007f]/.test(displayName) || !['code', 'terminal', 'laptop', 'desktop'].includes(icon) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || Object.keys(message.params).some(key => !['displayName', 'icon', 'expectedRevision'].includes(key))) throw new BridgeError('BAD_PARAMS', '连接显示信息参数无效');
     return message;
   }
+  // 沿用协议 v1 的历史方法；静默视图不能夹带订阅、分页或任何操作参数。
+  if(message.method==='thread.history'&&message.params.view!==undefined&&!['prefetch','file-report'].includes(message.params.view))throw new BridgeError('BAD_PARAMS','不支持此历史只读视图');
+  if(message.params.view==='prefetch') {
+    if(message.method!=='thread.history'||Object.keys(message.params).some(key=>!['threadId','view'].includes(key)))throw new BridgeError('BAD_PARAMS','静默预加载仅接受聊天编号和只读视图');
+    requireString(message.params.threadId,'聊天编号',200);
+  }
   if(message.params.reportId!==undefined||message.params.view==='file-report'){
     if(message.method!=='thread.history'||message.params.view!=='file-report')throw new BridgeError('BAD_PARAMS','文件报告只能通过历史只读视图查看');
     requireString(message.params.reportId,'报告编号',1000);

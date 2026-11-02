@@ -1,0 +1,93 @@
+export type PrefetchThread = { id: string, revision: string, important: boolean, terminal: boolean, attention: string }
+export type PrefetchHost = { id: string, generation: string, threads: PrefetchThread[] }
+export type PrefetchResult = { snapshot: UTSJSONObject, contentRevision: string }
+export type PrefetchJob = { key: string, namespace: string, hostId: string, threadId: string, generation: string, wanted: string, attention: string, requested: boolean, urgent: boolean, active: boolean, running: boolean, attempt: number, startedAt: number, retryAt: number }
+
+// 调度状态独立于页面和实时连接快照；只保存身份、版本和限流信息。
+export class ConversationPrefetchQueue {
+  jobs = [] as PrefetchJob[]
+  knownHosts = new Set<string>()
+  scope = ''
+  activeReads = 0
+  read: (hostId: string, threadId: string) => Promise<PrefetchResult>
+  cached: (namespace: string, hostId: string, threadId: string) => string | null
+  save: (job: PrefetchJob, result: PrefetchResult) => boolean
+  epoch: () => number
+  wake: () => void
+
+  constructor(read: (hostId: string, threadId: string) => Promise<PrefetchResult>, cached: (namespace: string, hostId: string, threadId: string) => string | null, save: (job: PrefetchJob, result: PrefetchResult) => boolean, epoch: () => number, wake: () => void) {
+    this.read = read; this.cached = cached; this.save = save; this.epoch = epoch; this.wake = wake
+  }
+
+  // 不提前释放未结束的网络请求槽位；旧回执通过对象身份与代次一起隔离。
+  reset() { this.scope = ''; this.jobs = [] as PrefetchJob[]; this.knownHosts.clear() }
+
+  // 首份列表只预热需要关注或已有旧缓存的聊天，后续才按新出现及版本变化读取。
+  observe(scope: string, namespace: string, hosts: PrefetchHost[], activeHost: string, activeThread: string) {
+    if (this.scope != scope) { this.reset(); this.scope = scope }
+    const previous = this.jobs
+    const next = [] as PrefetchJob[]
+    const retainedHosts = new Set<string>()
+    hosts.forEach((host: PrefetchHost) => {
+      const hostKey = JSON.stringify([host.id, host.generation])
+      const baseline = !this.knownHosts.has(hostKey)
+      retainedHosts.add(hostKey)
+      host.threads.forEach((thread: PrefetchThread) => {
+        if (thread.revision.length == 0) return
+        const key = JSON.stringify([host.id, host.generation, thread.id])
+        let job = previous.find((entry: PrefetchJob): boolean => entry.key == key)
+        const active = host.id == activeHost && thread.id == activeThread
+        if (job == null) {
+          const cached = this.cached(namespace, host.id, thread.id)
+          const requested = (!baseline || thread.important || cached != null) && cached != thread.revision
+          job = { key, namespace, hostId: host.id, threadId: thread.id, generation: host.generation, wanted: thread.revision, attention: thread.attention, requested, urgent: thread.important, active, running: false, attempt: 0, startedAt: -1000, retryAt: 0 } as PrefetchJob
+        } else {
+          if (job.wanted != thread.revision || job.attention != thread.attention) {
+            job.requested = true
+            if (job.attention != thread.attention && (thread.important || thread.terminal)) job.urgent = true
+            job.wanted = thread.revision; job.attention = thread.attention
+          }
+          if (active && !job.active) { job.attempt++; job.requested = false }
+          if (!active && job.active) job.requested = this.cached(namespace, host.id, thread.id) != thread.revision
+          job.active = active
+        }
+        if (active) job.requested = false
+        next.push(job)
+      })
+    })
+    this.jobs = next
+    this.knownHosts = retainedHosts
+  }
+
+  // 限流使用首个时间窗口而非无限防抖，持续流式输出也能定期准备最新正文。
+  due(job: PrefetchJob): number { return Math.max(job.retryAt, job.urgent ? 0 : job.startedAt + 1000) }
+  nextDelay(now: number): number {
+    if (this.activeReads >= 2) return -1
+    let delay = -1
+    this.jobs.forEach((job: PrefetchJob) => { if (job.requested && !job.active && !job.running) { const value = Math.max(0, this.due(job) - now); if (delay < 0 || value < delay) delay = value } })
+    return delay
+  }
+
+  // 用户打开的聊天不经过此队列；预加载最多两路，在途更新只标脏、不重复并发。
+  drain(now: number) {
+    const ready = this.jobs.filter((job: PrefetchJob): boolean => job.requested && !job.active && !job.running && this.due(job) <= now)
+    ready.sort((left: PrefetchJob, right: PrefetchJob): number => left.urgent == right.urgent ? left.startedAt - right.startedAt : left.urgent ? -1 : 1)
+    ready.forEach((job: PrefetchJob) => {
+      if (this.activeReads >= 2) return
+      job.running = true; job.requested = false; job.urgent = false; job.startedAt = now
+      this.activeReads++
+      const attempt = ++job.attempt
+      const epoch = this.epoch()
+      const wanted = job.wanted
+      this.read(job.hostId, job.threadId).then((result: PrefetchResult) => {
+        if (!this.jobs.some((entry: PrefetchJob): boolean => entry === job) || job.attempt != attempt || job.active || epoch != this.epoch()) return
+        // 列表已推进而回执仍是旧内容时，不把旧版本覆盖回缓存；继续补取尾帧。
+        if (job.wanted != wanted && result.contentRevision != job.wanted) { job.requested = true; return }
+        if (this.save(job, result)) { job.requested = false; job.retryAt = 0 }
+        else { job.requested = true; job.retryAt = Date.now() + 5000 }
+      }, (_: Error) => {
+        if (this.jobs.some((entry: PrefetchJob): boolean => entry === job) && job.attempt == attempt && !job.active && epoch == this.epoch()) { job.requested = true; job.retryAt = Date.now() + 5000 }
+      }).then(() => { job.running = false; this.activeReads--; this.wake() }, (_: Error) => { job.running = false; this.activeReads--; job.requested = false; this.wake() })
+    })
+  }
+}

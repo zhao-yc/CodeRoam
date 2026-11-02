@@ -2,11 +2,21 @@ import { clearFileReportCache } from './file-report-cache.uts'
 import type { ChatMessage, Conversation, ConversationTurn, LatestTurn } from './bridge.uts'
 import type { HistoryPage } from './history.uts'
 
-export type CachedConversation = { latestTurn?: LatestTurn, hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
+export type CachedConversation = { contentRevision?: string, latestTurn?: LatestTurn, hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
 type CacheStore = { version: number, namespace: string, entries: CachedConversation[] }
 const CACHE_KEY = 'codex-mobile-conversation-cache-v1'
 const ENTRY_BYTES = 512 * 1024
 const TOTAL_BYTES = 3 * 1024 * 1024
+
+let invalidationRevision = 0
+
+// 清理代次使所有在途预加载失效，即使目标聊天此前还没有缓存也不能迟到写回。
+export function conversationCacheRevision(): number { return invalidationRevision }
+
+// 调度检查不冒充用户访问，也不为了读取版本而同步改写存储。
+export function peekConversationCache(namespace: string, hostId: string, threadId: string): CachedConversation | null {
+  return loadStore(namespace).entries.find((entry: CachedConversation): boolean => entry.hostId == hostId && entry.threadId == threadId) ?? null
+}
 
 // 只保存显示正文所需字段，图片数据、协议游标、审批及能力信息均不落入缓存。
 function cacheMessages(messages: ChatMessage[]): ChatMessage[] {
@@ -49,13 +59,14 @@ export function readConversationCache(namespace: string, hostId: string, threadI
 }
 
 // 按最新快照拆分历史补充，旧快照的尾部绝不能再次拼回 PC 返回的新快照。
-export function saveConversationCache(namespace: string, hostId: string, snapshot: Conversation, history: HistoryPage | null): boolean {
+export function saveConversationCache(namespace: string, hostId: string, snapshot: Conversation, history: HistoryPage | null, contentRevision: string = ''): boolean {
   if (namespace.length == 0 || hostId.length == 0 || snapshot.threadId.length == 0) return false
   const now = Date.now()
   const messages = cacheMessages(snapshot.messages)
   const turns = (snapshot.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage }))
   const olderMessages = cacheMessages((history?.messages ?? [] as ChatMessage[]).filter((message: ChatMessage): boolean => !messages.some((current: ChatMessage): boolean => current.id == message.id)))
   const entry = { latestTurn: snapshot.latestTurn, hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: (history?.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage })), savedAt: now, accessedAt: now } as CachedConversation
+  if (contentRevision.length > 0) entry.contentRevision = contentRevision
   // 剔除最早完整消息和无引用轮次，不截断正文，不影响当前页面的完整内容。
   while (JSON.stringify(entry).length * 2 > ENTRY_BYTES) {
     if (entry.olderMessages.length > 0) entry.olderMessages.shift()
@@ -81,6 +92,7 @@ export function cachedConversationSnapshot(entry: CachedConversation): Conversat
 
 // 清理只触及本应用的会话缓存；失败时旧命名空间也不能被新配对读取。
 export function clearConversationCache(namespace: string, hostId: string = '', threadIds: string[] | null = null) {
+  invalidationRevision++
   clearFileReportCache(namespace, hostId, threadIds)
   if (namespace.length == 0) return
   try { const raw = uni.getStorageSync(CACHE_KEY); if (typeof raw != 'string' || JSON.parse<CacheStore>(raw)?.namespace != namespace) return } catch (_) { return }
@@ -96,5 +108,6 @@ export function retainConversationCacheHosts(namespace: string, hostIds: string[
   const store = loadStore(namespace)
   const retained = store.entries.filter((entry: CachedConversation): boolean => hostIds.indexOf(entry.hostId) >= 0)
   if (retained.length == store.entries.length) return
+  invalidationRevision++
   store.entries = retained; writeStore(store)
 }

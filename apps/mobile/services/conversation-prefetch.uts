@@ -1,0 +1,54 @@
+import { watch } from 'vue'
+import { bridge, connection, Computer, Conversation, ThreadSummary } from './bridge.uts'
+import { threadList, ComputerThreads } from './thread-list.uts'
+import { peekConversationCache, saveConversationCache, conversationCacheRevision } from './conversation-cache.uts'
+import { HistoryPage } from './history.uts'
+import { ConversationPrefetchQueue, PrefetchHost, PrefetchThread, PrefetchJob, PrefetchResult } from './conversation-prefetch-state.uts'
+
+let installed = false
+let foreground = true
+let timer = 0
+
+// 白名单回执只进入展示缓存；不调用 applySnapshot，也不改变选中电脑或聊天。
+const queue = new ConversationPrefetchQueue((hostId: string, threadId: string): Promise<PrefetchResult> => bridge.prefetchConversation(hostId, threadId).then((raw: UTSJSONObject): PrefetchResult => {
+  const snapshot = raw['snapshot'] as UTSJSONObject | null
+  const revision = raw.getString('contentRevision') ?? ''
+  if (snapshot == null || snapshot.getString('threadId') != threadId || snapshot.getBoolean('readOnly') != true || revision.length == 0 || !Array.isArray(snapshot['messages']) || !Array.isArray(snapshot['turns'])) throw new Error('预加载回执无效')
+  return { snapshot, contentRevision: revision } as PrefetchResult
+}), (namespace: string, hostId: string, threadId: string): string | null => {
+  const cached = peekConversationCache(namespace, hostId, threadId)
+  return cached == null ? null : cached.contentRevision ?? ''
+}, (job: PrefetchJob, result: PrefetchResult): boolean => {
+  if (!foreground || !connection.connected || connection.cacheNamespace != job.namespace) return false
+  const snapshot = JSON.parse<Conversation>(JSON.stringify(result.snapshot))
+  if (snapshot == null) return false
+  const previous = peekConversationCache(job.namespace, job.hostId, job.threadId)
+  const history = previous == null ? null : { messages: previous.olderMessages, turns: previous.olderTurns, cursor: '', hasMore: true } as HistoryPage
+  return saveConversationCache(job.namespace, job.hostId, snapshot, history, result.contentRevision)
+}, (): number => conversationCacheRevision(), () => { schedulePrefetch() })
+
+// 应用级计时器与详情读取相互独立，后台和断线后不继续重试。
+function schedulePrefetch() {
+  clearTimeout(timer); timer = 0
+  if (!foreground || !connection.connected) return
+  queue.drain(Date.now())
+  const delay = queue.nextDelay(Date.now())
+  if (delay >= 0) timer = setTimeout(() => { schedulePrefetch() }, Math.max(1, delay))
+}
+
+function observePrefetch() {
+  if (!foreground || !connection.connected || connection.cacheNamespace.length == 0) { queue.reset(); clearTimeout(timer); timer = 0; return }
+  const hosts = threadList.computers.filter((entry: ComputerThreads): boolean => entry.online && entry.subscribed == true && connection.computers.some((computer: Computer): boolean => computer.id == entry.hostId && computer.online && (computer.instanceGeneration ?? '') == (entry.instanceGeneration ?? ''))).map((entry: ComputerThreads): PrefetchHost => ({ id: entry.hostId, generation: entry.instanceGeneration ?? '', threads: entry.threads.map((thread: ThreadSummary): PrefetchThread => ({ id: thread.id, revision: thread.contentRevision ?? '', important: thread.status == 'active' || (thread.activeTurnId ?? '').length > 0 || thread.hasUnreadTurn == true || (thread.notificationState?.pending.length ?? 0) > 0, terminal: thread.notificationState?.latestTurnStatus == 'completed' || thread.notificationState?.latestTurnStatus == 'failed', attention: JSON.stringify(thread.notificationState ?? null) })) }))
+  queue.observe(connection.configurationRevision.toString() + ':' + connection.cacheNamespace, connection.cacheNamespace, hosts, connection.hostId, connection.activeThreadId)
+  schedulePrefetch()
+}
+
+// 全局列表在首页之外也会更新；同步侦听身份变化，先废弃回执再让异步请求完成。
+export function startConversationPrefetch() {
+  if (installed) return
+  installed = true
+  watch((): string => connection.configurationRevision.toString() + ':' + connection.connected + ':' + connection.cacheNamespace + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + JSON.stringify(connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online + ':' + (computer.instanceGeneration ?? ''))) + ':' + JSON.stringify(threadList.computers.map((entry: ComputerThreads): UTSJSONObject => ({ hostId: entry.hostId, generation: entry.instanceGeneration ?? '', online: entry.online, subscribed: entry.subscribed, threads: entry.threads.map((thread: ThreadSummary): UTSJSONObject => ({ id: thread.id, revision: thread.contentRevision, unread: thread.hasUnreadTurn, status: thread.status, activeTurnId: thread.activeTurnId, notificationState: thread.notificationState })) }))), () => { observePrefetch() }, { immediate: true, flush: 'sync' })
+}
+
+export function resumeConversationPrefetch() { foreground = true; observePrefetch() }
+export function backgroundConversationPrefetch() { foreground = false; queue.reset(); clearTimeout(timer); timer = 0 }
