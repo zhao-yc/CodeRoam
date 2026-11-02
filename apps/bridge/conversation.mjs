@@ -3,7 +3,7 @@ import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { executionSettings } from './model-settings.mjs';
 import { normalizeQuestions, parseQuestionReply, questionResponseText } from './questions.mjs';
 import { MAX_IMAGES } from '../../packages/protocol/images.mjs';
-import { readMessageImages } from './message-images.mjs';
+import { readMessageImages, assistantImages } from './message-images.mjs';
 import { currentActivity } from './activity.mjs';
 import { normalizeGoal, goalRevision } from './goals.mjs';
 import { taskNotificationState } from './task-notifications.mjs';
@@ -40,7 +40,7 @@ function textOf(content, hideImages = false) {
 }
 
 /** 将桌面内部时间线压缩为手机需要的消息、执行状态与待审批项。 */
-export function normalizeConversation(state, { imageMessageId, maxMessages = 80, maxCharacters = 120000, preserveDialogue = true } = {}) {
+export function normalizeConversation(state, { imageMessageId, imageIndex, maxMessages = 80, maxCharacters = 120000, preserveDialogue = true } = {}) {
   const history = state.turnHistory?.history;
   const turns = history?.entitiesByKey ? (history.islands ?? []).flatMap(island => (island.entries ?? []).map(entry => history.entitiesByKey[entry.value]).filter(Boolean)) : state.turns ?? [];
   const messages = [];
@@ -56,7 +56,17 @@ export function normalizeConversation(state, { imageMessageId, maxMessages = 80,
       if (['userMessage','steeringUserMessage'].includes(item.type)) { role='user'; const content=item.content ?? item.input; imageParts=Array.isArray(content)?content.filter(part=>['image','localImage'].includes(part?.type)).slice(0,MAX_IMAGES):[]; text=textOf(content,imageParts.length>0); const replies=parseQuestionReply(text); if(replies.length) text=replies.map(reply=>`${reply.question ?? '问题'}\n回答：${reply.answer}`).join('\n\n'); }
       else if (item.type === 'userInputResponse') { role='user'; text=questionResponseText(item); }
       else if (item.type === 'planImplementation') { role='assistant'; text=typeof item.planContent === 'string' ? item.planContent : ''; }
-      else if (item.type === 'agentMessage' || item.type === 'assistantMessage') { role='assistant'; text=textOf(item.text ?? item.content); }
+      else if (item.type === 'imageGeneration' && item.status === 'completed') {
+        // 生成图片是独立可见记录，只同步图片，不发送提示词、生成参数或本地保存路径。
+        role='assistant';
+        if (typeof item.savedPath === 'string' && item.savedPath) imageParts=[{type:'localImage',path:item.savedPath}];
+        else if (typeof item.result === 'string' && item.result) imageParts=[{type:'image',url:item.result.startsWith('data:image/')?item.result:`data:image/${item.result.startsWith('/9j/')?'jpeg':'png'};base64,${item.result}`}];
+      }
+      else if (item.type === 'agentMessage' || item.type === 'assistantMessage') {
+        role='assistant';
+        const extracted=assistantImages(textOf(item.text ?? item.content));
+        text=extracted.text; imageParts=extracted.parts;
+      }
       else if (item.type === 'commandExecution') {
         text = `${item.command ?? '执行命令'}\n${item.aggregatedOutput ?? item.output ?? ''}`;
         // 摘要从原始命令提取，长输出截断后仍能显示真实命令入口。
@@ -70,7 +80,7 @@ export function normalizeConversation(state, { imageMessageId, maxMessages = 80,
         if (paths.length > 0) summary = `${paths[0]}${paths.length > 1 ? ` 等${paths.length}个文件` : ''}`.slice(0,240);
       }
       // 日常快照只同步数量；查看时仅读取桌面目标消息已附加的图片，不抓取远程地址。
-      const images=String(item.id)===imageMessageId?readMessageImages(imageParts):[];
+      const images=String(item.id)===imageMessageId?readMessageImages(imageParts,imageIndex):[];
       if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }

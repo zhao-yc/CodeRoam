@@ -1,23 +1,52 @@
 <template>
   <view class="message-images">
-    <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFit" :class="['thumbnail', sources.length == 1 ? 'thumbnail-single' : '']" :aria-label="'预览第' + (index + 1) + '张图片'" @click="preview(source)" /></view>
+    <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFit" :class="['thumbnail', sources.length == 1 ? 'thumbnail-single' : '', props.large == true ? 'thumbnail-large' : '']" :aria-label="'预览第' + (index + 1) + '张图片'" @load="imageLoaded" @click="preview(source)" /></view>
     <view v-else :class="['placeholder', (props.count ?? 1) == 1 ? 'placeholder-single' : '']"><text class="hint">{{ error.length > 0 ? error : connected ? '正在加载图片…' : '等待连接后加载图片' }}</text><button v-if="error.length > 0 && connected" class="retry" @click="loadImages">重新加载</button></view>
   </view>
 </template>
 <script setup lang="uts">
 import { ref, watch, onUnmounted } from 'vue'
 import { bridge } from '../../services/bridge.uts'
-const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, count?: number }>()
+const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, count?: number, large?: boolean }>()
+const emit = defineEmits<{ (event: 'layout'): void }>()
 const sources = ref<string[]>([])
 const error = ref('')
 let loading = false
 let requestVersion = 0
 let alive = true
+// 大图按片读取，避免设计稿超过中转单条消息上限；离页或断线立即停止后续请求。
+async function loadLargeImages(version: number): Promise<string[]> {
+  const images: string[] = []
+  for (let index = 0; index < Math.min(props.count ?? 1, 3); index++) {
+    let source = ''
+    let chunks = 1
+    for (let chunk = 0; chunk < chunks; chunk++) {
+      if (!alive || version != requestVersion || !props.connected) return [] as string[]
+      const result = await bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId, imageIndex: index, chunkIndex: chunk })
+      chunks = result['chunkCount'] as number
+      if (chunks < 1 || chunks > 17) throw new Error('图片分片无效，请重新加载')
+      source += result['data'] as string
+    }
+    images.push(source)
+  }
+  return images
+}
 // 每条消息独立保留图片，进入会话自动加载，不弹出大图或中断滚动。
 function loadImages() {
   if (!alive || loading || !props.connected || props.threadId.length == 0) return
   loading = true; error.value = ''
   const version = ++requestVersion
+  if (props.large == true) {
+    loadLargeImages(version).then((images: string[]) => {
+      if (!alive || version != requestVersion) return
+      loading = false; sources.value = images
+      if (images.length == 0) error.value = '这条记录未保留图片'
+    }, (failure: Error) => {
+      if (!alive || version != requestVersion) return
+      loading = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
+    })
+    return
+  }
   bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId }).then((result: UTSJSONObject) => {
     if (!alive || version != requestVersion) return
     loading = false
@@ -30,6 +59,8 @@ function loadImages() {
 }
 // 仅点击缩略图时打开当前消息的图片组。
 function preview(source: string) { uni.previewImage({ urls: sources.value, current: source }) }
+// 异步图片出现后由会话页维护滚动位置。
+function imageLoaded() { emit('layout') }
 // 消息归属变化及卸载后使旧请求失效，避免图片串入其他会话。
 watch((): string => props.hostId + ':' + props.threadId + ':' + props.messageId, () => {
   requestVersion++; loading = false; sources.value = [] as string[]; error.value = ''; loadImages()
@@ -45,6 +76,7 @@ onUnmounted(() => { alive = false; requestVersion++ })
 .thumbnails { flex-direction: row; flex-wrap: wrap; gap: 8px; }
 .thumbnail { width: 96px; height: 96px; border-radius: 8px; background-color: #e0e7df; }
 .thumbnail-single { width: 128px; height: 128px; }
+.thumbnail-large { width: 260px; max-width: 100%; height: 180px; }
 .placeholder { min-width: 96px; min-height: 96px; padding: 8px; border-radius: 8px; background-color: #e0e7df; align-items: center; justify-content: center; }
 .placeholder-single { min-width: 128px; min-height: 128px; }
 .hint { font-size: 12px; color: #7b827a; }

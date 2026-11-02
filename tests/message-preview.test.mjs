@@ -83,7 +83,7 @@ test('消息默认加载缩略图，点击才预览，重连可重试且卸载�
   const source=component.match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   const calls=[],requests=[],watches=[];let resolve,reject,dispose;
   const props={hostId:'host',threadId:'thread',messageId:'picture',connected:true};
-  const context=vm.createContext({defineProps:()=>props,ref:value=>({value}),watch:(get,callback,options)=>{watches.push({get,callback});if(options?.immediate)callback(get());},onUnmounted:callback=>dispose=callback,uni:{previewImage:options=>calls.push(options)},bridge:{request:(...args)=>{requests.push(args);return new Promise((yes,no)=>{resolve=yes;reject=no;});}}});
+  const context=vm.createContext({defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),watch:(get,callback,options)=>{watches.push({get,callback});if(options?.immediate)callback(get());},onUnmounted:callback=>dispose=callback,uni:{previewImage:options=>calls.push(options)},bridge:{request:(...args)=>{requests.push(args);return new Promise((yes,no)=>{resolve=yes;reject=no;});}}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={sources,error,loadImages,preview};',context);
   const f=context.subject;
   assert.equal(requests.length,1);f.loadImages();assert.equal(requests.length,1);

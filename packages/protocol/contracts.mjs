@@ -95,7 +95,10 @@ export function validateRequest(message) {
   if (message.method === 'question.reply') requireString(message.params.questionGroupId, '题组编号', 1000);
   if (message.method === 'thread.images') {
     requireString(message.params.messageId, '消息编号', 200);
-    if(Object.keys(message.params).some(key=>!['threadId','messageId'].includes(key)))throw new BridgeError('BAD_PARAMS','查看图片只接受聊天编号和消息编号');
+    if (message.params.imageIndex !== undefined || message.params.chunkIndex !== undefined) {
+      if (!Number.isInteger(message.params.imageIndex) || message.params.imageIndex < 0 || message.params.imageIndex >= 3 || !Number.isInteger(message.params.chunkIndex) || message.params.chunkIndex < 0 || message.params.chunkIndex > 16) throw new BridgeError('BAD_PARAMS','图片或分片编号不合法');
+    }
+    if(Object.keys(message.params).some(key=>!['threadId','messageId','imageIndex','chunkIndex'].includes(key)))throw new BridgeError('BAD_PARAMS','查看图片只接受聊天编号和消息编号');
   }
   // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
   if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {

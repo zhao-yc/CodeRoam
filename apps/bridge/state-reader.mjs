@@ -57,6 +57,7 @@ export class StateReader {
       row=db.prepare(`SELECT id,${title} AS title,cwd,rollout_path,${time} AS updatedAt FROM threads WHERE id=? AND archived=0`).get(threadId);
     } finally {db.close();}
     if(!row) throw new BridgeError('THREAD_NOT_FOUND','这条聊天已不存在或已经归档，请刷新聊天列表');
+    if(options.imageMessageId){const projected=readProjectedHistory(row,path.dirname(this.filePath),options);if(projected)return projected;}
     if(options.rawTurns===true&&options.reportId){const report=readProjectedFileReport(row,path.dirname(this.filePath),options.reportId);if(report)return report;}
     if(options.page===true) {
       // 新版分叉会话的继承消息只保存在历史投影中，不能只扫描当前日志。
@@ -71,7 +72,17 @@ export class StateReader {
       }
       return page;
     }
-    return readHistoricalSnapshot(row,path.join(path.dirname(this.filePath),'sessions'),undefined,options);
+    const snapshot=readHistoricalSnapshot(row,path.join(path.dirname(this.filePath),'sessions'),undefined,options);
+    // 生成图片不在旧事件正文中，使用桌面只读投影补齐同轮次可见图片。
+    if(!options.rawTurns) {
+      const projected=readProjectedHistory(row,path.dirname(this.filePath));
+      for(const image of projected?.messages.filter(message=>message.kind==='imageGeneration')??[]) {
+        if(snapshot.messages.some(message=>message.id===image.id))continue;
+        const last=snapshot.messages.findLastIndex(message=>message.turnId===image.turnId);
+        if(last>=0)snapshot.messages.splice(last+1,0,image);
+      }
+    }
+    return snapshot;
   }
   list({ limit = 50, offset = 0, search = '', archived = false } = {}) {
     if (!fs.existsSync(this.filePath)) throw new BridgeError('INDEX_NOT_FOUND', '未找到 Codex 聊天索引，请先打开桌面客户端');

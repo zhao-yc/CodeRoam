@@ -184,14 +184,21 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   /** 图片只从该手机已订阅会话的可见用户消息读取，不接受手机传入文件路径或图片地址。 */
-  async messageImages(threadId,messageId,deviceId) {
+  async messageImages(threadId,messageId,deviceId,options={}) {
     const entry=this.conversations.get(threadId);
     if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条聊天再查看图片');
-    const snapshot=entry.state?normalizeConversation(entry.state,{imageMessageId:messageId}):await this.index?.readHistory(threadId,{imageMessageId:messageId});
+    const selection={imageMessageId:messageId,...(options.imageIndex === undefined ? {} : {imageIndex:options.imageIndex})};
+    const snapshot=entry.state?normalizeConversation(entry.state,selection):await this.index?.readHistory(threadId,selection);
     // 异步读取结束后再次核对订阅，切换会话或设备断开后不返回原图。
     if(this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
-    const message=snapshot?.messages.find(item=>item.id===messageId&&item.role==='user');
+    const message=snapshot?.messages.find(item=>item.id===messageId&&['user','assistant'].includes(item.role));
     if(!message?.images?.length)throw new BridgeError('IMAGE_UNAVAILABLE','这条记录没有保留可预览的图片，请重新发送原图');
+    // 每个回复片段小于协议上限；手机只能选择消息内的图片序号。
+    if(options.imageIndex !== undefined) {
+      const source=message.images[0], size=1024*1024, count=Math.ceil(source.length/size);
+      if(options.chunkIndex>=count)throw new BridgeError('BAD_PARAMS','图片分片编号超出范围');
+      return {imageCount:message.imageCount,chunkCount:count,data:source.slice(options.chunkIndex*size,(options.chunkIndex+1)*size)};
+    }
     return {images:message.images};
   }
 

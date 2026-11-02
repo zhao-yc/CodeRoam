@@ -25,6 +25,7 @@ export function historicalSnapshot(row, records, options = {}) {
       if(item.type==='UserMessage') converted={...item,type:'userMessage'};
       else if(item.type==='UserInputResponse') converted={...item,type:'userInputResponse',requestId:item.requestId??item.request_id,questions:(Array.isArray(item.questions)?item.questions:[]).map(question=>({...question,isSecret:question.isSecret===true||question.is_secret===true}))};
       else if(item.type==='AgentMessage'&&item.phase!=='analysis'&&item.channel!=='analysis') converted={...item,type:'agentMessage'};
+      else if(item.type==='ImageGeneration') converted={...item,type:'imageGeneration'};
       else if(item.type==='CommandExecution') converted={...item,type:'commandExecution',command:Array.isArray(item.command)?item.command.join(' '):item.command,aggregatedOutput:item.aggregated_output??item.aggregatedOutput};
       else if(item.type==='FileChange') {
         // 持久化事件按文件路径存对象，实时快照使用数组；统一后复用手机摘要逻辑。

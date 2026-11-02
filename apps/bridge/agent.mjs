@@ -121,7 +121,7 @@ export class BridgeAgent extends EventEmitter {
           const threads=await this.adapter.list(message.params);
           return {threads,...(message.params.archived===true?{archived:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
         }
-        if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId);
+        if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {
           const snapshot=await this.adapter.watch(message.params.threadId,message.deviceId,{activate:message.params.activate===true});
