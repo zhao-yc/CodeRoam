@@ -56,7 +56,7 @@ function operate(action: string) { if (!props.disabled && !props.busy) emit('ope
 function clear() {
   if (props.disabled || props.busy) return
   const revision = props.revision
-  uni.showModal({ title: '清除目标', content: '确定清除此会话的目标吗？', confirmText: '清除', cancelText: '取消', success: (result) => { if (result.confirm && !props.disabled && !props.busy) emit('operate', 'clear', '', revision) } })
+  uni.showModal({ title: '清除目标', content: '确定清除此聊天的目标吗？', confirmText: '清除', cancelText: '取消', success: (result) => { if (result.confirm && !props.disabled && !props.busy) emit('operate', 'clear', '', revision) } })
 }
 watch((): number => props.openRequest, (_value: number, _previous: number) => { if (props.goal == null) edit(); else { expanded.value = true; emit('expanded', true) } })
 watch((): number => props.closeRequest, (_value: number, _previous: number) => closeDetails(false))

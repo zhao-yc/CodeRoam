@@ -10,16 +10,16 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
   const deadline = Date.now() + 50000, watcher = 'delete:' + commandId;
   const observed = new Map(), temporary = new Set();
   let release = () => {}, committed = false;
-  const assertTime = () => { if (Date.now() >= deadline) throw new BridgeError('DELETE_TIMEOUT', '删除准备超时，对话尚未确认删除，请重新核对'); };
+  const assertTime = () => { if (Date.now() >= deadline) throw new BridgeError('DELETE_TIMEOUT', '删除准备超时，聊天尚未确认删除，请重新核对'); };
   const rootCurrent = () => {
     const current = adapter.subscribed(threadId, deviceId);
-    if (current !== entry || current.owner?.clientId !== owner.clientId || current.owner?.hostId !== owner.hostId) throw new BridgeError('THREAD_CHANGED', '会话连接已变化，已停止删除');
+    if (current !== entry || current.owner?.clientId !== owner.clientId || current.owner?.hostId !== owner.hostId) throw new BridgeError('THREAD_CHANGED', '聊天连接已变化，已停止删除');
   };
   try {
     rootCurrent();
-    if (owner.hostId !== 'local') throw new BridgeError('DELETE_UNSUPPORTED', '此类会话暂不支持手机永久删除，请在原桌面操作');
+    if (owner.hostId !== 'local') throw new BridgeError('DELETE_UNSUPPORTED', '此类聊天暂不支持手机永久删除，请在原桌面操作');
     const tree = adapter.index.readDeletionTree(threadId);
-    if (!tree.length || tree[0].id !== threadId) throw new BridgeError('THREAD_NOT_FOUND', '目标对话已不存在，请刷新列表');
+    if (!tree.length || tree[0].id !== threadId) throw new BridgeError('THREAD_NOT_FOUND', '目标聊天已不存在，请刷新列表');
     const ids = tree.map(item => item.id), fingerprint = JSON.stringify(tree);
     release = await lockRelated(ids);
     // 子对话只能从只读索引的关联关系派生，手机不能提交任意删除编号。
@@ -28,13 +28,13 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
       const found = await adapter.discoverOwner(item.id, 800);
       if (observed.has(item.id)) {
         const previous = observed.get(item.id);
-        if (previous?.clientId !== found?.clientId || previous?.hostId !== found?.hostId) throw new BridgeError('THREAD_CHANGED', '关联对话的连接已变化，已停止删除');
+        if (previous?.clientId !== found?.clientId || previous?.hostId !== found?.hostId) throw new BridgeError('THREAD_CHANGED', '关联聊天的连接已变化，已停止删除');
       } else observed.set(item.id, found);
       if (!found) {
-        if (item.id === threadId) throw new BridgeError('OWNER_UNAVAILABLE', '目标对话的原桌面连接已不可用');
+        if (item.id === threadId) throw new BridgeError('OWNER_UNAVAILABLE', '目标聊天的原桌面连接已不可用');
         return null;
       }
-      if (found.hostId !== owner.hostId) throw new BridgeError('THREAD_CHANGED', '关联对话不属于当前电脑，已停止删除');
+      if (found.hostId !== owner.hostId) throw new BridgeError('THREAD_CHANGED', '关联聊天不属于当前电脑，已停止删除');
       temporary.add(item.id);
       const snapshot = await adapter.watch(item.id, watcher, { fresh: true, history: false, ownerTimeoutMs: 800, snapshotTimeoutMs: 2000 });
       rootCurrent();
@@ -43,26 +43,26 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
     for (const item of tree) {
       const snapshot = await refresh(item);
       if (!snapshot || idle(snapshot)) continue;
-      if (!snapshot.activeTurnId) throw new BridgeError('DELETE_STOP_FAILED', '无法确认待停止的任务，对话尚未删除');
+      if (!snapshot.activeTurnId) throw new BridgeError('DELETE_STOP_FAILED', '无法确认待停止的任务，聊天尚未删除');
       const turnId = snapshot.activeTurnId;
       try { await adapter.operate('turn.stop', { threadId: item.id, expectedTurnId: turnId }, commandId + '-stop-' + item.id, watcher); }
-      catch { throw new BridgeError('DELETE_STOP_FAILED', '未能确认任务停止，对话尚未删除，请核对原桌面任务状态'); }
+      catch { throw new BridgeError('DELETE_STOP_FAILED', '未能确认任务停止，聊天尚未删除，请核对原桌面任务状态'); }
       // 停止请求被接收并不代表任务已停止；必须等待新的原桌面快照。
       while (true) {
         const stopped = await refresh(item);
-        if (!stopped) throw new BridgeError('DELETE_STOP_FAILED', '停止后无法核对任务状态，对话尚未删除');
+        if (!stopped) throw new BridgeError('DELETE_STOP_FAILED', '停止后无法核对任务状态，聊天尚未删除');
         if (idle(stopped)) break;
         if (stopped.activeTurnId && stopped.activeTurnId !== turnId) throw new BridgeError('THREAD_CHANGED', '停止期间启动了新的任务，已停止删除');
-        if (Date.now() + 250 >= deadline - 10000) throw new BridgeError('DELETE_STOP_FAILED', '任务尚未确认停止，对话尚未删除');
+        if (Date.now() + 250 >= deadline - 10000) throw new BridgeError('DELETE_STOP_FAILED', '任务尚未确认停止，聊天尚未删除');
         await pause(200);
       }
     }
     const verify = async () => {
       assertTime(); rootCurrent();
-      if (JSON.stringify(adapter.index.readDeletionTree(threadId)) !== fingerprint) throw new BridgeError('THREAD_CHANGED', '关联对话已变化，请重新确认删除范围');
+      if (JSON.stringify(adapter.index.readDeletionTree(threadId)) !== fingerprint) throw new BridgeError('THREAD_CHANGED', '关联聊天已变化，请重新确认删除范围');
       for (const item of tree) {
         const snapshot = await refresh(item);
-        if (snapshot && !idle(snapshot)) throw new BridgeError('THREAD_BUSY', '任务状态已变化，对话尚未删除，请重新确认');
+        if (snapshot && !idle(snapshot)) throw new BridgeError('THREAD_BUSY', '任务状态已变化，聊天尚未删除，请重新确认');
       }
       // 在真正删除前保存范围；进程中断后仍能只读核对全部目标是否已消失。
       checkpoint({ deletionPending: true, threadId, deletedThreadIds: ids });

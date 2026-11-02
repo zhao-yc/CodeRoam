@@ -56,12 +56,12 @@ export function readHistoricalSnapshot(row, sessionDirectory, maximumBytes=8*102
     // Codex 在 Windows 索引中保存 \\?\ 长路径；原生解析兼容此前缀并继续解析链接，避免普通 realpathSync 在盘符处报 EISDIR。
     const root=fs.realpathSync.native(sessionDirectory),file=fs.realpathSync.native(row.rollout_path);
     const relative=path.relative(root,file);
-    if(!relative||relative.startsWith('..')||path.isAbsolute(relative)||!file.endsWith('.jsonl')) throw new BridgeError('HISTORY_UNAVAILABLE','这条会话的历史记录格式暂不支持');
+    if(!relative||relative.startsWith('..')||path.isAbsolute(relative)||!file.endsWith('.jsonl')) throw new BridgeError('HISTORY_UNAVAILABLE','这条聊天的历史记录格式暂不支持');
     fd=fs.openSync(file,'r');
     const size=fs.fstatSync(fd).size,header=Buffer.alloc(Math.min(size,256*1024));
     fs.readSync(fd,header,0,header.length,0);
     const firstLine=header.toString('utf8').split('\n')[0],metadata=JSON.parse(firstLine);
-    if(metadata.type!=='session_meta'||metadata.payload?.id!==row.id) throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前会话不匹配');
+    if(metadata.type!=='session_meta'||metadata.payload?.id!==row.id) throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前聊天不匹配');
     const start=Math.max(0,size-maximumBytes),buffer=Buffer.alloc(Math.min(size,maximumBytes));
     fs.readSync(fd,buffer,0,buffer.length,start);
     // 保存真实字节位置，保证旧格式消息与向前分页使用同一个稳定编号。
@@ -76,7 +76,7 @@ export function readHistoricalSnapshot(row, sessionDirectory, maximumBytes=8*102
     return historicalSnapshot(row,records,{...options,historyTruncated:start>0});
   } catch(error) {
     if(error instanceof BridgeError) throw error;
-    const failure=new BridgeError('HISTORY_UNAVAILABLE','暂时无法读取这条会话的已保存历史，请稍后重新同步');
+    const failure=new BridgeError('HISTORY_UNAVAILABLE','暂时无法读取这条聊天的已保存历史，请稍后重新同步');
     failure.cause=error;throw failure;
   } finally {if(fd!==undefined)fs.closeSync(fd);}
 }

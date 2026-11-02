@@ -1,7 +1,7 @@
 {
   "pages": [
     { "path": "pages/index/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "掌上 Codex" } },
-    { "path": "pages/conversation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "会话" } },
+    { "path": "pages/conversation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "聊天" } },
     { "path": "pages/connection/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "电脑连接" } }
   ],
   "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#f8f8f3", "backgroundColor": "#f8f8f3" }

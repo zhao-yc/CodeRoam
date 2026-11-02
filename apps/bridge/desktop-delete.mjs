@@ -93,19 +93,19 @@ export class DesktopDeleteController {
         await pause(150);
       } while (Date.now() < locateUntil);
       this.record(params, { phase: 'located', pageCount: pages.length, candidateCount: candidates.length });
-      if (candidates.length !== 1) { candidates.forEach(candidate => candidate.close()); throw new BridgeError('DELETE_TARGET_UNAVAILABLE', candidates.length > 1 ? '原桌面多个窗口包含该对话，请关闭重复窗口后重试' : '原桌面尚未显示目标对话，请展开对应项目后重试'); }
+      if (candidates.length !== 1) { candidates.forEach(candidate => candidate.close()); throw new BridgeError('DELETE_TARGET_UNAVAILABLE', candidates.length > 1 ? '原桌面多个窗口包含该聊天，请关闭重复窗口后重试' : '原桌面尚未显示目标聊天，请展开对应项目后重试'); }
       page = candidates[0];
       await page.step('focus', params);
       const opened = await page.step('open', params);
-      if (opened?.state !== 'opened') throw new BridgeError(opened?.state === 'unavailable' ? 'DELETE_MENU_UNAVAILABLE' : 'DELETE_TARGET_CHANGED', opened?.state === 'unavailable' ? '原桌面删除菜单动作暂不可用，请检查连接服务版本' : '原桌面目标已变化，尚未删除对话');
+      if (opened?.state !== 'opened') throw new BridgeError(opened?.state === 'unavailable' ? 'DELETE_MENU_UNAVAILABLE' : 'DELETE_TARGET_CHANGED', opened?.state === 'unavailable' ? '原桌面删除菜单动作暂不可用，请检查连接服务版本' : '原桌面目标已变化，尚未删除聊天');
       this.record(params, { phase: 'opened', ...await page.step('inspect', params) });
       let state;
       const waitUntil = Math.min(params.deadline - 1000, Date.now() + 5000);
       do { state = await page.step('inspect', params); if (state.matched && state.ready) break; await pause(100); } while (Date.now() < waitUntil);
-      if (!state?.matched || !state.ready) throw new BridgeError('DELETE_TARGET_CHANGED', '无法核对原生删除弹窗的会话编号，尚未删除对话');
+      if (!state?.matched || !state.ready) throw new BridgeError('DELETE_TARGET_CHANGED', '无法核对原生删除弹窗的聊天编号，尚未删除聊天');
       await beforeCommit(); committed = true;
       const submission = await page.step('commit', params);
-      if (submission?.state === 'changed') { committed = false; throw new BridgeError('DELETE_TARGET_CHANGED', '原桌面确认框已取消或目标已变化，对话尚未删除'); }
+      if (submission?.state === 'changed') { committed = false; throw new BridgeError('DELETE_TARGET_CHANGED', '原桌面确认框已取消或目标已变化，聊天尚未删除'); }
       if (submission?.state !== 'submitted') throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '删除回执需要核对，请勿重复提交', true);
       do {
         state = await page.step('inspect', params);
@@ -117,7 +117,7 @@ export class DesktopDeleteController {
       this.record(params, { phase: 'failed', code: error.code, committed });
       if (committed) throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '永久删除结果需要核对，请勿重复提交', true);
       if (error instanceof BridgeError) throw error;
-      throw new BridgeError('DELETE_UNAVAILABLE', '原桌面删除连接未就绪，尚未删除对话');
+      throw new BridgeError('DELETE_UNAVAILABLE', '原桌面删除连接未就绪，尚未删除聊天');
     } finally { if (page) await page.step('cancel', params).catch(() => {}); pages.forEach(candidate => candidate.close()); }
   }
 }

@@ -115,12 +115,12 @@ async function submitNewConversation(draft: NewDraft, progress: (message: string
   if (text.length == 0 && draft.images.length == 0 && draft.files.length == 0) throw new Error('请先输入内容或添加附件')
   if (draft.projectId.length == 0) throw new Error('请先选择项目')
   if (draft.threadId.length == 0) {
-    progress('正在创建会话…')
+    progress('正在创建聊天…')
     const title = text.split('\n')[0].slice(0, 60)
-    await writeStep(draft, 'create', 'thread.create', { projectId: draft.projectId, title: title.length > 0 ? title : '新对话' })
-    if (draft.threadId.length == 0) throw new Error('未取得会话编号，请返回列表查看，按需重新发送')
+    await writeStep(draft, 'create', 'thread.create', { projectId: draft.projectId, title: title.length > 0 ? title : '新聊天' })
+    if (draft.threadId.length == 0) throw new Error('未取得聊天编号，请返回列表查看，按需重新发送')
   }
-  progress('正在连接电脑会话…')
+  progress('正在连接电脑聊天…')
   assertDestination(draft)
   await bridge.openCreatedThread(draft.threadId)
   assertDestination(draft)
@@ -128,7 +128,7 @@ async function submitNewConversation(draft: NewDraft, progress: (message: string
   const snapshot = connection.snapshot
   if (snapshot != null && snapshot.threadId == draft.threadId && (snapshot.messages.length > 0 || snapshot.activeTurnId.length > 0 || snapshot.status == 'active')) {
     detachCreatedThread(draft)
-    throw new Error('原会话已被使用，已解除关联；请再次发送以创建新对话')
+    throw new Error('原聊天已被使用，已解除关联；请再次发送以创建新聊天')
   }
   if (draft.settingsChanged && !draft.settingsApplied && draft.settings != null) {
     if (connection.snapshot?.supportsExecutionSettings != true) throw new Error('请更新电脑连接服务后使用所选模型或计划模式')
@@ -137,7 +137,7 @@ async function submitNewConversation(draft: NewDraft, progress: (message: string
   }
   if (draft.permissionMode.length > 0 && !draft.permissionsApplied) {
     if (connection.snapshot?.supportsPermissionSettings != true) throw new Error('请更新电脑连接服务后应用所选权限')
-    progress('正在应用会话权限…')
+    progress('正在应用聊天权限…')
     const current = JSON.parse<PermissionState>(JSON.stringify(await bridge.request('thread.permissions.read', { threadId: draft.threadId })))
     assertDestination(draft)
     if (current == null || current.revision.length == 0) throw new Error('无法核对电脑权限，草稿已保留')

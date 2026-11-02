@@ -23,7 +23,7 @@ const flush=()=>new Promise(setImmediate);
 
 test('只读页面不自动导航，明确点击后连接一次，成功后开放输入且不发送消息',async()=>{
   const t=fixture();assert.equal(t.f.canWrite.value,false);t.tick();t.tick();assert.equal(t.requests.length,0);t.f.continueConversation();t.f.continueConversation();
-  assert.deepEqual(t.requests,['thread']);assert.equal(t.f.activating.value,true);assert.equal(t.f.conversationConnectionHint.value,'正在连接会话…');
+  assert.deepEqual(t.requests,['thread']);assert.equal(t.f.activating.value,true);assert.equal(t.f.conversationConnectionHint.value,'正在连接聊天…');
   t.connection.snapshot.readOnly=false;t.loaders[0].resolve({});await flush();
   assert.equal(t.f.canWrite.value,true);assert.equal(t.f.activating.value,false);
   t.connection.snapshot.readOnly=true;t.connection.sequence++;t.tick();assert.equal(t.requests.length,1);

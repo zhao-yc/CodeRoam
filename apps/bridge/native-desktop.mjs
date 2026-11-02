@@ -21,29 +21,29 @@ export class NativeDesktop extends EventEmitter {
  async connect(){
   if(this.socket?.writable)return;if(this.connecting)return this.connecting;
   this.connecting=(async()=>{
-   if(this.platform!=='win32')throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','当前电脑不支持原生会话同步');
+   if(this.platform!=='win32')throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','当前电脑不支持原生聊天同步');
    const endpoint=await this.resolveEndpoint();
    this.processId=endpoint.pid;
    await new Promise((resolve,reject)=>{const socket=net.createConnection(endpoint.path);this.socket=socket;const connectingTimer=setTimeout(()=>{socket.destroy();reject(new Error('原生通道连接超时'));},3000);const decoder=new FrameDecoder(message=>{const entry=this.pending.get(message.id);if(!entry)return;this.pending.delete(message.id);clearTimeout(entry.timer);message.error?entry.reject(new Error('原生请求失败')):entry.resolve(message.result);},8*1024*1024);
     socket.on('data',chunk=>{try{decoder.push(chunk);}catch{socket.destroy();}});socket.on('error',()=>{clearTimeout(connectingTimer);reject(new Error('原生通道不可用'));});socket.on('close',()=>{clearTimeout(connectingTimer);if(this.socket===socket){this.socket=null;this.invalidate();}for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(new Error('原生通道已关闭'));}this.pending.clear();});socket.once('connect',()=>{clearTimeout(connectingTimer);socket.unref();resolve();});
    });
-  })().catch(()=>{this.invalidate();throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','电脑原生会话连接未就绪，请确认桌面端正在运行后重试');}).finally(()=>{this.connecting=null;});return this.connecting;
+  })().catch(()=>{this.invalidate();throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','电脑原生聊天连接未就绪，请确认桌面端正在运行后重试');}).finally(()=>{this.connecting=null;});return this.connecting;
  }
  /** 内部调用固定工具，手机不能传入方法、程序、路径或任意参数。 */
  async call(tool,args,threadId){
-  if(!allowed.has(tool)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId))throw new BridgeError('BAD_NATIVE_REQUEST','原生会话请求无效');
+  if(!allowed.has(tool)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId))throw new BridgeError('BAD_NATIVE_REQUEST','原生聊天请求无效');
   if(this.closed)throw new Error('原生通道已关闭');
   if(this.invokeOverride)return this.invokeOverride(tool,args,threadId);
   await this.connect();const id=randomUUID();
-  const result=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error('原生会话请求超时'));},7000);this.pending.set(id,{resolve,reject,timer});this.socket.write(encodeFrame({jsonrpc:'2.0',id,method:'tools/call',params:{namespace:'codex_app',tool,arguments:args,callerSource:'codex',callId:id,threadId,turnId:id,hostId:'local'}}));});
-  if(result?.success!==true)throw new Error('原生会话请求未完成');const text=result.contentItems?.find(item=>item.type==='inputText')?.text;if(typeof text!=='string')throw new Error('原生返回格式不受支持');try{return JSON.parse(text);}catch{throw new BridgeError('BAD_NATIVE_RESPONSE','电脑返回的会话数据格式无效，请更新后重试');}
+  const result=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error('原生聊天请求超时'));},7000);this.pending.set(id,{resolve,reject,timer});this.socket.write(encodeFrame({jsonrpc:'2.0',id,method:'tools/call',params:{namespace:'codex_app',tool,arguments:args,callerSource:'codex',callId:id,threadId,turnId:id,hostId:'local'}}));});
+  if(result?.success!==true)throw new Error('原生聊天请求未完成');const text=result.contentItems?.find(item=>item.type==='inputText')?.text;if(typeof text!=='string')throw new Error('原生返回格式不受支持');try{return JSON.parse(text);}catch{throw new BridgeError('BAD_NATIVE_RESPONSE','电脑返回的聊天数据格式无效，请更新后重试');}
  }
  /** 原生确认已打开后才提交已读；不把系统启动或排队当作切换成功。 */
  async navigate(threadId,isCurrent=()=>true){
-  if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','旧的会话导航已取消');
+  if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','旧的聊天导航已取消');
   const result=await this.call('navigate_to_codex_page',{threadId},threadId);
-  if(result.navigated!==true)throw new BridgeError('DESKTOP_LOAD_FAILED','电脑未确认会话切换，请重试');
-  if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','会话已切换，不提交旧会话的已读状态');
+  if(result.navigated!==true)throw new BridgeError('DESKTOP_LOAD_FAILED','电脑未确认聊天切换，请重试');
+  if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，不提交旧聊天的已读状态');
   await this.call('set_thread_read_state',{threadId,source:'codex',hostId:'local',read:true},threadId);
   if(this.reading)await this.reading.catch(()=>{});
   await this.refresh([threadId]);

@@ -234,7 +234,7 @@ test('超时、断线、发送失败与未知回执均释放提交状态，用�
   for(const reason of ['timeout','disconnect','send-fail','unknown']){
     const f=connectedFixture();let failSend;
     f.bridge.socket.send=options=>{f.sent.push(JSON.parse(options.data));failSend=options.fail;};
-    const first=f.bridge.request('turn.send',{threadId:'thread',text:'消息'},true),rejected=assert.rejects(first,/查看会话/),old=f.sent[0];
+    const first=f.bridge.request('turn.send',{threadId:'thread',text:'消息'},true),rejected=assert.rejects(first,/查看聊天/),old=f.sent[0];
     await assert.rejects(f.bridge.request('turn.send',{threadId:'thread',text:'连续点击'},true),/正在提交/);
     if(reason==='timeout')[...f.timers.values()].find(t=>t.delay===20000).fn();
     if(reason==='disconnect')f.bridge.disconnect();

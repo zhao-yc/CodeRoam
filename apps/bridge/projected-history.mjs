@@ -21,7 +21,7 @@ function sessionMetadata(row, home, inherited) {
     fd=fs.openSync(file,'r');
     const header=Buffer.alloc(Math.min(fs.fstatSync(fd).size,256*1024));fs.readSync(fd,header,0,header.length,0);
     const record=JSON.parse(header.toString('utf8').split('\n')[0]);
-    if(record.type!=='session_meta'||record.payload?.id!==row.id)throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前会话不匹配');
+    if(record.type!=='session_meta'||record.payload?.id!==row.id)throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前聊天不匹配');
     return record.payload;
   }finally{if(fd!==undefined)fs.closeSync(fd);}
 }
@@ -42,7 +42,7 @@ function historySources(row, home) {
         (metadata.forked_from_id&&metadata.forked_from_id!==base.thread_id))throw new BridgeError('HISTORY_UNAVAILABLE','历史继承边界无效');
       limit=Math.min(limit,base.end_ordinal_exclusive);
       current=index.prepare('SELECT id,rollout_path FROM threads WHERE id=?').get(base.thread_id);
-      if(!current)throw new BridgeError('HISTORY_UNAVAILABLE','未找到这条会话继承的早期记录');
+      if(!current)throw new BridgeError('HISTORY_UNAVAILABLE','未找到这条聊天继承的早期记录');
     }
     return sources;
   }finally{index.close();}
@@ -79,14 +79,14 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId=''}={
   const file=path.join(home,'thread_history_1.sqlite'),continuing=isProjectedCursor(before);
   if(before&&!continuing)return null;
   if(!fs.existsSync(file)) {
-    if(continuing)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开会话');
+    if(continuing)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开聊天');
     return null;
   }
   const db=new DatabaseSync(file,{readOnly:true});
   try {
     const columns=new Set(db.prepare('PRAGMA table_info(thread_items)').all().map(column=>column.name));
     if(!['thread_id','turn_id','item_id','rollout_ordinal','item_json','item_type','updated_at_ordinal'].every(name=>columns.has(name))) {
-      if(continuing)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开会话');
+      if(continuing)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开聊天');
       return null;
     }
     // 在同一个只读事务中定位消息和翻页，避免并发投影更新使边界前后不一致。
@@ -98,7 +98,7 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId=''}={
       const cursor=JSON.parse(Buffer.from(before,'base64url').toString('utf8'));
       sourceIndex=sources.findIndex(source=>source.id===cursor.source);
       if(cursor.threadId!==row.id||sourceIndex<0||!Number.isSafeInteger(cursor.ordinal)||cursor.ordinal<0||typeof cursor.itemId!=='string'||cursor.itemId.length>1000||cursor.ordinal>=sources[sourceIndex].limit)
-        throw new BridgeError('BAD_HISTORY_CURSOR','历史游标无效，请重新打开会话');
+        throw new BridgeError('BAD_HISTORY_CURSOR','历史游标无效，请重新打开聊天');
       ordinal=cursor.ordinal;itemId=cursor.itemId;
     }else if(beforeMessageId) {
       let anchor;

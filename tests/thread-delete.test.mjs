@@ -113,7 +113,7 @@ test('定位失败保留匹配诊断，不记录页面内容或进入最终删�
   const file = path.join(directory, 'delete-ui-diagnostics.jsonl'), phases = [];
   const page = { close() {}, async step(phase) { phases.push(phase); return { target: true, targetCount: 2, visibleCount: 0, aliasCount: 2, title: '不应记录的合成标题', content: '不应记录的合成正文' }; } };
   const controller = new DesktopDeleteController({ platform: 'win32', diagnosticPath: file, discover: async () => [{ pid: 42, port: 1234 }], fetcher: async () => ({ ok: true, text: async () => JSON.stringify(['one', 'two'].map(id => ({ id, type: 'page', url: 'app://-/index.html' }))) }), openPage: async () => page });
-  await assert.rejects(controller.delete({ threadId: 'root', hostId: 'local', commandId: 'synthetic-command', deadline: Date.now() + 5000, native: { processId: 42, navigate: async () => {} } }, async () => { throw new Error('不应进入回读提交'); }), { code: 'DELETE_TARGET_UNAVAILABLE', message: '原桌面多个窗口包含该对话，请关闭重复窗口后重试' });
+  await assert.rejects(controller.delete({ threadId: 'root', hostId: 'local', commandId: 'synthetic-command', deadline: Date.now() + 5000, native: { processId: 42, navigate: async () => {} } }, async () => { throw new Error('不应进入回读提交'); }), { code: 'DELETE_TARGET_UNAVAILABLE', message: '原桌面多个窗口包含该聊天，请关闭重复窗口后重试' });
   assert.equal(phases.includes('open'), false); assert.equal(phases.includes('commit'), false);
   const text = fs.readFileSync(file, 'utf8'), entries = text.trim().split('\n').map(line => JSON.parse(line));
   assert.equal(entries.find(entry => entry.phase === 'locate').aliasCount, 2);

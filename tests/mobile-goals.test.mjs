@@ -70,7 +70,7 @@ test('准备后复核失败不提交，提交后断线明确标记未知', async
 });
 
 test('侧边聊天或目标栏未就绪时返回明确原因，不进入提交阶段', async () => {
-  for (const [code, hint] of [['GOAL_UI_SIDECHAT_ACTIVE', '侧边聊天'], ['GOAL_UI_LAYOUT_LOADING', '尚未加载完成'], ['GOAL_UI_THREAD_CHANGED', '当前会话已变化'], ['GOAL_UI_FOREGROUND_CHANGED', '前台窗口已切换']]) {
+  for (const [code, hint] of [['GOAL_UI_SIDECHAT_ACTIVE', '侧边聊天'], ['GOAL_UI_LAYOUT_LOADING', '尚未加载完成'], ['GOAL_UI_THREAD_CHANGED', '当前聊天已变化'], ['GOAL_UI_FOREGROUND_CHANGED', '前台窗口已切换']]) {
     const fixture = nativeFixture('before-error', { code }); let checked = 0;
     await assert.rejects(fixture.controller.perform({ deadline: Date.now() + 2000 }, async () => { checked++; }), error => error.code === code && error.message.includes(hint) && error.outcomeUnknown === false);
     assert.equal(checked, 0); assert.equal(fixture.writes.length, 1);

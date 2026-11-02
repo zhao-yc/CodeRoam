@@ -13,11 +13,11 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
     fd=fs.openSync(file,'r');const size=fs.fstatSync(fd).size;
     const header=Buffer.alloc(Math.min(size,256*1024));fs.readSync(fd,header,0,header.length,0);
     const metadata=JSON.parse(header.toString('utf8').split('\n')[0]);
-    if(metadata.type!=='session_meta'||metadata.payload?.id!==row.id)throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前会话不匹配');
+    if(metadata.type!=='session_meta'||metadata.payload?.id!==row.id)throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前聊天不匹配');
     let end=size,seek=beforeMessageId;
     if(before){
-      let cursor;try{cursor=JSON.parse(Buffer.from(before,'base64url').toString('utf8'));}catch{throw new BridgeError('BAD_HISTORY_CURSOR','历史游标无效，请重新打开会话');}
-      if(cursor.threadId!==row.id||!Number.isSafeInteger(cursor.offset)||cursor.offset<0||cursor.offset>size||typeof cursor.seek!=='string'||cursor.seek.length>1000)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开会话');
+      let cursor;try{cursor=JSON.parse(Buffer.from(before,'base64url').toString('utf8'));}catch{throw new BridgeError('BAD_HISTORY_CURSOR','历史游标无效，请重新打开聊天');}
+      if(cursor.threadId!==row.id||!Number.isSafeInteger(cursor.offset)||cursor.offset<0||cursor.offset>size||typeof cursor.seek!=='string'||cursor.seek.length>1000)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开聊天');
       end=cursor.offset;seek=cursor.seek;
     }
     const start=Math.max(0,end-maximumBytes),buffer=Buffer.alloc(end-start);fs.readSync(fd,buffer,0,buffer.length,start);

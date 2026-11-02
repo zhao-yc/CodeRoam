@@ -9,6 +9,6 @@ export function selectNativeEndpoint({candidates=[],ipcProcessId=null}={},prefer
     matches=valid.filter(entry=>entry.path===preferredPath);
     if(!matches.length){const visible=valid.filter(entry=>entry.hasWindow===true);matches=visible.length?visible:valid;}
   }
-  if(matches.length!==1)throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','无法确定会话所属的桌面实例，请确认电脑连接后重试');
+  if(matches.length!==1)throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','无法确定聊天所属的桌面实例，请确认电脑连接后重试');
   return matches[0];
 }

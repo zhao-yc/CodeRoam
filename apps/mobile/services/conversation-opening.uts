@@ -1,9 +1,9 @@
 // 尚未取得快照时，失败与断线必须结束“正在打开”的提示；已有历史不被后续错误替换。
 export function conversationOpeningTitle(hasSnapshot: boolean, error: string, connected: boolean): string {
   if (hasSnapshot) return ''
-  if (error.length > 0) return '会话打开失败'
+  if (error.length > 0) return '聊天打开失败'
   if (!connected) return '等待连接电脑'
-  return '正在打开会话'
+  return '正在打开聊天'
 }
 
 // 有效的新名称优先，快照未提供名称时沿用列表名称，无名称入口仍显示原有加载提示。
@@ -21,5 +21,5 @@ export function conversationProjectName(listProjectName: string, snapshotCwd: st
     const parts = normalized.split('/')
     return parts[parts.length - 1].length > 0 ? parts[parts.length - 1] : normalized
   }
-  return listProjectName.trim().length > 0 ? listProjectName : '会话'
+  return listProjectName.trim().length > 0 ? listProjectName : '聊天'
 }

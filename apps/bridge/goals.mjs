@@ -21,7 +21,7 @@ export async function readGoal(adapter, threadId, deviceId, deadline = Date.now(
   const entry = adapter.subscribed(threadId, deviceId), owner = entry.owner;
   if (Date.now() >= deadline) throw new BridgeError('GOAL_READ_UNAVAILABLE', '目标读取未完成，请刷新后核对');
   await adapter.watch(threadId, deviceId, { fresh: true, history: false, snapshotTimeoutMs: Math.max(1, Math.min(6000, deadline - Date.now() - 500)) });
-  if (adapter.subscribed(threadId, deviceId) !== entry || entry.owner?.clientId !== owner.clientId || entry.owner?.hostId !== owner.hostId) throw new BridgeError('GOAL_CHANGED', '会话所有者已变化，请重新同步目标');
+  if (adapter.subscribed(threadId, deviceId) !== entry || entry.owner?.clientId !== owner.clientId || entry.owner?.hostId !== owner.hostId) throw new BridgeError('GOAL_CHANGED', '聊天所有者已变化，请重新同步目标');
   if (!Object.hasOwn(entry.state, 'threadGoal')) throw new BridgeError('GOAL_UNSUPPORTED', '当前桌面暂不支持目标，请更新电脑端');
   const goal = normalizeGoal(entry.state);
   if (entry.state.threadGoal != null && goal == null) throw new BridgeError('GOAL_UNSUPPORTED', '电脑端目标格式已变化，请更新连接服务');
@@ -36,7 +36,7 @@ export async function updateGoal(adapter, params, commandId, deviceId) {
     const latest = await readGoal(adapter, params.threadId, deviceId, deadline);
     if (latest.goalRevision !== params.expectedRevision) throw new BridgeError('GOAL_CHANGED', '电脑端目标已经变化，请刷新后重新操作');
     const exists = latest.goal !== null;
-    if (params.action === 'create' ? exists : !exists) throw new BridgeError('GOAL_CHANGED', exists ? '此会话已有目标，请刷新后编辑' : '目标已清除，请刷新后新建');
+    if (params.action === 'create' ? exists : !exists) throw new BridgeError('GOAL_CHANGED', exists ? '此聊天已有目标，请刷新后编辑' : '目标已清除，请刷新后新建');
     if (params.action === 'pause' && latest.goal.status !== 'active') throw new BridgeError('GOAL_CHANGED', '目标当前未运行，请刷新后核对');
     if (params.action === 'resume' && !['paused', 'blocked', 'usageLimited', 'budgetLimited'].includes(latest.goal.status)) throw new BridgeError('GOAL_CHANGED', '目标当前无需继续，请刷新后核对');
     return latest;

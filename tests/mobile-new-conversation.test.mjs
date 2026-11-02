@@ -126,7 +126,7 @@ test('当前流程创建的空会话若已被电脑端使用，重试解除旧�
     f.fail('turn.send'); await assert.rejects(f.sendNewConversation(draft, () => {}), /明确失败/);
     const count = f.calls.length;
     f.fail(''); f.openedSnapshot(occupied);
-    await assert.rejects(f.sendNewConversation(draft, () => {}), /原会话已被使用/);
+    await assert.rejects(f.sendNewConversation(draft, () => {}), /原聊天已被使用/);
     assert.deepEqual(f.calls.slice(count).map(call => call.method), ['open']);
     assert.equal(draft.threadId, ''); assert.equal(draft.text, '手机新消息');
     f.openedSnapshot({}); assert.equal(await f.sendNewConversation(draft, () => {}), 'created-thread-2');

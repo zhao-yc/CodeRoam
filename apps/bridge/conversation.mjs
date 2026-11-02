@@ -12,15 +12,15 @@ import { latestTurnSummary, boundedTurnMetadata, turnStatus } from './turn-failu
 /** 对本地快照应用 Immer 路径补丁，拒绝原型链路径和非法数组索引。 */
 export function applyPatches(state, patches) {
   for (const patch of patches) {
-    if (!Array.isArray(patch.path) || patch.path.some(key => ['__proto__','prototype','constructor'].includes(String(key)))) throw new BridgeError('BAD_PATCH', '收到不安全的会话补丁');
-    if (!['add','replace','remove'].includes(patch.op) || patch.path.length === 0) throw new BridgeError('BAD_PATCH', '不支持的会话补丁');
+    if (!Array.isArray(patch.path) || patch.path.some(key => ['__proto__','prototype','constructor'].includes(String(key)))) throw new BridgeError('BAD_PATCH', '收到不安全的聊天补丁');
+    if (!['add','replace','remove'].includes(patch.op) || patch.path.length === 0) throw new BridgeError('BAD_PATCH', '不支持的聊天补丁');
     let target = state;
     for (const key of patch.path.slice(0,-1)) {
-      if (!target || typeof target !== 'object' || !Object.hasOwn(target,key)) throw new BridgeError('PATCH_GAP', '会话补丁缺少基础状态');
+      if (!target || typeof target !== 'object' || !Object.hasOwn(target,key)) throw new BridgeError('PATCH_GAP', '聊天补丁缺少基础状态');
       target = target[key];
     }
     const key = patch.path.at(-1);
-    if (!target || typeof target !== 'object') throw new BridgeError('BAD_PATCH','会话补丁的目标不存在');
+    if (!target || typeof target !== 'object') throw new BridgeError('BAD_PATCH','聊天补丁的目标不存在');
     if (Array.isArray(target)) {
       if (!Number.isInteger(key) || key < 0 || key > target.length || (patch.op !== 'add' && key === target.length)) throw new BridgeError('BAD_PATCH','数组补丁索引不合法');
       if (patch.op === 'remove') target.splice(key,1);
@@ -96,7 +96,7 @@ export function normalizeConversation(state, { imageMessageId, maxMessages = 80,
     const kind = request.method === 'item/commandExecution/requestApproval' ? 'command' : request.method === 'item/fileChange/requestApproval' ? 'file' : null;
     if (!kind || request.id === undefined) return [];
     const params = request.params ?? {};
-    return [{ id:String(request.id), kind, turnId:params.turnId ?? active?.turnId ?? '', title:kind==='command'?'执行命令审批':'修改文件审批', detail:String(params.command ?? params.reason ?? '请核对桌面会话后选择是否允许').slice(0,6000), cwd:params.cwd ?? '' }];
+    return [{ id:String(request.id), kind, turnId:params.turnId ?? active?.turnId ?? '', title:kind==='command'?'执行命令审批':'修改文件审批', detail:String(params.command ?? params.reason ?? '请核对桌面聊天后选择是否允许').slice(0,6000), cwd:params.cwd ?? '' }];
   });
   // 仅保留消息窗口、最新轮次和跨度内的空失败，旧失败由历史分页补齐。
   const selectedTurnIds = new Set(selected.map(message => message.turnId).filter(Boolean));
@@ -110,5 +110,5 @@ export function normalizeConversation(state, { imageMessageId, maxMessages = 80,
   const candidate=[...turns].reverse().flatMap(turn=>(turn.items??[]).filter(item=>item.type==='planImplementation').reverse().map(item=>({item,turn})))[0];
   const pendingPlan=candidate&&candidate.item.isCompleted===false&&!active&&typeof candidate.item.planContent==='string'?{id:String(candidate.item.id),turnId:candidate.item.turnId??candidate.turn.turnId??'',text:candidate.item.planContent}:null;
   const notificationState=taskNotificationState(latestTurn ? [turns.at(-1)] : [],normalizeQuestions(state,turns),approvals,pendingPlan);
-  return { supportsTurnRetry:true, ...(latestTurn ? {latestTurn} : {}), supportsFileReports:process.platform==='win32', notificationState, pendingPlan, supportsPlanImplementation:true, ...(typeof state.hasUnreadTurn === 'boolean' ? {hasUnreadTurn:state.hasUnreadTurn} : {}), ...(Array.isArray(state.threadRuntimeStatus?.activeFlags) ? {activeFlags:state.threadRuntimeStatus.activeFlags.filter(flag=>['waitingOnUserInput','waitingOnApproval'].includes(flag))} : {}), goal:normalizeGoal(state), goalRevision:goalRevision(normalizeGoal(state)), supportsGoals:Object.hasOwn(state,'threadGoal'), activity:currentActivity(active), supportsPlanReset:true, supportsPermissionSettings:true, permissionSettings:permissionState(state), supportsExecutionSettings:true, supportsAttachments:true, executionSettings:executionSettings(state), supportsImages:true, supportsHistoryPages:true, threadId:state.id, title:state.title ?? state.fallbackSearchTitle ?? '未命名会话', cwd:state.cwd ?? '', status:state.threadRuntimeStatus?.type ?? (active?'active':'idle'), activeTurnId:active?.turnId ?? '', messages:selected, turns:[...turnInfo.values()], approvals, questionGroups:normalizeQuestions(state,turns), updatedAt:Date.now() };
+  return { supportsTurnRetry:true, ...(latestTurn ? {latestTurn} : {}), supportsFileReports:process.platform==='win32', notificationState, pendingPlan, supportsPlanImplementation:true, ...(typeof state.hasUnreadTurn === 'boolean' ? {hasUnreadTurn:state.hasUnreadTurn} : {}), ...(Array.isArray(state.threadRuntimeStatus?.activeFlags) ? {activeFlags:state.threadRuntimeStatus.activeFlags.filter(flag=>['waitingOnUserInput','waitingOnApproval'].includes(flag))} : {}), goal:normalizeGoal(state), goalRevision:goalRevision(normalizeGoal(state)), supportsGoals:Object.hasOwn(state,'threadGoal'), activity:currentActivity(active), supportsPlanReset:true, supportsPermissionSettings:true, permissionSettings:permissionState(state), supportsExecutionSettings:true, supportsAttachments:true, executionSettings:executionSettings(state), supportsImages:true, supportsHistoryPages:true, threadId:state.id, title:state.title ?? state.fallbackSearchTitle ?? '未命名聊天', cwd:state.cwd ?? '', status:state.threadRuntimeStatus?.type ?? (active?'active':'idle'), activeTurnId:active?.turnId ?? '', messages:selected, turns:[...turnInfo.values()], approvals, questionGroups:normalizeQuestions(state,turns), updatedAt:Date.now() };
 }

@@ -29,7 +29,7 @@ test('有效实时标题优先，索引不可用不影响正文快照',()=>{
     assert.equal(adapter.snapshot({id:'thread',title:'实时名称'}).title,'实时名称');
     assert.equal(adapter.snapshot({id:'thread',title:null}).title,'实时名称');
     adapter.conversations.get('thread').lastTitle='';
-    assert.equal(adapter.snapshot({id:'thread',title:null}).title,'未命名会话');
+    assert.equal(adapter.snapshot({id:'thread',title:null}).title,'未命名聊天');
   } finally {adapter.close();}
 });
 test('名称查询兼容新旧索引，尊重改名并排除已归档会话',()=>{

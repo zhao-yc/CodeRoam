@@ -43,7 +43,7 @@ export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: 
     } else if (sort == 'priority') {
       const rank = priority(thread)
       key = 'priority:' + rank.toString()
-      title = ['待处理', '执行中', '未读', '其他会话'][rank]
+      title = ['待处理', '执行中', '未读', '其他聊天'][rank]
     } else {
       key = thread.updatedAt >= dayStart ? 'today' : thread.updatedAt >= dayStart - 86400000 ? 'yesterday' : 'older'
       title = key == 'today' ? '今天' : key == 'yesterday' ? '昨天' : '更早'

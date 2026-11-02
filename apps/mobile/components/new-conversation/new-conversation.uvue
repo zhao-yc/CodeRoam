@@ -19,9 +19,9 @@
       <!-- 加号共用同一节点，左右及底部边距在两种状态下保持一致。 -->
       <view class="new-composer-add"><view class="add-action action-frame" :style="{ opacity: (busy || imageBusy) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="busy || imageBusy || !props.expanded" aria-label="添加附件、插件、计划模式或追求目标" @click="openOptions('add')"></button></view></view>
       <view v-show="props.expanded" class="new-actions"><permissions-control :active="props.expanded" :project-id="projectId" :selected-mode="draft.permissionMode" :disabled="busy || creationPendingId.length > 0" @select="selectPermission" /><view v-if="draft.settings?.mode == 'plan'" class="plan-chip action-frame"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="busy || creationPendingId.length > 0" aria-label="关闭计划模式" @click="composerAction('plan')"></button></view><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view></view>
-      <view v-show="props.expanded" class="new-composer-send"><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新对话" @click="send"></button></view></view>
+      <view v-show="props.expanded" class="new-composer-send"><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新聊天" @click="send"></button></view></view>
       </view>
-      <button v-if="!props.expanded" class="action-hitbox new-entry-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="expandEditor"></button>
+      <button v-if="!props.expanded" class="action-hitbox new-entry-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="expandEditor"></button>
       </view>
     </view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
@@ -118,7 +118,7 @@ function loadProjects() {
   bridge.request('projects.list', {}).then((result: UTSJSONObject) => {
     if (!alive || hostId != connection.hostId || request != projectRequest) return
     projectsLoading.value = false
-    if (result.getBoolean('supportsThreadCreation') != true) { error.value = '请更新电脑连接服务后开启新对话'; return }
+    if (result.getBoolean('supportsThreadCreation') != true) { error.value = '请更新电脑连接服务后开启新聊天'; return }
     projects.value = JSON.parse<NewProject[]>(JSON.stringify(result['projects'])) ?? [] as NewProject[]
     let remembered = ''
     try { const value = uni.getStorageSync('codex-mobile-new-project-' + hostId); if (typeof value == 'string') remembered = value } catch (_) {}
@@ -193,7 +193,7 @@ function composerAction(action: string) {
   if (busy.value) return
   if (action == 'plugin') { closeMenus(); showPluginManagement(); return }
   // 目标属于真实会话，首次发送前只说明入口，保留尚未发送的草稿。
-  if (action == 'goal') { closeMenus(); uni.showModal({ title: '追求目标', content: '请先发送消息创建对话，再从加号菜单设置目标。', showCancel: false, confirmText: '知道了' }); return }
+  if (action == 'goal') { closeMenus(); uni.showModal({ title: '追求目标', content: '请先发送消息创建聊天，再从加号菜单设置目标。', showCancel: false, confirmText: '知道了' }); return }
   if (action == 'plan') {
     if (draft.value.settings == null) return
     draft.value.settings!.mode = draft.value.settings!.mode == 'plan' ? 'default' : 'plan'

@@ -24,7 +24,7 @@ const rows = [0, 1, 2, 3, 4, 5]
 const turns = [0, 1]
 const opacity = ref(1)
 let pulseTimer = 0
-const label = computed((): string => props.kind == 'list' ? '正在加载会话列表' : props.kind == 'conversation' ? '正在加载对话' : '正在读取更早的对话')
+const label = computed((): string => props.kind == 'list' ? '正在加载聊天列表' : props.kind == 'conversation' ? '正在加载聊天' : '正在读取更早的聊天')
 
 // 每个骨架只使用一个时钟，由跨端透明度过渡完成约 1.6 秒一轮的呼吸。
 function stopPulse() { clearInterval(pulseTimer); pulseTimer = 0; opacity.value = 1 }

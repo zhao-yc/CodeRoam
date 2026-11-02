@@ -8,7 +8,7 @@ export class DesktopNavigation {
     return this.current={threadId,devices:new Set([deviceId]),pending:true,promise:null};
   }
   isCurrent(token){return this.current===token&&token.devices.size>0;}
-  assertCurrent(token){if(!this.isCurrent(token))throw new BridgeError('SUBSCRIPTION_CANCELED','会话已切换，已取消旧的电脑导航');}
+  assertCurrent(token){if(!this.isCurrent(token))throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，已取消旧的电脑导航');}
   run(token,open) {
     token.promise??=Promise.resolve().then(async()=>{this.assertCurrent(token);await open(token.threadId,{isCurrent:()=>this.isCurrent(token)});this.assertCurrent(token);}).finally(()=>{token.pending=false;});
     return token.promise;

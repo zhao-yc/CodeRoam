@@ -77,7 +77,7 @@ export class BridgeAgent extends EventEmitter {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
       const execute=async()=>{
-        if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该对话正在永久删除，请先核对删除结果');
+        if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该聊天正在永久删除，请先核对删除结果');
         if(message.method==='turn.send'&&message.params.queueAction) {
           if(!this.messageQueue)throw new BridgeError('QUEUE_UNAVAILABLE','请更新电脑连接服务后使用消息排队');
           return this.messageQueue.operate(message.params,message.requestId,message.deviceId);
@@ -94,7 +94,7 @@ export class BridgeAgent extends EventEmitter {
         }
         if(message.method==='thread.delete') {
           const lockRelated=async ids=>{
-            if(ids.some(id=>this.deletingIds.has(id)))throw new BridgeError('DELETE_IN_PROGRESS','关联对话正在删除，请先核对原操作');
+            if(ids.some(id=>this.deletingIds.has(id)))throw new BridgeError('DELETE_IN_PROGRESS','关联聊天正在删除，请先核对原操作');
             ids.forEach(id=>this.deletingIds.add(id));
             const release=()=>ids.forEach(id=>this.deletingIds.delete(id));
             try {await Promise.all(ids.filter(id=>id!==message.params.threadId).map(id=>this.threadLocks.get(id)?.catch(()=>{})));return release;}

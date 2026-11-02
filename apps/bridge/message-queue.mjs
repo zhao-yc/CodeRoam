@@ -16,7 +16,7 @@ export class MessageQueue {
       previous_turn TEXT NOT NULL DEFAULT '', UNIQUE(device_id, command_id)
     )`);
     // 崩溃前已开始发送的消息必须人工核对，绝不能当作待发送消息重放。
-    this.db.prepare("UPDATE message_queue SET state='unknown', error='发送结果需要核对，请先查看会话；此消息不会自动重发' WHERE state='sending'").run();
+    this.db.prepare("UPDATE message_queue SET state='unknown', error='发送结果需要核对，请先查看聊天；此消息不会自动重发' WHERE state='sending'").run();
     this.timer = setInterval(() => this.pump(), 1000); this.timer.unref();
   }
 
@@ -38,13 +38,13 @@ export class MessageQueue {
   /** 入队与普通写操作共用会话锁、请求账本；仅确认保存后通知手机清空原草稿。 */
   async operate(params, commandId, deviceId) {
     const { threadId, queueAction } = params;
-    if (this.blocked(threadId)) throw new BridgeError('DELETE_IN_PROGRESS', '该对话正在删除，不能操作排队消息');
+    if (this.blocked(threadId)) throw new BridgeError('DELETE_IN_PROGRESS', '该聊天正在删除，不能操作排队消息');
     if (queueAction === 'enqueue') {
       const images = validateImages(params.images), text = params.text ?? '', attachments = params.attachments ?? [];
       if (typeof text !== 'string' || text.length > 32000 || (!text.trim() && !images.length && !attachments.length)) throw new BridgeError('BAD_PARAMS', '请输入消息或选择附件');
       if (this.rows(threadId).length >= 20) throw new BridgeError('QUEUE_FULL', '最多排队20条消息，请先处理已有消息');
       const snapshot = await this.snapshot(threadId);
-      if (snapshot.readOnly) throw new BridgeError('HISTORY_READ_ONLY', '请先连接原桌面会话再排队');
+      if (snapshot.readOnly) throw new BridgeError('HISTORY_READ_ONLY', '请先连接原桌面聊天再排队');
       const id = randomUUID();
       this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments }));
       this.changed(threadId);
@@ -75,7 +75,7 @@ export class MessageQueue {
       const unknown = error.outcomeUnknown || /timeout|超时|连接已关闭|not-connected/i.test(error.message);
       // 空闲快照之后桌面先开始了另一任务时安全回队，绝不改为追加。
       const state = error.code === 'TURN_ACTIVE' || error.code === 'STALE_TURN' ? 'queued' : unknown ? 'unknown' : 'failed';
-      this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, state === 'queued' ? '' : unknown ? '发送结果需要核对，请先查看会话；此消息不会自动重发' : '发送失败，请核对会话和附件后取消此消息并重新发送', row.id);
+      this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, state === 'queued' ? '' : unknown ? '发送结果需要核对，请先查看聊天；此消息不会自动重发' : '发送失败，请核对聊天和附件后取消此消息并重新发送', row.id);
       this.changed(row.thread_id); throw error;
     }
   }

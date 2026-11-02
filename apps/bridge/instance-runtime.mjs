@@ -50,7 +50,7 @@ export class InstanceRuntime {
     const activate = this.adapter.activateThread;
     this.adapter.activateThread = async (id, options) => {
       const own = await this.adapter.discoverOwner(id, 400);
-      if (!own && await this.client.ownedElsewhere(id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '此会话正在另一个实例中打开，请切换到对应设备');
+      if (!own && await this.client.ownedElsewhere(id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '此聊天正在另一个实例中打开，请切换到对应设备');
       return activate(id, options);
     };
     this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });

@@ -64,7 +64,7 @@ test('按真实来源隐藏内部审核和子智能体，保留同名及未知�
     const before=f.db.prepare('SELECT * FROM threads ORDER BY id').all();
     assert.deepEqual(f.reader.list().map(row=>row.id),['same-title','normal','same-worker-title','unnamed','null-subagent','empty-source']);
     assert.deepEqual(f.reader.list({search:'普通子会话'}).map(row=>row.id),['same-worker-title']);
-    assert.equal(f.reader.list().find(row=>row.id==='unnamed').title,'未命名会话');
+    assert.equal(f.reader.list().find(row=>row.id==='unnamed').title,'未命名聊天');
     assert.deepEqual(f.reader.list({search:'Guardian review'}).map(row=>row.id),['same-title']);
     assert.deepEqual(f.reader.list({search:'审核'}),[]);
     assert.deepEqual(f.reader.list({search:'C:/project',limit:2,offset:1}).map(row=>row.id),['normal','same-worker-title']);

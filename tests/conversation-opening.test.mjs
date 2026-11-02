@@ -9,16 +9,16 @@ vm.runInContext(stripTypeScriptTypes(source.replace(/\bexport /g,''),{mode:'tran
 
 test('打开失败后结束加载提示，重试与连接恢复后可重新显示加载状态',()=>{
   const title=context.title;
-  assert.equal(title(false,'',true),'正在打开会话');
-  assert.equal(title(false,'历史读取失败',true),'会话打开失败');
-  assert.equal(title(false,'历史读取失败',false),'会话打开失败');
+  assert.equal(title(false,'',true),'正在打开聊天');
+  assert.equal(title(false,'历史读取失败',true),'聊天打开失败');
+  assert.equal(title(false,'历史读取失败',false),'聊天打开失败');
   assert.equal(title(false,'',false),'等待连接电脑');
-  assert.equal(title(false,'',true),'正在打开会话');
+  assert.equal(title(false,'',true),'正在打开聊天');
   assert.equal(title(true,'后续同步失败',true),'');
 });
 
 test('详情加载、失败或断线期间沿用列表名称，取得新名称后更新',()=>{
-  for(const status of ['正在打开会话','会话打开失败','等待连接电脑','']) {
+  for(const status of ['正在打开聊天','聊天打开失败','等待连接电脑','']) {
     for(const snapshotTitle of ['', '   ', '列表中的会话']) {
       assert.equal(context.displayTitle('列表中的会话',snapshotTitle,status),'列表中的会话');
     }
@@ -31,7 +31,7 @@ test('项目加载期间沿用列表名称，快照支持两种路径分隔符�
   assert.equal(context.projectName('列表项目',''),'列表项目');
   assert.equal(context.projectName('列表项目','   '),'列表项目');
   assert.equal(context.projectName('未指定项目',''),'未指定项目');
-  assert.equal(context.projectName('',''),'会话');
+  assert.equal(context.projectName('',''),'聊天');
   for(const cwd of ['C:\\workspace\\新项目\\','/workspace/新项目/','/workspace/新项目']) {
     assert.equal(context.projectName('列表项目',cwd),'新项目');
   }

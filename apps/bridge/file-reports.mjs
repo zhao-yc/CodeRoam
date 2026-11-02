@@ -52,12 +52,12 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
   /** 重复请求共享在途解析，订阅与所有者变化后不返回旧报告。 */
   async read(adapter,{threadId,reportId,fileId},deviceId) {
     const entry=adapter.conversations.get(threadId);
-    if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条会话再查看文件修改');
+    if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条聊天再查看文件修改');
     const owner=entry.owner,ownerId=JSON.stringify([owner?.hostId,owner?.clientId]);
     const current=()=>!this.closed&&adapter.conversations.get(threadId)===entry&&entry.watchers.has(deviceId)&&JSON.stringify([entry.owner?.hostId,entry.owner?.clientId])===ownerId;
     let source=entry.state?fileReportSource(entry.state,reportId):null;
     if(!source&&adapter.index?.readHistory){const saved=await adapter.index.readHistory(threadId,{reportId,rawTurns:true});source=fileReportSource(saved,reportId);}
-    if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的文件查看已取消');
+    if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的文件查看已取消');
     if(!source)throw new BridgeError('REPORT_NOT_FOUND','这份报告的修改记录暂不可用');
     if(!source.batches.length)return {report:null};
     const revision=createHash('sha256').update(JSON.stringify(source.batches)).digest('hex'),key=JSON.stringify([ownerId,threadId,reportId,revision]);
@@ -65,7 +65,7 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
     if(!report){
       if(!this.pendingReports.has(key))this.pendingReports.set(key,this.nativeReport(adapter,source).finally(()=>this.pendingReports.delete(key)));
       const native=await this.pendingReports.get(key);
-      if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的文件查看已取消');
+      if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的文件查看已取消');
       if(!Number.isSafeInteger(native.additions)||native.additions<0||!Number.isSafeInteger(native.deletions)||native.deletions<0||!Array.isArray(native.files)||native.files.length>500)throw new BridgeError('BAD_REPORT','电脑文件汇总格式无效');
       if(native.files.some(file=>typeof file.path!=='string'||!file.path||!Number.isSafeInteger(file.additions)||file.additions<0||!Number.isSafeInteger(file.deletions)||file.deletions<0||!Array.isArray(file.diffs)||file.diffs.some(diff=>typeof diff!=='string')))throw new BridgeError('BAD_REPORT','电脑文件差异格式无效');
       report={reportId,revision,additions:native.additions,deletions:native.deletions,files:native.files.map(file=>({...file,id:createHash('sha256').update(file.path).digest('hex').slice(0,24)}))};
@@ -73,7 +73,7 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
       if(this.cache.size>=8)this.cache.delete(this.cache.keys().next().value);
       this.cache.set(key,report);
     }
-    if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的文件查看已取消');
+    if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的文件查看已取消');
     if(fileId){const file=report.files.find(file=>file.id===fileId);if(!file)throw new BridgeError('FILE_NOT_FOUND','这份报告中没有这个文件');return {reportId,revision,file};}
     return {report:{...report,fileCount:report.files.length,files:report.files.map(({diffs,...file})=>file)}};
   }

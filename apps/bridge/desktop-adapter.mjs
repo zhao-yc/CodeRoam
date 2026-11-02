@@ -82,7 +82,7 @@ export class DesktopAdapter extends EventEmitter {
   async loadOwner(threadId,requestDeadline) {
     if(this.loadingThreads.has(threadId))return this.loadingThreads.get(threadId);
     const loading=(async()=>{
-      if(!this.index?.containsThread?.(threadId))throw new BridgeError('THREAD_NOT_FOUND','这条会话已不存在或已经归档，请刷新会话列表');
+      if(!this.index?.containsThread?.(threadId))throw new BridgeError('THREAD_NOT_FOUND','这条聊天已不存在或已经归档，请刷新聊天列表');
       if(this.stopped)throw new BridgeError('SUBSCRIPTION_CANCELED','连接服务已停止');
       // 显式打开已统一发出导航；这里只等待原桌面所有者，不重复切换。
       const deadline=Math.min(Date.now()+this.loadTimeoutMs,requestDeadline);
@@ -91,7 +91,7 @@ export class DesktopAdapter extends EventEmitter {
         if(owner)return owner;
         if(Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,Math.min(200,deadline-Date.now())));
       }
-      throw new BridgeError('DESKTOP_LOAD_TIMEOUT','电脑仍在加载会话，请稍后点击继续此会话重试');
+      throw new BridgeError('DESKTOP_LOAD_TIMEOUT','电脑仍在加载聊天，请稍后点击继续此聊天重试');
     })();
     this.loadingThreads.set(threadId,loading);
     try{return await loading;}finally{if(this.loadingThreads.get(threadId)===loading)this.loadingThreads.delete(threadId);}
@@ -104,7 +104,7 @@ export class DesktopAdapter extends EventEmitter {
     await this.connect();
     let entry=this.conversations.get(threadId);
     if(!entry) {
-      if(this.conversations.size>=64) throw new BridgeError('TOO_MANY_THREADS','订阅会话过多，请关闭不用的会话');
+      if(this.conversations.size>=64) throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
       entry={watchers:new Set(),owner:null,state:null,revision:null,waiters:[],publishTimer:null};
       this.conversations.set(threadId,entry);
     }
@@ -114,35 +114,35 @@ export class DesktopAdapter extends EventEmitter {
       let discovered;
       try {
         if(activate) {
-          if(!this.index?.containsThread?.(threadId))throw new BridgeError('THREAD_NOT_FOUND','这条会话已不存在或已经归档，请刷新会话列表');
+          if(!this.index?.containsThread?.(threadId))throw new BridgeError('THREAD_NOT_FOUND','这条聊天已不存在或已经归档，请刷新聊天列表');
           await this.navigation.run(navigation,(id,options)=>this.activateThread(id,options));
           fresh=true;
         }
         discovered=await this.discoverOwner(threadId,ownerTimeoutMs);
         // 用户切换会话或断开后，不再启动加载，也不遗留迟到的跟随订阅。
         const current=()=>!this.stopped&&this.conversations.get(threadId)===entry&&entry.watchers.has(deviceId)&&(!navigation||this.navigation.isCurrent(navigation));
-        if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的同步已取消');
-        if(!discovered&&activate){discovered=await this.loadOwner(threadId,requestDeadline-1000);if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的同步已取消');}
+        if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
+        if(!discovered&&activate){discovered=await this.loadOwner(threadId,requestDeadline-1000);if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');}
         if(!discovered&&history) {
-          if(!this.index?.readHistory) throw new BridgeError('HISTORY_UNAVAILABLE','暂时无法读取这条会话的已保存历史');
+          if(!this.index?.readHistory) throw new BridgeError('HISTORY_UNAVAILABLE','暂时无法读取这条聊天的已保存历史');
           const saved=await this.index.readHistory(threadId);
-          if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的同步已取消');
+          if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
           if(previous&&this.client.socket?.writable) this.client.broadcast('thread-stream-following-changed',{hostId:previous.hostId,conversationId:threadId,following:false},1,[previous.clientId]);
           entry.owner=null;entry.state=null;entry.revision=null;
           return this.native?{...saved,hasUnreadTurn:this.native.unread.get(threadId)}:saved;
         }
         // 列表临时探测失败时只撤销本次订阅，不能清空手机正在使用的所有者和快照。
-        if(!discovered) throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此会话，加载完成后再操作');
-        if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的同步已取消');
+        if(!discovered) throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此聊天，加载完成后再操作');
+        if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
       }
       catch(error) { if(this.conversations.get(threadId)===entry&&(!navigation||this.navigation.current===navigation||this.navigation.current?.threadId!==threadId)) this.unwatch(threadId,deviceId); throw error; }
       entry.owner=discovered;
       if(entry.owner?.clientId!==previous?.clientId){entry.state=null;entry.revision=null;}
-      if(!entry.owner) { this.unwatch(threadId,deviceId); throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此会话，加载完成后再操作'); }
+      if(!entry.owner) { this.unwatch(threadId,deviceId); throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此聊天，加载完成后再操作'); }
     }
     if(entry.state&&!fresh) return this.snapshot(entry.state);
     const snapshot=new Promise((resolve,reject)=>{
-      const waiter={resolve,reject}; waiter.timer=setTimeout(()=>{entry.waiters=entry.waiters.filter(value=>value!==waiter);reject(new BridgeError('SNAPSHOT_TIMEOUT','桌面会话快照读取超时'));},Math.min(snapshotTimeoutMs,Math.max(1,requestDeadline-Date.now())));entry.waiters.push(waiter);
+      const waiter={resolve,reject}; waiter.timer=setTimeout(()=>{entry.waiters=entry.waiters.filter(value=>value!==waiter);reject(new BridgeError('SNAPSHOT_TIMEOUT','桌面聊天快照读取超时'));},Math.min(snapshotTimeoutMs,Math.max(1,requestDeadline-Date.now())));entry.waiters.push(waiter);
     });
     this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:true},1,[entry.owner.clientId]);
     return snapshot;
@@ -153,7 +153,7 @@ export class DesktopAdapter extends EventEmitter {
     const entry=this.conversations.get(threadId); if(!entry) return {ok:true};
     entry.watchers.delete(deviceId);
     if(entry.watchers.size===0) {
-      for(const waiter of entry.waiters.splice(0)) {clearTimeout(waiter.timer);waiter.reject(new BridgeError('SUBSCRIPTION_CANCELED','这条会话的同步已取消'));}
+      for(const waiter of entry.waiters.splice(0)) {clearTimeout(waiter.timer);waiter.reject(new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消'));}
       if(entry.owner&&this.client.socket?.writable) this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:false},1,[entry.owner.clientId]);
       clearTimeout(entry.publishTimer); this.conversations.delete(threadId);
     }
@@ -178,17 +178,17 @@ export class DesktopAdapter extends EventEmitter {
     } catch(error) {
       entry.state=null;
       if(this.client.socket?.writable)this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:message.params.conversationId,following:true},1,[entry.owner.clientId]);
-      this.emit('adapterWarning',{code:'SNAPSHOT_RESET',message:'会话状态需要重新同步'});
+      this.emit('adapterWarning',{code:'SNAPSHOT_RESET',message:'聊天状态需要重新同步'});
     }
   }
 
   /** 图片只从该手机已订阅会话的可见用户消息读取，不接受手机传入文件路径或图片地址。 */
   async messageImages(threadId,messageId,deviceId) {
     const entry=this.conversations.get(threadId);
-    if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条会话再查看图片');
+    if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条聊天再查看图片');
     const snapshot=entry.state?normalizeConversation(entry.state,{imageMessageId:messageId}):await this.index?.readHistory(threadId,{imageMessageId:messageId});
     // 异步读取结束后再次核对订阅，切换会话或设备断开后不返回原图。
-    if(this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_CANCELED','这条会话的同步已取消');
+    if(this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
     const message=snapshot?.messages.find(item=>item.id===messageId&&item.role==='user');
     if(!message?.images?.length)throw new BridgeError('IMAGE_UNAVAILABLE','这条记录没有保留可预览的图片，请重新发送原图');
     return {images:message.images};
@@ -197,17 +197,17 @@ export class DesktopAdapter extends EventEmitter {
   /** 翻页只读取已订阅会话的保存记录，不导航桌面，也不发布成实时状态。 */
   async historyPage(threadId,deviceId,options) {
     const entry=this.conversations.get(threadId);
-    if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条会话再加载历史');
+    if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条聊天再加载历史');
     if(!this.index?.readHistory)throw new BridgeError('HISTORY_UNAVAILABLE','当前电脑暂不支持读取早期记录');
     const page=await this.index.readHistory(threadId,{...options,page:true});
-    if(this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_CANCELED','会话已切换，已停止读取历史');
+    if(this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，已停止读取历史');
     return page;
   }
 
   /** 设置读取和附件上传均要求手机已订阅，绝不借上传或选择菜单唤醒其他会话。 */
   subscribed(threadId,deviceId) {
     const entry=this.conversations.get(threadId);
-    if(!entry?.watchers.has(deviceId)||!entry.owner||!entry.state)throw new BridgeError('SUBSCRIPTION_REQUIRED','请先加载此会话后再操作');
+    if(!entry?.watchers.has(deviceId)||!entry.owner||!entry.state)throw new BridgeError('SUBSCRIPTION_REQUIRED','请先加载此聊天后再操作');
     return entry;
   }
 
@@ -216,7 +216,7 @@ export class DesktopAdapter extends EventEmitter {
   async readSettings(threadId,deviceId) {
     const entry=this.subscribed(threadId,deviceId),owner=entry.owner;
     const response=await this.client.request('thread-follower-read-model-settings',{conversationId:threadId},1,{targetClientId:owner.clientId,timeoutMs:5000});
-    if(this.subscribed(threadId,deviceId)!==entry||entry.owner!==owner)throw new BridgeError('SUBSCRIPTION_CANCELED','会话已切换，请重新打开设置');
+    if(this.subscribed(threadId,deviceId)!==entry||entry.owner!==owner)throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，请重新打开设置');
     const settings=response.result?.settings;
     if(response.resultType!=='success'||!settings?.model)throw new BridgeError('SETTINGS_UNAVAILABLE','电脑端暂不支持读取模型设置，请更新后重试');
     const current=executionSettings(entry.state)??{model:settings.model,effort:settings.reasoningEffort??'',serviceTier:'',mode:'default'};
@@ -258,8 +258,8 @@ export class DesktopAdapter extends EventEmitter {
     await this.watch(params.threadId,deviceId,{fresh:true,history:false});
     const entry=this.subscribed(params.threadId,deviceId),snapshot=this.snapshot(entry.state);
     const reject=(code,message)=>{this.emit('conversation',snapshot);throw new BridgeError(code,message);};
-    if(snapshot.readOnly||snapshot.activeTurnId||snapshot.status==='active')reject('TURN_ACTIVE','任务状态已变化，请核对最新会话后操作');
-    if(snapshot.latestTurn?.turnId!==params.expectedTurnId||snapshot.latestTurn.status!=='failed')reject('STALE_TURN','失败任务已变化，请核对最新会话后操作');
+    if(snapshot.readOnly||snapshot.activeTurnId||snapshot.status==='active')reject('TURN_ACTIVE','任务状态已变化，请核对最新聊天后操作');
+    if(snapshot.latestTurn?.turnId!==params.expectedTurnId||snapshot.latestTurn.status!=='failed')reject('STALE_TURN','失败任务已变化，请核对最新聊天后操作');
     const pendingRequest=(entry.state.requests??[]).some(entry=>{
       const request=entry.request??entry;
       return request.completed!==true&&(request.method?.endsWith('/requestApproval')||request.method==='item/tool/requestUserInput');
@@ -270,7 +270,7 @@ export class DesktopAdapter extends EventEmitter {
       conversationId:params.threadId,
       turnStart:{request:{threadId:params.threadId,input:[],turnTrigger:'capacity_retry_manual'},context:{inheritThreadSettings:true}}
     },2,{targetClientId:entry.owner.clientId,timeoutMs:15000});
-    if(response.resultType!=='success')throw new BridgeError('OWNER_UNAVAILABLE','桌面会话所有者已不可用');
+    if(response.resultType!=='success')throw new BridgeError('OWNER_UNAVAILABLE','桌面聊天所有者已不可用');
     return {ok:true,commandId,threadId:params.threadId,expectedTurnId:params.expectedTurnId,result:response.result};
   }
 
@@ -358,7 +358,7 @@ export class DesktopAdapter extends EventEmitter {
       payload={...base,requestId:request.id,decision:params.decision};
     } else throw new BridgeError('METHOD_NOT_ALLOWED','不支持的桌面操作');
     const response=await this.client.request(ipcMethod,payload,version,{targetClientId:entry.owner.clientId,timeoutMs:15000});
-    if(response.resultType!=='success') throw new BridgeError('OWNER_UNAVAILABLE','桌面会话所有者已不可用');
+    if(response.resultType!=='success') throw new BridgeError('OWNER_UNAVAILABLE','桌面聊天所有者已不可用');
     if(method==='thread.settings.update') {
       if(response.result?.applied!==true)throw new BridgeError('SETTINGS_CHANGED','电脑端设置已变化，请刷新后重新选择');
       // 桌面广播是最终来源；回读确认而非把乐观选择伪装成桌面快照。

@@ -42,7 +42,7 @@ export class AttachmentStore {
     const file = path.join(directory, 'metadata.json');
     if (fs.lstatSync(file).isSymbolicLink()) throw new BridgeError('UNSAFE_ATTACHMENT_PATH', '附件元数据不可用');
     const metadata = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (metadata.deviceId !== deviceId || metadata.threadId !== threadId || metadata.id !== id) throw new BridgeError('UPLOAD_FORBIDDEN', '附件不属于当前会话');
+    if (metadata.deviceId !== deviceId || metadata.threadId !== threadId || metadata.id !== id) throw new BridgeError('UPLOAD_FORBIDDEN', '附件不属于当前聊天');
     if (!metadata.sent && this.now() - metadata.createdAt >= EXPIRY) throw new BridgeError('UPLOAD_EXPIRED', '附件已过期，请移除后重新选择');
     return { directory, metadata };
   }
@@ -136,7 +136,7 @@ export class AttachmentStore {
     if (ids === undefined) return [];
     if (!Array.isArray(ids) || ids.length + imageCount > MAX_ATTACHMENTS || new Set(ids).size !== ids.length) throw new BridgeError('BAD_ATTACHMENTS', '每次最多发送3个不同附件');
     if (!ids.length) return [];
-    if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !fs.existsSync(cwd)) throw new BridgeError('ATTACHMENT_CWD_UNAVAILABLE', '当前会话的电脑工作目录不可用，无法发送文件');
+    if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !fs.existsSync(cwd)) throw new BridgeError('ATTACHMENT_CWD_UNAVAILABLE', '当前聊天的电脑工作目录不可用，无法发送文件');
     const workspace = fs.realpathSync(cwd);
     return ids.map(id => {
       const { directory, metadata } = this.metadata(deviceId, threadId, id);

@@ -69,7 +69,7 @@ async function choose(value: string) {
   if (value == mode.value) { closeMenu(); return }
   const key = context.value, id = request, revision = state.value!.revision
   if (value == 'full-access') {
-    const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完整访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此会话启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
+    const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完整访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此聊天启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
     if (!confirmed || !current(key, id) || props.disabled || !available.value) return
   }
   if (props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }

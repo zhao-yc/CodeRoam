@@ -110,13 +110,13 @@ export class InstanceIpcClient extends IpcClient {
     return result.resultType === 'success' && !this.allowedClients.has(result.handledByClientId);
   }
   request(method, params, version, options = {}) {
-    if (method !== 'initialize') { this.assertCurrent(); if (!options.targetClientId || !this.allowedClients.has(options.targetClientId)) return Promise.reject(new BridgeError('INSTANCE_CHANGED', '会话所属实例已变化，请重新连接')); }
+    if (method !== 'initialize') { this.assertCurrent(); if (!options.targetClientId || !this.allowedClients.has(options.targetClientId)) return Promise.reject(new BridgeError('INSTANCE_CHANGED', '聊天所属实例已变化，请重新连接')); }
     return super.request(method, params, version, options).then(result => {
       if (method !== 'initialize' && result.resultType === 'success' && result.handledByClientId !== options.targetClientId) throw new BridgeError('INSTANCE_CHANGED', '桌面响应归属已变化，已停止操作');
       return result;
     });
   }
-  broadcast(method, params, version, targets) { this.assertCurrent(); if (!targets?.length || targets.some(id => !this.allowedClients.has(id))) throw new BridgeError('INSTANCE_CHANGED', '会话所属实例已变化，已停止操作'); return super.broadcast(method, params, version, targets); }
+  broadcast(method, params, version, targets) { this.assertCurrent(); if (!targets?.length || targets.some(id => !this.allowedClients.has(id))) throw new BridgeError('INSTANCE_CHANGED', '聊天所属实例已变化，已停止操作'); return super.broadcast(method, params, version, targets); }
   handleMessage(message) {
     if (message.type === 'broadcast' && message.method === 'client-status-changed' && message.params?.status === 'disconnected' && this.allowedClients.delete(message.params.clientId) && !this.allowedClients.size) this.instance.ready = false;
     if (message.type === 'broadcast' && message.method !== 'thread-stream-following-status-requested' && !this.allowedClients.has(message.sourceClientId)) return;

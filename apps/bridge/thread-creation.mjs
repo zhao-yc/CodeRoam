@@ -74,7 +74,7 @@ export class ThreadCreationClient {
         const entry = pending.get(message.id); if (!entry) continue;
         pending.delete(message.id); clearTimeout(entry.timer);
         if (message.error) {
-          const error = new BridgeError('CREATION_REJECTED', entry.method === 'thread/start' ? 'Codex 未能创建会话，请核对电脑端项目与配置' : '暂时无法读取项目的 Codex 设置');
+          const error = new BridgeError('CREATION_REJECTED', entry.method === 'thread/start' ? 'Codex 未能创建聊天，请核对电脑端项目与配置' : '暂时无法读取项目的 Codex 设置');
           error.cause = message.error; entry.reject(error);
         }
         else entry.resolve(message.result);
@@ -113,7 +113,7 @@ export class ThreadCreationClient {
       return response;
     });
   }
-  async create(cwd, title = '新对话', onCreated = () => {}) {
+  async create(cwd, title = '新聊天', onCreated = () => {}) {
     return this.run(cwd, async request => {
       const result = await request('thread/start', { cwd });
       const threadId = result?.thread?.id;

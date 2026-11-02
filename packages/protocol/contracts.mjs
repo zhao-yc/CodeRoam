@@ -42,7 +42,7 @@ export function validateRequest(message) {
   if (message.method === 'turn.retry') validateTurnRetry(message.params);
   if (message.method === 'threads.list') {
     const p=message.params;
-    if(Object.keys(p).some(key=>!['limit','offset','search','archived','includeUsage'].includes(key)) || (p.archived!==undefined&&typeof p.archived!=='boolean') || (p.includeUsage!==undefined&&typeof p.includeUsage!=='boolean') || (p.limit!==undefined&&(!Number.isInteger(p.limit)||p.limit<1||p.limit>100)) || (p.offset!==undefined&&(!Number.isInteger(p.offset)||p.offset<0||p.offset>10000)) || (p.search!==undefined&&(typeof p.search!=='string'||p.search.length>100)))throw new BridgeError('BAD_PARAMS','会话列表参数无效');
+    if(Object.keys(p).some(key=>!['limit','offset','search','archived','includeUsage'].includes(key)) || (p.archived!==undefined&&typeof p.archived!=='boolean') || (p.includeUsage!==undefined&&typeof p.includeUsage!=='boolean') || (p.limit!==undefined&&(!Number.isInteger(p.limit)||p.limit<1||p.limit>100)) || (p.offset!==undefined&&(!Number.isInteger(p.offset)||p.offset<0||p.offset>10000)) || (p.search!==undefined&&(typeof p.search!=='string'||p.search.length>100)))throw new BridgeError('BAD_PARAMS','聊天列表参数无效');
   }
   if (message.method === 'host.profile.update') {
     requireString(message.hostId, '电脑编号', 200);
@@ -55,31 +55,31 @@ export function validateRequest(message) {
     if(message.method!=='thread.history'||message.params.view!=='file-report')throw new BridgeError('BAD_PARAMS','文件报告只能通过历史只读视图查看');
     requireString(message.params.reportId,'报告编号',1000);
     if(message.params.fileId!==undefined&&(typeof message.params.fileId!=='string'||!/^[a-f0-9]{24}$/.test(message.params.fileId)))throw new BridgeError('BAD_PARAMS','文件编号无效');
-    if(Object.keys(message.params).some(key=>!['threadId','view','reportId','fileId'].includes(key)))throw new BridgeError('BAD_PARAMS','文件汇总仅接受会话、报告和文件编号');
+    if(Object.keys(message.params).some(key=>!['threadId','view','reportId','fileId'].includes(key)))throw new BridgeError('BAD_PARAMS','文件汇总仅接受聊天、报告和文件编号');
   }
   if(message.params.planAction!==undefined) {
     if(message.method!=='turn.send')throw new BridgeError('BAD_PARAMS','计划确认只能用于新一轮消息');
-    requireString(message.params.threadId,'会话编号',200);requireString(message.params.planId,'计划编号',300);
+    requireString(message.params.threadId,'聊天编号',200);requireString(message.params.planId,'计划编号',300);
     if(!['implement','feedback'].includes(message.params.planAction)||Object.keys(message.params).some(key=>!['threadId','planId','planAction','text'].includes(key)))throw new BridgeError('BAD_PARAMS','计划确认参数无效');
     if(message.params.planAction==='feedback')requireString(message.params.text,'修改意见',32000);
   }
   if(message.params.planMode!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!['default','plan'].includes(message.params.planMode)||message.params.resetPlanAfterSend!==true))throw new BridgeError('BAD_PARAMS','本次计划模式参数无效');
   if(message.params.resetPlanAfterSend===true&&!['default','plan'].includes(message.params.planMode))throw new BridgeError('BAD_PARAMS','请明确本次消息的执行模式');
   if(message.params.resetPlanAfterSend!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||typeof message.params.resetPlanAfterSend!=='boolean'))throw new BridgeError('BAD_PARAMS','一次性计划标记只能用于发送消息');
-  if(message.params.activate!==undefined&&(message.method!=='thread.watch'||typeof message.params.activate!=='boolean'))throw new BridgeError('BAD_PARAMS','仅会话订阅可使用布尔值加载标记');
+  if(message.params.activate!==undefined&&(message.method!=='thread.watch'||typeof message.params.activate!=='boolean'))throw new BridgeError('BAD_PARAMS','仅聊天订阅可使用布尔值加载标记');
   if(message.params.page!==undefined&&(message.method!=='thread.history'||message.params.page!==true))throw new BridgeError('BAD_PARAMS','历史分页标记无效');
   if(message.params.before!==undefined&&(message.method!=='thread.history'||typeof message.params.before!=='string'||message.params.before.length>2000))throw new BridgeError('BAD_PARAMS','历史游标无效');
   if(message.params.beforeMessageId!==undefined&&(message.method!=='thread.history'||typeof message.params.beforeMessageId!=='string'||message.params.beforeMessageId.length>1000))throw new BridgeError('BAD_PARAMS','历史消息起点无效');
   if(message.params.images!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!Array.isArray(message.params.images)||message.params.images.length>3))throw new BridgeError('BAD_PARAMS','图片只能随发送或追加指令提交，每次最多3张');
-  if (UPLOAD_METHODS.has(message.method)) requireString(message.params.threadId, '会话编号', 200);
+  if (UPLOAD_METHODS.has(message.method)) requireString(message.params.threadId, '聊天编号', 200);
   if (message.params.attachments !== undefined && (!['turn.send', 'turn.steer'].includes(message.method) || !Array.isArray(message.params.attachments) || message.params.attachments.length > 3)) throw new BridgeError('BAD_ATTACHMENTS', '附件只能随发送或追加指令提交，每次最多3个');
   if (message.method === 'thread.create' || message.method === 'thread.create.settings' || message.method === 'thread.create.permissions') {
     requireString(message.params.projectId, '项目编号', 200);
     const allowed = message.method === 'thread.create' ? ['projectId', 'title'] : ['projectId'];
-    if (Object.keys(message.params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '创建会话仅接受电脑端项目编号与标题');
-    if (message.params.title !== undefined) requireString(message.params.title, '会话标题', 80);
-  } else if (message.method.startsWith('thread.') || message.method.startsWith('turn.') || message.method === 'approval.reply' || message.method === 'question.reply') requireString(message.params.threadId, '会话编号', 200);
-  if (message.method === 'thread.permissions.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '权限读取仅接受会话编号');
+    if (Object.keys(message.params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '创建聊天仅接受电脑端项目编号与标题');
+    if (message.params.title !== undefined) requireString(message.params.title, '聊天标题', 80);
+  } else if (message.method.startsWith('thread.') || message.method.startsWith('turn.') || message.method === 'approval.reply' || message.method === 'question.reply') requireString(message.params.threadId, '聊天编号', 200);
+  if (message.method === 'thread.permissions.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '权限读取仅接受聊天编号');
   if (message.method === 'thread.permissions.update') {
     const p = message.params;
     if (Object.keys(p).some(key => !['threadId','mode','expectedRevision','confirmedFullAccess'].includes(key)) || !['default','auto-review','read-only','full-access'].includes(p.mode) || typeof p.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(p.expectedRevision) || (p.confirmedFullAccess !== undefined && typeof p.confirmedFullAccess !== 'boolean') || (p.mode === 'full-access' && p.confirmedFullAccess !== true)) throw new BridgeError('BAD_PERMISSIONS', '权限参数无效或尚未确认完整访问');
@@ -87,7 +87,7 @@ export function validateRequest(message) {
   if (message.method === 'question.reply') requireString(message.params.questionGroupId, '题组编号', 1000);
   if (message.method === 'thread.images') {
     requireString(message.params.messageId, '消息编号', 200);
-    if(Object.keys(message.params).some(key=>!['threadId','messageId'].includes(key)))throw new BridgeError('BAD_PARAMS','查看图片只接受会话编号和消息编号');
+    if(Object.keys(message.params).some(key=>!['threadId','messageId'].includes(key)))throw new BridgeError('BAD_PARAMS','查看图片只接受聊天编号和消息编号');
   }
   // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
   if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {
@@ -97,11 +97,11 @@ export function validateRequest(message) {
     if (p.queueAction === 'steer') requireString(p.expectedTurnId, '当前任务编号', 200);
     if (enqueue && p.attachments?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id))) throw new BridgeError('BAD_ATTACHMENTS', '排队附件编号无效');
   }
-  if (message.method === 'thread.prediction.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取预测仅接受会话编号');
+  if (message.method === 'thread.prediction.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取预测仅接受聊天编号');
   if (message.method === 'thread.goal.update') validateGoalUpdate(message.params);
-  if (message.method === 'thread.goal.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取目标仅接受会话编号');
-  if (message.method === 'thread.archive' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '归档仅接受会话编号');
-  if (message.method === 'thread.delete' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '永久删除仅接受会话编号');
+  if (message.method === 'thread.goal.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取目标仅接受聊天编号');
+  if (message.method === 'thread.archive' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '归档仅接受聊天编号');
+  if (message.method === 'thread.delete' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '永久删除仅接受聊天编号');
   return message;
 }
 
@@ -112,8 +112,8 @@ export function requireString(value, label, maximum = 32000) {
 
 /** 重试只能指定失败轮次，正文、模型和权限等设置均由原桌面会话继承。 */
 export function validateTurnRetry(params) {
-  if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !['threadId', 'expectedTurnId'].includes(key))) throw new BridgeError('BAD_PARAMS', '重试仅接受会话编号和失败轮次编号');
-  requireString(params.threadId, '会话编号', 200);
+  if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !['threadId', 'expectedTurnId'].includes(key))) throw new BridgeError('BAD_PARAMS', '重试仅接受聊天编号和失败轮次编号');
+  requireString(params.threadId, '聊天编号', 200);
   requireString(params.expectedTurnId, '失败轮次编号', 200);
 }
 

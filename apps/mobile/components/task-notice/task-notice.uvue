@@ -2,7 +2,7 @@
   <view v-if="active && taskNotifications.current != null" :id="'task-notice-' + headerId" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible', 'task-notice-dragging': dragging }" :style="{ top: top + 'px', transform: noticeTransform, opacity: noticeOpacity }" role="status" aria-live="polite">
     <view class="task-notice-copy"><text class="task-notice-title">{{ title }}</text><text class="task-notice-subtitle">{{ taskNotifications.current!.threadTitle }}</text></view>
     <app-icon name="chevron-right" :size="20" />
-    <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，点击打开会话，向上滑动关闭'" @touchstart.stop="beginTouch" @touchmove.stop="moveTouch" @touchend.stop="finishTouch" @touchcancel.stop="cancelTouch" @click.stop="openNotice"></button>
+    <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，点击打开聊天，向上滑动关闭'" @touchstart.stop="beginTouch" @touchmove.stop="moveTouch" @touchend.stop="finishTouch" @touchcancel.stop="cancelTouch" @click.stop="openNotice"></button>
   </view>
 </template>
 

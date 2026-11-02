@@ -44,5 +44,5 @@ export class NewThreadService {
     return { settings: { model: modelId, effort, serviceTier: normalizeServiceTier(config.service_tier), mode: 'default' }, models };
   }
   /** 创建结果由调用方先记入自有账本，后续加载或发送失败也可继续同一编号。 */
-  create(projectId, title = '新对话', onCreated) { return this.creation.create(this.project(projectId).cwd, title, onCreated); }
+  create(projectId, title = '新聊天', onCreated) { return this.creation.create(this.project(projectId).cwd, title, onCreated); }
 }

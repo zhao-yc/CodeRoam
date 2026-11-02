@@ -14,11 +14,11 @@ const actions = new Set(['create', 'edit', 'pause', 'resume', 'clear']);
 const uiErrors = new Map([
   ['GOAL_UI_CHANGED', '电脑目标内容已变化，请刷新目标后重试'],
   ['GOAL_DESKTOP_DRAFT', '电脑输入框已有草稿或附件，请先处理后再操作目标'],
-  ['GOAL_UI_SIDECHAT_ACTIVE', '电脑仍停在侧边聊天，未能切回主会话，请在电脑打开主会话后重试'],
-  ['GOAL_UI_LAYOUT_LOADING', '电脑主会话的目标栏尚未加载完成，请稍后重试'],
-  ['GOAL_UI_THREAD_CHANGED', '电脑当前会话已变化，已停止目标操作，请重新打开该会话后重试'],
+  ['GOAL_UI_SIDECHAT_ACTIVE', '电脑仍停在侧边聊天，未能切回主聊天，请在电脑打开主聊天后重试'],
+  ['GOAL_UI_LAYOUT_LOADING', '电脑主聊天的目标栏尚未加载完成，请稍后重试'],
+  ['GOAL_UI_THREAD_CHANGED', '电脑当前聊天已变化，已停止目标操作，请重新打开该聊天后重试'],
   ['GOAL_UI_FOREGROUND_CHANGED', '电脑前台窗口已切换，已停止目标操作，请稍后重试'],
-  ['GOAL_UI_TAB_UNSUPPORTED', '此电脑版本暂不支持主会话标签校验，请在电脑管理目标'],
+  ['GOAL_UI_TAB_UNSUPPORTED', '此电脑版本暂不支持主聊天标签校验，请在电脑管理目标'],
 ]);
 
 /** 提交后的任何失败都保留待核对状态，不能根据错误代码自动重放。 */

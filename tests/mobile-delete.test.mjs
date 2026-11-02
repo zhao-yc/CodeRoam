@@ -23,7 +23,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 test('删除按钮在归档下方，第二次确认前不发送写请求', async () => {
   const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8'); assert.ok(source.indexOf('@click="archiveFromMenu"') < source.indexOf('@click="deleteFromMenu"'));
-  const f = fixture(); f.deleteFromMenu(); f.deleteFromMenu(); assert.equal(f.modals.length, 1); assert.equal(f.modals[0].title, '永久删除对话'); assert.equal(f.calls.length, 0);
+  const f = fixture(); f.deleteFromMenu(); f.deleteFromMenu(); assert.equal(f.modals.length, 1); assert.equal(f.modals[0].title, '永久删除聊天'); assert.equal(f.calls.length, 0);
   f.modals[0].success({ confirm: true }); assert.equal(f.modals.length, 1); assert.equal(f.deleteFinalVisible.value, true); assert.match(f.deleteFinalContent.value, /合成对话/); assert.equal(f.calls.length, 0);
   f.answerDeleteFinal(true); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].method, 'thread.delete'); assert.equal(f.calls[0].write, true); assert.equal(f.removed.length, 0); assert.equal(f.drafts.length, 0);
   f.resolve({ threadId: 'root', deleted: true, deletedThreadIds: ['root', 'child'] }); await flush();
