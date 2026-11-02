@@ -1,0 +1,78 @@
+import { reactive, watch, nextTick } from 'vue'
+import { bridge, connection, Computer, ThreadSummary } from './bridge.uts'
+import { threadList, ComputerThreads, syncThreadComputers, refreshComputerThreads, disconnectThreadLists } from './thread-list.uts'
+import { TaskNotificationCenter, TaskNotice } from './task-notification-state.uts'
+
+type NotificationView = { current: TaskNotice | null, phase: string, focus: TaskNotice | null, focusRevision: number }
+export const taskNotifications = reactive<NotificationView>({ current: null, phase: 'idle', focus: null, focusRevision: 0 })
+const center = new TaskNotificationCenter()
+let installed = false
+let displayTimer = 0
+let configuration = -1
+let navigationRevision = 0
+let navigationNotice: TaskNotice | null = null
+
+// 单一计时器跨页面运行；组件只展示状态，不接管倒计时。
+function publishNotice() {
+  clearTimeout(displayTimer)
+  taskNotifications.current = center.current
+  taskNotifications.phase = center.phase
+  if (center.deadline > 0) displayTimer = setTimeout(() => { center.tick(Date.now()); publishNotice() }, Math.max(1, center.deadline - Date.now()))
+}
+
+// 应用隐藏、断线或重新配对后只恢复读取，不补发旧的完成或失败。
+export function resetTaskNotifications() {
+  clearTimeout(displayTimer); center.reset(); taskNotifications.current = null; taskNotifications.phase = 'idle'
+  taskNotifications.focus = null; navigationNotice = null; navigationRevision++
+}
+
+// 列表订阅属于应用，不能依赖用户先打开首页。
+export function startTaskNotifications() {
+  if (installed) return
+  installed = true
+  watch((): string => connection.configurationRevision.toString() + ':' + connection.configured + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online + ':' + computer.label + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
+    if (configuration != connection.configurationRevision || !connection.connected) { configuration = connection.configurationRevision; resetTaskNotifications() }
+    syncThreadComputers()
+    center.retainHosts(connection.computers.filter((computer: Computer): boolean => computer.online).map((computer: Computer): string => JSON.stringify([computer.id, computer.instanceGeneration ?? ''])))
+    if (!connection.connected) disconnectThreadLists()
+    else refreshComputerThreads()
+    center.tick(Date.now()); publishNotice()
+  }, { immediate: true, flush: 'sync' })
+  watch((): string => JSON.stringify(threadList.computers.map((entry: ComputerThreads): UTSJSONObject => ({ hostId: entry.hostId, generation: entry.instanceGeneration ?? '', online: entry.online, subscribed: entry.subscribed == true, threads: entry.threads.map((thread: ThreadSummary): UTSJSONObject => ({ id: thread.id, title: thread.title, notificationState: thread.notificationState })) }))), () => {
+    if (!connection.connected) return
+    threadList.computers.forEach((entry: ComputerThreads) => {
+      if (entry.online && entry.subscribed == true) center.observe(entry.hostId, entry.instanceGeneration ?? '', entry.threads, Date.now())
+    })
+    publishNotice()
+  }, { immediate: true })
+}
+
+export function pendingTaskNotice(key: string): TaskNotice | null { return navigationNotice?.key == key ? navigationNotice : null }
+
+function focusNotice(notice: TaskNotice) { taskNotifications.focus = notice; taskNotifications.focusRevision++ }
+
+// 显式点击才导航电脑；旧页面先卸载，再打开新目标，避免清理旧订阅时误清新快照。
+export function openTaskNotice(notice: TaskNotice, hostId: string = '', threadId: string = '') {
+  const online = connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == notice.hostId && computer.online && (computer.instanceGeneration ?? '') == notice.generation)
+  if (!online) { uni.showToast({ title: '电脑离线或实例已变化，请恢复连接后查看会话', icon: 'none' }); return }
+  center.dismiss(Date.now()); publishNotice()
+  if (hostId == notice.hostId && threadId == notice.threadId) { focusNotice(notice); return }
+  const revision = ++navigationRevision
+  navigationNotice = notice
+  const pages = getCurrentPages()
+  const currentRoute = pages.length > 0 ? pages[pages.length - 1].route : ''
+  const url = '/pages/conversation/index?threadId=' + encodeURIComponent(notice.threadId) + '&title=' + encodeURIComponent(notice.threadTitle) + '&noticeKey=' + encodeURIComponent(notice.key)
+  const opened = () => {
+    nextTick(() => {
+      if (revision != navigationRevision) return
+      try {
+        bridge.selectComputer(notice.hostId)
+        focusNotice(notice)
+        bridge.openThread(notice.threadId).then((_: UTSJSONObject) => {}, (_: Error) => {})
+      } catch (error) { uni.showToast({ title: (error as Error).message, icon: 'none' }) }
+    })
+  }
+  const failed = () => { if (revision == navigationRevision) navigationNotice = null; uni.showToast({ title: '无法打开会话，请从列表重试', icon: 'none' }) }
+  if (currentRoute == 'pages/conversation/index') uni.redirectTo({ url, success: (_) => { opened() }, fail: (_) => { failed() } })
+  else uni.navigateTo({ url, success: (_) => { opened() }, fail: (_) => { failed() } })
+}

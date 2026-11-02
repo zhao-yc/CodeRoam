@@ -1,9 +1,10 @@
 <script lang="uts">
 import { bridge } from './services/bridge.uts'
+import { startTaskNotifications, resetTaskNotifications } from './services/task-notifications.uts'
 export default {
-  onLaunch() { bridge.restore() },
+  onLaunch() { startTaskNotifications(); bridge.restore() },
   onShow() { bridge.resume() },
-  onHide() { bridge.background() }
+  onHide() { resetTaskNotifications(); bridge.background() }
 }
 </script>
 
