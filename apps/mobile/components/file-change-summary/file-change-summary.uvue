@@ -13,8 +13,9 @@
 </template>
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
-import { bridge } from '../../services/bridge.uts'
+import { bridge, connection } from '../../services/bridge.uts'
 import { ChangedFile, FileReport } from '../../services/file-reports.uts'
+import { readFileReportCache, saveFileReportCache } from '../../services/file-report-cache.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 const props = defineProps<{ hostId: string, threadId: string, reportId: string, connected: boolean }>()
 const emit = defineEmits<{ (event: 'open', report: FileReport, fileId: string): void; (event: 'reading'): void; (event: 'beforelayout'): void; (event: 'layout'): void }>()
@@ -25,24 +26,31 @@ const expanded = ref(true)
 const preview = computed((): ChangedFile[] => report.value?.files.slice(0, 3) ?? [] as ChangedFile[])
 let requestVersion = 0
 let alive = true
-let loaded = false
+// 请求与本地缓存都绑定配对及报告，旧请求不能写回其他配对。
+function cacheIdentity(): string { return JSON.stringify([connection.cacheNamespace, props.hostId, props.threadId, props.reportId]) }
 // 汇总正文独立加载，不扩大聊天快照；归属变化后旧回执立即失效。
 function load() {
   if (!alive || loading.value || !props.connected) return
   loading.value = true; error.value = ''
   const version = ++requestVersion
+  const namespace = connection.cacheNamespace
+  const identity = cacheIdentity()
   bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.reportId }).then((result: UTSJSONObject) => {
-    if (!alive || version != requestVersion) return
-    loading.value = false; loaded = true
+    if (!alive || version != requestVersion || identity != cacheIdentity()) return
+    loading.value = false
     emit('beforelayout')
-    report.value = result['report'] == null ? null : JSON.parse<FileReport>(JSON.stringify(result['report']))
+    const next = result['report'] == null ? null : JSON.parse<FileReport>(JSON.stringify(result['report']))
+    if (next != null && next.reportId != props.reportId) { error.value = '文件汇总暂不可用'; nextTick(() => emit('layout')); return }
+    report.value = next
+    saveFileReportCache(namespace, props.hostId, props.threadId, props.reportId, report.value)
     nextTick(() => emit('layout'))
-  }, (failure: Error) => { if (!alive || version != requestVersion) return; emit('beforelayout'); loading.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
+  }, (failure: Error) => { if (!alive || version != requestVersion || identity != cacheIdentity()) return; emit('beforelayout'); loading.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
 }
 function toggleSummary() { emit('reading'); emit('beforelayout'); expanded.value = !expanded.value; nextTick(() => emit('layout')) }
 function open(fileId: string) { if (report.value == null) return; emit('reading'); emit('open', report.value!, fileId) }
-watch((): string => props.hostId + ':' + props.threadId + ':' + props.reportId, () => { requestVersion++; loading.value = false; report.value = null; loaded = false; error.value = ''; expanded.value = true; load() }, { immediate: true })
-watch((): boolean => props.connected, (connected: boolean) => { requestVersion++; loading.value = false; if (connected && !loaded) load() })
+// 先恢复本地汇总；正文实时订阅就绪后仍后台读取最新版本。
+watch((): string => cacheIdentity(), () => { requestVersion++; loading.value = false; error.value = ''; expanded.value = true; const cached = readFileReportCache(connection.cacheNamespace, props.hostId, props.threadId, props.reportId); report.value = cached?.report ?? null; load() }, { immediate: true })
+watch((): boolean => props.connected, (connected: boolean) => { requestVersion++; loading.value = false; if (connected) load() })
 onUnmounted(() => { alive = false; requestVersion++ })
 </script>
 <style>

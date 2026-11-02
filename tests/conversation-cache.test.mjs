@@ -13,7 +13,7 @@ function fixture(storage=new Map()) {
   let now=1000;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)};
   const c=vm.createContext({uni,Date:{now:()=>++now}});
-  vm.runInContext(stripTypeScriptTypes(uts('conversation-cache'),{mode:'transform'})+';globalThis.subject={readConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts};',c);
+  vm.runInContext(stripTypeScriptTypes(uts('file-report-cache')+'\n'+uts('conversation-cache'),{mode:'transform'})+';globalThis.subject={readConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts};',c);
   return {c,uni,storage,...c.subject};
 }
 

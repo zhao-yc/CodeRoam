@@ -1,3 +1,4 @@
+import { retainFileReportCacheHosts } from './file-report-cache.uts'
 import { watch } from 'vue'
 import { connection, Computer } from './bridge.uts'
 import { clearConversationCache, retainConversationCacheHosts } from './conversation-cache.uts'
@@ -14,6 +15,7 @@ export function startConversationCacheLifecycle() {
     if (!connection.connected || connection.cacheNamespace.length == 0) return
     // 授权全集由 welcome/hosts 提供，不依据截断的最近会话列表删除缓存。
     const namespace = connection.cacheNamespace
+    retainFileReportCacheHosts(namespace, connection.computers.map((computer: Computer): string => computer.id))
     retainConversationCacheHosts(namespace, connection.computers.map((computer: Computer): string => computer.id))
   })
 }

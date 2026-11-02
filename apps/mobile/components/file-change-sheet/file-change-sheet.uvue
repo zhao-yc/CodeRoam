@@ -21,8 +21,9 @@
 </template>
 <script setup lang="uts">
 import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
-import { bridge } from '../../services/bridge.uts'
-import { FileReport, FileReportDetail, DiffRow, fileDiffRows } from '../../services/file-reports.uts'
+import { bridge, connection } from '../../services/bridge.uts'
+import { ChangedFile, FileReport, FileReportDetail, DiffRow, fileDiffRows } from '../../services/file-reports.uts'
+import { readFileReportCache, saveFileReportDetailCache } from '../../services/file-report-cache.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 const props = defineProps<{ hostId: string, threadId: string, report: FileReport, fileId: string, connected: boolean }>()
 const emit = defineEmits<{ (event: 'close'): void }>()
@@ -33,29 +34,46 @@ const expandedIds = ref<string[]>([])
 const loaded = ref<LoadedFile[]>([])
 const errors = ref<FileFailure[]>([])
 const pendingIds = ref<string[]>([])
+const refreshedIds = ref<string[]>([])
 const scrollTarget = ref('')
 let alive = true
 let generation = 0
+let mounted = false
+function cacheIdentity(): string { return JSON.stringify([connection.cacheNamespace, props.hostId, props.threadId, props.report.reportId, props.report.revision]) }
 function detailFor(id: string): FileReportDetail | null { return loaded.value.find((file: LoadedFile): boolean => file.id == id)?.detail ?? null }
 function rowsFor(id: string): DiffRow[] { return loaded.value.find((file: LoadedFile): boolean => file.id == id)?.rows ?? [] as DiffRow[] }
 function errorFor(id: string): string { return errors.value.find((error: FileFailure): boolean => error.id == id)?.message ?? '' }
-// 每个文件按需读取，已打开内容在当前面板内保留；报告、电脑或连接代次变化后丢弃旧回执。
+// 已读差异先从本地恢复，再后台校验；只使用同一报告版本的缓存。
 function loadFile(id: string) {
-  if (!alive || !props.connected || detailFor(id) != null || pendingIds.value.indexOf(id) >= 0) return
+  if (!alive || !props.report.files.some((file: ChangedFile): boolean => file.id == id)) return
+  const namespace = connection.cacheNamespace
+  if (detailFor(id) == null) {
+    const cached = readFileReportCache(namespace, props.hostId, props.threadId, props.report.reportId)
+    const detail = cached?.report?.revision == props.report.revision ? cached?.details.find((file: FileReportDetail): boolean => file.id == id) ?? null : null
+    if (detail != null) loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) })
+  }
+  if (!props.connected || refreshedIds.value.indexOf(id) >= 0 || pendingIds.value.indexOf(id) >= 0) return
   const version = generation
+  const identity = cacheIdentity()
   pendingIds.value.push(id); errors.value = errors.value.filter((error: FileFailure): boolean => error.id != id)
   bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.report.reportId, fileId: id }).then((result: UTSJSONObject) => {
-    if (!alive || version != generation) return
+    if (!alive || version != generation || identity != cacheIdentity()) return
     pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id)
-    if (result.getString('revision') != props.report.revision) { errors.value.push({ id, message: '这份报告已更新，请关闭后重新打开' }); return }
+    if (result.getString('revision') != props.report.revision) { loaded.value = loaded.value.filter((file: LoadedFile): boolean => file.id != id); errors.value.push({ id, message: '这份报告已更新，请关闭后重新打开' }); return }
     const detail = JSON.parse<FileReportDetail>(JSON.stringify(result['file']))
     if (detail == null || detail.id != id) { errors.value.push({ id, message: '文件差异暂不可用' }); return }
+    loaded.value = loaded.value.filter((file: LoadedFile): boolean => file.id != id)
     loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) })
-  }, (failure: Error) => { if (!alive || version != generation) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message }) })
+    refreshedIds.value.push(id)
+    saveFileReportDetailCache(namespace, props.hostId, props.threadId, props.report, detail)
+  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message }) })
 }
 function toggle(id: string) { const index = expandedIds.value.indexOf(id); if (index >= 0) expandedIds.value.splice(index, 1); else { expandedIds.value.push(id); loadFile(id) } }
-onMounted(() => { const id = props.fileId.length > 0 ? props.fileId : props.report.files[0]?.id ?? ''; if (id.length == 0) return; expandedIds.value = [id]; loadFile(id); nextTick(() => { scrollTarget.value = 'changed-file-' + id }) })
-watch((): boolean => props.connected, (connected: boolean) => { generation++; pendingIds.value = [] as string[]; if (connected) expandedIds.value.forEach((id: string) => loadFile(id)) })
+// 重新打开面板、切换配对或报告版本后，恢复当前报告的已读差异。
+function openInitialFile() { const id = props.fileId.length > 0 ? props.fileId : props.report.files[0]?.id ?? ''; if (id.length == 0) return; expandedIds.value = [id]; loadFile(id); nextTick(() => { scrollTarget.value = 'changed-file-' + id }) }
+onMounted(() => { mounted = true; openInitialFile() })
+watch((): string => cacheIdentity(), () => { generation++; pendingIds.value = [] as string[]; refreshedIds.value = [] as string[]; loaded.value = [] as LoadedFile[]; errors.value = [] as FileFailure[]; if (mounted) openInitialFile() })
+watch((): boolean => props.connected, (connected: boolean) => { generation++; pendingIds.value = [] as string[]; refreshedIds.value = [] as string[]; if (connected) expandedIds.value.forEach((id: string) => loadFile(id)) })
 onUnmounted(() => { alive = false; generation++ })
 </script>
 <style>

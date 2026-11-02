@@ -1,3 +1,4 @@
+import { clearFileReportCache } from './file-report-cache.uts'
 import type { ChatMessage, Conversation, ConversationTurn, LatestTurn } from './bridge.uts'
 import type { HistoryPage } from './history.uts'
 
@@ -80,6 +81,7 @@ export function cachedConversationSnapshot(entry: CachedConversation): Conversat
 
 // 清理只触及本应用的会话缓存；失败时旧命名空间也不能被新配对读取。
 export function clearConversationCache(namespace: string, hostId: string = '', threadIds: string[] | null = null) {
+  clearFileReportCache(namespace, hostId, threadIds)
   if (namespace.length == 0) return
   try { const raw = uni.getStorageSync(CACHE_KEY); if (typeof raw != 'string' || JSON.parse<CacheStore>(raw)?.namespace != namespace) return } catch (_) { return }
   const store = loadStore(namespace)

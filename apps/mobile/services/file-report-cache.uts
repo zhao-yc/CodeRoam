@@ -1,0 +1,110 @@
+import type { ChangedFile, FileReport, FileReportDetail } from './file-reports.uts'
+
+export type CachedFileReport = { hostId: string, threadId: string, reportId: string, report: FileReport | null, details: FileReportDetail[], savedAt: number, accessedAt: number }
+type FileReportCacheStore = { version: number, namespace: string, entries: CachedFileReport[] }
+const FILE_REPORT_CACHE_KEY = 'codex-mobile-file-reports-v1'
+const FILE_REPORT_CACHE_BYTES = 1024 * 1024
+const FILE_REPORT_ENTRY_BYTES = 256 * 1024
+
+function validFileCount(value: number): boolean { return typeof value == 'number' && Number.isFinite(value) && value >= 0 && Math.floor(value) == value }
+function validChangedFile(file: ChangedFile): boolean {
+  return file != null && typeof file.id == 'string' && file.id.length > 0 && typeof file.path == 'string' && typeof file.kind == 'string' && typeof file.binary == 'boolean' && validFileCount(file.additions) && validFileCount(file.deletions)
+}
+function validFileReport(report: FileReport, reportId: string): boolean {
+  return report != null && report.reportId == reportId && typeof report.revision == 'string' && report.revision.length > 0 && Array.isArray(report.files) && report.files.length == report.fileCount && report.files.every((file: ChangedFile): boolean => validChangedFile(file)) && validFileCount(report.additions) && validFileCount(report.deletions)
+}
+function validFileDetail(detail: FileReportDetail, report: FileReport): boolean {
+  if (!validChangedFile(detail) || !Array.isArray(detail.diffs) || !detail.diffs.every((diff: string): boolean => typeof diff == 'string')) return false
+  return report.files.some((file: ChangedFile): boolean => file.id == detail.id && file.path == detail.path && file.kind == detail.kind && file.binary == detail.binary && file.additions == detail.additions && file.deletions == detail.deletions)
+}
+
+// 持久化只复制展示字段，避免将响应中的其他运行信息写入本地。
+function cachedFileMetadata(file: ChangedFile): ChangedFile {
+  return { id: file.id, path: file.path, kind: file.kind, additions: file.additions, deletions: file.deletions, binary: file.binary }
+}
+function cachedFileSummary(report: FileReport): FileReport {
+  return { reportId: report.reportId, revision: report.revision, fileCount: report.fileCount, additions: report.additions, deletions: report.deletions, files: report.files.map((file: ChangedFile): ChangedFile => cachedFileMetadata(file)) }
+}
+
+// 文件内容仅保存在当前设备；存储损坏、禁用或配额不足均不影响 PC 正常读取。
+function loadFileReportStore(namespace: string): FileReportCacheStore {
+  const empty = { version: 1, namespace, entries: [] as CachedFileReport[] } as FileReportCacheStore
+  try {
+    const raw = uni.getStorageSync(FILE_REPORT_CACHE_KEY)
+    if (typeof raw != 'string' || raw.length == 0 || raw.length * 2 > FILE_REPORT_CACHE_BYTES) return empty
+    const store = JSON.parse<FileReportCacheStore>(raw)
+    if (store == null || store.version != 1 || store.namespace != namespace || !Array.isArray(store.entries)) return empty
+    store.entries = store.entries.filter((entry: CachedFileReport): boolean => entry != null && typeof entry.hostId == 'string' && typeof entry.threadId == 'string' && typeof entry.reportId == 'string' && typeof entry.savedAt == 'number' && typeof entry.accessedAt == 'number' && Array.isArray(entry.details) && (entry.report == null ? entry.details.length == 0 : validFileReport(entry.report!, entry.reportId) && entry.details.every((detail: FileReportDetail): boolean => validFileDetail(detail, entry.report!))))
+    return store
+  } catch (_) { return empty }
+}
+function writeFileReportStore(store: FileReportCacheStore): boolean {
+  try { uni.setStorageSync(FILE_REPORT_CACHE_KEY, JSON.stringify(store)); return true } catch (_) { return false }
+}
+function findFileReport(store: FileReportCacheStore, hostId: string, threadId: string, reportId: string): CachedFileReport | null {
+  return store.entries.find((entry: CachedFileReport): boolean => entry.hostId == hostId && entry.threadId == threadId && entry.reportId == reportId) ?? null
+}
+
+// 保存完整文件差异，不截断代码；超限优先淘汰旧差异，再淘汰最久未访问的报告。
+function persistFileReport(store: FileReportCacheStore, entry: CachedFileReport): boolean {
+  while (JSON.stringify(entry).length * 2 > FILE_REPORT_ENTRY_BYTES && entry.details.length > 0) entry.details.shift()
+  if (JSON.stringify(entry).length * 2 > FILE_REPORT_ENTRY_BYTES) return false
+  store.entries = store.entries.filter((item: CachedFileReport): boolean => item.hostId != entry.hostId || item.threadId != entry.threadId || item.reportId != entry.reportId)
+  store.entries.sort((left: CachedFileReport, right: CachedFileReport): number => right.accessedAt - left.accessedAt)
+  store.entries.unshift(entry)
+  while (store.entries.length > 40 || JSON.stringify(store).length * 2 > FILE_REPORT_CACHE_BYTES) store.entries.pop()
+  while (!writeFileReportStore(store)) {
+    if (store.entries.length > 1) store.entries.pop()
+    else if (entry.details.length > 0) entry.details.shift()
+    else return false
+  }
+  return true
+}
+
+// 配对、电脑、聊天与报告编号共同隔离；已确认无修改的空结果也可以命中。
+export function readFileReportCache(namespace: string, hostId: string, threadId: string, reportId: string): CachedFileReport | null {
+  if (namespace.length == 0 || hostId.length == 0 || threadId.length == 0 || reportId.length == 0) return null
+  const store = loadFileReportStore(namespace)
+  const entry = findFileReport(store, hostId, threadId, reportId)
+  if (entry != null) { entry.accessedAt = Date.now(); writeFileReportStore(store) }
+  return entry
+}
+
+// 版本一致才保留已读取的差异，PC 确认新版本或无修改时立即丢弃旧版本正文。
+export function saveFileReportCache(namespace: string, hostId: string, threadId: string, reportId: string, report: FileReport | null): boolean {
+  if (namespace.length == 0 || hostId.length == 0 || threadId.length == 0 || reportId.length == 0 || (report != null && !validFileReport(report!, reportId))) return false
+  const store = loadFileReportStore(namespace)
+  const previous = findFileReport(store, hostId, threadId, reportId)
+  const now = Date.now()
+  const entry = { hostId, threadId, reportId, report: report == null ? null : cachedFileSummary(report), details: report != null && previous?.report?.revision == report.revision ? previous!.details : [] as FileReportDetail[], savedAt: now, accessedAt: now } as CachedFileReport
+  return persistFileReport(store, entry)
+}
+
+// 差异只接受报告中列出的文件；迟到的旧面板不能覆盖已经确认的新报告。
+export function saveFileReportDetailCache(namespace: string, hostId: string, threadId: string, report: FileReport, detail: FileReportDetail): boolean {
+  if (namespace.length == 0 || hostId.length == 0 || threadId.length == 0 || !validFileReport(report, report.reportId) || !validFileDetail(detail, report)) return false
+  const store = loadFileReportStore(namespace)
+  let entry = findFileReport(store, hostId, threadId, report.reportId)
+  if (entry != null && entry.report?.revision != report.revision) return false
+  if (entry == null) entry = { hostId, threadId, reportId: report.reportId, report: cachedFileSummary(report), details: [] as FileReportDetail[], savedAt: Date.now(), accessedAt: Date.now() } as CachedFileReport
+  entry.details = entry.details.filter((file: FileReportDetail): boolean => file.id != detail.id)
+  entry.details.push({ id: detail.id, path: detail.path, kind: detail.kind, additions: detail.additions, deletions: detail.deletions, binary: detail.binary, diffs: detail.diffs.slice() }); entry.accessedAt = Date.now(); entry.savedAt = entry.accessedAt
+  return persistFileReport(store, entry)
+}
+
+// 与正文缓存使用相同的配对、授权、归档和永久删除清理边界。
+export function clearFileReportCache(namespace: string, hostId: string = '', threadIds: string[] | null = null) {
+  if (namespace.length == 0) return
+  try { const raw = uni.getStorageSync(FILE_REPORT_CACHE_KEY); if (typeof raw != 'string' || JSON.parse<FileReportCacheStore>(raw)?.namespace != namespace) return } catch (_) { return }
+  const store = loadFileReportStore(namespace)
+  store.entries = store.entries.filter((entry: CachedFileReport): boolean => hostId.length > 0 && (entry.hostId != hostId || (threadIds != null && threadIds.indexOf(entry.threadId) < 0)))
+  if (store.entries.length > 0) { writeFileReportStore(store); return }
+  try { uni.removeStorageSync(FILE_REPORT_CACHE_KEY) } catch (_) { writeFileReportStore(store) }
+}
+export function retainFileReportCacheHosts(namespace: string, hostIds: string[]) {
+  if (namespace.length == 0) return
+  const store = loadFileReportStore(namespace)
+  const retained = store.entries.filter((entry: CachedFileReport): boolean => hostIds.indexOf(entry.hostId) >= 0)
+  if (retained.length == store.entries.length) return
+  store.entries = retained; writeFileReportStore(store)
+}

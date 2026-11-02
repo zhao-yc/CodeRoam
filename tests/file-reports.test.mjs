@@ -67,7 +67,7 @@ test('差异展示正确还原双侧行号、代码中的头部字符和多次�
 test('卡片按报告隔离异步加载，无修改隐藏，断线和卸载后不接收迟到结果',async()=>{
   const code=fs.readFileSync('apps/mobile/components/file-change-summary/file-change-summary.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   const props={hostId:'host',threadId:'thread',reportId:'report',connected:true},watches=[],requests=[];let unmount;
-  const context=vm.createContext({nextTick:fn=>fn(),defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),computed:fn=>({get value(){return fn();}}),watch:(source,callback,options)=>{watches.push({source,callback});if(options?.immediate)callback();},onUnmounted:fn=>{unmount=fn;},bridge:{request:()=>new Promise(resolve=>requests.push(resolve))}});
+  const context=vm.createContext({connection:{cacheNamespace:'pair'},readFileReportCache:()=>null,saveFileReportCache(){},nextTick:fn=>fn(),defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),computed:fn=>({get value(){return fn();}}),watch:(source,callback,options)=>{watches.push({source,callback});if(options?.immediate)callback();},onUnmounted:fn=>{unmount=fn;},bridge:{request:()=>new Promise(resolve=>requests.push(resolve))}});
   vm.runInContext(stripTypeScriptTypes(code,{mode:'transform'})+';globalThis.ui={report,error,load};',context);
   props.reportId='new-report';watches[0].callback();requests[0]({report:{reportId:'report',files:[]}});await Promise.resolve();assert.equal(context.ui.report.value,null);
   requests[1]({report:null});await Promise.resolve();assert.equal(context.ui.report.value,null);
