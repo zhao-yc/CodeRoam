@@ -886,15 +886,15 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .sheet-actions { padding: 8px 16px 10px; flex-shrink: 0; }
 .sheet-copy { height: 46px; margin: 0; border-radius: 12px; border-style: solid; border-width: 1px; border-color: #285c49; flex-direction: row; align-items: center; justify-content: center; }
 .sheet-copy-label { font-size: 14px; color: #202c28; margin-left: 10px; }
-.question-section { margin: 18px 12px 20px; border-width: 1px; border-style: solid; border-color: #d5d5d5; border-radius: 20px; background-color: #ffffff; overflow: hidden; }
-.question-entry { flex-direction: row; align-items: center; padding: 10px 16px; min-height: 56px; background-color: #ffffff; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #eeeeee; }
-.question-label { color: #747474; font-size: 16px; line-height: 24px; flex: 1; }
-.question-state { color: #747474; font-size: 12px; margin-right: 12px; }
-.question-collapse-label { color: #747474; font-size: 13px; line-height: 22px; }
-.question-pressed { background-color: rgba(0, 0, 0, 0.04); }
+.question-section { margin: 18px 12px 20px; border-width: 1px; border-style: solid; border-color: #d8dfd5; border-radius: 20px; background-color: #fffefa; overflow: hidden; }
+.question-entry { flex-direction: row; align-items: center; padding: 10px 16px; min-height: 56px; background-color: #f0f3ed; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #e3e8df; }
+.question-label { color: #657269; font-size: 16px; line-height: 24px; flex: 1; }
+.question-state { color: #657269; font-size: 12px; margin-right: 12px; }
+.question-collapse-label { color: #657269; font-size: 13px; line-height: 22px; }
+.question-pressed { background-color: rgba(40, 92, 73, 0.04); }
 /* #ifdef WEB */
 /* 阴影只用于 Web，原生沿用白底与描边的操作区层次。 */
-.question-section { box-shadow: 0px 12px 30px rgba(0, 0, 0, 0.12); }
+.question-section { box-shadow: 0px 10px 26px rgba(32, 44, 40, 0.07); }
 /* #endif */
 .approval { margin: 10px 16px; padding: 12px; background-color: #e8eee6; border-radius: 14px; }
 .approval-title { color: #202c28; font-size: 16px; font-weight: bold; }
