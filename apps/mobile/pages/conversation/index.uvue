@@ -64,12 +64,12 @@
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
         <message-queue :messages="queuedMessages" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" @cancel="cancelQueuedMessage" />
+        <!-- 同步骨架紧跟缓存消息末尾，与聊天内容一起滚动。 -->
+        <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
         <view id="timeline-bottom" class="bottom-space"></view>
       </scroll-view>
       <view v-if="!atTimelineBottom" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing"></button></view>
     </view>
-    <!-- 缓存刷新只在输入框上方显示骨架，不占用聊天顶部或打断历史阅读。 -->
-    <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
@@ -1252,7 +1252,7 @@ onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(f
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* #endif */
 /* 缓存同步提示保持轻量，避免错误提示重复挤占聊天区域。 */
-.cache-sync-indicator { flex-shrink: 0; padding: 0 16px 6px; }
+.cache-sync-indicator { flex-shrink: 0; padding: 8px 16px 6px; }
 .cache-notice { flex-direction: row; align-items: center; padding: 8px 16px; background-color: #eef2eb; }
 .cache-note { flex: 1; font-size: 12px; line-height: 20px; color: #68776c; }
 .cache-retry { width: 56px; height: 28px; padding: 0; margin: 0 0 0 8px; font-size: 12px; border-radius: 8px; }
