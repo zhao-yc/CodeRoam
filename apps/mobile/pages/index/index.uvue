@@ -293,7 +293,7 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .list-shell { flex: 1; height: 0; min-height: 0; }
 /* 全部标签固定，电脑标签在剩余宽度内横向滚动。 */
 .computer-tabs { height: 56px; padding: 4px 16px 8px; flex-direction: row; align-items: center; flex-shrink: 0; }
-.computer-tab { position: relative; height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
+.computer-tab { position: relative; overflow: visible; height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
 .all-tab { margin-right: 6px; }
 .computer-tab-selected { background-color: #e8eee6; }
 .computer-scroll { flex: 1; width: 0; min-width: 0; height: 44px; }
