@@ -13,9 +13,12 @@ test('列表独立订阅推送完成、未读和移除，多设备共享且最�
   adapter.unwatch=(id,device)=>{removed.push([id,device]);adapter.conversations.get(id)?.watchers.delete(device);};
   const feed=new ThreadListFeed(adapter,event=>events.push(event));
   const initial=await feed.watch('one');assert.equal(initial.threads[0].status,'active');
+  adapter.emit('conversation',{...snapshot,questionGroups:[{kind:'async',state:'pending'}]});
+  assert.equal(events.at(-1).threads[0].unansweredQuestionCount,1);assert.equal(events.at(-1).threads[0].pendingQuestionCount,0);assert.equal(events.at(-1).threads[0].status,'active');
   await feed.watch('two');assert.equal(adapter.conversations.get('a').watchers.has('list-status'),true);
   adapter.emit('conversation',{...snapshot,status:'idle',activeTurnId:'',hasUnreadTurn:true});
   assert.equal(events.at(-1).threads[0].hasUnreadTurn,true);assert.equal(events.at(-1).threads[0].status,'idle');
+  assert.equal(events.at(-1).threads[0].unansweredQuestionCount,0);
   const count=events.length;adapter.emit('conversation',{...snapshot,status:'idle',activeTurnId:'',hasUnreadTurn:true,messages:[{text:'正文变化'}]});assert.equal(events.length,count);
   feed.unwatch('one');assert.equal(adapter.conversations.get('a').watchers.has('list-status'),true);
   rows=[];await feed.refresh();assert.deepEqual(events.at(-1).threads,[]);

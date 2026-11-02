@@ -3,6 +3,13 @@ import { BridgeError, requireString } from '../../packages/protocol/contracts.mj
 const OPEN = '<send_user_message_question_reply>';
 const CLOSE = '</send_user_message_question_reply>';
 
+/** 待回答数量与阻塞状态分开同步，异步问题在任务运行时也需要可见提醒。 */
+export function questionCounts(snapshot) {
+  const pending = (snapshot.questionGroups ?? []).filter(group => group.state === 'pending');
+  const running = !!snapshot.activeTurnId || snapshot.status === 'active';
+  return {pendingQuestionCount: pending.filter(group => group.kind === 'native' || !running).length, unansweredQuestionCount: pending.length};
+}
+
 /** 只解析桌面明确标记的回答，不把普通消息列表误认为问答。 */
 export function parseQuestionReply(text) {
   if (typeof text !== 'string' || !text.trim().startsWith(OPEN) || !text.trim().endsWith(CLOSE)) return [];

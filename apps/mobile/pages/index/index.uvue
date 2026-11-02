@@ -33,7 +33,7 @@
           <text class="group-title">{{ group.title }}</text>
           <view v-for="thread in group.threads" :key="thread.key" :class="['thread', connection.hostId == thread.hostId && connection.activeThreadId == thread.id ? 'thread-selected' : '']" @click="openThread(thread)">
             <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><text class="thread-time">{{ updatedLabel(thread.updatedAt) }}</text></view>
-            <view class="thread-meta"><app-icon name="folder" :size="16" tone="muted" /><text class="thread-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text><text v-if="selectedComputerId.length == 0 && connection.computers.length > 1" class="thread-computer">{{ thread.hostLabel }}</text><task-status :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" /></view>
+            <view class="thread-meta"><app-icon name="folder" :size="16" tone="muted" /><text class="thread-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text><text v-if="selectedComputerId.length == 0 && connection.computers.length > 1" class="thread-computer">{{ thread.hostLabel }}</text><text v-if="thread.online && (thread.unansweredQuestionCount ?? 0) > 0" class="thread-question">待回答 {{ thread.unansweredQuestionCount }}</text><task-status :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" /></view>
           </view>
         </view>
         <view class="list-bottom"></view>
@@ -272,4 +272,5 @@ onBackPress((): boolean => { if (editingComputerId.value.length > 0) { if (!conn
 /* #ifdef WEB */
 .thread-title, .thread-project, .thread-computer, .computer-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
+.thread-question { margin-left: 8px; padding: 2px 7px; border-radius: 10px; background-color: #e4edfb; color: #285c49; font-size: 11px; line-height: 18px; flex-shrink: 0; }
 </style>

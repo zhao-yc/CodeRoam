@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {normalizeConversation} from '../apps/bridge/conversation.mjs';
-import {formatQuestionReply} from '../apps/bridge/questions.mjs';
+import {formatQuestionReply, questionCounts} from '../apps/bridge/questions.mjs';
 import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';
 import {Journal} from '../apps/bridge/journal.mjs';
 import {BridgeError, validateRequest} from '../packages/protocol/contracts.mjs';
@@ -13,6 +13,14 @@ import {conversationUpdate, applyConversationUpdate} from '../apps/bridge/update
 
 function state() {return {id:'thread',cwd:'/',turns:[{turnId:'turn',status:'completed',items:[{id:'call',type:'agentMessage',text:'选择甲或乙',questions:[{title:'第一题',options:['甲','乙']},{title:'第二题',options:null}]}]}],requests:[]};}
 function answerParams(snapshot) {const group=snapshot.questionGroups[0];return {threadId:'thread',questionGroupId:group.id,turnId:group.turnId,answers:group.questions.map((q,i)=>({questionId:q.id,text:i?'自定义':'乙'}))};}
+
+test('运行中异步问题仍计入待回答提醒，阻塞数量与运行状态分别保留',()=>{
+  const snapshot={status:'active',activeTurnId:'turn',questionGroups:[{kind:'async',state:'pending'},{kind:'native',state:'pending'},{kind:'async',state:'answered'},{kind:'async',state:'expired'}]};
+  assert.deepEqual(questionCounts(snapshot),{pendingQuestionCount:1,unansweredQuestionCount:2});
+  snapshot.activeTurnId='';assert.deepEqual(questionCounts(snapshot),{pendingQuestionCount:1,unansweredQuestionCount:2});
+  snapshot.status='idle';assert.deepEqual(questionCounts(snapshot),{pendingQuestionCount:2,unansweredQuestionCount:2});
+  snapshot.questionGroups.forEach(group=>group.state='answered');assert.deepEqual(questionCounts(snapshot),{pendingQuestionCount:0,unansweredQuestionCount:0});
+});
 class Fixture extends EventEmitter {
   constructor(raw) {super();this.raw=raw;this.socket={writable:true};this.calls=[];}
   async connect() {}

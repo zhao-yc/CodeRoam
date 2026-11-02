@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {questionCounts} from './questions.mjs';
 
 /** 共享列表只读订阅：索引变更维护成员，桌面快照推送状态，不使用周期轮询。 */
 export class ThreadListFeed {
@@ -65,7 +66,7 @@ export class ThreadListFeed {
     try{await this.running;}finally{this.running=null;}
   }
   summary(row,snapshot) {
-    return {...row,title:snapshot.title||row.title,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,pendingQuestionCount:snapshot.questionGroups.filter(group=>group.state==='pending'&&(group.kind==='native'||(!snapshot.activeTurnId&&snapshot.status!=='active'))).length};
+    return {...row,title:snapshot.title||row.title,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,...questionCounts(snapshot)};
   }
   /** 只发布列表摘要，正文流式变化不制造重复列表事件。 */
   update(snapshot) {

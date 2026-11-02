@@ -5,7 +5,7 @@ import type { ExecutionSettings } from './execution-settings.uts'
 export type Computer = { id: string, label: string, online: boolean, icon?: string, hostname?: string, connectionType?: string, lastConnectedAt?: number, profileRevision?: number }
 // 图标只允许随包资源，旧中转或未知值继续显示笔记本。
 export function computerIcon(computer: Computer | null): string { const icon = computer?.icon ?? ''; return ['code', 'terminal', 'laptop', 'desktop'].indexOf(icon) >= 0 ? icon : 'laptop' }
-export type ThreadSummary = { id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number }
+export type ThreadSummary = { id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
 export type ChatMessage = { id: string, role: string, kind?: string, summary?: string, phase?: string, imageCount?: number, text: string, turnId: string, status: string }
 export type ConversationTurn = { turnId: string, status: string, durationMs?: number }
 export type Approval = { id: string, kind: string, turnId: string, title: string, detail: string, cwd: string }

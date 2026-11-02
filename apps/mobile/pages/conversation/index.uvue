@@ -15,6 +15,8 @@
     <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="isCurrentPage() && connection.pendingCommandId.length > 0 && !busy" class="notice pending-notice"><text class="notice-text">本会话上次操作结果待确认</text><button class="check button-secondary" :disabled="checking || !connection.connected" @click="checkPending">{{ checking ? '正在核对…' : '核对结果' }}</button></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
+    <!-- 问题提醒独立于运行状态和消息滚动位置，点击后定位原题。 -->
+    <view v-if="pendingQuestionCount > 0 && !readOnly" class="question-notice action-frame"><text class="question-notice-label">有 {{ pendingQuestionCount }} 组问题待回答</text><text class="question-notice-action">查看问题</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" aria-label="查看待回答问题" @click="showQuestions"></button></view>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch">
         <view v-if="connection.snapshot?.supportsHistoryPages == true && (loadingHistory || historyError.length > 0 || historyPage?.hasMore == false)" class="history-controls"><view v-if="loadingHistory" class="history-loading"><loading class="history-spinner" :paused="!pageVisible" /><text class="history-note">正在读取更早的对话…</text></view><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的对话，请再次下拉重试</text><text v-else class="history-note">已显示全部对话</text></view>
@@ -503,11 +505,15 @@ watch(timeline, (entries: TimelineEntry[]) => {
   if (retainedTurns.length != expandedTurnIds.value.length) expandedTurnIds.value = retainedTurns
   if (selectedExecutionId.value.length > 0 && selectedExecution.value == null) selectedExecutionId.value = ''
 })
-// 桌面确认回答或题组失效后，清理对应的展开与提交状态，其他待答题的选择继续保留。
-watch(pendingQuestionGroups, (groups: QuestionGroup[]) => {
+// 新问题自动展开；同步已有问题时保留手动收起，回答或失效后清理对应状态。
+watch(pendingQuestionGroups, (groups: QuestionGroup[], previousGroups: QuestionGroup[] = []) => {
   expandedQuestionIds.value = expandedQuestionIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
   submittedGroupIds.value = submittedGroupIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
-})
+  const added = groups.filter((group: QuestionGroup): boolean => !previousGroups.some((previous: QuestionGroup): boolean => previous.id == group.id))
+  added.forEach((group: QuestionGroup) => { if (expandedQuestionIds.value.indexOf(group.id) < 0) expandedQuestionIds.value.push(group.id) })
+  // 仅在跟随最新消息时随新问题滚动，阅读历史时由常驻入口提示。
+  if (added.length > 0 && following.value && pageVisible.value) nextTick(() => { if (following.value && pageVisible.value) scrollLatest() })
+}, { immediate: true })
 // 模板通过页面方法调用模块，兼容 Android 对导入函数引用的编译限制。
 function isExecutionExpanded(entry: TimelineEntry): boolean { return executionGroupExpanded(entry, expandedExecutionIds.value) }
 function isProcessExpanded(entry: TimelineEntry): boolean { return expandedTurnIds.value.indexOf(entry.turnId) >= 0 }
@@ -972,4 +978,7 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .settings-trigger-label, .file-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
 
+.question-notice { margin: 0 16px 8px; min-height: 44px; padding: 8px 12px; border-radius: 12px; flex-direction: row; align-items: center; background-color: #e4edfb; flex-shrink: 0; }
+.question-notice-label { flex: 1; min-width: 0; color: #285c49; font-size: 14px; line-height: 22px; }
+.question-notice-action { color: #285c49; font-size: 13px; margin: 0 6px; }
 </style>

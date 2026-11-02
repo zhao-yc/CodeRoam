@@ -5,7 +5,7 @@ import path from 'node:path';
 import { IpcClient } from '../../packages/protocol/ipc-client.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { applyPatches, normalizeConversation } from './conversation.mjs';
-import { formatQuestionReply, validateQuestionAnswers } from './questions.mjs';
+import { formatQuestionReply, validateQuestionAnswers, questionCounts } from './questions.mjs';
 import { DesktopNavigation } from './desktop-navigation.mjs';
 import { NativeDesktop } from './native-desktop.mjs';
 import { openDesktopThread } from './desktop-launcher.mjs';
@@ -56,8 +56,8 @@ export class DesktopAdapter extends EventEmitter {
         const position=next++, row=rows[position], watcher='status:'+randomUUID();
         try {
           const snapshot=await this.watch(row.id,watcher,{snapshotTimeoutMs:1000,ownerTimeoutMs:500,history:false});
-          // 异步问题不会阻塞执行，运行时仍转圈；仅原生输入请求表示正在等用户。
-          result[position]={...row,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,pendingQuestionCount:snapshot.questionGroups.filter(group=>group.state==='pending'&&(group.kind==='native'||(!snapshot.activeTurnId&&snapshot.status!=='active'))).length};
+          // 异步问题不改变运行状态，但列表仍同步全部待回答数量。
+          result[position]={...row,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,...questionCounts(snapshot)};
         } catch { result[position]={...row,hasUnreadTurn:this.native?.unread.get(row.id),status:'unknown',activeTurnId:'',approvalCount:0,pendingQuestionCount:0}; }
         finally { this.unwatch(row.id,watcher); }
       }

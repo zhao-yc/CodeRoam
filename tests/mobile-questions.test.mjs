@@ -26,14 +26,18 @@ test('离线、提交中、结果未知和已提交均阻止修改选择与重�
   f.props.group=structuredClone(f.props.group);f.props.group.questions[0].answer='乙';f.sync();assert.equal(f.drafts.value[0].text,'乙');assert.equal(f.drafts.value[1].text,'回答');
 });
 
-/** 执行页面实际计算与监听，验证已答题不占据末尾，待答题仍能定位和展开。 */
-test('页面末尾只显示待答题组，回答或失效后移除且保留其他题组状态',()=>{
+/** 执行页面实际计算与监听，供问题提醒及状态清理回归共用。 */
+function pageFixture() {
   const watches=[],connection={snapshot:{messages:[],approvals:[],questionGroups:[{id:'answered',state:'answered'},{id:'pending',state:'pending'},{id:'expired',state:'expired'},{id:'other',state:'pending'}],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
   const context=vm.createContext({connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
   const pageSource=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
   const source=pageSource.match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pendingQuestionGroups,pendingQuestionCount,expandedQuestionIds,submittedGroupIds,showQuestions,scrollTarget};',context);
-  const page=context.subject,plain=value=>JSON.parse(JSON.stringify(value));
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pendingQuestionGroups,pendingQuestionCount,expandedQuestionIds,submittedGroupIds,showQuestions,scrollTarget,following,pageVisible};',context);
+  return {pageSource,page:context.subject,connection,watches,plain:value=>JSON.parse(JSON.stringify(value))};
+}
+
+test('页面末尾只显示待答题组，回答或失效后移除且保留其他题组状态',()=>{
+  const {pageSource,page,connection,watches,plain}=pageFixture();
   assert.match(pageSource.split('<script')[0],/v-for="group in pendingQuestionGroups"/);
   assert.deepEqual(plain(page.pendingQuestionGroups.value.map(group=>group.id)),['pending','other']);assert.equal(page.pendingQuestionCount.value,2);
   page.showQuestions();assert.deepEqual(plain(page.expandedQuestionIds.value),['pending']);assert.equal(page.scrollTarget.value,'questions-anchor');
@@ -44,4 +48,20 @@ test('页面末尾只显示待答题组，回答或失效后移除且保留其�
   assert.equal(page.pendingQuestionCount.value,0);assert.deepEqual(plain(page.expandedQuestionIds.value),[]);assert.deepEqual(plain(page.submittedGroupIds.value),[]);
   page.showQuestions();assert.deepEqual(plain(page.expandedQuestionIds.value),[]);
   connection.snapshot=null;assert.equal(page.pendingQuestionCount.value,0);
+});
+
+test('新问题独立提醒并自动展开，重复同步保留收起，阅读历史时不强制滚动',()=>{
+  const {pageSource,page,connection,watches,plain}=pageFixture();
+  const template=pageSource.split('<script')[0],notice=template.indexOf('class="question-notice action-frame"');
+  assert.ok(notice>0&&notice<template.indexOf('class="timeline-region"'));
+  assert.match(template,/aria-label="查看待回答问题" @click="showQuestions"/);
+  const update=watches.find(watch=>watch.source===page.pendingQuestionGroups).callback;
+  page.pageVisible.value=true;update(page.pendingQuestionGroups.value,[]);
+  assert.deepEqual(plain(page.expandedQuestionIds.value),['pending','other']);assert.equal(page.scrollTarget.value,'timeline-bottom');
+  page.expandedQuestionIds.value=[];const previous=page.pendingQuestionGroups.value;
+  update(page.pendingQuestionGroups.value,previous);assert.equal(page.expandedQuestionIds.value.length,0);
+  page.following.value=false;page.scrollTarget.value='history';
+  connection.snapshot.questionGroups.push({id:'new',state:'pending'});update(page.pendingQuestionGroups.value,previous);
+  assert.deepEqual(plain(page.expandedQuestionIds.value),['new']);assert.equal(page.scrollTarget.value,'history');
+  page.showQuestions();assert.equal(page.scrollTarget.value,'questions-anchor');
 });
