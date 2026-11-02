@@ -16,9 +16,8 @@
     <view v-show="!editingNewConversation" class="list-shell">
     <view v-if="connection.computers.length > 1" class="computer-tabs">
       <view :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
-      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view></view></scroll-view>
+      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text><view v-if="computerSyncState(computer.id).length > 0" class="computer-sync-badge" :aria-label="computerSyncLabel(computer.id)"><loading v-if="computerSyncState(computer.id) == 'loading'" class="computer-sync-spinner" :paused="!pageVisible" /><app-icon v-else name="alert-triangle" :size="12" tone="warning" /></view></view></view></scroll-view>
     </view>
-    <view v-if="listHint.length > 0 && !showThreadLoading" class="list-hint"><text class="list-hint-text">{{ listHint }}</text></view>
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
@@ -152,10 +151,20 @@ function computerIndicator(hostId: string): string { return computerIndicators.v
 const selectedComputerOnline = computed((): boolean => connection.connected && selectedComputers.value.some((entry: ComputerThreads): boolean => entry.online))
 const showThreadLoading = computed((): boolean => computerThreadsLoading(selectedComputerId.value))
 const listUnavailable = computed((): boolean => selectedComputers.value.length > 0 && selectedComputers.value.every((entry: ComputerThreads): boolean => !entry.online || entry.error.length > 0))
-const listHint = computed((): string => {
-  if (selectedComputers.value.some((entry: ComputerThreads): boolean => !entry.online || entry.error.length > 0)) return selectedComputerId.value.length == 0 ? '部分电脑离线或读取失败，已取得的会话仍可查看。' : selectedComputerOnline.value ? '读取失败，当前显示最近同步的会话。' : '电脑离线，恢复连接后可重新同步。'
-  return selectedComputers.value.some((entry: ComputerThreads): boolean => entry.loading && !entry.loaded) ? '正在同步其他电脑的会话…' : ''
-})
+// 同步与异常状态只标记所属设备；失败优先，首次同步完成后自动移除。
+function computerSyncState(hostId: string): string {
+  const computer = connection.computers.find((item: Computer): boolean => item.id == hostId)
+  const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
+  if (computer == null) return ''
+  if (!connection.connected || !computer.online) return 'offline'
+  if (entry != null && entry.error.length > 0) return 'error'
+  return entry != null && entry.loading && !entry.loaded ? 'loading' : ''
+}
+// 图标保留无障碍说明，不再占用列表中的独立提示行。
+function computerSyncLabel(hostId: string): string {
+  const state = computerSyncState(hostId)
+  return state == 'offline' ? '电脑离线' : state == 'error' ? '会话读取失败' : state == 'loading' ? '正在同步会话' : ''
+}
 
 // 默认按项目展示，切换排序和最近开关只影响当前筛选后的会话。
 const groups = computed((): ThreadGroup[] => {
@@ -269,7 +278,7 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .list-shell { flex: 1; height: 0; min-height: 0; }
 /* 全部标签固定，电脑标签在剩余宽度内横向滚动。 */
 .computer-tabs { height: 56px; padding: 4px 16px 8px; flex-direction: row; align-items: center; flex-shrink: 0; }
-.computer-tab { height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
+.computer-tab { position: relative; height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
 .all-tab { margin-right: 6px; }
 .computer-tab-selected { background-color: #e8eee6; }
 .computer-scroll { flex: 1; width: 0; min-width: 0; height: 44px; }
@@ -280,8 +289,8 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .computer-indicator { width: 16px; height: 16px; margin-right: 7px; flex-shrink: 0; align-items: center; justify-content: center; }
 .computer-spinner { width: 16px; height: 16px; border-color: #285c49; }
 .computer-unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #285c49; }
-.list-hint { padding: 0 16px 6px; flex-shrink: 0; }
-.list-hint-text { color: #7b827a; font-size: 12px; line-height: 18px; }
+.computer-sync-badge { position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; align-items: center; justify-content: center; border-radius: 7px; background-color: #f7f8f2; }
+.computer-sync-spinner { width: 11px; height: 11px; color: #426454; }
 .thread-computer-meta { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
 .thread-computer { max-width: 84px; margin-left: 6px; font-size: 13px; line-height: 20px; color: #7b827a; lines: 1; text-overflow: ellipsis; }
 .search-field { height: 44px; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; flex-direction: row; align-items: center; }
