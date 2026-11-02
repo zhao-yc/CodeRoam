@@ -781,10 +781,20 @@ function send() {
   rememberSubmission(hostId, threadId, commandId, text)
   request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(method == 'turn.steer' ? '已追加到当前任务' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
+let stopPromptOpen = false
+// 所有停止入口共用确认框，确认时复核原会话及任务，避免误停后续任务。
 function stop() {
-  if (!canWrite.value || activeTurnId.value.length == 0) return
-  busy.value = true; pendingAction.value = 'stop'
-  bridge.request('turn.stop', { threadId: pageThreadId.value, expectedTurnId: activeTurnId.value }, true).then((_: UTSJSONObject) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify('停止请求已提交'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  if (!canWrite.value || activeTurnId.value.length == 0 || stopPromptOpen) return
+  const hostId = pageHostId.value
+  const threadId = pageThreadId.value
+  const turnId = activeTurnId.value
+  stopPromptOpen = true
+  uni.showModal({ title: '停止任务', content: '确定停止当前正在执行的任务吗？', confirmText: '停止', confirmColor: '#bb3f44', cancelText: '取消', success: (choice) => {
+    stopPromptOpen = false
+    if (!choice.confirm || !isCurrentPage() || !pageVisible.value || connection.hostId != hostId || pageThreadId.value != threadId || activeTurnId.value != turnId || !canWrite.value) return
+    busy.value = true; pendingAction.value = 'stop'
+    bridge.request('turn.stop', { threadId, expectedTurnId: turnId }, true).then((_: UTSJSONObject) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify('停止请求已提交'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  }, fail: (_) => { stopPromptOpen = false } })
 }
 function reply(id: string, turnId: string, decision: string) {
   if (!canWrite.value || handledApprovalIds.value.indexOf(id) >= 0) return
