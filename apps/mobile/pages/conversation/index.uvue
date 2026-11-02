@@ -298,7 +298,8 @@ function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, com
   connection.threads = connection.threads.filter((thread: ThreadSummary): boolean => thread.id != threadId)
   if (connection.activeThreadId == threadId) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0 }
   operationError.value = ''
-  if (returnToList) { notify('归档成功'); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+  // 页面跳转会清除原页的提示，等返回完成后再显示；跳转失败时也如实提示已归档。
+  if (returnToList) { if (getCurrentPages().length > 1) uni.navigateBack({ success: (_) => { notify('归档成功') }, fail: (_) => { notify('归档成功') } }); else uni.reLaunch({ url: '/pages/index/index', success: (_) => { notify('归档成功') }, fail: (_) => { notify('归档成功') } }) }
   return true
 }
 let archivePromptOpen = false

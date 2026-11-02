@@ -14,7 +14,7 @@ function fixture() {
   let modal, respond, reject, ledger;
   context.loadingEvents = []; context.unloadCallbacks = [];
   context.onUnload = callback => context.unloadCallbacks.push(callback);
-  context.uni = { showLoading: options => context.loadingEvents.push(options), hideLoading: () => context.loadingEvents.push('关闭'), showModal: options => { modal = options; }, showToast() {}, navigateBack: () => { context.returned++; }, reLaunch: () => { context.returned++; } };
+  context.uni = { showLoading: options => context.loadingEvents.push(options), hideLoading: () => context.loadingEvents.push('关闭'), showModal: options => { modal = options; }, showToast() {}, navigateBack: options => { context.returned++; options.success({}); }, reLaunch: options => { context.returned++; options.success({}); } };
   context.bridge = {
     request(method, params, write) { context.calls.push({ method, params, write }); context.connection.pendingCommandId = 'command'; return new Promise((resolve, fail) => { respond = result => { context.connection.pendingCommandId = ''; resolve(json(result)); }; reject = unknown => { if (!unknown) context.connection.pendingCommandId = ''; fail(new Error(unknown ? '结果待核对' : '归档失败')); }; }); },
     clearCommand(id) { if (context.connection.pendingCommandId === id) context.connection.pendingCommandId = ''; },
@@ -37,6 +37,25 @@ test('菜单归档可取消，重复点击不叠加提交，确认成功后才�
   assert.equal(f.context.returned, 1); assert.deepEqual(Array.from(f.context.connection.threads, item => item.id), ['other']);
   assert.equal(f.context.connection.snapshot, null); assert.equal(f.context.connection.activeThreadId, ''); assert.equal(f.context.draft, '保留的草稿');
   assert.equal(f.context.loadingEvents.at(-1), '关闭'); assert.equal(f.context.notices.at(-1), '归档成功');
+});
+
+test('归档成功提示在返回或重开列表完成后显示，跳转失败也提示实际成功结果', async () => {
+  for (const reopen of [false, true]) {
+    for (const navigationFailed of [false, true]) {
+      const f = fixture();
+      let navigation;
+      f.context.getCurrentPages = () => reopen ? [{}] : [{}, {}];
+      f.context.uni[reopen ? 'reLaunch' : 'navigateBack'] = options => { navigation = options; };
+      f.archiveFromMenu(); f.modal().success({ confirm: true });
+      f.respond({ threadId: 'thread', archived: true }); await flush();
+      assert.ok(navigation);
+      if (reopen) assert.equal(navigation.url, '/pages/index/index');
+      assert.equal(f.context.loadingEvents.at(-1), '关闭');
+      assert.equal(f.context.notices.length, 0, '跳转前不显示会被清除的提示');
+      navigation[navigationFailed ? 'fail' : 'success']({});
+      assert.deepEqual(f.context.notices, ['归档成功']);
+    }
+  }
 });
 
 test('确认前切换电脑或任务开始后不会误发归档', () => {
