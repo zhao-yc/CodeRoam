@@ -1,0 +1,24 @@
+import { reactive } from 'vue'
+
+type MessageSendingPreferences = { behavior: string }
+const storageKey = 'codex-mobile-new-message-behavior'
+
+// 偏好只保存行为枚举；缺失、损坏或读取失败时保持默认排队。
+function readMessageBehavior(): string {
+  try {
+    const saved = uni.getStorageSync(storageKey)
+    if (typeof saved == 'string' && ['queue', 'steer'].indexOf(saved as string) >= 0) return saved as string
+  } catch (_) {}
+  return 'queue'
+}
+
+export const messageSendingPreferences = reactive<MessageSendingPreferences>({ behavior: readMessageBehavior() })
+
+// 先保存成功再更新运行期状态，存储失败时不能让界面显示未生效的选择。
+export function setMessageSendingBehavior(behavior: string) {
+  if (['queue', 'steer'].indexOf(behavior) < 0) throw new Error('新消息发送行为选项无效')
+  try { uni.setStorageSync(storageKey, behavior) } catch (_) { throw new Error('无法保存新消息发送行为，请检查本地存储权限') }
+  messageSendingPreferences.behavior = behavior
+}
+
+export function messageSendingBehaviorLabel(behavior: string): string { return behavior == 'steer' ? '追加指令' : '排队' }

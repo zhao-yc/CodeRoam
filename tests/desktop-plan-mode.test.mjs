@@ -12,7 +12,7 @@ test('模式与桌面输入框一致，实时协作模式优先于旧保存值�
 /** 执行真实页面的模式派生、读写方法和快照监听，不模拟计划状态机。 */
 function page(){
  const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8'),pending=[],calls=[],settled=[],watchers=[];
- const context=vm.createContext({operationError:{value:''},computed:read=>({get value(){return read();}}),settingsRequest:0,settingsSnapshotRevision:0,checking:{value:false},settings:{value:setting('plan')},models:{value:[]},settingsLoading:{value:false},settingsBusy:{value:false},settingsError:{value:''},busy:{value:false},pendingAction:{value:''},composerMenu:{value:''},readOnly:{value:false},draft:{value:'正文'},draftImages:{value:[]},draftFiles:{value:[]},canWrite:{value:true},imageBusy:{value:false},filesReady:{value:true},modelSupportsImages:{value:true},activeTurnId:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},connection:{hostId:'pc',activeThreadId:'thread',snapshot:{threadId:'thread',supportsMessageQueue:true,supportsExecutionSettings:true,supportsPlanReset:false},connected:true,pendingCommandId:'command',error:''},uni:{showToast(){},getStorageSync(){throw Error('不应读取旧计划缓存');},setStorageSync(){throw Error('不应写入计划缓存');}},watch:(read,changed)=>watchers.push({read,changed}),closeComposerMenu(){},updateMenuHeight(){},refresh(){},resumeFollowing(){},notify(){},rememberSubmission(){},settleSubmission:(...args)=>settled.push(args)});
+ const context=vm.createContext({messageSendingPreferences:{behavior:'queue'},operationError:{value:''},computed:read=>({get value(){return read();}}),settingsRequest:0,settingsSnapshotRevision:0,checking:{value:false},settings:{value:setting('plan')},models:{value:[]},settingsLoading:{value:false},settingsBusy:{value:false},settingsError:{value:''},busy:{value:false},pendingAction:{value:''},composerMenu:{value:''},readOnly:{value:false},draft:{value:'正文'},draftImages:{value:[]},draftFiles:{value:[]},canWrite:{value:true},imageBusy:{value:false},filesReady:{value:true},modelSupportsImages:{value:true},activeTurnId:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},connection:{hostId:'pc',activeThreadId:'thread',snapshot:{threadId:'thread',supportsMessageQueue:true,supportsExecutionSettings:true,supportsPlanReset:false},connected:true,pendingCommandId:'command',error:''},uni:{showToast(){},getStorageSync(){throw Error('不应读取旧计划缓存');},setStorageSync(){throw Error('不应写入计划缓存');}},watch:(read,changed)=>watchers.push({read,changed}),closeComposerMenu(){},updateMenuHeight(){},refresh(){},resumeFollowing(){},notify(){},rememberSubmission(){},settleSubmission:(...args)=>settled.push(args)});
  context.isCurrentPage=()=>context.connection.hostId===context.pageHostId.value&&context.connection.activeThreadId===context.pageThreadId.value;
  context.bridge={pendingCommand:()=>context.connection.pendingCommandId,request:(method,params,write)=>{calls.push({method,params,write});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}};
  const derived=source.split(/\r?\n/).find(line=>line.startsWith('const planEnabled ='));
@@ -46,6 +46,20 @@ test('运行中旧桥接不回退为追加，手动追加仅提交队列编号�
  f.pending.shift().resolve({});await tick();assert.equal(f.context.busy.value,false);
  f.cancelQueuedMessage('queued-message');assert.equal(f.calls[1].params.queueAction,'cancel');assert.equal(f.calls[1].params.queueId,'queued-message');
  f.pending.shift().resolve({});await tick();assert.equal(f.context.draft.value,'正文');
+});
+
+test('选择追加指令后运行中直接追加，空闲时开始新一轮，均不创建队列消息',async()=>{
+ const f=page();f.context.messageSendingPreferences.behavior='steer';f.context.activeTurnId.value='active';f.send();
+ assert.equal(f.calls[0].method,'turn.steer');assert.equal(f.calls[0].params.expectedTurnId,'active');assert.equal(f.calls[0].params.queueAction,undefined);assert.equal(f.calls[0].params.text,'正文');
+ f.pending.shift().resolve({});await tick();
+ f.context.activeTurnId.value='';f.context.connection.snapshot.status='idle';f.send();assert.equal(f.calls[1].method,'turn.send');assert.equal(f.calls[1].params.queueAction,undefined);assert.equal(f.calls[1].params.expectedTurnId,undefined);
+ f.pending.shift().resolve({});await tick();assert.equal(f.planEnabled.value,true);
+});
+
+test('追加模式缺少当前轮次时不猜测、不回退排队，拒绝或未知结果保留草稿',async()=>{
+ const f=page();f.context.messageSendingPreferences.behavior='steer';f.context.connection.snapshot.status='active';f.send();
+ assert.equal(f.calls.length,0);assert.match(f.context.operationError.value,/状态正在同步/);assert.equal(f.context.busy.value,false);
+ f.context.activeTurnId.value='active';f.send();f.pending.shift().reject(Error('结果未知'));await tick();assert.equal(f.context.draft.value,'正文');assert.equal(f.settled.length,0);assert.equal(f.calls.length,1);
 });
 
 test('桌面变化后旧读取不能覆盖新模式，即使模式已经往返变化',async()=>{

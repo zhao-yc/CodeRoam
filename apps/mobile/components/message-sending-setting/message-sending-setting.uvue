@@ -1,0 +1,37 @@
+<template>
+  <view id="message-sending-preferences" class="setting-section">
+    <view class="setting-row action-frame">
+      <view class="setting-copy"><text class="setting-title">新消息发送行为</text><text class="setting-description">选择任务进行中发送新消息时的处理方式。</text></view>
+      <text class="setting-value">{{ behaviorLabel }}</text><app-icon name="chevron-down" :size="18" tone="muted" />
+      <button class="action-hitbox" :aria-label="'新消息发送行为，当前' + behaviorLabel + '，点击选择'" hover-class="action-pressed" @click="chooseBehavior"></button>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import { computed } from 'vue'
+import { messageSendingPreferences, messageSendingBehaviorLabel, setMessageSendingBehavior } from '../../services/message-sending-preferences.uts'
+import AppIcon from '../app-icon/app-icon.uvue'
+const behaviorLabel = computed((): string => messageSendingBehaviorLabel(messageSendingPreferences.behavior))
+
+// 与桌面保持两种发送语义；仅改变本机后续发送，不处理已有队列或修改电脑配置。
+function chooseBehavior() {
+  uni.hideKeyboard()
+  uni.showActionSheet({ itemList: ['排队', '追加指令'], success: (result) => {
+    const options = ['queue', 'steer']
+    if (result.tapIndex < 0 || result.tapIndex >= options.length) return
+    try { setMessageSendingBehavior(options[result.tapIndex]) }
+    catch (error) { uni.showToast({ title: (error as Error).message, icon: 'none' }) }
+  }, fail: (_) => {} })
+}
+</script>
+<style>
+.setting-section { padding: 24px 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.setting-row { min-height: 52px; flex-direction: row; align-items: center; }
+.setting-copy { flex: 1; min-width: 0; margin-right: 12px; }
+.setting-title { color: #202c28; font-size: 16px; line-height: 24px; font-weight: bold; }
+.setting-description { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 6px; }
+.setting-value { color: #657269; font-size: 14px; line-height: 22px; margin-right: 10px; flex-shrink: 0; }
+.action-frame { position: relative; overflow: hidden; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
+</style>

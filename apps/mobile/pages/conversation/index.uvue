@@ -70,7 +70,6 @@
     </view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
-      <text v-if="activeTurnId.length > 0 || queuedMessages.length > 0" class="queue-compose-hint">发送后默认排队，可在消息上点击追加到当前任务</text>
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
       <view class="composer-panel" :class="{ 'composer-compact': !composerExpanded }" @click="dismissGoal">
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
@@ -109,6 +108,7 @@ import { computed, ref, watch, nextTick } from 'vue'
 import { showPluginManagement } from '../../services/composer-actions.uts'
 import MessageQueue from '../../components/message-queue/message-queue.uvue'
 import { QueuedMessage } from '../../services/message-queue.uts'
+import { messageSendingPreferences } from '../../services/message-sending-preferences.uts'
 import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
@@ -1154,15 +1154,20 @@ function send() {
   busy.value = true; pendingAction.value = 'send'
   const hostId = pageHostId.value
   const threadId = pageThreadId.value
-  const method = 'turn.send'
-  const queue = connection.snapshot?.supportsMessageQueue == true
-  if (!queue && (activeTurnId.value.length > 0 || connection.snapshot?.status == 'active')) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
+  // 偏好只作用于本次新消息；已排队消息继续使用原队列及手动追加入口。
+  const running = activeTurnId.value.length > 0 || connection.snapshot?.status == 'active'
+  const steer = messageSendingPreferences.behavior == 'steer' && running
+  if (steer && activeTurnId.value.length == 0) { busy.value = false; pendingAction.value = ''; operationError.value = '当前任务状态正在同步，请稍后重新发送'; return }
+  const method = steer ? 'turn.steer' : 'turn.send'
+  const queue = messageSendingPreferences.behavior == 'queue' && connection.snapshot?.supportsMessageQueue == true
+  if (!steer && !queue && running) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
   const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id) }
   if (queue) params['queueAction'] = 'enqueue'
+  if (steer) params['expectedTurnId'] = activeTurnId.value
   const request = bridge.request(method, params, true)
   const commandId = connection.pendingCommandId
   rememberSubmission(hostId, threadId, commandId, text)
-  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(queue ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(steer ? '已追加到当前任务' : queue ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
 // 追加和取消都指向电脑保存的同一条消息，避免手机重传正文形成重复指令。
 function operateQueuedMessage(id: string, action: string) {
@@ -1242,7 +1247,6 @@ onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(f
 /* #ifdef WEB */
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* #endif */
-.queue-compose-hint { color: #69766b; font-size: 12px; line-height: 18px; margin: 0 4px 8px; }
 /* 缓存同步提示保持轻量，避免错误提示重复挤占聊天区域。 */
 .cache-notice { flex-direction: row; align-items: center; padding: 8px 16px; background-color: #eef2eb; }
 .cache-note { flex: 1; font-size: 12px; line-height: 20px; color: #68776c; }
