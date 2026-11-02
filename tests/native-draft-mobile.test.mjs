@@ -286,6 +286,25 @@ test('send 结果未知查账前后都不重复提交，unknown/not_found 不能
   assert.ok(f.calls.filter(call => call.method === 'command.status').every(call => call.params.commandId === commandId));
 });
 
+test('新建已完成但升级后草稿 token 过期时解除未知保护，只允许用户手动重连', async () => {
+  const f = fixture(), value = snapshot();
+  f.hooks.set('thread.draft.open', () => { throw Error('新建回执丢失'); });
+  await assert.rejects(f.watchNativeDraft('pc-a', 'project-a'), /核对/);
+  const state = f.nativeDraftState('pc-a', 'project-a');
+  f.hooks.set('command.status', () => ({ state: 'done', result: value }));
+  f.hooks.set('thread.draft.read', () => { throw Error('草稿不存在'); });
+  await f.checkNativeDraftCommand(state);
+  assert.equal(state.outcomeUnknown, false); assert.equal(state.pendingCommandId, '');
+  assert.equal(state.snapshot.status, 'detached'); assert.equal(state.needsReadback, true);
+  assert.match(state.error, /手动重新连接/);
+  assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 1);
+  assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false);
+  f.hooks.delete('thread.draft.open'); f.hooks.delete('thread.draft.read');
+  await f.watchNativeDraft('pc-a', 'project-a', true);
+  assert.equal(state.snapshot.status, 'ready'); assert.equal(state.needsReadback, false);
+  assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 2);
+});
+
 test('手机提交成功时切换电脑，迟到成功仍保护原草稿，返回后不能再 send', async () => {
   const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '合成消息';
   f.hooks.set('thread.draft.read', () => ({ snapshot: plain(f.current()) }));

@@ -212,10 +212,24 @@ export async function checkNativeDraftCommand(state: NativeDraftState): Promise<
     }
     if (outcome != 'done' && outcome != 'failed') throw new Error('原操作结果仍待核对，请勿重复提交')
     const result = (status['result'] ?? {}) as UTSJSONObject
-    if (outcome == 'done' && action == 'open') state.draftId = parseNativeSnapshot(result, state.projectId).draftId
+    if (outcome == 'done' && action == 'open') {
+      const snapshot = parseNativeSnapshot(result, state.projectId)
+      state.draftId = snapshot.draftId
+      if (state.snapshot?.draftId != snapshot.draftId) state.snapshot = null
+      acceptNativeSnapshot(state, snapshot)
+    }
     const threadId = outcome == 'done' && action == 'send' ? result.getString('threadId') ?? '' : ''
     if (outcome == 'done' && action == 'send' && threadId.length == 0) throw new Error('原发送回执缺少聊天编号，请继续核对')
-    if (state.draftId.length > 0) await readNativeDraft(state)
+    let readbackLost = false
+    if (state.draftId.length > 0) {
+      try { await readNativeDraft(state) }
+      catch (reason) {
+        // 已确认的新建没有发送消息。连接服务升级后旧 token 失效时，允许手动重连，不能自动重建。
+        if (outcome != 'done' || action != 'open' || !currentNativeSession(state, session) || state.snapshot == null) throw reason
+        state.needsReadback = true; readbackLost = true
+        acceptNativeSnapshot(state, { ...state.snapshot!, status: 'detached' } as NativeDraftSnapshot)
+      }
+    }
     if (threadId.length > 0) {
       if (state.snapshot == null) throw new Error('原发送已确认，请继续读取电脑聊天状态')
       acceptNativeSnapshot(state, { ...state.snapshot!, status: 'promoted', threadId } as NativeDraftSnapshot)
@@ -223,6 +237,7 @@ export async function checkNativeDraftCommand(state: NativeDraftState): Promise<
     bridge.clearCommand(commandId, state.hostId)
     state.outcomeUnknown = false; state.error = ''
     settleNativeWrite(state)
+    if (readbackLost) state.error = '原新建已确认，草稿连接已失效，请手动重新连接'
     if (outcome == 'failed') state.error = '原操作已确认失败，草稿已保留；可由用户重新操作'
     return threadId
   } catch (reason) { if (currentNativeSession(state, session)) state.error = (reason as Error).message; throw reason }
