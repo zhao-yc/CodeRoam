@@ -39,6 +39,24 @@ export class Journal {
     return row ? { state: row.state, ...(row.payload ? JSON.parse(row.payload) : {}) } : { state: 'not_found' };
   }
 
+  /** 保留操作回执用于去重，移除已永久删除对话的桥接历史缓存。 */
+  forgetThreads(ids) {
+    if (!ids.length) return;
+    const placeholders = ids.map(() => '?').join(',');
+    this.db.prepare('DELETE FROM events WHERE thread_id IN (' + placeholders + ')').run(...ids);
+    this.db.prepare('DELETE FROM question_submissions WHERE thread_id IN (' + placeholders + ')').run(...ids);
+  }
+
+  /** 仅按原请求指纹和完整删除范围收口未知结果，不重放删除。 */
+  confirmObservedDeletion(deviceId, commandId, fingerprint, result) {
+    const previous = this.db.prepare("SELECT payload FROM commands WHERE device_id=? AND command_id=? AND fingerprint=? AND state='unknown'").get(deviceId, commandId, fingerprint);
+    if (!previous) return this.status(deviceId, commandId);
+    this.forgetThreads(result.deletedThreadIds);
+    const payload = { result, resolution: { source: 'desktop-deletion-state', confirmedAt: Date.now(), previousError: previous.payload ? JSON.parse(previous.payload).error ?? null : null } };
+    this.db.prepare("UPDATE commands SET state='done',payload=? WHERE device_id=? AND command_id=? AND fingerprint=? AND state='unknown'").run(JSON.stringify(payload), deviceId, commandId, fingerprint);
+    return this.status(deviceId, commandId);
+  }
+
   /** 只提供当前设备未知请求的指纹，不能跨设备查询或重放操作。 */
   unknownFingerprint(deviceId, commandId) {
     return this.db.prepare("SELECT fingerprint FROM commands WHERE device_id=? AND command_id=? AND state='unknown'").get(deviceId, commandId)?.fingerprint ?? null;

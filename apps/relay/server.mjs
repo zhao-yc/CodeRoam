@@ -137,7 +137,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const timer = setTimeout(() => {
           const entry = complete(transportId);
           if (entry) fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method)));
-        }, message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
+        }, message.method === 'thread.delete' ? Math.max(60000, requestTimeoutMs) : message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
         pending.set(transportId, { host, hostId: message.hostId, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, timer });
         send(host, { ...message, deviceId: identity.id, transportId });
       } catch (error) { fail(socket, message.requestId, error); }

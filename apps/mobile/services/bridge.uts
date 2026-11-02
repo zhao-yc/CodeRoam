@@ -39,8 +39,8 @@ type TextAppend = { id: string, text: string, status: string }
 type ConversationDelta = { pendingPlan?: PendingPlan | null, supportsPlanImplementation?: boolean, hasUnreadTurn?: boolean, activeFlags?: string[], goal?: ThreadGoal | null, goalRevision?: string, supportsGoals?: boolean, supportsGoalControl?: boolean, supportsComposerPrediction?: boolean, predictionTurnId?: string, executionSettings?: ExecutionSettings | null, supportsPlanReset?: boolean, supportsPermissionSettings?: boolean, permissionSettings?: PermissionState, supportsExecutionSettings?: boolean, supportsAttachments?: boolean, threadId: string, title: string, cwd: string, status: string, activeTurnId: string, activity?: string, turns?: ConversationTurn[], approvals: Approval[], questionGroups: QuestionGroup[], updatedAt: number, order: string[], upserts: ChatMessage[], appends: TextAppend[], readOnly?: boolean, supportsImages?: boolean, supportsHistoryPages?: boolean }
 type ConnectionConfig = { relayUrl: string, token: string, hostId: string }
 type SessionTicket = { ticket: string }
-type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string }
-export type PendingCommand = { id: string, hostId: string, threadId: string }
+type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string }
+export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string }
 type ConnectionState = { supportsHostProfiles: boolean, subscriptionRevision: number, configurationRevision: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
 export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number }
@@ -218,20 +218,25 @@ class MobileBridge {
   rejectPending() {
     this.pending.forEach((entry: PendingReply, id: string) => {
       clearTimeout(entry.timer)
-      if (entry.write) this.clearCommand(id, entry.hostId)
-      entry.reject(new Error(entry.write ? '连接已中断，恢复后请查看会话，按需重新发送' : '连接已中断'))
+      if (entry.write && entry.method != 'thread.delete') this.clearCommand(id, entry.hostId)
+      entry.reject(new Error(entry.method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作，勿重复提交' : entry.write ? '连接已中断，恢复后请查看会话，按需重新发送' : '连接已中断'))
     })
     this.pending.clear()
   }
 
-  // 升级后不恢复旧的未知结果锁；由用户查看同步后的会话决定是否再次发送。
+  // 普通消息不恢复旧操作锁，永久删除单独保存原编号供只读核对。
   clearLegacyCommands(hostId: string) {
     try { uni.removeStorageSync('codex-mobile-pending-v2-' + hostId) } catch (_) {}
     try { uni.removeStorageSync('codex-mobile-pending-' + hostId) } catch (_) {}
+    // 删除请求与普通消息分开保存，重连和刷新页面不能解除未知删除的保护。
+    try {
+      const saved = JSON.parse<PendingCommand[]>(uni.getStorageSync('codex-mobile-delete-pending-v1-' + hostId) as string) ?? [] as PendingCommand[]
+      saved.forEach((entry: PendingCommand) => { if (entry.method == 'thread.delete' && entry.hostId == hostId && entry.id.length >= 16 && entry.threadId.length > 0 && this.pendingCommand(hostId, entry.threadId).length == 0) connection.pendingCommands.push(entry) })
+    } catch (_) {}
     this.syncPendingCommand()
   }
 
-  // 只锁定尚在等待响应的写请求，结束或断线后即可由用户再次操作。
+  // 普通写请求仅在提交中锁定；永久删除的未知结果继续保护相同电脑和会话。
   pendingCommand(hostId: string, threadId: string): string {
     const scope = threadId.length > 0 ? threadId : '@new'
     return connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == hostId && entry.threadId == scope)?.id ?? ''
@@ -239,12 +244,13 @@ class MobileBridge {
   syncPendingCommand() { connection.pendingCommandId = this.pendingCommand(connection.hostId, connection.activeThreadId) }
   hasPendingCommands(): boolean { return connection.pendingCommands.length > 0 }
 
-  // 请求编号只保存在运行期内存，用于防止提交中的连续点击。
-  rememberCommand(id: string, hostId: string = connection.hostId, threadId: string = connection.activeThreadId) {
+  // 普通请求编号仅保存在运行期，永久删除额外持久化，防止刷新后重复提交。
+  rememberCommand(id: string, hostId: string = connection.hostId, threadId: string = connection.activeThreadId, method: string = '') {
     const scope = threadId.length > 0 ? threadId : '@new'
     const previous = this.pendingCommand(hostId, scope)
     if (previous.length > 0 && previous != id) throw new Error('此会话正在提交，请稍后再试')
-    const records = connection.pendingCommands.filter((entry: PendingCommand): boolean => !(entry.hostId == hostId && entry.threadId == scope)).concat([{ id, hostId, threadId: scope } as PendingCommand])
+    const records = connection.pendingCommands.filter((entry: PendingCommand): boolean => !(entry.hostId == hostId && entry.threadId == scope)).concat([{ id, hostId, threadId: scope, method } as PendingCommand])
+    if (method == 'thread.delete') uni.setStorageSync('codex-mobile-delete-pending-v1-' + hostId, JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'thread.delete')))
     connection.pendingCommands = records
     this.syncPendingCommand()
   }
@@ -252,6 +258,9 @@ class MobileBridge {
   clearCommand(id: string, hostId: string = connection.hostId) {
     const records = connection.pendingCommands.filter((entry: PendingCommand): boolean => !(entry.hostId == hostId && entry.id == id))
     if (records.length == connection.pendingCommands.length) return
+    if (connection.pendingCommands.some((entry: PendingCommand): boolean => entry.hostId == hostId && entry.id == id && entry.method == 'thread.delete')) {
+      try { uni.setStorageSync('codex-mobile-delete-pending-v1-' + hostId, JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'thread.delete'))) } catch (_) { return }
+    }
     connection.pendingCommands = records
     this.syncPendingCommand()
   }
@@ -289,9 +298,17 @@ class MobileBridge {
       clearTimeout(entry.timer); this.pending.delete(id)
       const error = envelope['error'] as UTSJSONObject | null
       if (error != null) {
-        if (entry.write) this.clearCommand(id, entry.hostId)
-        entry.reject(new Error(error.getBoolean('outcomeUnknown') == true ? '未收到明确结果，请查看会话，按需重新操作' : error.getString('message') ?? '操作失败'))
-      } else { if (entry.write) this.clearCommand(id, entry.hostId); entry.resolve(envelope['result'] as UTSJSONObject) }
+        if (entry.write && !(entry.method == 'thread.delete' && error.getBoolean('outcomeUnknown') == true)) this.clearCommand(id, entry.hostId)
+        entry.reject(new Error(entry.method == 'thread.delete' && error.getBoolean('outcomeUnknown') == true ? '永久删除结果需要核对，请核对原操作，勿重复提交' : error.getBoolean('outcomeUnknown') == true ? '未收到明确结果，请查看会话，按需重新操作' : error.getString('message') ?? '操作失败'))
+      } else {
+        const result = envelope['result'] as UTSJSONObject
+        if (entry.method == 'thread.delete') {
+          let valid = false
+          try { const ids = JSON.parse<string[]>(JSON.stringify(result?.['deletedThreadIds'])) ?? [] as string[]; valid = result?.getBoolean('deleted') == true && result?.getString('threadId') == entry.threadId && ids.indexOf(entry.threadId) >= 0 } catch (_) {}
+          if (!valid) { entry.reject(new Error('永久删除回执需要核对，请勿重复提交')); return }
+        }
+        if (entry.write) this.clearCommand(id, entry.hostId); entry.resolve(result)
+      }
     } else if (type == 'event') {
       if (envelope.getString('hostId') != connection.hostId || envelope.getString('threadId') != connection.activeThreadId) return
       const epoch = envelope.getString('epoch') ?? ''
@@ -362,20 +379,20 @@ class MobileBridge {
       const id = Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2)
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        if (write) this.clearCommand(id, hostId)
-        reject(new Error(write ? '操作响应超时，请查看会话，按需重新操作' : '读取超时，请重试'))
-      }, method == 'thread.goal.update' ? 30000 : 20000)
+        if (write && method != 'thread.delete') this.clearCommand(id, hostId)
+        reject(new Error(method == 'thread.delete' ? '永久删除结果需要核对，请核对原操作，勿重复提交' : write ? '操作响应超时，请查看会话，按需重新操作' : '读取超时，请重试'))
+      }, method == 'thread.delete' ? 65000 : method == 'thread.goal.update' ? 30000 : 20000)
       if (write) {
-        try { this.rememberCommand(id, hostId, threadId) }
-        catch (_) { clearTimeout(timer); reject(new Error('操作正在提交，请稍后再试')); return }
+        try { this.rememberCommand(id, hostId, threadId, method) }
+        catch (_) { clearTimeout(timer); reject(new Error(method == 'thread.delete' ? '无法保存删除核对信息，请检查本地存储后重试' : '操作正在提交，请稍后再试')); return }
       }
-      this.pending.set(id, { resolve, reject, timer, write, hostId, threadId })
+      this.pending.set(id, { resolve, reject, timer, write, hostId, threadId, method })
       socket.send({ data: JSON.stringify({ v: 1, type: 'request', requestId: id, hostId, method, params }), fail: (_) => {
         const entry = this.pending.get(id)
         if (entry == null) return
         clearTimeout(entry.timer); this.pending.delete(id)
-        if (write) this.clearCommand(id, hostId)
-        reject(new Error(write ? '未收到发送结果，请查看会话，按需重新发送' : '发送失败，请重新连接'))
+        if (write && method != 'thread.delete') this.clearCommand(id, hostId)
+        reject(new Error(method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作' : write ? '未收到发送结果，请查看会话，按需重新发送' : '发送失败，请重新连接'))
       } })
     })
   }

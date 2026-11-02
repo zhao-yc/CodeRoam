@@ -10,7 +10,7 @@ function composerFixture(){
   let source=fs.readFileSync(new URL('../apps/mobile/services/composer.uts',import.meta.url),'utf8')
     .replace(/^import .* from 'vue'\r?\n/m,'').replace(/\bexport /g,'');
   source=stripTypeScriptTypes(source,{mode:'transform'});
-  vm.runInContext(source+'\nglobalThis.subject={readDraft,saveDraft,readDraftImages,saveDraftImages,rememberSubmission,settleSubmission};',context);
+  vm.runInContext(source+'\nglobalThis.subject={readDraft,saveDraft,readDraftImages,saveDraftImages,rememberSubmission,settleSubmission,clearDeletedDrafts,readDraftFiles,saveDraftFiles};',context);
   return context.subject;
 }
 
@@ -122,4 +122,15 @@ test('不同命令编号和不同电脑的回执均不会误清草稿',()=>{
   assert.equal(f.readDraft('pc-a','thread'),'待确认指令');
   f.settleSubmission('pc-a','expected-command',true);
   assert.equal(f.readDraft('pc-a','thread'),'');
+});
+
+
+test('永久删除清理同一电脑主子对话的全部草稿，保留其他电脑和其他会话',()=>{
+ const f=composerFixture();
+ for(const [host,id]of [['pc','root'],['pc','child'],['pc','keep'],['other','root']]){
+  f.saveDraft(host,id,'合成草稿');f.saveDraftImages(host,id,[{id:'image',src:'data:image/png;base64,合成图片'}]);f.saveDraftFiles(host,id,[{id:'file',name:'合成附件',size:1,source:'',data:'',status:'ready',progress:100,error:''}]);
+ }
+ f.clearDeletedDrafts('pc',['root','child']);
+ for(const id of ['root','child']){assert.equal(f.readDraft('pc',id),'');assert.equal(f.readDraftImages('pc',id).length,0);assert.equal(f.readDraftFiles('pc',id).length,0);}
+ assert.equal(f.readDraft('other','root'),'合成草稿');assert.equal(f.readDraftImages('other','root').length,1);assert.equal(f.readDraft('pc','keep'),'合成草稿');
 });

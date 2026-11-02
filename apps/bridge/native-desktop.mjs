@@ -19,6 +19,7 @@ export class NativeDesktop extends EventEmitter {
    const pipe=/^\\\\\.\\pipe\\([A-Za-z0-9._-]+)$/.exec(this.ipcSocketPath);if(!pipe)throw new Error('会话 IPC 通道无效');
    const result=await execute(executable,['-NoProfile','-NonInteractive','-File',helper,'-IpcPipeName',pipe[1]],{windowsHide:true,timeout:6000,maxBuffer:16384});
    const endpoint=selectNativeEndpoint(JSON.parse(result.stdout.trim()),process.env.CODEX_APP_TOOLS_PIPE_PATH);
+   this.processId=endpoint.pid;
    await new Promise((resolve,reject)=>{const socket=net.createConnection(endpoint.path);this.socket=socket;const connectingTimer=setTimeout(()=>{socket.destroy();reject(new Error('原生通道连接超时'));},3000);const decoder=new FrameDecoder(message=>{const entry=this.pending.get(message.id);if(!entry)return;this.pending.delete(message.id);clearTimeout(entry.timer);message.error?entry.reject(new Error('原生请求失败')):entry.resolve(message.result);},8*1024*1024);
     socket.on('data',chunk=>{try{decoder.push(chunk);}catch{socket.destroy();}});socket.on('error',()=>{clearTimeout(connectingTimer);reject(new Error('原生通道不可用'));});socket.on('close',()=>{clearTimeout(connectingTimer);if(this.socket===socket){this.socket=null;this.invalidate();}for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(new Error('原生通道已关闭'));}this.pending.clear();});socket.once('connect',()=>{clearTimeout(connectingTimer);socket.unref();resolve();});
    });

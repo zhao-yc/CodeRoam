@@ -8,6 +8,16 @@ type ThreadListState = { configuration: number, computers: ComputerThreads[] }
 export const threadList = reactive<ThreadListState>({ configuration: -1, computers: [] as ComputerThreads[] })
 const queue = [] as ListQueueEntry[]
 let activeReads = 0
+const deletedThreadKeys = new Set<string>()
+
+// 永久删除后拒绝旧列表回执重新带回相同电脑的已删除编号。
+export function removeDeletedThreads(hostId: string, ids: string[]) {
+  ids.forEach((id: string) => { deletedThreadKeys.add(hostId + ':' + id); removeArchivedThread(hostId, id) })
+  liveThreadLists.updates.forEach((update: ThreadListUpdate) => { if (update.hostId == hostId) update.threads = update.threads.filter((thread: ThreadSummary): boolean => ids.indexOf(thread.id) < 0) })
+  if (connection.hostId == hostId) connection.threads = connection.threads.filter((thread: ThreadSummary): boolean => ids.indexOf(thread.id) < 0)
+}
+
+function retainedThreads(hostId: string, threads: ThreadSummary[]): ThreadSummary[] { return threads.filter((thread: ThreadSummary): boolean => !deletedThreadKeys.has(hostId + ':' + thread.id)) }
 
 // 原生归档成功后移除缓存，并使归档前发出的列表回执失效，防止会话重新出现。
 export function removeArchivedThread(hostId: string, threadId: string) {
@@ -21,6 +31,7 @@ export function removeArchivedThread(hostId: string, threadId: string) {
 // 配对变化与授权撤回立即清除旧数据；临时离线保留当前运行期内的列表缓存。
 export function syncThreadComputers() {
   if (!connection.configured || threadList.configuration != connection.configurationRevision) {
+    deletedThreadKeys.clear()
     threadList.configuration = connection.configurationRevision
     threadList.computers = [] as ComputerThreads[]
     queue.splice(0, queue.length)
@@ -74,7 +85,7 @@ function drainThreadQueue() {
     bridge.readComputerThreads(entry.hostId).then((result: UTSJSONObject) => {
       if (next.configuration == threadList.configuration && threadList.computers.some((item: ComputerThreads): boolean => item === entry) && entry.revision == revision) {
         const pushed = liveThreadLists.updates.find((item: ThreadListUpdate): boolean => item.hostId == entry.hostId)
-        entry.threads = pushed != null && pushed.revision > pushedRevision ? pushed.threads : JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[]
+        entry.threads = retainedThreads(entry.hostId, pushed != null && pushed.revision > pushedRevision ? pushed.threads : JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[])
         entry.subscribed = true
         entry.loaded = true; entry.loading = false; entry.error = ''
       }
@@ -108,6 +119,6 @@ export function disconnectThreadLists() {
 watch((): string => liveThreadLists.updates.map((item: ThreadListUpdate): string => item.hostId + ':' + item.revision).join('|'), () => {
   liveThreadLists.updates.forEach((update: ThreadListUpdate) => {
     const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == update.hostId)
-    if (entry != null) { entry.threads = update.threads; entry.loaded = true; entry.error = '' }
+    if (entry != null) { entry.threads = retainedThreads(entry.hostId, update.threads); entry.loaded = true; entry.error = '' }
   })
 })

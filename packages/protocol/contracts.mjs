@@ -15,6 +15,7 @@ READ_METHODS.add('thread.goal.read');
 READ_METHODS.add('thread.prediction.read');
 WRITE_METHODS.add('thread.goal.update');
 WRITE_METHODS.add('thread.archive');
+WRITE_METHODS.add('thread.delete');
 READ_METHODS.add('thread.permissions.read');
 READ_METHODS.add('thread.create.permissions');
 WRITE_METHODS.add('thread.permissions.update');
@@ -85,6 +86,7 @@ export function validateRequest(message) {
   if (message.method === 'thread.goal.update') validateGoalUpdate(message.params);
   if (message.method === 'thread.goal.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取目标仅接受会话编号');
   if (message.method === 'thread.archive' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '归档仅接受会话编号');
+  if (message.method === 'thread.delete' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '永久删除仅接受会话编号');
   return message;
 }
 

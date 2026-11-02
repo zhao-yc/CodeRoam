@@ -12,6 +12,14 @@ const memory = reactive<ComposerMemory>({ drafts: [] as Draft[], submissions: []
 const imageDrafts = reactive<ImageDraft[]>([])
 const fileDrafts = reactive<FileDraft[]>([])
 
+// 仅在原桌面确认永久删除后清理同一电脑的草稿、附件和发送记录。
+export function clearDeletedDrafts(hostId: string, threadIds: string[]) {
+  for (let index = memory.drafts.length - 1; index >= 0; index--) if (memory.drafts[index].hostId == hostId && threadIds.indexOf(memory.drafts[index].threadId) >= 0) memory.drafts.splice(index, 1)
+  for (let index = memory.submissions.length - 1; index >= 0; index--) if (memory.submissions[index].hostId == hostId && threadIds.indexOf(memory.submissions[index].threadId) >= 0) memory.submissions.splice(index, 1)
+  for (let index = imageDrafts.length - 1; index >= 0; index--) if (imageDrafts[index].hostId == hostId && threadIds.indexOf(imageDrafts[index].threadId) >= 0) imageDrafts.splice(index, 1)
+  for (let index = fileDrafts.length - 1; index >= 0; index--) if (fileDrafts[index].hostId == hostId && threadIds.indexOf(fileDrafts[index].threadId) >= 0) fileDrafts.splice(index, 1)
+}
+
 // 文件和图片一样按电脑与会话隔离，仅在运行期保留，上传正文不写持久化配置。
 export function readDraftFiles(hostId: string, threadId: string): DraftFile[] {
   return fileDrafts.find((entry: FileDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.files ?? [] as DraftFile[]

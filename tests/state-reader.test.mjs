@@ -6,6 +6,18 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {StateReader} from '../apps/bridge/state-reader.mjs';
 
+test('永久删除范围仅沿附属关系递归，包含归档子对话并防止循环，不包括普通分叉', t => {
+  const f=fixture(['attached_thread_parent_id']);t.after(()=>f.close());
+  f.add({id:'root',title:'合成主对话',attached_thread_parent_id:null});
+  f.add({id:'child',title:'合成子对话',attached_thread_parent_id:'root'});
+  f.add({id:'grandchild',title:'合成归档子对话',attached_thread_parent_id:'child',archived:1});
+  f.add({id:'fork',title:'独立分叉',attached_thread_parent_id:null});
+  assert.deepEqual(f.reader.readDeletionTree('root'),[{id:'root',archived:false},{id:'child',archived:false},{id:'grandchild',archived:true}]);
+  assert.deepEqual(f.reader.existingThreadIds(['root','grandchild','missing']).sort(),['grandchild','root']);
+  assert.equal(f.reader.readDeletionTree('missing').length,0);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM threads').get().count,4);
+});
+
 /** 仅创建隔离索引，覆盖实际来源格式和旧版字段，绝不更改真实 Codex 数据。 */
 function fixture(extraColumns=[]) {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'codex-thread-list-'));

@@ -10,7 +10,7 @@ function fixture(count=2){
  const watchers=[],liveThreadLists={updates:[]};
  const context=vm.createContext({watch:(_source,callback)=>watchers.push(callback),liveThreadLists,connection,reactive:value=>value,bridge:{readComputerThreads(hostId){return new Promise((resolve,reject)=>requests.push({hostId,resolve,reject}));}}});
  const source=fs.readFileSync('apps/mobile/services/thread-list.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
- vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={threadList,syncThreadComputers,refreshComputerThreads,visibleComputerThreads,computerThreadsLoading,disconnectThreadLists};',context);
+ vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={threadList,syncThreadComputers,refreshComputerThreads,visibleComputerThreads,computerThreadsLoading,disconnectThreadLists,removeDeletedThreads};',context);
  return {...context.subject,connection,requests,liveThreadLists,push:()=>watchers.forEach(callback=>callback())};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
@@ -59,4 +59,13 @@ test('推送在列表隐藏时更新缓存，返回及筛选不重复订阅，�
  assert.equal(f.visibleComputerThreads('','')[0].id,'new');
  f.refreshComputerThreads();f.refreshComputerThreads('pc0');assert.equal(f.requests.length,1);
  f.liveThreadLists.updates[0]={hostId:'pc0',revision:3,threads:[]};f.push();assert.equal(f.visibleComputerThreads('','').length,0);
+});
+
+
+test('永久删除拦截迟到推送，不影响其他电脑的同号会话',async()=>{
+ const f=fixture();f.connection.threads=[];f.refreshComputerThreads();
+ f.requests[0].resolve({threads:[row('same','合成主对话',2)]});f.requests[1].resolve({threads:[row('same','另一电脑对话',1)]});await settle();
+ f.removeDeletedThreads('pc0',['same']);
+ f.liveThreadLists.updates=[{hostId:'pc0',revision:3,threads:[row('same','迟到快照',3)]},{hostId:'pc1',revision:3,threads:[row('same','另一电脑对话',1)]}];f.push();
+ assert.deepEqual(plain(f.visibleComputerThreads('','').map(item=>item.key)),['pc1:same']);
 });

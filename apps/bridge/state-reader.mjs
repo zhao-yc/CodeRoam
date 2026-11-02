@@ -17,6 +17,24 @@ export class StateReader {
     try{return !!db.prepare('SELECT id FROM threads WHERE id=? AND archived=0').get(threadId);}
     finally{db.close();}
   }
+  /** 只读枚举与桌面删除规则相同的附属子对话，包含已归档子对话。 */
+  readDeletionTree(threadId) {
+    const db = new DatabaseSync(this.filePath, { readOnly: true });
+    try {
+      const columns = new Set(db.prepare('PRAGMA table_info(threads)').all().map(column => column.name));
+      if (!columns.has('attached_thread_parent_id')) throw new BridgeError('DELETE_UNSUPPORTED', '此电脑版本暂不支持核对删除范围，请更新后重试');
+      const rows = db.prepare('WITH RECURSIVE subtree(id) AS (SELECT id FROM threads WHERE id=? UNION SELECT t.id FROM threads t JOIN subtree p ON t.attached_thread_parent_id=p.id) SELECT id,archived FROM threads WHERE id IN (SELECT id FROM subtree) ORDER BY id').all(threadId);
+      if (rows.length > 1000) throw new BridgeError('DELETE_TOO_LARGE', '关联对话过多，请在电脑端处理');
+      return rows.sort((a, b) => a.id === threadId ? -1 : b.id === threadId ? 1 : a.id.localeCompare(b.id)).map(row => ({ id: row.id, archived: row.archived === 1 }));
+    } finally { db.close(); }
+  }
+  /** 删除后的回读同时检查归档区，不能把归档误判为永久删除。 */
+  existingThreadIds(ids) {
+    if (!ids.length) return [];
+    const db = new DatabaseSync(this.filePath, { readOnly: true });
+    try { return db.prepare('SELECT id FROM threads WHERE id IN (' + ids.map(() => '?').join(',') + ')').all(...ids).map(row => row.id); }
+    finally { db.close(); }
+  }
   /** 实时快照可能缺少名称；按会话 ID 只读索引，不受列表分页影响。 */
   readTitle(threadId) {
     if(!fs.existsSync(this.filePath))return '';

@@ -88,6 +88,29 @@ function respond(f,request,result={},error=null){
   f.bridge.receive(utsObject({type:'response',requestId:request.requestId,result:utsObject(result),error:error==null?null:utsObject(error)}));
 }
 
+test('永久删除超时、断线和未知回执保留编号，重连恢复后只核对，不允许重复删除',async()=>{
+  for(const failure of ['timeout','disconnect','unknown']){
+    const f=connectedFixture();const pending=f.bridge.request('thread.delete',{threadId:'thread'},true);const request=f.sent.at(-1);
+    if(failure==='timeout')[...f.timers.values()].find(timer=>timer.delay===65000).fn();
+    if(failure==='disconnect')f.bridge.rejectPending();
+    if(failure==='unknown')respond(f,request,{}, {code:'OUTCOME_UNKNOWN',message:'连接中断',outcomeUnknown:true});
+    await assert.rejects(pending,/核对/);
+    assert.equal(f.bridge.pendingCommand('pc','thread'),request.requestId);
+    assert.ok(f.storage.get('codex-mobile-delete-pending-v1-pc').includes(request.requestId));
+    await assert.rejects(f.bridge.request('thread.delete',{threadId:'thread'},true),/正在提交/);
+    f.connection.pendingCommands=[];f.bridge.clearLegacyCommands('pc');assert.equal(f.bridge.pendingCommand('pc','thread'),request.requestId);
+  }
+});
+
+test('永久删除的明确失败和成功回执释放保护，成功状态不会在下次连接恢复',async()=>{
+  for(const failure of [false,true]){
+    const f=connectedFixture(),pending=f.bridge.request('thread.delete',{threadId:'thread'},true),request=f.sent.at(-1);
+    respond(f,request,{threadId:'thread',deleted:true,deletedThreadIds:['thread']},failure?{code:'DELETE_STOP_FAILED',message:'停止失败',outcomeUnknown:false}:null);
+    if(failure)await assert.rejects(pending,/停止失败/);else assert.equal((await pending).deleted,true);
+    assert.equal(f.bridge.pendingCommand('pc','thread'),'');f.bridge.clearLegacyCommands('pc');assert.equal(f.bridge.pendingCommand('pc','thread'),'');
+  }
+});
+
 test('手机增量接收保留报告阶段与轮次耗时，阶段替换和后续文本追加可组合',()=>{
   const f=connectedFixture();f.connection.activeThreadId='thread';f.connection.epoch='e';f.connection.sequence=1;
   f.connection.snapshot={threadId:'thread',messages:[{id:'a',role:'assistant',phase:'commentary',text:'报告',turnId:'t',status:'inProgress'}]};

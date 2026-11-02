@@ -1,4 +1,9 @@
 let archiveSuccessPending = false
+let deleteSuccessPending = false
+
+// 永久删除结果由列表页在渲染完成后展示，避免提示随详情页卸载而消失。
+export function queueDeleteSuccessNotice() { deleteSuccessPending = true }
+export function consumeDeleteSuccessNotice(): boolean { const pending = deleteSuccessPending; deleteSuccessPending = false; return pending }
 
 // 详情页只交接已确认的归档结果，提示由返回后的列表页负责展示。
 export function queueArchiveSuccessNotice() { archiveSuccessPending = true }

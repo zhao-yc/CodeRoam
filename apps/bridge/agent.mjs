@@ -10,17 +10,20 @@ import { hostname } from 'node:os';
 import { NewThreadService } from './new-thread-service.mjs';
 import { archiveThread } from './thread-archive.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
+import { deleteThread, deletionCommandStatus } from './thread-delete.mjs';
+import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
-  constructor({ config, adapter, journal, archiveController = new DesktopArchiveController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
+  constructor({ config, adapter, journal, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
     this.newThreads=newThreads;
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();
+    this.deleteController=deleteController;this.deletingIds=new Set();
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
     adapter.on('conversation',snapshot=>{if(!adapter.conversations||[...adapter.conversations.get(snapshot.threadId)?.watchers??[]].some(id=>id!=='list-status'))this.publish(snapshot);});
     adapter.on('adapterWarning',warning=>this.emit('warning',warning));
@@ -59,6 +62,7 @@ export class BridgeAgent extends EventEmitter {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
       const execute=async()=>{
+        if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该对话正在永久删除，请先核对删除结果');
         if(message.method==='thread.create.permissions')return this.adapter.permissionCatalog.read(this.newThreads.project(message.params.projectId).cwd);
         if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
         if(message.method==='projects.list')return this.newThreads.projects();
@@ -67,6 +71,18 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.archive') {
           const result=await archiveThread(this.adapter,this.archiveController,message.params.threadId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result),message.requestId);
           this.published.delete(message.params.threadId);return result;
+        }
+        if(message.method==='thread.delete') {
+          const lockRelated=async ids=>{
+            if(ids.some(id=>this.deletingIds.has(id)))throw new BridgeError('DELETE_IN_PROGRESS','关联对话正在删除，请先核对原操作');
+            ids.forEach(id=>this.deletingIds.add(id));
+            const release=()=>ids.forEach(id=>this.deletingIds.delete(id));
+            try {await Promise.all(ids.filter(id=>id!==message.params.threadId).map(id=>this.threadLocks.get(id)?.catch(()=>{})));return release;}
+            catch(error){release();throw error;}
+          };
+          const result=await deleteThread(this.adapter,this.deleteController,message.params.threadId,message.deviceId,result=>{this.journal.checkpoint(message.deviceId,message.requestId,result);if(result.deleted===true)this.journal.forgetThreads(result.deletedThreadIds);},message.requestId,lockRelated);
+          for(const id of result.deletedThreadIds)this.published.delete(id);
+          this.threadListFeed.schedule();return result;
         }
         if(message.method==='thread.prediction.read')return this.predictions.read(this.adapter,message.params.threadId,message.deviceId);
         if(message.method==='thread.settings.read')return this.adapter.readSettings(message.params.threadId,message.deviceId);
@@ -87,7 +103,7 @@ export class BridgeAgent extends EventEmitter {
           return {snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
         }
         if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!this.adapter.conversations.has(message.params.threadId))this.published.delete(message.params.threadId);return result;}
-        if(message.method==='command.status') { const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
+        if(message.method==='command.status') { const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
         if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
         throw new BridgeError('METHOD_NOT_ALLOWED','此接口不支持通过电脑执行');
       };

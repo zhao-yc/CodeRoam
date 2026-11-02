@@ -57,7 +57,7 @@
 import { computed, ref, nextTick, watch } from 'vue'
 import { bridge, connection, Computer, computerIcon, taskState, conversationTaskState, threadIndicator } from '../../services/bridge.uts'
 import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, syncThreadComputers, refreshComputerThreads, disconnectThreadLists } from '../../services/thread-list.uts'
-import { consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
+import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
@@ -166,6 +166,14 @@ function updateClock() {
 function restoreThreadScroll() { restoringThreadScroll = true; nextTick(() => { threadScrollTop.value = savedThreadScrollTop; nextTick(() => { restoringThreadScroll = false }) }) }
 
 // 归档反馈由列表页显示；等列表渲染完成后调用原生接口，避免绑定到正在关闭的详情页。
+function showDeleteSuccessNotice() {
+  if (!consumeDeleteSuccessNotice()) return
+  const request = ++archiveToastRequest
+  nextTick(() => {
+    if (pageVisible.value && request == archiveToastRequest) uni.showToast({ title: '永久删除成功', icon: 'success', duration: 3000 })
+  })
+}
+
 function showArchiveSuccessNotice() {
   if (!consumeArchiveSuccessNotice()) return
   const request = ++archiveToastRequest
@@ -177,6 +185,7 @@ function showArchiveSuccessNotice() {
 onShow(() => {
   pageVisible.value = true
   showArchiveSuccessNotice()
+  showDeleteSuccessNotice()
   if (!editingNewConversation.value) restoreThreadScroll()
   updateClock()
   clearInterval(statusTimer)
