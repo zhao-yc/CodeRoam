@@ -952,6 +952,8 @@ function selectSetting(key: string, value: string): boolean {
     if (snapshotRevision == settingsSnapshotRevision) settings.value = response.settings
     models.value = response.models
     closeComposerMenu()
+    // 强度切换确认后恢复编辑，隐藏页面或失败响应不争抢输入焦点。
+    if (key == 'effort' && pageVisible.value) focusComposerInput()
     refresh()
   }, (error: Error) => {
     busy.value = false; settingsBusy.value = false

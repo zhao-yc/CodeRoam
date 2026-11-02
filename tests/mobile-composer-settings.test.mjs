@@ -10,7 +10,7 @@ function fixture() {
   const methods = source.slice(source.indexOf('function onDraftBlur()'), source.indexOf('\nwatch((): string => connection.hostId', source.indexOf('function onDraftBlur()')));
   const files = new Map(), calls = [], pending = [];
   const context = vm.createContext({
-    predictionFocus: { value: false }, composerMenu: { value: '' }, menuHeight: { value: 200 }, keyboardInset: { value: 0 },
+    predictionFocus: { value: false }, inputFocused: { value: false }, pageVisible: { value: true }, composerBlurTimer: 0, nextTick: run => Promise.resolve().then(run), composerMenu: { value: '' }, menuHeight: { value: 200 }, keyboardInset: { value: 0 },
     models: { value: [] }, settings: { value: { model: 'model-a', effort: 'high', mode: 'default', serviceTier: '' } }, settingsBusy: { value: false }, settingsLoading: { value: false }, settingsError: { value: '' }, busy: { value: false }, settingsRequest: 0, settingsSnapshotRevision: 0,
     canWrite: { get value() { return !context.busy.value; } }, readOnly: { value: false }, imageBusy: { value: false }, modelSupportsImages: { value: true },
     connection: { connected: true, hostId: 'pc', activeThreadId: 'thread', snapshot: { supportsPlanReset: true, supportsExecutionSettings: true, supportsAttachments: true }, pendingCommandId: '' },
