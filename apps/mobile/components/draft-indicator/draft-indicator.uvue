@@ -1,0 +1,14 @@
+<template>
+  <view v-if="hasDraft" class="draft-indicator" aria-label="有未发送草稿"><app-icon name="edit" :size="16" tone="muted" /></view>
+</template>
+<script setup lang="uts">
+import { computed } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
+import { readDraft, readDraftImages, readDraftFiles } from '../../services/composer.uts'
+const props = defineProps<{ hostId: string, threadId: string }>()
+// 跟随同一电脑、聊天的响应式草稿；发送确认或手动清空后自动移除标识。
+const hasDraft = computed((): boolean => props.hostId.length > 0 && props.threadId.length > 0 && (readDraft(props.hostId, props.threadId).trim().length > 0 || readDraftImages(props.hostId, props.threadId).length > 0 || readDraftFiles(props.hostId, props.threadId).length > 0))
+</script>
+<style>
+.draft-indicator { width: 16px; height: 16px; margin-left: 8px; flex-shrink: 0; align-items: center; justify-content: center; }
+</style>
