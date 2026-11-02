@@ -59,15 +59,24 @@
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
-      <view class="composer-panel" @click="dismissGoal">
-        <view v-if="planEnabled" class="plan-chip action-frame"><app-icon name="plan" :size="17" /><text class="plan-label">计划</text><app-icon name="close" :size="13" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || settingsBusy" aria-label="关闭计划模式" @click="togglePlan"></button></view>
+      <view class="composer-panel" :class="{ 'composer-compact': !composerExpanded }" @click="dismissGoal">
+        <view v-if="composerExpanded && planEnabled" class="plan-chip action-frame"><app-icon name="plan" :size="17" /><text class="plan-label">计划</text><app-icon name="close" :size="13" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || settingsBusy" aria-label="关闭计划模式" @click="togglePlan"></button></view>
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><button class="remove-image" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)">×</button></view></view>
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
-        <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :style="{ height: draftHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
-        <view class="composer-actions"><view class="add-image action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
-        <text v-if="executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
-        <text v-if="settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
+        <view class="composer-input-row">
+          <view v-if="!composerExpanded" class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view>
+          <!-- 紧凑与展开共用同一编辑节点，布局切换不会重建原生输入框。 -->
+          <view class="draft-editor" :class="{ 'draft-editor-compact': !composerExpanded }">
+            <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @click="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :style="{ height: composerHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
+            <!-- 同宽文本只测量排版；零宽字符保留末尾换行，不写入草稿。 -->
+            <view class="draft-measure-box" aria-hidden="true"><text id="draft-placeholder-measure" class="draft-placeholder-measure">{{ visiblePrediction + '\u200b' }}</text></view>
+          </view>
+          <view v-if="!composerExpanded" class="primary-action action-frame" :style="{ opacity: !canWrite || activeTurnId.length == 0 ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || activeTurnId.length == 0" :aria-label="activeTurnId.length > 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view>
+        </view>
+        <view v-show="composerExpanded" class="composer-actions"><view class="add-image action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
+        <text v-if="composerExpanded && executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
+        <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
       </view>
     </view>
       <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :note="readOnly ? '历史浏览模式，请先继续此会话' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
@@ -83,6 +92,7 @@
 import { computed, ref, watch, nextTick } from 'vue'
 import { showPluginManagement } from '../../services/composer-actions.uts'
 import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
+import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, conversationTaskState } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
@@ -112,6 +122,12 @@ const pageThreadId = ref('')
 const listTitle = ref('')
 const predictionText = ref('')
 const predictionFocus = ref(false)
+const inputFocused = ref(false)
+const permissionMenuOpen = ref(false)
+const predictionHeight = ref(24)
+let composerBlurTimer = 0
+let composerMeasureRevision = 0
+let composerKeyboardVisible = false
 let predictionTimer = 0
 let predictionExpiryTimer = 0
 let predictionRevision = 0
@@ -281,7 +297,7 @@ function pollPrediction(revision: number) {
   })
 }
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.epoch + ':' + connection.subscriptionRevision + ':' + (connection.snapshot?.predictionTurnId ?? '') + ':' + predictionAllowed.value, () => { resetPrediction(); if (predictionAllowed.value) pollPrediction(predictionRevision) }, { flush: 'sync' })
-// 预测只用作占位提示，点击输入框才写入空草稿，始终沿用手动发送。
+// 预测只用作占位提示，首次回车才写入空草稿，始终沿用手动发送。
 function acceptPrediction(focus: boolean = true) {
   if (!predictionAllowed.value || visiblePrediction.value.length == 0 || Date.now() > predictionDeadline) { resetPrediction(); return }
   const text = visiblePrediction.value
@@ -596,8 +612,13 @@ function chooseImages(source: string = 'album') {
 }
 function removeImage(id: string) { if (busy.value || imageBusy.value || connection.pendingCommandId.length > 0) return; saveDraftImages(pageHostId.value, pageThreadId.value, draftImages.value.filter((image: DraftImage): boolean => image.id != id)) }
 function previewImage(src: string) { uni.previewImage({ urls: draftImages.value.map((image: DraftImage): string => image.src), current: src }) }
-// 工具栏始终显示，失焦只复位建议采纳的聚焦标记。
-function onDraftBlur() { predictionFocus.value = false }
+// 延后收起，让引起失焦的工具栏点击先完成，菜单或附件选择会继续保持展开。
+function onDraftBlur() {
+  predictionFocus.value = false
+  clearTimeout(composerBlurTimer)
+  composerBlurTimer = setTimeout(() => { if (pageAlive) inputFocused.value = false }, 160)
+}
+function onPermissionVisibility(value: boolean) { permissionMenuOpen.value = value }
 function updateMenuHeight() {
   const windowHeight = uni.getWindowInfo().windowHeight
   const pageBottom = uni.getElementById('conversation-page')?.getBoundingClientRect().bottom ?? windowHeight
@@ -771,10 +792,43 @@ watch((): string => JSON.stringify(connection.snapshot?.executionSettings ?? nul
 })
 
 
-function onDraftLineChange(event: UniTextareaLineChangeEvent) { draftHeight.value = Math.max(64, Math.min(144, event.detail.height)); if (following.value) scrollLatest() }
+// 占位预测使用独立测量值，原生空输入行高事件不能覆盖预测的实际高度。
+function onDraftLineChange(event: UniTextareaLineChangeEvent) {
+  if (draft.value.length > 0) draftHeight.value = Math.max(64, Math.min(144, event.detail.height))
+  updateComposerGeometry()
+}
+const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value, attachmentBusy: imageBusy.value }))
+const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
+// 布局稳定后更新菜单锚点；用户阅读历史时不强制滚到消息末尾。
+function updateComposerGeometry() {
+  nextTick(() => {
+    if (!pageAlive) return
+    if (composerMenu.value.length > 0) updateMenuHeight()
+    if (following.value) scrollLatest()
+    else updateTimelinePosition()
+  })
+}
+// 按真实可用宽度测量自然折行，代次校验阻止旧会话或旧预测的测量写回。
+function measureComposerPrediction() {
+  const revision = ++composerMeasureRevision
+  if (visiblePrediction.value.length == 0) { predictionHeight.value = 24; return }
+  nextTick(() => {
+    if (!pageAlive || revision != composerMeasureRevision) return
+    const height = uni.getElementById('draft-placeholder-measure')?.getBoundingClientRect().height ?? 0
+    if (height > 0) predictionHeight.value = height
+  })
+}
+watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + visiblePrediction.value + ':' + composerExpanded.value, () => { measureComposerPrediction(); updateComposerGeometry() }, { flush: 'post' })
+watch((): number => composerHeight.value, () => { updateComposerGeometry() })
+watch((): string => draft.value, (text: string) => { if (text.length == 0) draftHeight.value = 64 })
+watch((): string => pageHostId.value + ':' + pageThreadId.value, () => { clearTimeout(composerBlurTimer); inputFocused.value = false; predictionFocus.value = false; permissionMenuOpen.value = false; draftHeight.value = 64; measureComposerPrediction() }, { flush: 'sync' })
+onResize(() => { measureComposerPrediction(); updateComposerGeometry() })
+onUnload(() => { clearTimeout(composerBlurTimer); composerMeasureRevision++ })
 // 键盘由输入区处理，扣除系统已缩小的窗口高度，避免自定义顶栏被整体上推或重复留白。
 function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
   const height = event.detail.height
+  if (height > 0) composerKeyboardVisible = true
+  else if (composerKeyboardVisible) { composerKeyboardVisible = false; onDraftBlur() }
   goalViewportHeight.value = uni.getWindowInfo().windowHeight
   const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight)
   keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0
@@ -832,8 +886,8 @@ function reply(id: string, turnId: string, decision: string) {
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
 function dismissGoal() { if (!goalBusy.value && goalExpanded.value) { goalCloseRequest.value++; goalExpanded.value = false } }
-// 聚焦聊天输入时收起目标表单，输入框尺寸不随焦点切换。
-function onComposerFocus() { dismissGoal() }
+// 聚焦只展开编辑面板并收起目标表单，不采纳或发送预测。
+function onComposerFocus() { clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
 function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
 function showGoal() {
   closeActions(); closeComposerMenu()
@@ -970,7 +1024,14 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .add-image { align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0; padding: 0; background-color: transparent; }
 .image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
 .composer-panel { border-radius: 24px; padding: 14px 12px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
-.draft { width: 100%; min-height: 64px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
+.composer-compact { border-radius: 30px; padding: 6px 8px; }
+.composer-input-row { flex-direction: row; align-items: center; }
+.draft-editor { position: relative; flex: 1; min-width: 0; }
+.draft-editor-compact { margin: 0 8px; }
+.draft { width: 100%; min-height: 24px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
+/* 裁切容器不占布局高度，内部文本保留真实排版尺寸供跨端测量。 */
+.draft-measure-box { position: absolute; left: 2px; right: 2px; top: 0; height: 0; overflow: hidden; opacity: 0; }
+.draft-placeholder-measure { flex-shrink: 0; font-size: 16px; line-height: 24px; }
 /* 模型文字使用与工具栏图标一致的深色色值。 */
 .settings-trigger-label { color: #171717; }
 .composer-actions { flex-direction: row; align-items: center; margin-top: 6px; }
@@ -991,6 +1052,7 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .menu-label { color: #202c28; font-size: 14px; line-height: 20px; margin-left: 10px; flex: 1; }
 .archive-label { color: #bb3f44; }
 /* #ifdef WEB */
+.draft-placeholder-measure { display: block; white-space: pre-wrap; overflow-wrap: break-word; }
 .execution-text, .message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .thread-title, .meta-project, .meta-host { display: block; white-space: nowrap; overflow: hidden; }
 .execution-label, .execution-summary { display: block; white-space: nowrap; overflow: hidden; }

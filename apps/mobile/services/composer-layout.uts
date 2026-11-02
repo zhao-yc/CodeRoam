@@ -1,0 +1,13 @@
+export type ComposerLayoutState = { focused: boolean, draft: string, prediction: string, imageCount: number, fileCount: number, menuOpen: boolean, attachmentBusy: boolean }
+
+// 只有空白且没有正在交互的工具时才收起，保留草稿、预测及附件的完整展示。
+export function shouldExpandComposer(state: ComposerLayoutState): boolean {
+  return state.focused || state.draft.length > 0 || state.prediction.length > 0 || state.imageCount > 0 || state.fileCount > 0 || state.menuOpen || state.attachmentBusy
+}
+
+// 预测按实际排版结果取整到完整行；普通编辑沿用原有高度，紧凑态只占一行。
+export function composerInputHeight(expanded: boolean, prediction: string, predictionHeight: number, draftHeight: number): number {
+  if (!expanded) return 24
+  if (prediction.length > 0) return Math.max(24, Math.min(144, Math.ceil(predictionHeight / 24) * 24))
+  return Math.max(64, Math.min(144, draftHeight))
+}
