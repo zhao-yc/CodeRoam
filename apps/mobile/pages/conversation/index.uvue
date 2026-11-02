@@ -10,7 +10,7 @@
       </view>
       <view class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
-    <view v-if="showingCachedContent" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><button v-if="!connection.connected || detailError.length > 0" class="cache-retry button-secondary" @click="refresh" aria-label="重试同步">重试</button></view>
+    <view v-if="showingCachedContent && !cacheRefreshing" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><button v-if="!connection.connected || detailError.length > 0" class="cache-retry button-secondary" @click="refresh" aria-label="重试同步">重试</button></view>
     <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
     <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
@@ -68,6 +68,8 @@
       </scroll-view>
       <view v-if="!atTimelineBottom" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing"></button></view>
     </view>
+    <!-- 缓存刷新只在输入框上方显示骨架，不占用聊天顶部或打断历史阅读。 -->
+    <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
@@ -256,7 +258,9 @@ const cachedDetail = ref<CachedConversation | null>(null)
 const pageCacheNamespace = ref('')
 const liveConversation = computed((): Conversation | null => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot : null)
 const showingCachedContent = computed((): boolean => liveConversation.value == null && cachedDetail.value != null && pageCacheNamespace.value == connection.cacheNamespace)
-const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同步失败，当前显示缓存' : !connection.connected ? '当前显示缓存，连接恢复后同步' : '正在同步最新内容')
+// 骨架仅表示有缓存时的联网同步；失败、离线和同步完成立即收起。
+const cacheRefreshing = computed((): boolean => showingCachedContent.value && connection.connected && detailError.value.length == 0)
+const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同步失败，当前显示缓存' : !connection.connected ? '当前显示缓存，连接恢复后同步' : '')
 const displayConversation = computed(() => conversationWithHistory(liveConversation.value ?? (showingCachedContent.value ? cachedConversationSnapshot(cachedDetail.value!) : null), historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
@@ -1248,6 +1252,7 @@ onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(f
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* #endif */
 /* 缓存同步提示保持轻量，避免错误提示重复挤占聊天区域。 */
+.cache-sync-indicator { flex-shrink: 0; padding: 0 16px 6px; }
 .cache-notice { flex-direction: row; align-items: center; padding: 8px 16px; background-color: #eef2eb; }
 .cache-note { flex: 1; font-size: 12px; line-height: 20px; color: #68776c; }
 .cache-retry { width: 56px; height: 28px; padding: 0; margin: 0 0 0 8px; font-size: 12px; border-radius: 8px; }
