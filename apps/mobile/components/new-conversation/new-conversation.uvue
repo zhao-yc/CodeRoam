@@ -266,7 +266,7 @@ watch((): string => draft.value.images.length.toString() + ':' + draft.value.fil
 .draft-image { width: 60px; height: 60px; margin-right: 10px; position: relative; }
 .draft-thumbnail { width: 60px; height: 60px; border-radius: 8px; }
 /* 图标由圆形容器居中，透明按钮保留原生点击与禁用行为，不再依赖文字基线。 */
-.remove-image { position: absolute; right: -5px; top: -5px; width: 24px; height: 24px; align-items: center; justify-content: center; overflow: hidden; background-color: #202c28; border-radius: 12px; }
+.remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; align-items: center; justify-content: center; overflow: hidden; background-color: #202c28; border-radius: 12px; }
 .draft-file { flex-direction: row; align-items: center; background-color: #e8eee6; border-radius: 10px; margin-bottom: 8px; padding: 8px; }
 .file-copy { flex: 1; min-width: 0; margin-left: 8px; }
 .file-name { font-size: 13px; color: #202c28; lines: 1; text-overflow: ellipsis; }
