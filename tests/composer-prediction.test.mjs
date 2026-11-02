@@ -41,18 +41,23 @@ function mobile(){
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
   const code=source.slice(source.indexOf('const predictionAllowed ='),source.indexOf('function notify(message: string)'));
   const ref=value=>({value});const pending=[],saved=[],timers=[];
-  const c={computed:fn=>({get value(){return fn();}}),pageVisible:ref(true),canWrite:ref(true),goalHostOnline:ref(true),connection:{epoch:'e',subscriptionRevision:1,snapshot:{supportsComposerPrediction:true,predictionTurnId:'turn-1'}},activeTurnId:ref(''),currentTaskState:ref('idle'),draft:ref(''),draftImages:ref([]),draftFiles:ref([]),pendingQuestionCount:ref(0),approvalCount:ref(0),pageHostId:ref('host'),pageThreadId:ref('thread-1'),predictionText:ref(''),predictionFocus:ref(false),inputFocused:ref(false),pageAlive:true,predictionRevision:0,predictionTimer:0,predictionExpiryTimer:0,predictionDeadline:0,Date,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},watch(){},onUnload(){},nextTick:fn=>fn(),saveDraft:(host,thread,text)=>{saved.push({host,thread,text});c.draft.value=text;},bridge:{request:(method,params)=>{assert.equal(method,'thread.prediction.read');return new Promise(resolve=>pending.push(resolve));}}};
-  vm.runInNewContext(stripTypeScriptTypes(code+';globalThis.ui={pollPrediction,acceptPrediction,resetPrediction,clearComposerDraft};'),c);
+  const c={ref,computed:fn=>({get value(){return fn();}}),pageVisible:ref(true),canWrite:ref(true),goalHostOnline:ref(true),connection:{epoch:'e',subscriptionRevision:1,snapshot:{supportsComposerPrediction:true,predictionTurnId:'turn-1'}},activeTurnId:ref(''),currentTaskState:ref('idle'),draft:ref(''),draftImages:ref([]),draftFiles:ref([]),pendingQuestionCount:ref(0),approvalCount:ref(0),pageHostId:ref('host'),pageThreadId:ref('thread-1'),predictionText:ref(''),predictionFocus:ref(false),inputFocused:ref(false),pageAlive:true,predictionRevision:0,predictionTimer:0,predictionExpiryTimer:0,predictionDeadline:0,Date,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},watch(){},onUnload(){},nextTick:fn=>fn(),saveDraft:(host,thread,text)=>{saved.push({host,thread,text});c.draft.value=text;},bridge:{request:(method,params)=>{assert.equal(method,'thread.prediction.read');return new Promise(resolve=>pending.push(resolve));}}};
+  vm.runInNewContext(stripTypeScriptTypes(code+';globalThis.ui={pollPrediction,acceptPrediction,resetPrediction,clearComposerDraft,visiblePrediction};'),c);
   const result=p=>({getString:k=>p?.[k]??null});
   return {c,pending,saved,resolve:p=>pending.shift()({prediction:result(p)}),ui:c.ui};
 }
 test('手机采纳仅填入草稿，保留空格换行且不自动发送',async()=>{const m=mobile();m.ui.pollPrediction(0);m.resolve(prediction);await Promise.resolve();m.ui.acceptPrediction();assert.equal(m.saved[0].text,prediction.text);assert.equal(m.c.predictionText.value,'');assert.equal(m.pending.length,0);});
 test('手机旧回执、已输入草稿和过期预测均不覆盖草稿',async()=>{const m=mobile();m.ui.pollPrediction(0);m.ui.resetPrediction();m.resolve(prediction);await Promise.resolve();assert.equal(m.c.predictionText.value,'');m.c.predictionText.value='旧预测';m.c.draft.value='用户草稿';m.ui.acceptPrediction();assert.equal(m.saved.length,0);m.c.draft.value='';m.c.predictionDeadline=0;m.ui.acceptPrediction();assert.equal(m.saved.length,0);});
 
-test('预测自动填入空草稿但不聚焦，清空后同轮不再自动填回，新轮仍可加载',async()=>{
+test('预测仅作占位提示，点击后才填草稿，清空图标抑制同轮预测',async()=>{
   const m=mobile();m.ui.pollPrediction(0);m.resolve(prediction);await Promise.resolve();
-  assert.equal(m.c.draft.value,prediction.text);assert.equal(m.c.predictionFocus.value,false);
+  assert.equal(m.c.draft.value,'');assert.equal(m.saved.length,0);assert.equal(m.ui.visiblePrediction.value,prediction.text);
+  m.ui.acceptPrediction(false);assert.equal(m.c.draft.value,prediction.text);assert.equal(m.c.predictionFocus.value,false);
   m.ui.clearComposerDraft();assert.equal(m.c.draft.value,'');m.ui.pollPrediction(m.c.predictionRevision);assert.equal(m.pending.length,0);
   m.c.connection.snapshot.predictionTurnId='turn-2';m.ui.pollPrediction(m.c.predictionRevision);assert.equal(m.pending.length,1);
-  m.resolve({...prediction,sourceTurnId:'turn-2'});await Promise.resolve();assert.equal(m.c.draft.value,prediction.text);
+  m.resolve({...prediction,sourceTurnId:'turn-2'});await Promise.resolve();assert.equal(m.c.draft.value,'');assert.equal(m.ui.visiblePrediction.value,prediction.text);
+});
+test('用户先输入草稿时，迟到的预测不能覆盖已输入文字',async()=>{
+  const m=mobile();m.ui.pollPrediction(0);m.c.draft.value='用户输入';m.resolve(prediction);await Promise.resolve();m.ui.acceptPrediction(false);
+  assert.equal(m.c.draft.value,'用户输入');assert.equal(m.saved.length,0);
 });
