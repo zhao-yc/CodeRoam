@@ -228,7 +228,7 @@ const displayConversation = computed(() => conversationWithHistory(connection.sn
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
 const messagePresentations = computed((): MessagePresentation[] => presentConversationMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
-const selectedAnnotations = computed((): MessageAnnotation[] => messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
+const selectedAnnotations = computed((): MessageAnnotation[] => timeline.value.find((entry: TimelineEntry): boolean => entry.id == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 // 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
 const timeline = computed((): TimelineEntry[] => {
   const entries = reportTimeline(displayConversation.value, expandedReportIds.value)
