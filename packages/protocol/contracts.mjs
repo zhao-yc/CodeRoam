@@ -38,6 +38,10 @@ export function validateRequest(message) {
   if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(message.requestId)) throw new BridgeError('BAD_REQUEST_ID', '请求编号不合法');
   if (!METHODS.has(message.method)) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的接口列表中');
   if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new BridgeError('BAD_PARAMS', '请求参数必须是对象');
+  if (message.method === 'threads.list') {
+    const p=message.params;
+    if(Object.keys(p).some(key=>!['limit','offset','search','archived','includeUsage'].includes(key)) || (p.archived!==undefined&&typeof p.archived!=='boolean') || (p.includeUsage!==undefined&&typeof p.includeUsage!=='boolean') || (p.limit!==undefined&&(!Number.isInteger(p.limit)||p.limit<1||p.limit>100)) || (p.offset!==undefined&&(!Number.isInteger(p.offset)||p.offset<0||p.offset>10000)) || (p.search!==undefined&&(typeof p.search!=='string'||p.search.length>100)))throw new BridgeError('BAD_PARAMS','会话列表参数无效');
+  }
   if (message.method === 'host.profile.update') {
     requireString(message.hostId, '电脑编号', 200);
     const { displayName, icon, expectedRevision } = message.params;
