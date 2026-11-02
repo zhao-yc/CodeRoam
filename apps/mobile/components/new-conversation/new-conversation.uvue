@@ -43,6 +43,7 @@ import { NewProject, NewDraft, newDraft, beginNewConversation, assignUnselectedD
 import { DraftImage, DraftFile } from '../../services/composer.uts'
 import { ModelOption, SettingsResponse, SpeedOption, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
 import { prepareImage } from '../../services/images.uts'
+import { bindImagePaste } from '../../services/image-paste.uts'
 import { validateFile, fileSizeLabel } from '../../services/files.uts'
 
 // 组件每次重新打开都解除旧创建目标，保留尚未发送的输入与正在提交的流程。
@@ -153,6 +154,15 @@ function chooseImages(source: string) {
   const target = draft.value
   uni.chooseImage({ count: remaining(), sourceType: source == 'camera' ? ['camera'] : ['album'], sizeType: ['compressed'], success: (result) => { acceptImages(target, result.tempFilePaths) } })
 }
+// 固定粘贴时的电脑与项目草稿，处理期间切换目标也不会串入其他草稿。
+async function pasteImages(paths: string[]) {
+  if (!alive || busy.value || imageBusy.value) return
+  if (!modelSupportsImages.value) { notify('当前模型不支持图片，请切换模型'); return }
+  const count = remaining()
+  if (count == 0) { notify('每次最多添加3个附件'); return }
+  if (paths.length > count) notify('每次最多添加3个附件，已保留可添加的图片')
+  await acceptImages(draft.value, paths.slice(0, count))
+}
 async function acceptFiles(target: NewDraft, selected: ChooseFileTempFile[]) {
   imageBusy.value = true
   try { for (const picked of selected) {
@@ -203,6 +213,10 @@ async function send() {
 }
 onMounted(() => { nextTick(() => { focused.value = true }); loadProjects() })
 onUnmounted(() => { alive = false; projectRequest++; settingsRequest++ })
+
+let unbindImagePaste: () => void = () => {}
+onMounted(() => { unbindImagePaste = bindImagePaste('.new-input', pasteImages) })
+onUnmounted(() => { unbindImagePaste() })
 
 // 连接变化使旧电脑的读取失效，未配置时输入的内容留给首次连接的电脑。
 watch((): string => connection.hostId, (hostId: string, previous: string) => {

@@ -1,0 +1,31 @@
+// 只处理用户在消息输入框内主动粘贴的图片，不主动读取剪贴板或加载网页链接。
+export function bindImagePaste(selector: string, accept: (sources: string[]) => Promise<void>): () => void {
+  // #ifdef WEB
+  const onPaste = async (event: ClipboardEvent) => {
+    const target = event.target
+    if (event.defaultPrevented || !(target instanceof HTMLTextAreaElement) || target.disabled || target.closest(selector) == null) return
+    const clipboard = event.clipboardData
+    if (clipboard == null) return
+    const images: File[] = []
+    for (let index = 0; index < clipboard.files.length; index++) {
+      const file = clipboard.files[index]
+      if (file.type.startsWith('image/')) images.push(file)
+    }
+    // 普通文字、HTML 和图片地址继续走输入框默认粘贴行为。
+    if (images.length == 0) return
+    event.preventDefault()
+    const sources: string[] = []
+    try {
+      images.forEach((file: File) => { sources.push(URL.createObjectURL(file)) })
+      await accept(sources)
+    } catch (_) { uni.showToast({ title: '无法读取粘贴图片，请重新复制或从相册选择', icon: 'none' }) }
+    finally { sources.forEach((source: string) => { URL.revokeObjectURL(source) }) }
+  }
+  document.addEventListener('paste', onPaste)
+  // 页面卸载时解除监听；临时图片地址在处理完成或失败后立即释放。
+  return () => { document.removeEventListener('paste', onPaste) }
+  // #endif
+  // #ifndef WEB
+  return () => {}
+  // #endif
+}

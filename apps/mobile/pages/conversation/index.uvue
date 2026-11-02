@@ -94,6 +94,7 @@ import { showPluginManagement } from '../../services/composer-actions.uts'
 import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
+import { bindImagePaste } from '../../services/image-paste.uts'
 import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, conversationTaskState } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
@@ -610,6 +611,28 @@ function chooseImages(source: string = 'album') {
     }, (error: Error) => { imageBusy.value = false; if (isCurrentPage()) notify(error.message) })
   }, fail: (error) => { imageBusy.value = false; if (error.errCode != 1101001 && !error.errMsg.toLowerCase().includes('cancel')) notify('未能选择图片，请重试') } })
 }
+// 粘贴仅添加附件，沿用选图压缩与发送流程，并始终写回发起粘贴的会话。
+async function pasteImages(paths: string[]) {
+  if (!pageVisible.value || !canWrite.value || imageBusy.value) return
+  if (connection.snapshot?.supportsImages != true) { notify('请先更新电脑连接服务以发送图片'); return }
+  if (!modelSupportsImages.value) { notify('当前模型不支持图片，请切换模型'); return }
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  const remaining = MAX_COMPOSER_IMAGES - readDraftImages(hostId, threadId).length - readDraftFiles(hostId, threadId).length
+  if (remaining <= 0) { notify('每次最多添加3个附件'); return }
+  if (paths.length > remaining) notify('每次最多添加3个附件，已保留可添加的图片')
+  imageBusy.value = true
+  try {
+    const sources = await Promise.all(paths.slice(0, remaining).map((path: string): Promise<string> => prepareImage(path)))
+    const images = readDraftImages(hostId, threadId).slice()
+    sources.forEach((src: string, index: number) => { images.push({ id: Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + index, src } as DraftImage) })
+    saveDraftImages(hostId, threadId, images.slice(0, MAX_COMPOSER_IMAGES - readDraftFiles(hostId, threadId).length))
+  } catch (reason) { if (isCurrentPage()) notify((reason as Error).message) }
+  finally { imageBusy.value = false }
+}
+// 文档级委托只匹配当前消息输入框，其他编辑框保留默认粘贴行为。
+let unbindImagePaste: () => void = () => {}
+onLoad(() => { unbindImagePaste = bindImagePaste('#conversation-page .draft', pasteImages) })
+onUnload(() => { unbindImagePaste() })
 function removeImage(id: string) { if (busy.value || imageBusy.value || connection.pendingCommandId.length > 0) return; saveDraftImages(pageHostId.value, pageThreadId.value, draftImages.value.filter((image: DraftImage): boolean => image.id != id)) }
 function previewImage(src: string) { uni.previewImage({ urls: draftImages.value.map((image: DraftImage): string => image.src), current: src }) }
 // 延后收起，让引起失焦的工具栏点击先完成，菜单或附件选择会继续保持展开。
