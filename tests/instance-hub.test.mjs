@@ -26,3 +26,16 @@ test('发现失败立即暂停全部实例，但保留身份和账本供核对',
   const hub = new InstanceHub({ config: { hostId: 'computer', codexHome: root }, dataPath: root, discover: async () => { if (fail) throw new Error(); return [{ pid: 1, startedAt: 1, nativePipe: 'pipe', codexHome: root }]; }, createRuntime: ({ instance }) => ({ instance, agent: new EventEmitter(), ready: async () => { instance.ready = true; }, close: async () => {} }) });
   await hub.refresh(); const instance = [...hub.runtimes.values()][0].instance; fail = true; await hub.refresh(); assert.equal(instance.ready, false); assert.equal(hub.runtimes.size, 1); await hub.close();
 });
+
+test('两个 Windows 实例分别核对原生草稿身份，端口换代后只暂停原绑定', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-draft-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rows = [{ pid: 101, startedAt: 1, nativePipe: 'pipe-one', codexHome: root, port: 1234, executable: 'desktop.exe' }, { pid: 102, startedAt: 2, nativePipe: 'pipe-two', codexHome: path.join(root, 'second'), port: 1235, executable: 'desktop.exe' }];
+  const hub = new InstanceHub({ config: { hostId: 'computer', codexHome: root }, dataPath: root, discover: async () => rows.map(row => ({ ...row })), bindOwners: async () => {}, createRuntime: ({ instance }) => ({ instance, agent: new EventEmitter(), ready: async () => { instance.ready = true; }, close: async () => { instance.alive = false; } }) });
+  t.after(() => hub.close()); await hub.refresh();
+  const [first, second] = [...hub.runtimes.values()].map(runtime => runtime.instance);
+  await Promise.all([first.verify(), second.verify()]);
+  assert.equal(first.ready, true); assert.equal(second.ready, true);
+  rows[0].port = 4321;
+  await assert.rejects(first.verify(), { code: 'INSTANCE_NOT_READY' });
+  await second.verify(); assert.equal(second.ready, true); assert.equal(first.ready, false);
+});

@@ -78,7 +78,7 @@ export class InstanceHub extends EventEmitter {
         if (runtime && (runtime.instance.pid !== row.pid || runtime.instance.startedAt !== row.startedAt || runtime.instance.nativePipe !== row.nativePipe || runtime.instance.port !== row.port)) { await runtime.close(); this.runtimes.delete(identity.id); runtime = null; }
         if (!runtime) {
           const instance = { ...row, id: identity.id, label: identity.label, generation: randomUUID(), alive: true, ready: false, refreshOwners: () => this.refreshOwners() };
-          instance.verify = () => this.verifyMacInstance(instance);
+          instance.verify = () => instance.platform === 'darwin' ? this.verifyMacInstance(instance) : this.verifyWindowsInstance(instance);
           const directory = identity.id === this.config.hostId ? this.dataPath : path.join(this.dataPath, 'instances', identity.id.slice(this.config.hostId.length + 1));
           fs.mkdirSync(directory, { recursive: true });
           runtime = this.createRuntime({ instance, config: this.config, dataPath: directory, send: message => this.send(message) });
@@ -101,6 +101,16 @@ export class InstanceHub extends EventEmitter {
       const response = await runtime.request(message);
       return { ...response, hostId: message.hostId, generation: message.generation };
     } catch (error) { return { v: 1, type: 'response', transportId: message.transportId, hostId: message.hostId, generation: message.generation, error: errorPayload(error) }; }
+  }
+  /** Windows 按进程和管道复核绑定，不能把缺少 Mac IPC 的多个实例误判为共享目录。 */
+  async verifyWindowsInstance(instance) {
+    try {
+      if (this.stopped || !instance.alive) throw new Error();
+      const rows = await (this.windowsVerification ??= this.discover().finally(() => { this.windowsVerification = null; }));
+      const matches = rows.filter(row => row.pid === instance.pid || row.nativePipe === instance.nativePipe);
+      const current = matches[0];
+      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData', 'port'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
+    } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连'); }
   }
   /** Mac 不借用全局调试页面；操作前复核专属 IPC，目录共用或 PID 换代立即暂停。 */
   async verifyMacInstance(instance) {
