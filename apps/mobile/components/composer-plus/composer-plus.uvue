@@ -5,6 +5,7 @@
 
 <style>
 .composer-plus { position: relative; width: 22px; height: 22px; flex-shrink: 0; }
-.plus-horizontal { position: absolute; left: 3px; top: 10px; width: 16px; height: 2px; background-color: #202c28; }
-.plus-vertical { position: absolute; left: 10px; top: 3px; width: 2px; height: 16px; background-color: #202c28; }
+/* 与 app-icon 的 dark PNG 使用相同色值，避免加号与权限、清空图标深浅不一。 */
+.plus-horizontal { position: absolute; left: 3px; top: 10px; width: 16px; height: 2px; background-color: #171717; }
+.plus-vertical { position: absolute; left: 10px; top: 3px; width: 2px; height: 16px; background-color: #171717; }
 </style>
