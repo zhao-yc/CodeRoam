@@ -7,7 +7,7 @@
     <view class="new-dock"><view class="new-panel">
       <scroll-view direction="vertical" :show-scrollbar="false" :scroll-into-view="contentTarget" class="editor-content" :style="{ height: editorContentHeight + 'px' }">
       <view v-if="draft.settings?.mode == 'plan'" class="plan-chip"><app-icon name="plan" :size="16" /><text class="plan-label">计划模式</text></view>
-      <view v-if="draft.images.length > 0" class="draft-images"><view v-for="image in draft.images" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><button class="remove-image" :disabled="busy" aria-label="移除图片" @click="removeImage(image.id)">×</button></view></view>
+      <view v-if="draft.images.length > 0" class="draft-images"><view v-for="image in draft.images" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
       <view v-for="file in draft.files" :key="file.id" class="draft-file"><app-icon name="file" :size="21" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'uploading' ? '正在上传 ' + file.progress + '%' : fileSize(file.size) }}</text></view><button class="file-remove" :disabled="busy" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
       <view id="new-draft-input"><textarea :value="draft.text" :focus="focused" :disabled="busy" :adjust-position="false" :maxlength="32000" class="new-input" :style="{ height: draftHeight + 'px' }" placeholder="问问 Codex" @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"></textarea></view>
       </scroll-view>
@@ -265,7 +265,8 @@ watch((): string => draft.value.images.length.toString() + ':' + draft.value.fil
 .draft-images { flex-direction: row; margin-bottom: 10px; }
 .draft-image { width: 60px; height: 60px; margin-right: 10px; position: relative; }
 .draft-thumbnail { width: 60px; height: 60px; border-radius: 8px; }
-.remove-image { position: absolute; right: -5px; top: -5px; width: 24px; height: 24px; line-height: 23px; padding: 0; margin: 0; background-color: #202c28; color: #ffffff; border-radius: 12px; font-size: 18px; }
+/* 图标由圆形容器居中，透明按钮保留原生点击与禁用行为，不再依赖文字基线。 */
+.remove-image { position: absolute; right: -5px; top: -5px; width: 24px; height: 24px; align-items: center; justify-content: center; overflow: hidden; background-color: #202c28; border-radius: 12px; }
 .draft-file { flex-direction: row; align-items: center; background-color: #e8eee6; border-radius: 10px; margin-bottom: 8px; padding: 8px; }
 .file-copy { flex: 1; min-width: 0; margin-left: 8px; }
 .file-name { font-size: 13px; color: #202c28; lines: 1; text-overflow: ellipsis; }
