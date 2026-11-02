@@ -20,7 +20,7 @@ const label = computed((): string => props.state == 'running' ? (showDetail.valu
 .task-status { flex-direction: row; align-items: center; flex-shrink: 0; }
 .with-detail { flex: 1; min-width: 0; }
 .spinner { width: 16px; height: 16px; border-color: #285c49; }
-.unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #3b82f6; margin-left: 6px; }
+.unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #285c49; margin-left: 6px; }
 .waiting-badge { background-color: #e4edfb; border-radius: 12px; padding: 2px 9px; }
 .label { color: #7b827a; font-size: 11px; line-height: 18px; margin-left: 6px; }
 .waiting-label { color: #3b82f6; margin-left: 0; }
