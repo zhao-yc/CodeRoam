@@ -16,7 +16,7 @@
     <view v-show="!editingNewConversation" class="list-shell">
     <view v-if="connection.computers.length > 1" class="computer-tabs">
       <view :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
-      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="'computer-tab-' + computer.id" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view></view></scroll-view>
+      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view></view></scroll-view>
     </view>
     <view v-if="listHint.length > 0 && !showThreadLoading" class="list-hint"><text class="list-hint-text">{{ listHint }}</text></view>
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
@@ -99,10 +99,16 @@ const connectionEditorBusy = ref(false)
 const connectionReleaseAt = ref(0)
 let suppressComputerClickUntil = 0
 const editingComputer = computed((): Computer | null => connection.computers.find((computer: Computer): boolean => computer.id == editingComputerId.value) ?? null)
+// 原生元素查询在 Web 内部使用 CSS 选择器；逐字符编码避免实例编号中的特殊符号及替换碰撞。
+function computerTabElementId(id: string): string {
+  let result = 'computer-tab'
+  for (let index = 0; index < id.length; index++) result += '-' + id.charCodeAt(index).toString(16)
+  return result
+}
 // 长按只编辑目标标签，保留当前筛选、执行电脑和列表滚动位置。
 function openComputerMenu(id: string) {
   if (editingNewConversation.value) return
-  const tab = uni.getElementById('computer-tab-' + id)?.getBoundingClientRect()
+  const tab = uni.getElementById(computerTabElementId(id))?.getBoundingClientRect()
   const page = uni.getElementById('home-page')?.getBoundingClientRect()
   connectionMenuLeft.value = tab?.left ?? 12
   connectionMenuTop.value = (tab?.bottom ?? 104) - (page?.top ?? 0) + 4
