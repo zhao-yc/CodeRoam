@@ -41,6 +41,10 @@ Compose 中相对路径以 Compose 文件位置为基准，请放置对应配置
 
 ## 手机与桌面
 
-Windows 桌面须已登录，桥接运行：`node apps/bridge/cli.mjs --config .local/bridge.json`。手机在连接页面导入自己的 `.local/mobile.json`。
+Windows 或 Mac 桌面须已登录，桥接运行：`node apps/bridge/cli.mjs --config .local/bridge.json`。手机在连接页面导入自己的 `.local/mobile.json`。
+
+Mac 默认连接当前用户 Codex 目录下的 `ipc/ipc.sock`，通过桌面会话链接打开聊天，再等待原桌面所有者及实时快照。`codexHome`、`ipcSocketPath` 和 `codexCliPath` 可在电脑私有配置中指定；不修改桌面安装文件、鉴权或数据库。Mac 的原生未读同步、归档、目标管理及输入预测尚未适配，不能把 Web 编译或模拟测试记为这些功能已通过真机验收。
+
+同一手机连接多台电脑时，为每台电脑生成不同的主机编号和令牌，在中转 `identities` 中分别登记主机，并把它们的编号追加到已有手机身份的 `hostIds`。保留已有手机令牌及其他主机条目，备份后重启中转加载配置；手机重连后即可在电脑列表中切换。不能把另一台电脑的主机编号和令牌直接复制过来启动，否则会替换原电脑连接。
 
 Web 通过 HBuilderX 导出 `apps/mobile/unpackage/dist/build/web`，只将静态产物放到自己的站点。不要上传 `.local`、签名、源码目录中的私有缓存或任何真实会话日志。更新前备份站点和配置，核对服务器、当前版本及健康检查。

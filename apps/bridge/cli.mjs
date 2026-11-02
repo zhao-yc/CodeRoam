@@ -9,6 +9,7 @@ import { ModelCatalog } from './model-settings.mjs';
 import { AttachmentStore } from './attachment-store.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { BridgeAgent } from './agent.mjs';
+import { IpcClient, defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
 
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
 let releaseBridgeLock=()=>{};
@@ -17,7 +18,8 @@ try {
   releaseBridgeLock=await acquireBridgeLock(values.config);
   const config=JSON.parse(fs.readFileSync(values.config,'utf8'));
   const dataPath=path.resolve(config.dataPath??'.local/bridge');fs.mkdirSync(dataPath,{recursive:true});
-  const adapter=new DesktopAdapter({index:new StateReader(config.codexHome),modelCatalog:new ModelCatalog({codexHome:config.codexHome}),attachments:new AttachmentStore({root:path.join(dataPath,'attachments')}),goalController:new DesktopGoalController({diagnosticPath:path.join(dataPath,'goal-ui-diagnostics.jsonl')})});
+  const client=new IpcClient({socketPath:config.ipcSocketPath??defaultIpcSocketPath({codexHome:config.codexHome})});
+  const adapter=new DesktopAdapter({client,index:new StateReader(config.codexHome),modelCatalog:new ModelCatalog({codexHome:config.codexHome}),attachments:new AttachmentStore({root:path.join(dataPath,'attachments')}),goalController:new DesktopGoalController({diagnosticPath:path.join(dataPath,'goal-ui-diagnostics.jsonl')})});
   const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite'))});
   const writeStatus=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
   agent.on('connected',()=>{writeStatus(true);console.log('电脑已连接中转服务');});

@@ -9,7 +9,8 @@ import { FILE_CHUNK_BYTES, MAX_FILE_BYTES, validateAttachmentInfo } from '../pac
 import { validateRequest, WRITE_METHODS, UPLOAD_METHODS } from '../packages/protocol/contracts.mjs';
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-attachments-'));
+  // Mac 的 /var 是系统符号链接；夹具使用真实路径，仍保留上传目录的防链接校验。
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-attachments-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const cwd = path.join(root, 'workspace'); fs.mkdirSync(cwd);
   return { root, cwd, store: new AttachmentStore({ root: path.join(root, 'temporary') }), id: randomUUID() };

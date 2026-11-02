@@ -1,13 +1,13 @@
 import { parseArgs } from 'node:util';
 import { performance } from 'node:perf_hooks';
-import { IpcClient } from '../packages/protocol/ipc-client.mjs';
+import { IpcClient, defaultIpcSocketPath } from '../packages/protocol/ipc-client.mjs';
 import { AsarReader } from './asar-reader.mjs';
 
 /** 只读诊断真实 IPC 的握手、广播和会话所有者发现。 */
 async function main() {
   const { values } = parseArgs({ options: {
     thread: { type: 'string', default: process.env.CODEX_THREAD_ID ?? '' },
-    socket: { type: 'string', default: '\\\\.\\pipe\\codex-ipc' },
+    socket: { type: 'string', default: defaultIpcSocketPath() },
     asar: { type: 'string' },
     hosts: { type: 'string', default: 'local,durable' },
     'observe-ms': { type: 'string', default: '500' },

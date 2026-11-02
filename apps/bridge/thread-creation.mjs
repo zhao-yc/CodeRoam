@@ -9,6 +9,15 @@ import { BridgeError } from '../../packages/protocol/contracts.mjs';
 export function desktopCodexPath(configuredPath, { platform = process.platform, env = process.env, exists = fs.existsSync, directories = fs.readdirSync, stat = fs.statSync } = {}) {
   const paths = platform === 'win32' ? path.win32 : path;
   for (const candidate of [configuredPath, env.CODEX_CLI_PATH]) if (typeof candidate === 'string' && paths.isAbsolute(candidate) && exists(candidate)) return candidate;
+  if (platform === 'darwin') {
+    // 兼容独立 Codex 与整合版桌面，始终使用桌面自带的 CLI。
+    for (const application of ['Codex', 'ChatGPT']) {
+      for (const relative of ['codex-cli/CodexCLI.app/Contents/MacOS/codex', 'codex']) {
+        const candidate = paths.join('/Applications', `${application}.app`, 'Contents/Resources', relative);
+        if (exists(candidate) && stat(candidate).isFile()) return candidate;
+      }
+    }
+  }
   if (platform === 'win32') {
     // 独立用户服务无法枚举 WindowsApps；优先使用桌面已解包到用户目录的同套 CLI。
     const localData = env.LOCALAPPDATA || paths.join(env.USERPROFILE || os.homedir(), 'AppData', 'Local');

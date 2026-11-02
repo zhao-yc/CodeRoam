@@ -1,6 +1,13 @@
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+
+/** 使用原桌面的平台默认通道，私有配置可指定另一套 Codex 用户目录。 */
+export function defaultIpcSocketPath({ platform = process.platform, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex') } = {}) {
+  return platform === 'win32' ? '\\\\.\\pipe\\codex-ipc' : path.join(codexHome, 'ipc', 'ipc.sock');
+}
 
 /** 编码 Codex 本地 IPC 的四字节小端长度加 UTF-8 JSON 消息。 */
 export function encodeFrame(message) {
@@ -53,7 +60,7 @@ export class FrameDecoder {
 
 /** 接入已经运行的 Codex IPC；本类不会启动、重启或修改桌面客户端。 */
 export class IpcClient extends EventEmitter {
-  constructor({ socketPath = '\\\\.\\pipe\\codex-ipc', timeoutMs = 5000, clientType = 'codex-mobile-bridge' } = {}) {
+  constructor({ socketPath = defaultIpcSocketPath(), timeoutMs = 5000, clientType = 'codex-mobile-bridge' } = {}) {
     super();
     this.socketPath = socketPath;
     this.timeoutMs = timeoutMs;

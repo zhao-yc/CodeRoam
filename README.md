@@ -1,6 +1,6 @@
 # 掌上 Codex
 
-使用自己的手机连接正在运行的 Codex Windows 桌面会话。手机界面使用 **uni-app x / UTS / uvue**，Windows 桥接复用现有桌面会话，中转通过 HTTPS 和 WSS 连接两端。
+使用自己的手机连接正在运行的 Codex Windows 或 Mac 桌面会话。手机界面使用 **uni-app x / UTS / uvue**，电脑桥接复用现有桌面会话，中转通过 HTTPS 和 WSS 连接两端。
 
 这是社区维护的非官方项目，与 OpenAI 无隶属关系。仓库提供源码和自建中转方案，不提供共享账号、公共中转服务、配对凭据或签名安装包。
 
@@ -14,7 +14,7 @@
 
 ## 环境
 
-- Node.js 24，以及已经登录并正在运行的 Codex Windows 桌面客户端。
+- Node.js 24，以及已经登录并正在运行的 Codex Windows 或 Mac 桌面客户端。
 - HBuilderX 5.34 或兼容的 uni-app x 工具链。手机端不是普通 Vue 项目。
 - 自己控制的中转服务器、HTTPS 域名及安全的凭据备份位置。
 
