@@ -2,7 +2,7 @@
   <view class="menu-overlay" @click="emit('dismiss')">
     <view class="menu-panel" :style="{ width: panelWidth + 'px' }" @click.stop>
       <template v-if="section == 'main'">
-        <scroll-view direction="vertical" :style="{ height: mainHeight + 'px' }" :show-scrollbar="false">
+        <scroll-view direction="vertical" class="menu-main-scroll" :style="{ maxHeight: mainMaxHeight + 'px' }" :show-scrollbar="false">
           <view v-for="option in options" :key="option.id" class="menu-row"><view class="check-slot"><app-icon v-if="sort == option.id" name="check" :size="17" /></view><app-icon :name="option.icon" :size="22" /><text class="menu-label">{{ option.label }}</text><button class="menu-hitbox" :aria-label="option.label" :aria-pressed="sort == option.id" hover-class="menu-pressed" @click="emit('sort', option.id)"></button></view>
           <view class="menu-separator"></view>
           <view class="menu-row"><view class="check-slot"><app-icon v-if="recentFirst" name="check" :size="17" /></view><app-icon name="recent" :size="22" /><text class="menu-label">优先显示“最近”</text><button class="menu-hitbox" aria-label="优先显示最近" :aria-pressed="recentFirst" hover-class="menu-pressed" @click="emit('recent')"></button></view>
@@ -12,7 +12,18 @@
           <view class="menu-row"><view class="check-slot"></view><app-icon name="settings" :size="22" /><text class="menu-label">设置</text><button class="menu-hitbox" aria-label="设置" hover-class="menu-pressed" @click="emit('connection', false)"></button></view>
           <view class="menu-separator"></view><text class="menu-caption">剩余用量</text>
           <text v-if="entries.length == 0" class="menu-note">连接电脑后查看</text>
-          <view v-for="entry in entries" :key="entry.hostId" class="usage-entry"><text class="usage-computer">{{ entry.label }}</text><text v-if="entry.online && !entry.usageLoading" class="usage-account">{{ entry.accountLabel.length > 0 ? entry.accountLabel : '账号暂不可获取' }}</text><text v-if="entry.usageLoading" class="menu-note">正在读取…</text><text v-else-if="entry.windows.length == 0" class="menu-note">{{ entry.online ? entry.usageNote : '电脑离线' }}</text><text v-for="window in entry.windows" :key="window.label" class="usage-value">{{ window.label }} {{ window.remainingPercent }}%</text></view>
+          <view class="usage-list">
+            <view v-for="entry in entries" :key="entry.hostId" class="usage-entry">
+              <text class="usage-computer">{{ entry.label }}</text>
+              <text v-if="entry.online && !entry.usageLoading" class="usage-account">{{ entry.accountLabel.length > 0 ? entry.accountLabel : '账号暂不可获取' }}</text>
+              <text v-if="entry.usageLoading" class="usage-note">正在读取…</text>
+              <text v-else-if="entry.windows.length == 0" class="usage-note">{{ entry.online ? entry.usageNote : '电脑离线' }}</text>
+              <view v-for="window in entry.windows" :key="window.label" class="usage-window">
+                <view class="usage-summary"><text class="usage-period">{{ window.label }}</text><text class="usage-value">{{ window.remainingPercent }}%</text></view>
+                <view class="usage-meter"><view class="usage-meter-fill" :style="{ width: Math.max(0, Math.min(100, window.remainingPercent)) + '%' }"></view></view>
+              </view>
+            </view>
+          </view>
         </scroll-view>
       </template>
       <template v-else>
@@ -27,7 +38,7 @@
 </template>
 
 <script setup lang="uts">
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { bridge, connection, Computer, ThreadSummary } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type UsageWindow = { label: string, remainingPercent: number }
@@ -38,7 +49,8 @@ const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'pr
 const section = ref('main')
 const entries = ref([] as MenuComputer[])
 const panelWidth = Math.min(276, uni.getWindowInfo().windowWidth - 32)
-const mainHeight = computed((): number => Math.min(entries.value.length == 0 ? 392 : 386 + entries.value.reduce((height: number, entry: MenuComputer): number => height + 20 + (entry.online && !entry.usageLoading ? 38 : 0) + (entry.windows.length > 0 ? entry.windows.length * 24 : 26), 0), uni.getWindowInfo().windowHeight - 82))
+// 主菜单随实际内容收缩，仅在超过可用屏幕高度时滚动，避免估算账号行高产生底部留白。
+const mainMaxHeight = Math.max(0, uni.getWindowInfo().windowHeight - 82)
 const archiveHeight = Math.max(120, Math.min(440, uni.getWindowInfo().windowHeight - 160))
 let revision = 0
 let archiveRevision = 0
@@ -87,6 +99,7 @@ onUnmounted(() => { revision++ })
 <style>
 .menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 50; padding-top: var(--status-bar-height); padding-left: 16px; background-color: rgba(32, 44, 40, 0.04); }
 .menu-panel { margin-top: 50px; border-radius: 20px; padding: 6px 6px; background-color: #fcfcf9; border-style: solid; border-width: 1px; border-color: #dedfd8; overflow: hidden; }
+.menu-main-scroll { height: auto; flex-shrink: 1; }
 .menu-row { position: relative; min-height: 42px; flex-direction: row; align-items: center; padding-right: 10px; border-radius: 14px; }
 .check-slot { width: 26px; align-items: center; flex-shrink: 0; }
 .menu-label { margin-left: 10px; font-size: 15px; line-height: 24px; color: #202c28; }
@@ -95,10 +108,18 @@ onUnmounted(() => { revision++ })
 .menu-separator { height: 1px; background-color: #e3e5dc; margin: 6px 14px; }
 .menu-caption { color: #94998f; font-size: 12px; line-height: 20px; padding: 2px 32px; }
 .menu-note { color: #7b827a; font-size: 13px; line-height: 22px; padding: 1px 32px 4px; }
-.usage-entry { padding-bottom: 4px; }
-.usage-computer { color: #7b827a; font-size: 12px; line-height: 18px; padding: 0 32px; }
-.usage-account { color: #59665f; font-size: 12px; line-height: 18px; padding: 1px 32px; max-height: 38px; overflow: hidden; lines: 2; text-overflow: ellipsis; }
-.usage-value { font-size: 14px; line-height: 22px; color: #202c28; padding: 1px 32px; }
+/* 每个实例独立分区，账号与额度保持在同一卡片内，进度条仅表达真实剩余百分比。 */
+.usage-list { padding: 0 14px 4px; }
+.usage-entry { margin-top: 6px; padding: 10px 12px; border-radius: 12px; border-width: 1px; border-style: solid; border-color: #e3e5dc; background-color: #f3f5ee; flex-shrink: 0; }
+.usage-computer { color: #39473f; font-size: 13px; font-weight: bold; line-height: 20px; lines: 1; text-overflow: ellipsis; }
+.usage-account { color: #7b827a; font-size: 12px; line-height: 18px; margin-top: 2px; max-height: 36px; overflow: hidden; lines: 2; text-overflow: ellipsis; }
+.usage-note { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 4px; }
+.usage-window { margin-top: 6px; }
+.usage-summary { flex-direction: row; align-items: center; justify-content: space-between; }
+.usage-period { color: #59665f; font-size: 12px; line-height: 20px; }
+.usage-value { font-size: 14px; font-weight: bold; line-height: 20px; color: #285c49; }
+.usage-meter { height: 3px; margin-top: 3px; border-radius: 2px; background-color: #dfe5da; overflow: hidden; }
+.usage-meter-fill { height: 3px; border-radius: 2px; background-color: #527c62; }
 .archive-heading { flex-direction: row; align-items: center; padding: 0 8px 8px; }
 .back-action { position: relative; width: 36px; height: 36px; align-items: center; justify-content: center; }
 .archive-title { flex: 1; font-size: 17px; color: #202c28; font-weight: bold; padding-left: 8px; }
