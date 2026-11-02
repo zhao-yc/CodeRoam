@@ -1,0 +1,96 @@
+<template>
+  <view class="file-overlay" @click="emit('close')">
+    <view class="file-sheet" :style="{ height: fullscreen ? '100%' : '86%' }" role="dialog" aria-modal="true" :aria-label="'已更改 ' + report.fileCount + ' 个文件'" @click.stop>
+      <view class="sheet-heading"><view class="sheet-title-block"><text class="sheet-title">已更改 {{ report.fileCount }} 个文件</text><view class="sheet-stats"><text class="added">+{{ report.additions }}</text><text class="deleted">−{{ report.deletions }}</text></view></view><button class="fullscreen" :aria-label="fullscreen ? '退出全屏' : '全屏查看文件差异'" @click="fullscreen = !fullscreen">{{ fullscreen ? '收起' : '全屏' }}</button><view class="close-frame action-frame"><app-icon name="close" :size="23" /><button class="action-hitbox" aria-label="关闭文件差异" hover-class="action-pressed" @click="emit('close')"></button></view></view>
+      <scroll-view direction="vertical" class="files-scroll" :scroll-into-view="scrollTarget" @touchstart.stop @touchmove.stop>
+        <view v-for="file in report.files" :key="file.id" :id="'changed-file-' + file.id" class="changed-file">
+          <view class="file-header action-frame"><app-icon :name="expandedIds.indexOf(file.id) >= 0 ? 'chevron-down' : 'chevron-right'" :size="15" tone="muted" /><text class="file-path">{{ file.path }}</text><text class="added">+{{ file.additions }}</text><text class="deleted">−{{ file.deletions }}</text><button class="action-hitbox" :aria-label="'展开或收起文件差异：' + file.path" :aria-expanded="expandedIds.indexOf(file.id) >= 0" hover-class="action-pressed" @click="toggle(file.id)"></button></view>
+          <view v-if="expandedIds.indexOf(file.id) >= 0" class="diff-body">
+            <template v-if="detailFor(file.id) != null">
+              <text v-if="detailFor(file.id)!.binary" class="diff-note">二进制文件，无法显示文本差异</text>
+              <text v-else-if="rowsFor(file.id).length == 0" class="diff-note">{{ file.kind == 'delete' ? '文件已删除' : '此文件没有可显示的文本差异' }}</text>
+              <view v-for="row in rowsFor(file.id)" :key="row.id" :class="['diff-row', 'diff-' + row.kind]"><text v-if="row.kind != 'hunk' && row.kind != 'note'" class="line-number">{{ row.oldLine }}</text><text v-if="row.kind != 'hunk' && row.kind != 'note'" class="line-number">{{ row.newLine }}</text><text class="diff-text" selectable>{{ row.text.length == 0 ? ' ' : row.text }}</text></view>
+            </template>
+            <view v-else class="diff-placeholder"><text class="diff-note">{{ errorFor(file.id).length > 0 ? errorFor(file.id) : connected ? '正在加载代码差异…' : '连接恢复后可查看代码差异' }}</text><button v-if="errorFor(file.id).length > 0" class="retry" :disabled="!connected" @click="loadFile(file.id)">重试</button></view>
+          </view>
+        </view>
+        <view class="safe-area"></view>
+      </scroll-view>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { bridge } from '../../services/bridge.uts'
+import { FileReport, FileReportDetail, DiffRow, fileDiffRows } from '../../services/file-reports.uts'
+import AppIcon from '../app-icon/app-icon.uvue'
+const props = defineProps<{ hostId: string, threadId: string, report: FileReport, fileId: string, connected: boolean }>()
+const emit = defineEmits<{ (event: 'close'): void }>()
+type LoadedFile = { id: string, detail: FileReportDetail, rows: DiffRow[] }
+type FileFailure = { id: string, message: string }
+const fullscreen = ref(false)
+const expandedIds = ref<string[]>([])
+const loaded = ref<LoadedFile[]>([])
+const errors = ref<FileFailure[]>([])
+const pendingIds = ref<string[]>([])
+const scrollTarget = ref('')
+let alive = true
+let generation = 0
+function detailFor(id: string): FileReportDetail | null { return loaded.value.find((file: LoadedFile): boolean => file.id == id)?.detail ?? null }
+function rowsFor(id: string): DiffRow[] { return loaded.value.find((file: LoadedFile): boolean => file.id == id)?.rows ?? [] as DiffRow[] }
+function errorFor(id: string): string { return errors.value.find((error: FileFailure): boolean => error.id == id)?.message ?? '' }
+// 每个文件按需读取，已打开内容在当前面板内保留；报告、电脑或连接代次变化后丢弃旧回执。
+function loadFile(id: string) {
+  if (!alive || !props.connected || detailFor(id) != null || pendingIds.value.indexOf(id) >= 0) return
+  const version = generation
+  pendingIds.value.push(id); errors.value = errors.value.filter((error: FileFailure): boolean => error.id != id)
+  bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.report.reportId, fileId: id }).then((result: UTSJSONObject) => {
+    if (!alive || version != generation) return
+    pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id)
+    if (result.getString('revision') != props.report.revision) { errors.value.push({ id, message: '这份报告已更新，请关闭后重新打开' }); return }
+    const detail = JSON.parse<FileReportDetail>(JSON.stringify(result['file']))
+    if (detail == null || detail.id != id) { errors.value.push({ id, message: '文件差异暂不可用' }); return }
+    loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) })
+  }, (failure: Error) => { if (!alive || version != generation) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message }) })
+}
+function toggle(id: string) { const index = expandedIds.value.indexOf(id); if (index >= 0) expandedIds.value.splice(index, 1); else { expandedIds.value.push(id); loadFile(id) } }
+onMounted(() => { const id = props.fileId.length > 0 ? props.fileId : props.report.files[0]?.id ?? ''; if (id.length == 0) return; expandedIds.value = [id]; loadFile(id); nextTick(() => { scrollTarget.value = 'changed-file-' + id }) })
+watch((): boolean => props.connected, (connected: boolean) => { generation++; pendingIds.value = [] as string[]; if (connected) expandedIds.value.forEach((id: string) => loadFile(id)) })
+onUnmounted(() => { alive = false; generation++ })
+</script>
+<style>
+.file-overlay { position: absolute; top: 0; bottom: 0; left: 0; right: 0; z-index: 70; background-color: rgba(20, 32, 26, 0.32); justify-content: flex-end; }
+.file-sheet { background-color: #f8f8f3; border-top-left-radius: 24px; border-top-right-radius: 24px; overflow: hidden; }
+.sheet-heading { flex-direction: row; align-items: center; min-height: 78px; padding: 12px 10px 12px 20px; border-bottom-width: 1px; border-bottom-color: #e1e5db; flex-shrink: 0; }
+.sheet-title-block { flex: 1; min-width: 0; }
+.sheet-title { font-size: 18px; font-weight: bold; color: #202c28; }
+.sheet-stats { flex-direction: row; gap: 8px; margin-top: 5px; }
+.added { font-size: 13px; color: #348744; flex-shrink: 0; }
+.deleted { font-size: 13px; color: #c14e56; flex-shrink: 0; }
+.fullscreen { padding: 8px; font-size: 13px; background-color: transparent; color: #56665a; }
+.close-frame { width: 44px; height: 44px; align-items: center; justify-content: center; }
+.files-scroll { flex: 1; height: 0; min-height: 0; }
+.changed-file { margin: 16px 12px 0; border-radius: 10px; overflow: hidden; border-width: 1px; border-color: #dce2d7; }
+.file-header { flex-direction: row; align-items: center; min-height: 48px; gap: 7px; padding: 10px; background-color: #e9ede5; }
+.file-path { flex: 1; min-width: 0; color: #34433c; font-size: 12px; lines: 2; text-overflow: ellipsis; }
+.diff-body { background-color: #fffefa; }
+.diff-row { flex-direction: row; min-height: 22px; align-items: flex-start; }
+.line-number { width: 30px; flex-shrink: 0; font-size: 10px; line-height: 22px; padding-right: 4px; text-align: right; color: #7c8a7b; font-family: monospace; }
+.diff-text { flex: 1; min-width: 0; font-family: monospace; font-size: 12px; line-height: 22px; color: #283b30; padding: 0 6px; }
+.diff-add { background-color: #def1db; }
+.diff-delete { background-color: #f9e1e0; }
+.diff-hunk { background-color: #eef0e9; padding: 6px 0; }
+.diff-hunk .diff-text { color: #758371; font-size: 11px; }
+.diff-note { font-size: 13px; color: #7b827a; padding: 14px 12px; line-height: 21px; }
+.diff-placeholder { padding-bottom: 6px; }
+.retry { color: #285c49; font-size: 13px; background-color: transparent; }
+.safe-area { height: 28px; flex-shrink: 0; }
+.action-frame { position: relative; overflow: hidden; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(40, 92, 73, 0.08); }
+/* #ifdef WEB */
+.action-hitbox::after, .fullscreen::after, .retry::after { border: none; }
+.diff-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+.safe-area { height: max(28px, env(safe-area-inset-bottom)); }
+/* #endif */
+</style>

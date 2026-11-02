@@ -1,7 +1,7 @@
 import { ChatMessage, Conversation, ConversationTurn, Approval, QuestionGroup } from './bridge.uts'
 import type { MessageAnnotation, MessageAttachment } from './annotations.uts'
 
-export type TimelineEntry = { id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[], attachments?: MessageAttachment[] }
+export type TimelineEntry = { reportId?: string, id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[], attachments?: MessageAttachment[] }
 
 // 返回每段明确最终回复前的正文起点，保留段首提问，段中追加仍属于过程。
 function reportPromptEnd(messages: ChatMessage[], start: number, end: number): number {
@@ -103,7 +103,7 @@ export function executionTimeline(messages: ChatMessage[]): TimelineEntry[] {
   const entries = [] as TimelineEntry[]
   messages.forEach((message: ChatMessage) => {
     if (message.role == 'user' || message.role == 'assistant') {
-      entries.push({ id: message.id, role: message.role, text: message.text, imageCount: message.imageCount ?? 0, turnId: message.turnId, executions: [] as ChatMessage[], label: '' })
+      entries.push({ reportId: message.role == 'assistant' && message.phase == 'final_answer' ? message.id : '', id: message.id, role: message.role, text: message.text, imageCount: message.imageCount ?? 0, turnId: message.turnId, executions: [] as ChatMessage[], label: '' })
       return
     }
     const previous = entries.length > 0 ? entries[entries.length - 1] : null

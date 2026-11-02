@@ -1,0 +1,69 @@
+<template>
+  <view v-if="report != null" class="changes-card">
+    <view class="changes-heading action-frame">
+      <text class="changes-title">已更改 {{ report!.fileCount }} 个文件</text><text class="added">+{{ report!.additions }}</text><text class="deleted">−{{ report!.deletions }}</text><view class="heading-space"></view><app-icon :name="expanded ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" />
+      <button class="action-hitbox" :aria-label="expanded ? '收起修改文件汇总' : '展开修改文件汇总'" :aria-expanded="expanded" hover-class="action-pressed" @click="toggleSummary"></button>
+    </view>
+    <template v-if="expanded">
+      <view v-for="file in preview" :key="file.id" class="changes-row action-frame"><text class="file-path">{{ file.path }}</text><text class="added">+{{ file.additions }}</text><text class="deleted">−{{ file.deletions }}</text><button class="action-hitbox" :aria-label="'查看文件差异：' + file.path" hover-class="action-pressed" @click="open(file.id)"></button></view>
+      <view class="changes-footer action-frame"><text class="footer-text">{{ report!.fileCount > 3 ? '查看另外 ' + (report!.fileCount - 3) + ' 个文件' : '查看代码差异' }}</text><app-icon name="chevron-right" :size="16" tone="muted" /><button class="action-hitbox" aria-label="查看全部修改文件与代码差异" hover-class="action-pressed" @click="open('')"></button></view>
+    </template>
+  </view>
+  <view v-else-if="error.length > 0" class="changes-error"><text class="error-text">{{ error }}</text><button class="retry" :disabled="!connected || loading" @click="load">重试文件汇总</button></view>
+</template>
+<script setup lang="uts">
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
+import { bridge } from '../../services/bridge.uts'
+import { ChangedFile, FileReport } from '../../services/file-reports.uts'
+import AppIcon from '../app-icon/app-icon.uvue'
+const props = defineProps<{ hostId: string, threadId: string, reportId: string, connected: boolean }>()
+const emit = defineEmits<{ (event: 'open', report: FileReport, fileId: string): void; (event: 'reading'): void; (event: 'beforelayout'): void; (event: 'layout'): void }>()
+const report = ref<FileReport | null>(null)
+const error = ref('')
+const loading = ref(false)
+const expanded = ref(true)
+const preview = computed((): ChangedFile[] => report.value?.files.slice(0, 3) ?? [] as ChangedFile[])
+let requestVersion = 0
+let alive = true
+let loaded = false
+// 汇总正文独立加载，不扩大聊天快照；归属变化后旧回执立即失效。
+function load() {
+  if (!alive || loading.value || !props.connected) return
+  loading.value = true; error.value = ''
+  const version = ++requestVersion
+  bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.reportId }).then((result: UTSJSONObject) => {
+    if (!alive || version != requestVersion) return
+    loading.value = false; loaded = true
+    emit('beforelayout')
+    report.value = result['report'] == null ? null : JSON.parse<FileReport>(JSON.stringify(result['report']))
+    nextTick(() => emit('layout'))
+  }, (failure: Error) => { if (!alive || version != requestVersion) return; emit('beforelayout'); loading.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
+}
+function toggleSummary() { emit('reading'); emit('beforelayout'); expanded.value = !expanded.value; nextTick(() => emit('layout')) }
+function open(fileId: string) { if (report.value == null) return; emit('reading'); emit('open', report.value!, fileId) }
+watch((): string => props.hostId + ':' + props.threadId + ':' + props.reportId, () => { requestVersion++; loading.value = false; report.value = null; loaded = false; error.value = ''; expanded.value = true; load() }, { immediate: true })
+watch((): boolean => props.connected, (connected: boolean) => { requestVersion++; loading.value = false; if (connected && !loaded) load() })
+onUnmounted(() => { alive = false; requestVersion++ })
+</script>
+<style>
+.changes-card { margin-top: 14px; border-radius: 16px; border-width: 1px; border-color: #dadfd6; overflow: hidden; background-color: #edf0e9; }
+.changes-heading { min-height: 44px; flex-direction: row; align-items: center; padding: 9px 13px; gap: 7px; background-color: #f0f2ed; }
+.changes-title { font-size: 14px; font-weight: bold; color: #202c28; }
+.heading-space { flex: 1; }
+.added { color: #348744; font-size: 13px; flex-shrink: 0; }
+.deleted { color: #c14e56; font-size: 13px; flex-shrink: 0; }
+.changes-row { min-height: 44px; padding: 10px 13px; flex-direction: row; align-items: center; gap: 7px; border-top-width: 1px; border-top-color: #dadfd6; }
+.file-path { flex: 1; min-width: 0; font-size: 13px; color: #34433c; lines: 1; text-overflow: ellipsis; }
+.changes-footer { min-height: 40px; padding: 8px 13px; flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #dadfd6; }
+.footer-text { flex: 1; font-size: 13px; color: #737d74; }
+.action-frame { position: relative; overflow: hidden; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(40, 92, 73, 0.08); }
+.changes-error { margin-top: 12px; flex-direction: row; align-items: center; gap: 8px; }
+.error-text { flex: 1; color: #7b827a; font-size: 12px; }
+.retry { font-size: 12px; color: #285c49; padding: 6px; background-color: transparent; }
+/* #ifdef WEB */
+.action-hitbox::after, .retry::after { border: none; }
+.file-path { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+/* #endif */
+</style>

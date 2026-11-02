@@ -33,6 +33,7 @@
               <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
               <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
             </view>
+            <file-change-summary v-if="(entry.reportId ?? '').length > 0 && connection.snapshot?.supportsFileReports == true" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
           </template>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
           <template v-else>
@@ -89,6 +90,7 @@
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">会话操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">会话信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="会话信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档会话"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除对话"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+    <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
     <task-notice :active="pageVisible" header-id="conversation-header" :host-id="pageHostId" :thread-id="pageThreadId" />
   </view>
@@ -116,6 +118,9 @@ import type { Conversation } from '../../services/bridge.uts'
 import { CachedConversation, readConversationCache, saveConversationCache, cachedConversationSnapshot, clearConversationCache } from '../../services/conversation-cache.uts'
 import { MessageAnnotation, MessagePresentation, parseAnnotationReferences, annotationPresentationsForTimeline } from '../../services/annotations.uts'
 import { presentConversationMessages } from '../../services/message-presentations.uts'
+import { FileReport } from '../../services/file-reports.uts'
+import FileChangeSummary from '../../components/file-change-summary/file-change-summary.uvue'
+import FileChangeSheet from '../../components/file-change-sheet/file-change-sheet.uvue'
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
@@ -221,6 +226,11 @@ const actionsVisible = ref(false)
 const following = ref(true)
 const atTimelineBottom = ref(true)
 const scrollTarget = ref('')
+const selectedFileReport = ref<FileReport | null>(null)
+const selectedChangedFileId = ref('')
+// 文件面板独立于聊天滚动；关闭后保持原报告阅读位置。
+function openFileReport(report: FileReport, fileId: string) { pauseFollowing(); uni.hideKeyboard(); selectedFileReport.value = report; selectedChangedFileId.value = fileId }
+function closeFileReport() { selectedFileReport.value = null; selectedChangedFileId.value = '' }
 const selectedExecutionId = ref('')
 const selectedAnnotationId = ref('')
 const historyPage = ref<HistoryPage | null>(null)
@@ -415,7 +425,7 @@ onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAliv
 function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
 // 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
 function closeComposerMenu() { composerMenu.value = '' }
-function goBack() { if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return }; if (composerMenu.value.length > 0) { closeComposerMenu(); return }; uni.hideKeyboard(); if (selectedExecutionId.value.length > 0) { selectedExecutionId.value = ''; return }; if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+function goBack() { if (selectedFileReport.value != null) { closeFileReport(); return }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return }; if (composerMenu.value.length > 0) { closeComposerMenu(); return }; uni.hideKeyboard(); if (selectedExecutionId.value.length > 0) { selectedExecutionId.value = ''; return }; if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
 function closeActions() { actionsVisible.value = false }
 function showActions() { closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
@@ -704,7 +714,7 @@ function onTimelineScroll(event: UniScrollEvent) {
 }
 // 新输出后重新测量，短会话无滚动事件时也能隐藏按钮。
 watch((): string => (displayConversation.value?.messages ?? []).map((message: ChatMessage): string => message.id + ':' + message.text).join('\n'), (_current: string, _previous: string) => { if (following.value) scrollLatest(); nextTick(() => { updateTimelinePosition(); checkShortHistory() }) })
-watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
+watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
   nextTick(() => { updateTimelinePosition() })
@@ -1163,7 +1173,7 @@ function operateGoal(action: string, objective: string, revision: string) {
 function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop() }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
-onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
+onBackPress((): boolean => { if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
 </script>
 
 <style>

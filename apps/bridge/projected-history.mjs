@@ -52,6 +52,27 @@ export function isProjectedCursor(value) {
   try{return JSON.parse(Buffer.from(value,'base64url').toString('utf8')).storage==='projection';}catch{return false;}
 }
 
+/** 报告按明确最终回复定位完整轮次，不受手机最近 80 条消息窗口影响，继承边界沿用历史读取规则。 */
+export function readProjectedFileReport(row,home,reportId) {
+  const file=path.join(home,'thread_history_1.sqlite');
+  if(!fs.existsSync(file))return null;
+  const db=new DatabaseSync(file,{readOnly:true});
+  try{
+    db.exec('BEGIN');
+    const sources=historySources(row,home);
+    for(const source of sources.reverse()){
+      const target=db.prepare('SELECT turn_id,item_json,rollout_ordinal FROM thread_items WHERE thread_id=? AND item_id=? AND rollout_ordinal<? AND updated_at_ordinal<?').get(source.id,reportId,source.limit,source.limit);
+      if(!target)continue;
+      const final=JSON.parse(target.item_json);
+      if(final.id!==reportId||!['agentMessage','assistantMessage'].includes(final.type)||final.phase!=='final_answer')throw new BridgeError('REPORT_NOT_FOUND','指定消息不是任务报告');
+      const records=db.prepare(`SELECT item_json FROM thread_items WHERE thread_id=? AND turn_id=? AND rollout_ordinal<=? AND updated_at_ordinal<? AND item_type IN (${visibleTypes.map(()=>'?').join(',')}) ORDER BY rollout_ordinal,item_id LIMIT 2001`).all(source.id,target.turn_id,target.rollout_ordinal,source.limit,...visibleTypes);
+      if(records.length>2000||records.reduce((size,item)=>size+Buffer.byteLength(item.item_json),0)>8*1024*1024)throw new BridgeError('REPORT_TOO_LARGE','这份报告的记录过多，请在电脑端查看');
+      return {cwd:row.cwd,sourceTurns:[{turnId:target.turn_id,items:records.map(record=>JSON.parse(record.item_json))}]};
+    }
+    return null;
+  }finally{db.close();}
+}
+
 /** 只读新版可见项目投影，兼容分叉与压缩；旧版无投影时继续使用原日志分页。 */
 export function readProjectedHistory(row, home, {before='',beforeMessageId=''}={}) {
   const file=path.join(home,'thread_history_1.sqlite'),continuing=isProjectedCursor(before);

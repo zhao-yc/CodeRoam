@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { readHistoricalSnapshot } from './history-reader.mjs';
 import { readHistoricalPage } from './history-pager.mjs';
-import { readProjectedHistory } from './projected-history.mjs';
+import { readProjectedHistory, readProjectedFileReport } from './projected-history.mjs';
 
 /** 只读查询 Codex 自有索引，不启动第二个执行进程，也不更改数据库。 */
 export class StateReader {
@@ -57,6 +57,7 @@ export class StateReader {
       row=db.prepare(`SELECT id,${title} AS title,cwd,rollout_path,${time} AS updatedAt FROM threads WHERE id=? AND archived=0`).get(threadId);
     } finally {db.close();}
     if(!row) throw new BridgeError('THREAD_NOT_FOUND','这条会话已不存在或已经归档，请刷新会话列表');
+    if(options.rawTurns===true&&options.reportId){const report=readProjectedFileReport(row,path.dirname(this.filePath),options.reportId);if(report)return report;}
     if(options.page===true) {
       // 新版分叉会话的继承消息只保存在历史投影中，不能只扫描当前日志。
       const projected=readProjectedHistory(row,path.dirname(this.filePath),options);

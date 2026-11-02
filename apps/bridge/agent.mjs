@@ -1,6 +1,7 @@
 import { goalCommandStatus } from './goal-command-status.mjs';
 import { PermissionCatalog, permissionCommandStatus } from './permissions.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
+import { DesktopFileReportReader } from './file-reports.mjs';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
 import { WRITE_METHODS, UPLOAD_METHODS, validateRequest, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
@@ -23,7 +24,7 @@ export class BridgeAgent extends EventEmitter {
     this.published=new Map();
     this.newThreads=newThreads;
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
-    this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();
+    this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();this.fileReports=new DesktopFileReportReader();
     this.deleteController=deleteController;this.deletingIds=new Set();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
@@ -105,6 +106,7 @@ export class BridgeAgent extends EventEmitter {
           this.threadListFeed.schedule();return result;
         }
         if(message.method==='thread.prediction.read')return this.predictions.read(this.adapter,message.params.threadId,message.deviceId);
+        if(message.method==='thread.history'&&message.params.view==='file-report')return this.fileReports.read(this.adapter,message.params,message.deviceId);
         if(message.method==='thread.settings.read')return this.adapter.readSettings(message.params.threadId,message.deviceId);
         if(message.method==='thread.goal.read')return this.adapter.readGoal(message.params.threadId,message.deviceId);
         if(UPLOAD_METHODS.has(message.method))return this.adapter.transfer(message.method,message.params,message.deviceId);
@@ -136,5 +138,5 @@ export class BridgeAgent extends EventEmitter {
     } catch(error) {response.error=errorPayload(error);}
     return response;
   }
-  async close(){this.stopped=true;this.messageQueue?.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.messageQueue?.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

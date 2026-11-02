@@ -26,8 +26,8 @@ export function historicalSnapshot(row, records, options = {}) {
       else if(item.type==='CommandExecution') converted={...item,type:'commandExecution',command:Array.isArray(item.command)?item.command.join(' '):item.command,aggregatedOutput:item.aggregated_output??item.aggregatedOutput};
       else if(item.type==='FileChange') {
         // 持久化事件按文件路径存对象，实时快照使用数组；统一后复用手机摘要逻辑。
-        const changes=Array.isArray(item.changes)?item.changes:Object.entries(item.changes??{}).map(([file,change])=>({path:file,kind:change?.type??change?.kind??'修改'}));
-        converted={...item,type:'fileChange',changes};
+        const changes=Array.isArray(item.changes)?item.changes:Object.entries(item.changes??{}).map(([file,change])=>({path:file,kind:{type:change?.type??change?.kind??'修改',move_path:change?.move_path??null},diff:change?.type==='update'?change.unified_diff:change?.content}));
+        converted={...item,type:'fileChange',status:item.status??'completed',changes};
       }
       if(converted) canonical.set(item.id,{turnId,items:[converted]});
     } else if(['user_message','agent_message'].includes(event.type)&&typeof event.message==='string') {
@@ -44,7 +44,7 @@ export function historicalSnapshot(row, records, options = {}) {
   const turns=[...grouped.values()];
   const snapshot=normalizeConversation({id:row.id,title:row.title,cwd:row.cwd,turns,requests:[],threadRuntimeStatus:{type:'unknown'}},options);
   // 历史不能证明当前执行、审批或问答状态，必须清空可操作目标并明确只读。
-  return {...snapshot,readOnly:true,status:'unknown',activeTurnId:'',activity:'',approvals:[],questionGroups:[],updatedAt:row.updatedAt??0};
+  return {...snapshot,...(options.rawTurns===true?{sourceTurns:turns,historyTruncated:options.historyTruncated===true}:{}),readOnly:true,status:'unknown',activeTurnId:'',activity:'',approvals:[],questionGroups:[],updatedAt:row.updatedAt??0};
 }
 
 /** 仅只读索引指向的本机 sessions 文件；验证实际路径和会话身份并限制读取量。 */
@@ -71,7 +71,7 @@ export function readHistoricalSnapshot(row, sessionDirectory, maximumBytes=8*102
       try{records.push({...JSON.parse(buffer.subarray(position,newline).toString('utf8')),ordinal:start+position});}catch{}
       position=newline+1;
     }
-    return historicalSnapshot(row,records,options);
+    return historicalSnapshot(row,records,{...options,historyTruncated:start>0});
   } catch(error) {
     if(error instanceof BridgeError) throw error;
     const failure=new BridgeError('HISTORY_UNAVAILABLE','暂时无法读取这条会话的已保存历史，请稍后重新同步');

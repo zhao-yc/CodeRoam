@@ -50,6 +50,12 @@ export function validateRequest(message) {
     if (/[\u0000-\u001f\u007f]/.test(displayName) || !['code', 'terminal', 'laptop', 'desktop'].includes(icon) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || Object.keys(message.params).some(key => !['displayName', 'icon', 'expectedRevision'].includes(key))) throw new BridgeError('BAD_PARAMS', '连接显示信息参数无效');
     return message;
   }
+  if(message.params.reportId!==undefined||message.params.view==='file-report'){
+    if(message.method!=='thread.history'||message.params.view!=='file-report')throw new BridgeError('BAD_PARAMS','文件报告只能通过历史只读视图查看');
+    requireString(message.params.reportId,'报告编号',1000);
+    if(message.params.fileId!==undefined&&(typeof message.params.fileId!=='string'||!/^[a-f0-9]{24}$/.test(message.params.fileId)))throw new BridgeError('BAD_PARAMS','文件编号无效');
+    if(Object.keys(message.params).some(key=>!['threadId','view','reportId','fileId'].includes(key)))throw new BridgeError('BAD_PARAMS','文件汇总仅接受会话、报告和文件编号');
+  }
   if(message.params.planAction!==undefined) {
     if(message.method!=='turn.send')throw new BridgeError('BAD_PARAMS','计划确认只能用于新一轮消息');
     requireString(message.params.threadId,'会话编号',200);requireString(message.params.planId,'计划编号',300);

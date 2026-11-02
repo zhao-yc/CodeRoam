@@ -8,6 +8,6 @@ $result=@(foreach($process in Get-CimInstance Win32_Process -Filter "Name='ChatG
   $port=[int]$Matches[1]
   $bindings=@($listeners | Where-Object {$_.LocalPort -eq $port})
   if($bindings.Count -ne 1 -or $bindings[0].LocalAddress -ne '127.0.0.1' -or $bindings[0].OwningProcess -ne $process.ProcessId){continue}
-  [pscustomobject]@{port=$port;pid=$process.ProcessId}
+  [pscustomobject]@{port=$port;pid=$process.ProcessId;executable=$process.ExecutablePath}
 })
 ConvertTo-Json -InputObject $result -Compress

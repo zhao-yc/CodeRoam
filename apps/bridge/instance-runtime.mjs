@@ -10,6 +10,7 @@ import { DesktopGoalController } from './desktop-goals.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
 import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
+import { DesktopFileReportReader } from './file-reports.mjs';
 import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { MacInstanceIpcClient, navigateMacInstance } from './macos-instance-client.mjs';
@@ -55,6 +56,8 @@ export class InstanceRuntime {
     this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });
     this.agent.predictions.close();
     this.agent.predictions = new ComposerPredictionReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port }] : [] });
+    this.agent.fileReports.close();
+    this.agent.fileReports = new DesktopFileReportReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port, executable:instance.executable }] : [] });
     this.agent.send = message => instance.alive && instance.ready && send({ ...message, hostId: instance.id, generation: instance.generation });
     this.client.on('disconnected', () => { instance.ready = false; });
   }

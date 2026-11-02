@@ -27,6 +27,19 @@ function fixture() {
   return {home,index,db,session,item,reader:new StateReader(home),close(){db.close();index.close();fs.rmSync(home,{recursive:true});}};
 }
 
+test('报告读取越过最近消息窗口，继承记录遵守分叉边界且报告身份必须匹配',()=>{
+  const f=fixture();try{
+    f.session('parent',{},1);f.session('child',{history_base:{thread_id:'parent',end_ordinal_exclusive:200}});
+    f.item('parent','edit',1,{type:'fileChange',status:'completed',changes:[{path:'src/demo.uts',kind:{type:'update'},diff:'@@ -1 +1 @@\n-old\n+new\n'}]});
+    for(let i=2;i<150;i++)f.item('parent','cmd-'+i,i,{type:'commandExecution'});
+    f.item('parent','report',150,{phase:'final_answer'});f.item('parent','later',210,{phase:'final_answer'});
+    const report=f.reader.readHistory('child',{rawTurns:true,reportId:'report'});
+    assert.equal(report.sourceTurns[0].items[0].id,'edit');assert.equal(report.sourceTurns[0].items.at(-1).id,'report');
+    assert.throws(()=>f.reader.readHistory('child',{rawTurns:true,reportId:'cmd-3'}),/不是任务报告/);
+    const missing=f.reader.readHistory('child',{rawTurns:true,reportId:'later'});assert.equal(missing.sourceTurns.some(turn=>turn.items.some(item=>item.id==='later')),false);
+  }finally{f.close();}
+});
+
 test('分叉分页从归档源会话定位早期消息，跨源连续翻页且不带入分叉后的内容',()=>{
   const f=fixture();try {
     const parent=f.session('parent',{},1),child=f.session('child',{forked_from_id:'parent',history_base:{thread_id:'parent',end_ordinal_exclusive:180}});

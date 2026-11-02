@@ -229,7 +229,7 @@ export class DesktopAdapter extends EventEmitter {
 
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
-    const snapshot={...normalizeConversation(state,options),supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
+    const snapshot={...normalizeConversation(state,options),supportsFileReports:process.platform==='win32',supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
     // 侧边栏保存的未读独立于流式快照，不能用快照默认 false 提前清理桌面蓝点。
     if(this.native){if(this.native.unread.has(state.id))snapshot.hasUnreadTurn=this.native.unread.get(state.id);else delete snapshot.hasUnreadTurn;}
     const entry=this.conversations.get(state.id);
