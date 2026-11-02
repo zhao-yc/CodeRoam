@@ -437,6 +437,12 @@ class MobileBridge {
   selectComputer(id: string) {
     if (connection.hostId == id) return
     if (!connection.computers.some((computer: Computer): boolean => computer.id == id)) throw new Error('这台电脑不在当前授权范围内')
+    // 先保存已授权的所选实例，刷新详情时沿用同一电脑；失败则保留原会话和订阅。
+    const config = this.config
+    if (config == null) throw new Error('请先连接电脑')
+    try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: config.relayUrl, token: config.token, hostId: id })) }
+    catch (_) { throw new Error('无法保存所选电脑，请检查浏览器存储权限') }
+    config.hostId = id
     const previous = connection.activeThreadId
     if (previous.length > 0 && connection.connected) this.request('thread.unwatch', { threadId: previous }).then((_: UTSJSONObject) => {}, (_: Error) => {})
     this.openingRevision++; connection.desktopNavigationError = ''

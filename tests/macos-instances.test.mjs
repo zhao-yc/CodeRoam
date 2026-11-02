@@ -41,8 +41,8 @@ test('Mac 身份变化后不发写请求，发现期间进程换代也不能接�
   const first = fixture(); await first.client.findOwner(randomUUID()); first.invalidate();
   await assert.rejects(first.client.request('thread-follower-start-turn', {}, 2, { targetClientId: first.owner }));
   assert.equal(first.requests.length, 1);
-  const second = fixture(); let reads = 0;
-  second.client.verify = async () => { if (++reads === 2) { second.instance.ready = false; throw new Error('进程换代'); } };
+  const second = fixture();
+  second.client.verify = async () => { second.instance.ready = false; throw new Error('发现回应到达前进程换代'); };
   await assert.rejects(second.client.findOwner(randomUUID())); assert.equal(second.client.allowedClients.size, 0);
 });
 
