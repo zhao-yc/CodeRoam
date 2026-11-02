@@ -23,7 +23,7 @@
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
         <view v-if="!connection.configured" class="empty"><text class="empty-title">在手机上继续你的会话</text><text class="description">首次使用时连接电脑，已有会话就会显示在这里。</text><button class="empty-action button-primary" @click="openConnection">连接电脑</button></view>
-        <view v-else-if="showThreadLoading" class="empty loading-state" aria-label="正在加载会话"><loading class="home-spinner" :paused="!pageVisible" /><text class="loading-text">正在加载会话…</text></view>
+        <loading-skeleton v-else-if="showThreadLoading" kind="list" :visible="pageVisible && !editingNewConversation" />
         <view v-else-if="allVisibleThreads.length == 0 && (connection.error.length > 0 || listUnavailable)" class="empty"><text class="empty-title">{{ listUnavailable && !selectedComputerOnline ? '电脑离线' : '会话加载失败' }}</text><text class="description">请检查连接后重试。</text><button class="empty-action button-secondary" @click="refreshThreads">重新加载</button></view>
         <view v-else-if="groups.length == 0" class="empty">
           <text class="empty-title">{{ search.trim().length > 0 ? '没有找到相关会话' : '暂无会话' }}</text>
@@ -61,6 +61,7 @@ import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../s
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
+import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import NewConversation from '../../components/new-conversation/new-conversation.uvue'
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
@@ -307,8 +308,6 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .thread-status { margin-left: 8px; flex-shrink: 0; }
 .list-bottom { height: 16px; }
 .empty { padding: 50px 0 28px; align-items: center; }
-.home-spinner { width: 28px; height: 28px; border-color: #285c49; }
-.loading-text { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 14px; }
 .empty-title { color: #202c28; font-size: 18px; line-height: 28px; text-align: center; }
 .description { color: #7b827a; font-size: 14px; line-height: 23px; margin-top: 12px; text-align: center; }
 .empty-action { height: 44px; line-height: 44px; font-size: 14px; margin-top: 22px; padding: 0 22px; justify-content: center; }

@@ -17,9 +17,10 @@
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch">
-        <view v-if="connection.snapshot?.supportsHistoryPages == true && (loadingHistory || historyError.length > 0 || historyPage?.hasMore == false)" class="history-controls"><view v-if="loadingHistory" class="history-loading"><loading class="history-spinner" :paused="!pageVisible" /><text class="history-note">正在读取更早的对话…</text></view><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的对话，请再次下拉重试</text><text v-else class="history-note">已显示全部对话</text></view>
-        <!-- 首次同步复用列表页的原生加载样式，断线或失败后显示对应提示。 -->
-        <view v-if="connection.snapshot == null && connection.connected && detailError.length == 0" class="opening-loading" aria-label="正在加载对话"><loading class="opening-spinner" :paused="!pageVisible" /><text class="opening-loading-text">正在加载对话…</text></view>
+        <!-- 历史提示预留固定高度，骨架出现和移除时不改变现有消息的位置。 -->
+        <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的对话，请再次下拉重试</text><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部对话</text></view>
+        <!-- 首次同步仅替换正文占位，导航、输入区和失败重试继续沿用真实状态。 -->
+        <loading-skeleton v-if="connection.snapshot == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
         <view v-else-if="connection.snapshot == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得会话内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步会话。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
         <view v-for="entry in timeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
@@ -115,6 +116,7 @@ import PermissionsControl from '../../components/permissions-control/permissions
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
+import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import GoalCard from '../../components/goal-card/goal-card.uvue'
 import { ThreadGoal } from '../../services/goals.uts'
 import ComposerOptions from '../../components/composer-options/composer-options.uvue'
@@ -1067,16 +1069,11 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .continue-button { height: 36px; line-height: 36px; margin: 8px 0 0; padding: 0 14px; font-size: 13px; align-self: flex-start; }
 .pending-notice { flex-direction: row; align-items: center; }
 .check { font-size: 12px; height: 34px; line-height: 34px; margin: 0 0 0 8px; padding: 0 12px; }
-.history-controls { padding: 8px 16px; align-items: center; flex-shrink: 0; }
-.history-loading { flex-direction: row; align-items: center; }
-.history-spinner { width: 16px; height: 16px; border-color: #285c49; margin-right: 8px; }
-.history-note { font-size: 12px; color: #7b827a; }
+.history-controls { height: 52px; padding: 8px 16px; justify-content: center; flex-shrink: 0; }
+.history-note { font-size: 12px; line-height: 18px; color: #7b827a; text-align: center; }
 .timeline-region { flex: 1; min-height: 0; position: relative; }
 .timeline { flex: 1; min-height: 0; }
 .empty { padding: 90px 26px; }
-.opening-loading { padding: 50px 0 28px; align-items: center; }
-.opening-spinner { width: 28px; height: 28px; border-color: #285c49; }
-.opening-loading-text { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 14px; }
 .empty-title { color: #202c28; font-size: 20px; }
 .empty-detail { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 12px; }
 .retry-opening { align-self: flex-start; margin: 18px 0 0; padding: 0 18px; font-size: 14px; }
