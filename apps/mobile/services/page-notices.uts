@@ -1,0 +1,11 @@
+let archiveSuccessPending = false
+
+// 详情页只交接已确认的归档结果，提示由返回后的列表页负责展示。
+export function queueArchiveSuccessNotice() { archiveSuccessPending = true }
+
+// 一次性消费，避免再次返回列表时重复显示旧的归档结果。
+export function consumeArchiveSuccessNotice(): boolean {
+  const pending = archiveSuccessPending
+  archiveSuccessPending = false
+  return pending
+}

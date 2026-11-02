@@ -78,6 +78,7 @@ import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, rea
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, conversationTaskState } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
+import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { conversationOpeningTitle, conversationDisplayTitle } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
@@ -316,8 +317,12 @@ function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, com
   connection.threads = connection.threads.filter((thread: ThreadSummary): boolean => thread.id != threadId)
   if (connection.activeThreadId == threadId) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0 }
   operationError.value = ''
-  // 页面跳转会清除原页的提示，等返回完成后再显示；跳转失败时也如实提示已归档。
-  if (returnToList) { if (getCurrentPages().length > 1) uni.navigateBack({ success: (_) => { notify('归档成功') }, fail: (_) => { notify('归档成功') } }); else uni.reLaunch({ url: '/pages/index/index', success: (_) => { notify('归档成功') }, fail: (_) => { notify('归档成功') } }) }
+  // 列表页在显示时消费结果，详情页卸载及全局加载框清理不会移除列表页提示。
+  if (returnToList) {
+    queueArchiveSuccessNotice()
+    if (getCurrentPages().length > 1) uni.navigateBack({ fail: (_) => { consumeArchiveSuccessNotice(); notify('归档成功') } })
+    else uni.reLaunch({ url: '/pages/index/index', fail: (_) => { consumeArchiveSuccessNotice(); notify('归档成功') } })
+  }
   return true
 }
 let archivePromptOpen = false
