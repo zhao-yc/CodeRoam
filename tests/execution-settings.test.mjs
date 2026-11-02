@@ -30,8 +30,12 @@ class SettingsDesktop extends EventEmitter {
   publish() { queueMicrotask(() => this.emit('broadcast', { method: 'thread-stream-state-changed', version: 11, sourceClientId: 'desktop', params: { hostId: 'local', conversationId: 'thread', change: { type: 'snapshot', revision: 1, conversationState: structuredClone(this.state) } } })); }
   async request(method, params, version) {
     this.calls.push({ method, params, version });
-    if (method === 'thread-follower-read-model-settings') return { resultType: 'success', result: { settings: { model: this.state.latestModel, reasoningEffort: this.state.latestReasoningEffort, modelProvider: 'openai' } } };
+    if (method === 'thread-follower-read-model-settings') return { resultType: 'success', result: { settings: { model: this.state.latestCollaborationMode?.settings?.model ?? this.state.latestModel, reasoningEffort: this.state.latestReasoningEffort, modelProvider: 'openai' } } };
     if (method === 'thread-follower-update-thread-settings') {
+      this.beforeUpdate?.();
+      // 与真实桌面一致：条件比较保存字段，而不是已经补全的显示设置。
+      const condition = params.condition;
+      if (condition && (this.state.latestReasoningEffort !== condition.ifEffortEquals || condition.ifModelEquals != null && this.state.latestModel !== condition.ifModelEquals)) return { resultType: 'success', result: { applied: false } };
       if (this.rejectUpdate) return { resultType: 'success', result: { applied: false } };
       this.state.latestThreadSettings = { ...this.state.latestThreadSettings, ...params.threadSettings };
       this.state.latestModel = params.threadSettings.model; this.state.latestReasoningEffort = params.threadSettings.effort; this.state.latestCollaborationMode = params.threadSettings.collaborationMode;
@@ -95,6 +99,39 @@ test('桌面拒绝并发覆盖时明确失败，不给手机返回伪成功', as
   client.rejectUpdate = true;
   await assert.rejects(adapter.operate('thread.settings.update', { threadId: 'thread', changes: { mode: 'plan' } }, 'command', 'phone'), error => error.code === 'SETTINGS_CHANGED');
   assert.equal(client.state.latestCollaborationMode.mode, 'default');
+});
+
+test('计划切换保留原始空强度条件，显示设置仍沿用协作模式的有效强度', async t => {
+  for (const effort of [null, undefined]) {
+    const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } }); t.after(() => adapter.close());
+    client.state.latestReasoningEffort = effort;
+    const result = await adapter.operate('thread.settings.update', { threadId: 'thread', changes: { mode: 'plan' } }, 'command', 'phone');
+    const call = client.calls.find(call => call.method === 'thread-follower-update-thread-settings');
+    assert.equal(call.params.condition.ifEffortEquals, effort);
+    assert.deepEqual(result.settings, { ...current, mode: 'plan' });
+    assert.equal(client.calls.filter(call => call.method === 'thread-follower-update-thread-settings').length, 1);
+    assert.ok(!client.calls.some(call => call.method === 'thread-follower-start-turn'));
+  }
+});
+
+test('协作模式与保存模型不一致时，以保存字段检查并发并更新实际选项', async t => {
+  const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } }); t.after(() => adapter.close());
+  client.state.latestModel = 'saved-model';
+  const result = await adapter.operate('thread.settings.update', { threadId: 'thread', changes: { mode: 'plan' } }, 'command', 'phone');
+  const call = client.calls.find(call => call.method === 'thread-follower-update-thread-settings');
+  assert.equal(call.params.condition.ifModelEquals, 'saved-model');
+  assert.equal(call.params.threadSettings.model, current.model);
+  assert.equal(result.settings.mode, 'plan');
+});
+
+test('读取完成后桌面强度真正发生变化时，仍拒绝旧设置且不自动重试', async t => {
+  const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } }); t.after(() => adapter.close());
+  client.state.latestReasoningEffort = null;
+  client.beforeUpdate = () => { client.state.latestReasoningEffort = 'max'; };
+  await assert.rejects(adapter.operate('thread.settings.update', { threadId: 'thread', changes: { mode: 'plan' } }, 'command', 'phone'), { code: 'SETTINGS_CHANGED' });
+  assert.equal(client.state.latestReasoningEffort, 'max');
+  assert.equal(client.state.latestCollaborationMode.mode, 'default');
+  assert.equal(client.calls.filter(call => call.method === 'thread-follower-update-thread-settings').length, 1);
 });
 
 test('空闲或运行中单独修改模型和推理强度均立即回读桌面确认，保留当前轮次', async t => {
