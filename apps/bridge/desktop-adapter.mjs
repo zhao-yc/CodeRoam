@@ -25,7 +25,7 @@ export class DesktopAdapter extends EventEmitter {
     this.modelCatalog=modelCatalog;this.attachments=attachments;
     this.goalController=goalController;this.permissionCatalog=permissionCatalog;
     this.conversations=new Map(); this.connecting=null; this.reconnectTimer=null; this.stopped=false;
-    this.native=client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null}):null;
+    this.native=client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null,ipcSocketPath:client.socketPath}):null;
     this.native?.on('changed',ids=>{if(this.stopped)return;for(const id of ids){const entry=this.conversations.get(id);if(entry?.state)this.emit('conversation',this.snapshot(entry.state));else this.emit('readState',{threadId:id,hasUnreadTurn:this.native.unread.get(id)});}});
     this.activateThread=(id,options)=>activateThread(id,{...options,nativeApi:this.native??undefined});this.loadTimeoutMs=loadTimeoutMs;this.loadingThreads=new Map();this.navigation=new DesktopNavigation();
     client.on('broadcast', message => this.onBroadcast(message));

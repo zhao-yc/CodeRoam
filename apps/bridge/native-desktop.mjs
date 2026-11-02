@@ -1,11 +1,12 @@
 import fs from 'node:fs';import net from 'node:net';import path from 'node:path';import {fileURLToPath} from 'node:url';import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {randomUUID} from 'node:crypto';import {EventEmitter} from 'node:events';
-import {encodeFrame,FrameDecoder} from '../../packages/protocol/ipc-client.mjs';import {BridgeError} from '../../packages/protocol/contracts.mjs';
+import {encodeFrame,FrameDecoder,defaultIpcSocketPath} from '../../packages/protocol/ipc-client.mjs';import {BridgeError} from '../../packages/protocol/contracts.mjs';
+import {selectNativeEndpoint} from './native-endpoint.mjs';
 const execute=promisify(execFile),helper=fileURLToPath(new URL('./windows-native-pipe.ps1',import.meta.url));
 const allowed=new Set(['list_threads','navigate_to_codex_page','set_thread_read_state']);
 
 /** 只调用原桌面的三个固定接口，所有账号、主机和未读判断均由原桌面完成。 */
 export class NativeDesktop extends EventEmitter {
- constructor({platform=process.platform,invoke=null,stateDirectory=null}={}){super();this.platform=platform;this.invokeOverride=invoke;this.socket=null;this.pending=new Map();this.connecting=null;this.reading=null;this.unread=new Map();this.context='';this.closed=false;this.refreshTimer=null;this.stateDirectory=stateDirectory;this.watcher=null;this.watchedIds=[];}
+ constructor({platform=process.platform,invoke=null,stateDirectory=null,ipcSocketPath=defaultIpcSocketPath()}={}){super();this.platform=platform;this.invokeOverride=invoke;this.ipcSocketPath=ipcSocketPath;this.socket=null;this.pending=new Map();this.connecting=null;this.reading=null;this.unread=new Map();this.context='';this.closed=false;this.refreshTimer=null;this.stateDirectory=stateDirectory;this.watcher=null;this.watchedIds=[];}
  /** 只监听桌面全局状态文件的变更通知，内容及账号状态始终由原生接口解释。 */
  watchReadState(){if(this.watcher||!this.stateDirectory||this.closed)return;try{this.watcher=fs.watch(this.stateDirectory,(_event,name)=>{if(name==null||String(name)==='.codex-global-state.json')this.schedule(this.watchedIds);});this.watcher.on('error',()=>{this.watcher?.close();this.watcher=null;});this.watcher.unref();}catch{}}
  invalidate(){const changed=[...this.unread.keys()];this.unread.clear();if(changed.length)this.emit('changed',changed);}
@@ -15,8 +16,9 @@ export class NativeDesktop extends EventEmitter {
   this.connecting=(async()=>{
    if(this.platform!=='win32')throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','当前电脑不支持原生会话同步');
    const executable=path.join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe');
-   const result=await execute(executable,['-NoProfile','-NonInteractive','-File',helper],{windowsHide:true,timeout:6000,maxBuffer:4096});
-   const endpoint=JSON.parse(result.stdout.trim());if(!/^\\\\\.\\pipe\\codex-app-tools-[0-9a-f-]+$/i.test(endpoint.path)||!Number.isSafeInteger(endpoint.pid))throw new Error('原生通道身份无效');
+   const pipe=/^\\\\\.\\pipe\\([A-Za-z0-9._-]+)$/.exec(this.ipcSocketPath);if(!pipe)throw new Error('会话 IPC 通道无效');
+   const result=await execute(executable,['-NoProfile','-NonInteractive','-File',helper,'-IpcPipeName',pipe[1]],{windowsHide:true,timeout:6000,maxBuffer:16384});
+   const endpoint=selectNativeEndpoint(JSON.parse(result.stdout.trim()),process.env.CODEX_APP_TOOLS_PIPE_PATH);
    await new Promise((resolve,reject)=>{const socket=net.createConnection(endpoint.path);this.socket=socket;const connectingTimer=setTimeout(()=>{socket.destroy();reject(new Error('原生通道连接超时'));},3000);const decoder=new FrameDecoder(message=>{const entry=this.pending.get(message.id);if(!entry)return;this.pending.delete(message.id);clearTimeout(entry.timer);message.error?entry.reject(new Error('原生请求失败')):entry.resolve(message.result);},8*1024*1024);
     socket.on('data',chunk=>{try{decoder.push(chunk);}catch{socket.destroy();}});socket.on('error',()=>{clearTimeout(connectingTimer);reject(new Error('原生通道不可用'));});socket.on('close',()=>{clearTimeout(connectingTimer);if(this.socket===socket){this.socket=null;this.invalidate();}for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(new Error('原生通道已关闭'));}this.pending.clear();});socket.once('connect',()=>{clearTimeout(connectingTimer);socket.unref();resolve();});
    });
