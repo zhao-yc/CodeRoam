@@ -525,14 +525,14 @@ function acceptDeleteReceipt(hostId: string, threadId: string, receipt: UTSJSONO
 function deleteFromMenu() {
   closeActions()
   if (!canWrite.value || deletePromptOpen || archivePromptOpen) return
-  const hostId = pageHostId.value; const threadId = pageThreadId.value; const title = displayTitle.value
+  const hostId = pageHostId.value; const threadId = pageThreadId.value
   const revision = ++deletePromptRevision
   deletePromptOpen = true
   const current = (): boolean => revision == deletePromptRevision && pageVisible.value && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && connection.hostId == hostId && canWrite.value
   const finishPrompt = () => { if (revision == deletePromptRevision) deletePromptOpen = false }
   uni.showModal({ title: '永久删除聊天', content: '将永久删除该聊天及其子智能体聊天，无法恢复。', confirmText: '继续', confirmColor: '#bb3f44', cancelText: '取消', success: (first) => {
     if (!first.confirm || !current()) { finishPrompt(); return }
-    showDeleteFinalModal(title + '\n\n正在执行的任务会先停止。确认永久删除吗？', (confirmed: boolean) => {
+    showDeleteFinalModal('正在执行的任务会先停止。确认永久删除吗？', (confirmed: boolean) => {
       if (!confirmed || !current()) { finishPrompt(); return }
       finishPrompt(); busy.value = true; pendingAction.value = 'delete'; operationError.value = ''
       deleteLoading = true; uni.showLoading({ title: '正在永久删除…', mask: true })
