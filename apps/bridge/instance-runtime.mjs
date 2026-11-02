@@ -8,6 +8,7 @@ import { AttachmentStore } from './attachment-store.mjs';
 import { Journal } from './journal.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
+import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
@@ -51,7 +52,7 @@ export class InstanceRuntime {
       if (!own && await this.client.ownedElsewhere(id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '此会话正在另一个实例中打开，请切换到对应设备');
       return activate(id, options);
     };
-    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client) });
+    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });
     this.agent.predictions.close();
     this.agent.predictions = new ComposerPredictionReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port }] : [] });
     this.agent.send = message => instance.alive && instance.ready && send({ ...message, hostId: instance.id, generation: instance.generation });

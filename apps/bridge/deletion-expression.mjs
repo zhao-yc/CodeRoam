@@ -1,8 +1,27 @@
 /** 固定桌面交互只定位明确编号的侧栏行和原生删除弹窗，不接受手机传入脚本。 */
 function desktopDeletionStep(phase, expectedHost, expectedThread, commandId) {
-  const visible = element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight && getComputedStyle(element).visibility !== 'hidden'; };
+  const rendered = element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
+  const visible = element => { const rect = element.getBoundingClientRect(); return rendered(element) && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight; };
   const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(visible);
   const key = '__codexMobileDeletion';
+  /** 新建会话的侧栏键可能仍是临时编号；只信任同一行组件明确绑定的正式编号。 */
+  const matchesRow = element => {
+    if (element.getAttribute('data-app-action-sidebar-thread-host-id') !== expectedHost) return false;
+    const rowId = element.getAttribute('data-app-action-sidebar-thread-id');
+    if (rowId === expectedHost + ':' + expectedThread) return true;
+    const prefix = expectedHost + ':client-new-thread:';
+    if (!rowId?.startsWith(prefix) || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(rowId.slice(prefix.length))) return false;
+    let fiber = element[Object.keys(element).find(name => name.startsWith('__reactFiber$'))];
+    const pairs = [];
+    for (let depth = 0; fiber && depth < 24; depth++, fiber = fiber.return) {
+      const props = fiber.memoizedProps, attributes = props?.dataAttributes;
+      // 属性必须与当前 DOM 行完全一致，不能使用共享祖先中其他会话的编号。
+      if (attributes?.['data-app-action-sidebar-thread-id'] !== rowId || attributes['data-app-action-sidebar-thread-host-id'] !== expectedHost) continue;
+      if (typeof props.conversationId === 'string' && typeof props.hostId === 'string') pairs.push([props.hostId, props.conversationId]);
+    }
+    return pairs.length > 0 && pairs.every(([host, thread]) => host === expectedHost && thread === expectedThread);
+  };
+  const targetRows = () => [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')].filter(matchesRow);
   const targetDialog = () => {
     if (dialogs.length !== 1) return null;
     const dialog = dialogs[0], pairs = [];
@@ -22,16 +41,18 @@ function desktopDeletionStep(phase, expectedHost, expectedThread, commandId) {
   };
   if (phase === 'inspect') {
     const dialog = targetDialog();
-    const rows = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')].filter(element => element.getAttribute('data-app-action-sidebar-thread-id') === 'local:' + expectedThread && element.getAttribute('data-app-action-sidebar-thread-host-id') === expectedHost);
-    // 侧栏多选状态与当前打开的对话独立；以明确编号的可见行定位，不依赖多选标记。
-    const target = rows.some(visible);
-    return { target, targetCount: rows.length, visibleCount: rows.filter(visible).length, dialog: dialogs.length > 0, matched: !!dialog, ready: !!dialog && !dialog.confirm.disabled };
+    const rows = targetRows();
+    // 侧栏多选状态与当前打开的对话独立；先按编号找到已渲染行，视口外的行稍后滚动。
+    const target = rows.some(rendered);
+    return { target, targetCount: rows.length, visibleCount: rows.filter(visible).length, aliasCount: rows.filter(row => row.getAttribute('data-app-action-sidebar-thread-id') !== expectedHost + ':' + expectedThread).length, dialog: dialogs.length > 0, matched: !!dialog, ready: !!dialog && !dialog.confirm.disabled };
   }
   if (phase === 'open') {
     if (dialogs.length) return { state: 'blocked' };
-    const rows = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')].filter(element => element.getAttribute('data-app-action-sidebar-thread-id') === 'local:' + expectedThread && element.getAttribute('data-app-action-sidebar-thread-host-id') === expectedHost && visible(element));
+    const rows = targetRows().filter(rendered);
     if (!rows.length) return { state: 'missing' };
-    const row = rows[0]; row.scrollIntoView({ block: 'nearest' });
+    const row = rows.find(visible) ?? rows[0]; row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    // 滚动后再次核对身份与命中节点，防止列表复用 DOM 或目标被其他内容遮挡。
+    if (!matchesRow(row) || !visible(row)) return { state: 'changed' };
     const rect = row.getBoundingClientRect();
     const x = rect.left + Math.min(64, rect.width / 2), y = rect.top + rect.height / 2;
     const hit = document.elementFromPoint(x, y);

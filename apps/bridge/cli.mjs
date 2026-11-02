@@ -8,6 +8,7 @@ import { Journal } from './journal.mjs';
 import { ModelCatalog } from './model-settings.mjs';
 import { AttachmentStore } from './attachment-store.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
+import { DesktopDeleteController } from './desktop-delete.mjs';
 import { BridgeAgent } from './agent.mjs';
 import { IpcClient, defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
 import { InstanceHub } from './instance-hub.mjs';
@@ -30,7 +31,7 @@ try {
   } else {
   const client=new IpcClient({socketPath:config.ipcSocketPath??defaultIpcSocketPath({codexHome:config.codexHome})});
   const adapter=new DesktopAdapter({client,index:new StateReader(config.codexHome),modelCatalog:new ModelCatalog({codexHome:config.codexHome}),attachments:new AttachmentStore({root:path.join(dataPath,'attachments')}),goalController:new DesktopGoalController({diagnosticPath:path.join(dataPath,'goal-ui-diagnostics.jsonl')})});
-  const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite'))});
+  const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite')),deleteController:new DesktopDeleteController({diagnosticPath:path.join(dataPath,'delete-ui-diagnostics.jsonl')})});
   const writeStatus=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
   agent.on('connected',()=>{writeStatus(true);console.log('电脑已连接中转服务');});
   agent.on('disconnected',()=>{writeStatus(false);console.log('中转连接已断开');});

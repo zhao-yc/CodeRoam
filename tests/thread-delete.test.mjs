@@ -6,6 +6,9 @@ import { DesktopDeleteController } from '../apps/bridge/desktop-delete.mjs';
 import { BridgeAgent } from '../apps/bridge/agent.mjs';
 import { Journal } from '../apps/bridge/journal.mjs';
 import { validateRequest, WRITE_METHODS } from '../packages/protocol/contracts.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 /** 使用独立合成状态覆盖真实删除编排，不连接原桌面或删除真实数据。 */
 function fixture({ running = false, stopFails = false, lost = false } = {}) {
@@ -88,4 +91,19 @@ test('回执丢失后只读核对完整范围，部分删除和跨设备查询�
     assert.equal(status.state, partial ? 'unknown' : 'done'); assert.equal(f.calls.filter(call => call === 'delete').length, 1);
     if (!partial) { assert.equal(status.result.deleted, true); assert.deepEqual(journal.db.prepare('SELECT thread_id FROM events').all().map(row => row.thread_id), ['other']); }
   }
+});
+
+test('定位失败保留匹配诊断，不记录页面内容或进入最终删除', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'delete-diagnostic-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'delete-ui-diagnostics.jsonl'), phases = [];
+  const page = { close() {}, async step(phase) { phases.push(phase); return { target: true, targetCount: 2, visibleCount: 0, aliasCount: 2, title: '不应记录的合成标题', content: '不应记录的合成正文' }; } };
+  const controller = new DesktopDeleteController({ platform: 'win32', diagnosticPath: file, discover: async () => [{ pid: 42, port: 1234 }], fetcher: async () => ({ ok: true, text: async () => JSON.stringify(['one', 'two'].map(id => ({ id, type: 'page', url: 'app://-/index.html' }))) }), openPage: async () => page });
+  await assert.rejects(controller.delete({ threadId: 'root', hostId: 'local', commandId: 'synthetic-command', deadline: Date.now() + 5000, native: { processId: 42, navigate: async () => {} } }, async () => { throw new Error('不应进入回读提交'); }), { code: 'DELETE_TARGET_UNAVAILABLE', message: '原桌面多个窗口包含该对话，请关闭重复窗口后重试' });
+  assert.equal(phases.includes('open'), false); assert.equal(phases.includes('commit'), false);
+  const text = fs.readFileSync(file, 'utf8'), entries = text.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(entries.find(entry => entry.phase === 'locate').aliasCount, 2);
+  assert.equal(entries.find(entry => entry.phase === 'located').candidateCount, 2);
+  assert.equal(entries.at(-1).committed, false);
+  assert.equal(text.includes('合成标题'), false); assert.equal(text.includes('合成正文'), false);
 });

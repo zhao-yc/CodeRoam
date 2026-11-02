@@ -13,6 +13,21 @@ public static class DeleteWindow {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window,int command);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint first, uint second, bool attach);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
+  // 复用目标操作的激活方式，短暂连接输入队列后立即解绑，不修改系统前台策略。
+  public static bool Focus(IntPtr window) {
+    if (GetForegroundWindow() == window) return true;
+    if (SetForegroundWindow(window) && GetForegroundWindow() == window) return true;
+    uint processId;
+    uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out processId);
+    uint currentThread = GetCurrentThreadId();
+    if (foregroundThread == 0 || foregroundThread == currentThread || !AttachThreadInput(currentThread, foregroundThread, true)) return false;
+    try { BringWindowToTop(window); SetForegroundWindow(window); return GetForegroundWindow() == window; }
+    finally { AttachThreadInput(currentThread, foregroundThread, false); }
+  }
 }
 '@
 try {
@@ -24,8 +39,7 @@ try {
     $stage='activate'
     if ($owner.MainWindowHandle -eq [IntPtr]::Zero) { throw 'DELETE_WINDOW_UNAVAILABLE' }
     if ([DeleteWindow]::IsIconic($owner.MainWindowHandle)) { [void][DeleteWindow]::ShowWindow($owner.MainWindowHandle,9) }
-    [void][DeleteWindow]::SetForegroundWindow($owner.MainWindowHandle)
-    if ([DeleteWindow]::GetForegroundWindow() -ne $owner.MainWindowHandle) { throw 'DELETE_WINDOW_UNAVAILABLE' }
+    if (![DeleteWindow]::Focus($owner.MainWindowHandle)) { throw 'DELETE_WINDOW_UNAVAILABLE' }
     [Console]::WriteLine('{"selected":true}')
     exit 0
   }

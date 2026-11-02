@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { discoverPredictionPorts } from './composer-prediction.mjs';
@@ -57,20 +58,30 @@ class DeletionPage {
 
 /** 先打开原生删除弹窗，校验其实际会话编号，再提交原桌面的永久删除。 */
 export class DesktopDeleteController {
-  constructor({ platform = process.platform, discover = discoverPredictionPorts, fetcher = fetch, launch = spawn, openPage = async url => new DeletionPage(url).connect(), diagnostic = () => {} } = {}) {
-    this.platform = platform; this.discover = discover; this.fetcher = fetcher; this.launch = launch; this.openPage = openPage; this.diagnostic = diagnostic;
+  constructor({ platform = process.platform, discover = discoverPredictionPorts, fetcher = fetch, launch = spawn, openPage = async url => new DeletionPage(url).connect(), diagnostic = () => {}, diagnosticPath = null } = {}) {
+    this.platform = platform; this.discover = discover; this.fetcher = fetcher; this.launch = launch; this.openPage = openPage; this.diagnostic = diagnostic; this.diagnosticPath = diagnosticPath;
+  }
+  /** 仅保存固定阶段、计数及错误码；不记录标题、正文、令牌或页面内容。 */
+  record(params, state) {
+    try { this.diagnostic(state); } catch {}
+    if (!this.diagnosticPath) return;
+    const entry = { at: new Date().toISOString(), commandId: /^[a-zA-Z0-9-]{8,160}$/.test(params.commandId ?? '') ? params.commandId : '', phase: state.phase };
+    for (const key of ['target', 'dialog', 'matched', 'ready', 'committed', 'selected']) if (typeof state[key] === 'boolean') entry[key] = state[key];
+    for (const key of ['targetCount', 'visibleCount', 'aliasCount', 'pageCount', 'candidateCount']) if (Number.isInteger(state[key]) && state[key] >= 0) entry[key] = Math.min(10000, state[key]);
+    if (/^DELETE_[A-Z_]{1,60}$/.test(state.code ?? '')) entry.code = state.code;
+    try { fs.appendFileSync(this.diagnosticPath, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 }); } catch {}
   }
   delete(params, beforeCommit) { return withDesktopUi(() => this.run(params, beforeCommit)); }
   /** 菜单选择只打开确认框，帮助进程不能直接提交删除，也不能接收任意命令。 */
-  selectMenu(processId, deadline, action = 'select') {
+  selectMenu(processId, deadline, action = 'select', params = {}) {
     return new Promise((resolve, reject) => {
       const executable = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
       const child = this.launch(executable, ['-NoProfile', '-NonInteractive', '-STA', '-File', helper], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '', done = false;
-      const finish = success => { if (done) return; done = true; clearTimeout(timer); child.kill(); success ? resolve() : reject(new BridgeError('DELETE_MENU_UNAVAILABLE', '原桌面永久删除菜单不可用，请确认目标对话在列表中')); };
+      const finish = success => { if (done) return; done = true; clearTimeout(timer); child.kill(); success ? resolve() : reject(new BridgeError(action === 'activate' ? 'DELETE_WINDOW_UNAVAILABLE' : 'DELETE_MENU_UNAVAILABLE', action === 'activate' ? '无法激活原桌面窗口，请稍后重试' : '原桌面永久删除菜单不可用，请确认目标对话在列表中')); };
       const timer = setTimeout(() => finish(false), Math.max(1, Math.min(7000, deadline - Date.now())));
       child.on('error', () => finish(false)); child.on('exit', () => finish(false)); child.stdin.on('error', () => finish(false)); child.stderr.on('data', () => {});
-      child.stdout.on('data', bytes => { output += bytes.toString('utf8'); if (output.length > 4096) return finish(false); if (output.includes('\n')) { try { const result=JSON.parse(output.trim());this.diagnostic({phase:'menu',action,...result});finish(result.selected === true); } catch { finish(false); } } });
+      child.stdout.on('data', bytes => { output += bytes.toString('utf8'); if (output.length > 4096) return finish(false); if (output.includes('\n')) { try { const result=JSON.parse(output.trim());this.record(params,{phase:'menu-'+action,selected:result.selected===true});finish(result.selected === true); } catch { finish(false); } } });
       child.stdin.end(JSON.stringify({ processId, deadline, action }) + '\n');
     });
   }
@@ -87,7 +98,7 @@ export class DesktopDeleteController {
       if (!response.ok) throw new Error();
       const body = await response.text(); if (body.length > 256 * 1024) throw new Error();
       const targets = JSON.parse(body).filter(target => target.type === 'page' && /^app:\/\/-\/index\.html(?:[?#]|$)/.test(target.url) && /^[a-zA-Z0-9-]{1,100}$/.test(target.id));
-      // 原桌面导航只改变一个窗口；只在包含目标侧栏行的唯一主页面打开菜单。
+      // 原桌面导航只改变一个窗口；只在包含已核对正式编号的侧栏行的唯一页面打开菜单。
       for (const target of targets) {
         const candidate = await this.openPage('ws://127.0.0.1:' + port.port + '/devtools/page/' + target.id);
         pages.push(candidate);
@@ -96,18 +107,19 @@ export class DesktopDeleteController {
       const locateUntil = Math.min(params.deadline - 1000, Date.now() + 8000);
       do {
         candidates = [];
-        for (const candidate of pages) { const state = await candidate.step('inspect', params); this.diagnostic({ phase: 'locate', ...state }); if (state.target === true) candidates.push(candidate); }
+        for (const candidate of pages) { const state = await candidate.step('inspect', params); this.record(params, { phase: 'locate', ...state }); if (state.target === true) candidates.push(candidate); }
         if (candidates.length === 1) break;
         if (candidates.length > 1) break;
         await pause(150);
       } while (Date.now() < locateUntil);
-      if (candidates.length !== 1) { candidates.forEach(candidate => candidate.close()); throw new BridgeError('DELETE_TARGET_UNAVAILABLE', '原桌面未能唯一定位目标对话，请在电脑列表中显示该对话后重试'); }
+      this.record(params, { phase: 'located', pageCount: pages.length, candidateCount: candidates.length });
+      if (candidates.length !== 1) { candidates.forEach(candidate => candidate.close()); throw new BridgeError('DELETE_TARGET_UNAVAILABLE', candidates.length > 1 ? '原桌面多个窗口包含该对话，请关闭重复窗口后重试' : '原桌面尚未显示目标对话，请展开对应项目后重试'); }
       page = candidates[0];
       await page.step('focus', params);
-      await this.selectMenu(port.pid, params.deadline, 'activate');
+      await this.selectMenu(port.pid, params.deadline, 'activate', params);
       if ((await page.step('open', params))?.state !== 'opened') throw new BridgeError('DELETE_TARGET_CHANGED', '原桌面目标已变化，尚未删除对话');
-      this.diagnostic({ phase: 'opened', ...await page.step('inspect', params) });
-      await this.selectMenu(port.pid, params.deadline);
+      this.record(params, { phase: 'opened', ...await page.step('inspect', params) });
+      await this.selectMenu(port.pid, params.deadline, 'select', params);
       let state;
       const waitUntil = Math.min(params.deadline - 1000, Date.now() + 5000);
       do { state = await page.step('inspect', params); if (state.matched && state.ready) break; await pause(100); } while (Date.now() < waitUntil);
@@ -116,11 +128,12 @@ export class DesktopDeleteController {
       if ((await page.step('commit', params))?.state !== 'submitted') throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '删除目标已变化，请核对原操作结果', true);
       do {
         state = await page.step('inspect', params);
-        if (!state.dialog) return;
+        if (!state.dialog) { this.record(params, { phase: 'completed', committed }); return; }
         await pause(150);
       } while (Date.now() < params.deadline - 500);
       throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '原桌面尚未确认删除完成，请核对原操作结果', true);
     } catch (error) {
+      this.record(params, { phase: 'failed', code: error.code, committed });
       if (committed) throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '永久删除结果需要核对，请勿重复提交', true);
       if (error instanceof BridgeError) throw error;
       throw new BridgeError('DELETE_UNAVAILABLE', '原桌面删除连接未就绪，尚未删除对话');
