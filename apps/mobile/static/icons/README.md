@@ -7,3 +7,5 @@
 松墨界面补充：`file`、`chevron-right` 同样来自此版本官方图标，使用墨色、石灰色和白色导出。
 
 连接编辑补充：`code`、`desktop`、`clock` 来自同一版本 Tabler 官方图标，按项目既有三种颜色导出。
+
+权限选择补充：`hand-stop`、`shield-check`、`lock`、`alert-triangle` 来自同一版本 Tabler 官方线性图标，沿用 72×72 PNG 与三种基础颜色；警告图标另提供琥珀色 `warning`，工具栏、选中项及关闭入口统一复用 `app-icon`。

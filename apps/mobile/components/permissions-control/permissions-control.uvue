@@ -1,12 +1,12 @@
 <template>
   <view class="permission-control">
-    <view :id="triggerId" class="permission-trigger"><text class="trigger-symbol">{{ symbol(mode) }}</text><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
+    <view :id="triggerId" class="permission-trigger"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'muted'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
     <view v-if="opened" class="permission-overlay" @click="closeMenu">
       <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
-        <view class="permission-heading"><text class="permission-title">{{ label }}</text><button class="permission-close" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu">×</button></view>
+        <view class="permission-heading"><text class="permission-title">{{ label }}</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: panelHeight + 'px' }">
           <text v-if="loading" class="permission-note">正在读取电脑权限…</text>
-          <template v-else><view v-for="option in state?.options ?? []" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }"><text :class="['permission-symbol', option.id == 'full-access' ? 'warning-symbol' : '']">{{ symbol(option.id) }}</text><view class="permission-copy"><text class="permission-name">{{ option.label }}</text><text class="permission-description">{{ option.enabled ? option.description : option.disabledReason }}</text></view><text v-if="mode == option.id" class="permission-check">✓</text><button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="'选择' + option.label" @click="choose(option.id)"></button></view></template>
+          <template v-else><view v-for="option in state?.options ?? []" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }"><view class="permission-symbol"><app-icon :name="permissionIcon(option.id)" :size="24" :tone="option.id == 'full-access' ? 'warning' : 'dark'" /></view><view class="permission-copy"><text class="permission-name">{{ option.label }}</text><text class="permission-description">{{ option.enabled ? option.description : option.disabledReason }}</text></view><view v-if="mode == option.id" class="permission-check"><app-icon name="check" :size="22" /></view><button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="'选择' + option.label" @click="choose(option.id)"></button></view></template>
           <text v-if="threadId.length > 0 && activeTurn" class="permission-note">沙箱权限用于下一轮；当前轮次审批方式按电脑能力同步。</text>
           <text v-if="busy" class="permission-note">正在同步电脑权限…</text>
           <text v-if="error.length > 0" class="permission-error">{{ error }}</text><button v-if="error.length > 0" class="permission-retry" :disabled="busy || loading" @click="load">重新读取</button>
@@ -17,6 +17,7 @@
 </template>
 <script setup lang="uts">
 import { ref, computed, watch, onUnmounted } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
 const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false })
@@ -30,7 +31,8 @@ const available = computed((): boolean => connection.connected && connection.com
 const mode = computed((): string => props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
 const label = computed((): string => permissionLabel(mode.value))
 const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0)
-function symbol(value: string): string { if (value == 'auto-review') return '🛡'; if (value == 'read-only') return '🔒'; if (value == 'full-access') return '⚠'; return '✋' }
+// 权限图标统一使用随包线性 PNG，不依赖系统字体或表情渲染。
+function permissionIcon(value: string): string { if (value == 'auto-review') return 'shield-check'; if (value == 'read-only') return 'lock'; if (value == 'full-access') return 'alert-triangle'; return 'hand-stop' }
 // 所有异步响应绑定电脑、项目或会话；切换目标后立即作废。
 function current(key: string, id: number): boolean { return alive && context.value == key && request == id }
 async function load() {
@@ -82,24 +84,23 @@ onUnmounted(() => { emit('visibility', false); alive = false; request++; if (bus
 .permission-control { width: 38px; height: 42px; flex-shrink: 0; }
 .permission-trigger { position: relative; width: 38px; height: 42px; padding: 0; margin: 0; background-color: transparent; align-items: center; justify-content: center; }
 .permission-trigger-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
-.trigger-symbol { font-size: 21px; color: #68766d; }
 .permission-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 250; background-color: rgba(0,0,0,0.12); }
 .permission-panel { position: absolute; border-radius: 22px; padding: 8px; background-color: #f8f8f3; border-width: 1px; border-color: #e3e5dc; }
 .permission-heading { height: 42px; flex-direction: row; align-items: center; padding-left: 12px; }
 .permission-title { flex: 1; font-size: 14px; color: #68766d; }
-.permission-close { width: 38px; height: 38px; padding: 0; margin: 0; background-color: transparent; font-size: 24px; }
+.permission-close { position: relative; width: 38px; height: 38px; align-items: center; justify-content: center; }
+.permission-close-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; padding: 0; margin: 0; background-color: transparent; }
 .permission-row { position: relative; min-height: 76px; flex-direction: row; align-items: center; padding: 10px 8px; }
-.permission-symbol { width: 36px; font-size: 23px; }
-.warning-symbol { color: #b78324; }
+.permission-symbol { width: 36px; height: 32px; flex-shrink: 0; justify-content: center; }
 .permission-copy { flex: 1; }
 .permission-name { font-size: 17px; color: #202c28; line-height: 26px; }
 .permission-description { font-size: 13px; line-height: 21px; color: #7b827a; }
-.permission-check { width: 24px; font-size: 23px; color: #285c49; }
+.permission-check { width: 24px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center; }
 .permission-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
 .permission-note, .permission-error { padding: 10px 12px; font-size: 12px; line-height: 20px; color: #7b827a; }
 .permission-error { color: #9b493a; }
 .permission-retry { margin: 4px 12px; font-size: 14px; color: #285c49; background-color: #e8eee6; }
 /* #ifdef WEB */
-.permission-trigger-hit::after, .permission-hit::after, .permission-close::after { border: 0; }
+.permission-trigger-hit::after, .permission-hit::after, .permission-close-hit::after { border: 0; }
 /* #endif */
 </style>
