@@ -26,6 +26,25 @@ function fixture() {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('任务运行中选择模型或推理强度即同步电脑，无需发送消息', async () => {
+  for (const [key, value] of [['model', 'model-b'], ['effort', 'max']]) {
+    const f = fixture();
+    f.context.connection.snapshot.activeTurnId = 'active';
+    f.context.connection.snapshot.status = 'active';
+    f.context.key = key; f.context.selected = value;
+    vm.runInContext('selectSetting(key, selected)', f.context);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].method, 'thread.settings.update');
+    assert.equal(f.calls[0].params.threadId, 'thread');
+    assert.deepEqual({ ...f.calls[0].params.changes }, { [key]: value });
+    assert.equal(f.calls[0].write, true);
+    const confirmed = { ...f.context.settings.value, [key]: value };
+    f.pending.shift().resolve({ settings: confirmed, models: [] }); await tick();
+    assert.equal(f.context.settings.value[key], value);
+    assert.equal(f.calls.some(call => call.method === 'turn.send' || call.method === 'turn.steer'), false);
+  }
+});
+
 test('设置在成功前保持原值，失败保留原因，未知结果不会自动重试', async () => {
   const f = fixture(); vm.runInContext("selectSetting('mode', 'plan')", f.context);
   assert.equal(f.context.settings.value.mode, 'default'); assert.equal(f.context.settingsBusy.value, true); assert.equal(f.calls[0].write, true);

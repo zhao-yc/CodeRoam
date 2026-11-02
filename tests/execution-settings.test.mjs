@@ -97,6 +97,24 @@ test('桌面拒绝并发覆盖时明确失败，不给手机返回伪成功', as
   assert.equal(client.state.latestCollaborationMode.mode, 'default');
 });
 
+test('空闲或运行中单独修改模型和推理强度均立即回读桌面确认，保留当前轮次', async t => {
+  for (const active of [false, true]) {
+    for (const changes of [{ model: 'model-b' }, { effort: 'max' }]) {
+      const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } });
+      t.after(() => adapter.close());
+      if (active) client.state.turns = [{ turnId: 'active', status: 'inProgress', items: [] }];
+      const before = structuredClone(client.state.turns);
+      const result = await adapter.operate('thread.settings.update', { threadId: 'thread', changes }, 'command', 'phone');
+      for (const [key, value] of Object.entries(changes)) assert.equal(result.settings[key], value);
+      assert.equal(result.settings.model, client.state.latestCollaborationMode.settings.model);
+      assert.equal(result.settings.effort, client.state.latestReasoningEffort);
+      assert.deepEqual(client.state.turns, before);
+      assert.equal(client.calls.filter(call => call.method === 'thread-follower-update-thread-settings').length, 1);
+      assert.equal(client.calls.some(call => /start-turn|steer-turn|interrupt-turn/.test(call.method)), false);
+    }
+  }
+});
+
 test('设置请求使用白名单与业务账本去重，禁止未订阅读取其他会话', async t => {
   const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } }), journal = new Journal();
   const agent = new BridgeAgent({ config: {}, adapter, journal }); t.after(() => agent.close());
