@@ -48,3 +48,14 @@ test('额度响应缺失时提示更新连接服务，接口失败允许稍后�
   assert.equal(failed.entries.value[0].usageLoading,false);
   assert.match(failed.entries.value[0].usageNote,/稍后重试/);
 });
+
+test('账号按电脑显示，断线清空身份且丢弃先前的账号回执',async()=>{
+  const f=fixture();
+  f.requests[0].resolve({usage:{available:false,windows:[],accountLabel:'synthetic@example.com'}});await settle();
+  assert.equal(f.entries.value[0].accountLabel,'synthetic@example.com');
+  f.sync();const pending=f.requests[1];
+  f.connection.connected=false;f.sync();
+  assert.equal(f.entries.value[0].accountLabel,'');
+  pending.resolve({usage:{available:true,windows:[],accountLabel:'stale@example.com'}});await settle();
+  assert.equal(f.entries.value[0].accountLabel,'');
+});

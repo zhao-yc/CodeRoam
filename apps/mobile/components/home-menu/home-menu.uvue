@@ -12,7 +12,7 @@
           <view class="menu-row"><view class="check-slot"></view><app-icon name="settings" :size="22" /><text class="menu-label">设置</text><button class="menu-hitbox" aria-label="设置" hover-class="menu-pressed" @click="emit('connection', false)"></button></view>
           <view class="menu-separator"></view><text class="menu-caption">剩余用量</text>
           <text v-if="entries.length == 0" class="menu-note">连接电脑后查看</text>
-          <view v-for="entry in entries" :key="entry.hostId" class="usage-entry"><text class="usage-computer">{{ entry.label }}</text><text v-if="entry.usageLoading" class="menu-note">正在读取…</text><text v-else-if="entry.windows.length == 0" class="menu-note">{{ entry.online ? entry.usageNote : '电脑离线' }}</text><text v-for="window in entry.windows" :key="window.label" class="usage-value">{{ window.label }} {{ window.remainingPercent }}%</text></view>
+          <view v-for="entry in entries" :key="entry.hostId" class="usage-entry"><text class="usage-computer">{{ entry.label }}</text><text v-if="entry.online && !entry.usageLoading" class="usage-account">{{ entry.accountLabel.length > 0 ? entry.accountLabel : '账号暂不可获取' }}</text><text v-if="entry.usageLoading" class="menu-note">正在读取…</text><text v-else-if="entry.windows.length == 0" class="menu-note">{{ entry.online ? entry.usageNote : '电脑离线' }}</text><text v-for="window in entry.windows" :key="window.label" class="usage-value">{{ window.label }} {{ window.remainingPercent }}%</text></view>
         </scroll-view>
       </template>
       <template v-else>
@@ -31,14 +31,14 @@ import { computed, ref, watch, onUnmounted } from 'vue'
 import { bridge, connection, Computer, ThreadSummary } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type UsageWindow = { label: string, remainingPercent: number }
-type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, usageNote: string, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loaded: boolean, more: boolean, archiveError: string }
+type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, usageNote: string, accountLabel: string, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loaded: boolean, more: boolean, archiveError: string }
 const props = defineProps<{ sort: string, recentFirst: boolean, computerId: string }>()
 const emit = defineEmits<{ dismiss: [], sort: [value: string], recent: [], connection: [adding: boolean] }>()
 const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'project', label: '按项目', icon: 'folder' }, { id: 'time', label: '按时间倒序排列', icon: 'clock' }]
 const section = ref('main')
 const entries = ref([] as MenuComputer[])
 const panelWidth = Math.min(276, uni.getWindowInfo().windowWidth - 32)
-const mainHeight = computed((): number => Math.min(entries.value.length == 0 ? 392 : 366 + entries.value.reduce((height: number, entry: MenuComputer): number => height + 20 + (entry.windows.length > 0 ? entry.windows.length * 24 : 26), 0), uni.getWindowInfo().windowHeight - 82))
+const mainHeight = computed((): number => Math.min(entries.value.length == 0 ? 392 : 366 + entries.value.reduce((height: number, entry: MenuComputer): number => height + 20 + (entry.online && !entry.usageLoading ? 38 : 0) + (entry.windows.length > 0 ? entry.windows.length * 24 : 26), 0), uni.getWindowInfo().windowHeight - 82))
 const archiveHeight = Math.max(120, Math.min(440, uni.getWindowInfo().windowHeight - 160))
 let revision = 0
 let archiveRevision = 0
@@ -46,12 +46,14 @@ let archiveRevision = 0
 function syncEntries() {
   const version = ++revision
   archiveRevision++
-  entries.value = connection.computers.filter((computer: Computer): boolean => props.computerId.length == 0 || computer.id == props.computerId).map((computer: Computer): MenuComputer => ({ hostId: computer.id, label: computer.label, online: connection.connected && computer.online, usageLoading: connection.connected && computer.online, usageNote: '暂无法获取，请稍后重试', windows: [] as UsageWindow[], threads: [] as ThreadSummary[], loading: false, loaded: false, more: false, archiveError: '' } as MenuComputer))
+  entries.value = connection.computers.filter((computer: Computer): boolean => props.computerId.length == 0 || computer.id == props.computerId).map((computer: Computer): MenuComputer => ({ hostId: computer.id, label: computer.label, online: connection.connected && computer.online, usageLoading: connection.connected && computer.online, usageNote: '暂无法获取，请稍后重试', accountLabel: '', windows: [] as UsageWindow[], threads: [] as ThreadSummary[], loading: false, loaded: false, more: false, archiveError: '' } as MenuComputer))
   entries.value.forEach((entry: MenuComputer) => {
     if (!entry.online) return
     bridge.readComputerMenu(entry.hostId, { limit: 1, archived: true, includeUsage: true }).then((result: UTSJSONObject) => {
       if (version != revision) return
       const usage = result['usage'] as UTSJSONObject | null
+      // 每次打开只接收当前电脑的新回执，断线与撤权时不保留旧账号。
+      entry.accountLabel = (usage?.['accountLabel'] as string | null) ?? ''
       // 旧服务没有额度字段时明确提示升级，避免误认为账号没有剩余额度。
       entry.usageNote = usage == null ? '请更新电脑连接服务' : '暂无法获取，请稍后重试'
       entry.windows = usage?.['available'] == true ? JSON.parse<UsageWindow[]>(JSON.stringify(usage!['windows'])) ?? [] as UsageWindow[] : [] as UsageWindow[]
@@ -95,6 +97,7 @@ onUnmounted(() => { revision++ })
 .menu-note { color: #7b827a; font-size: 13px; line-height: 22px; padding: 1px 32px 4px; }
 .usage-entry { padding-bottom: 4px; }
 .usage-computer { color: #7b827a; font-size: 12px; line-height: 18px; padding: 0 32px; }
+.usage-account { color: #59665f; font-size: 12px; line-height: 18px; padding: 1px 32px; lines: 2; text-overflow: ellipsis; }
 .usage-value { font-size: 14px; line-height: 22px; color: #202c28; padding: 1px 32px; }
 .archive-heading { flex-direction: row; align-items: center; padding: 0 8px 8px; }
 .back-action { position: relative; width: 36px; height: 36px; align-items: center; justify-content: center; }
@@ -108,5 +111,6 @@ onUnmounted(() => { revision++ })
 /* #ifdef WEB */
 .menu-panel { box-shadow: 0 12px 40px rgba(32, 44, 40, 0.14); }
 .menu-hitbox::after { border: 0; }
+.usage-account { overflow-wrap: anywhere; }
 /* #endif */
 </style>

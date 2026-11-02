@@ -11,8 +11,24 @@ export function normalizeAccountUsage(response) {
   return {available:windows.length>0,windows};
 }
 
-/** 复用受控本机短连接读取额度，不读取或透传鉴权文件，不启动执行轮次。 */
+/** 仅提取接口公开的登录邮箱或登录方式，不透传账号对象和凭据。 */
+export function normalizeAccountLabel(response) {
+  const account=response?.account;
+  if(account===null)return '未登录';
+  if(account?.type==='apiKey')return 'API Key 登录';
+  if(account?.type!=='chatgpt'||typeof account.email!=='string')return '';
+  const email=account.email.trim();
+  return email.length<=254&&!/[\u0000-\u001f\u007f<>]/.test(email)&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)?email:'';
+}
+
+/** 同一受控短连接并行读取账号和额度，各自失败不抹掉另一项；不主动刷新登录。 */
 export async function readAccountUsage(service) {
-  try {return normalizeAccountUsage(await service.creation.run(service.codexHome,request=>request('account/rateLimits/read',{})));}
-  catch {return {available:false,windows:[]};}
+  try {
+    return await service.creation.run(service.codexHome,async request=>{
+      const [usage,account]=await Promise.allSettled([
+        request('account/rateLimits/read',{}),request('account/read',{refreshToken:false}),
+      ]);
+      return {...normalizeAccountUsage(usage.status==='fulfilled'?usage.value:null),accountLabel:account.status==='fulfilled'?normalizeAccountLabel(account.value):''};
+    });
+  } catch {return {available:false,windows:[],accountLabel:''};}
 }
