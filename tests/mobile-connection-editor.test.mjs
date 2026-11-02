@@ -55,3 +55,18 @@ test('长按尚未松手和松手后的合成点击不会关闭菜单，后续�
   f.props.releaseAt = Date.now(); f.dismiss(); assert.equal(f.events.length, 0);
   f.props.releaseAt = Date.now() - 1000; f.dismiss(); assert.equal(f.events.at(-1)[0], 'dismiss');
 });
+
+test('含实例分隔符的设备长按使用可查询且无碰撞的元素编号，编辑目标仍为原设备', () => {
+  const source = fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8');
+  const methods = ['computerTabElementId', 'openComputerMenu'].map(name => source.match(new RegExp('function ' + name + '\\([^]*?\\n}'))?.[0]).join('\n');
+  const ids = ['pc', 'pc~00000000-0000-4000-8000-000000000001', 'pc_7e_', 'pc~', 'pc.1:second', '合成设备'];
+  const queries = [], target = ids[1];
+  const context = vm.createContext({ editingNewConversation: { value: false }, editingComputerId: { value: '' }, connectionMenuLeft: { value: 0 }, connectionMenuTop: { value: 0 }, connectionReleaseAt: { value: 1 }, suppressComputerClickUntil: 0, Date, uni: { getElementById(id) {
+    assert.match(id, /^[A-Za-z][A-Za-z0-9_-]*$/); queries.push(id);
+    return { getBoundingClientRect: () => id === 'home-page' ? { top: 20 } : { left: 180, bottom: 120 } };
+  } } });
+  vm.runInContext(stripTypeScriptTypes(methods, { mode: 'transform' }) + ';globalThis.subject={computerTabElementId,openComputerMenu}', context);
+  const encoded = ids.map(id => context.subject.computerTabElementId(id)); assert.equal(new Set(encoded).size, ids.length);
+  context.subject.openComputerMenu(target); assert.equal(queries[0], encoded[1]); assert.equal(context.editingComputerId.value, target); assert.equal(context.connectionMenuLeft.value, 180); assert.equal(context.connectionMenuTop.value, 104);
+  assert.match(source, /:id="computerTabElementId\(computer\.id\)"/);
+});
