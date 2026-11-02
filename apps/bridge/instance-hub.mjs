@@ -102,15 +102,12 @@ export class InstanceHub extends EventEmitter {
       return { ...response, hostId: message.hostId, generation: message.generation };
     } catch (error) { return { v: 1, type: 'response', transportId: message.transportId, hostId: message.hostId, generation: message.generation, error: errorPayload(error) }; }
   }
-  /** Windows 按进程和管道复核绑定，不能把缺少 Mac IPC 的多个实例误判为共享目录。 */
+  /** Windows 周期发现已固定进程、端口和代次；原生调用只接受仍在线的同一上下文，页面另核对固定目标。 */
   async verifyWindowsInstance(instance) {
-    try {
-      if (this.stopped || !instance.alive) throw new Error();
-      const rows = await (this.windowsVerification ??= this.discover().finally(() => { this.windowsVerification = null; }));
-      const matches = rows.filter(row => row.pid === instance.pid || row.nativePipe === instance.nativePipe);
-      const current = matches[0];
-      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData', 'port'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
-    } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连'); }
+    // 不为每次草稿读写重新启动系统枚举，避免多实例轮询叠加导致发现超时和代次抖动。
+    if (this.stopped || !instance.alive || !instance.ready || this.runtimes.get(instance.id)?.instance !== instance) {
+      instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连');
+    }
   }
   /** Mac 不借用全局调试页面；操作前复核专属 IPC，目录共用或 PID 换代立即暂停。 */
   async verifyMacInstance(instance) {
