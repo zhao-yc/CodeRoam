@@ -21,6 +21,11 @@ READ_METHODS.add('thread.create.permissions');
 READ_METHODS.add('thread.plugins.read');
 READ_METHODS.add('thread.create.plugins');
 WRITE_METHODS.add('thread.permissions.update');
+READ_METHODS.add('thread.draft.read');
+READ_METHODS.add('thread.draft.unwatch');
+WRITE_METHODS.add('thread.draft.open');
+WRITE_METHODS.add('thread.draft.update');
+WRITE_METHODS.add('thread.draft.send');
 export const METHODS = new Set([...READ_METHODS, ...WRITE_METHODS, ...UPLOAD_METHODS, ...RELAY_METHODS]);
 export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 
@@ -41,6 +46,11 @@ export function validateRequest(message) {
   if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(message.requestId)) throw new BridgeError('BAD_REQUEST_ID', '请求编号不合法');
   if (!METHODS.has(message.method)) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的接口列表中');
   if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new BridgeError('BAD_PARAMS', '请求参数必须是对象');
+  // 原生草稿使用独立编号，不能落入既有聊天编号与发送参数的校验分支。
+  if (message.method.startsWith('thread.draft.')) {
+    validateDraftRequest(message.method, message.params);
+    return message;
+  }
   if (message.params.pluginIds !== undefined) {
     if (!['turn.send', 'turn.steer'].includes(message.method) || (message.params.queueAction !== undefined && message.params.queueAction !== 'enqueue')) throw new BridgeError('BAD_PARAMS', '插件只能随发送、追加指令或入队提交');
     validatePluginIds(message.params.pluginIds);
@@ -78,7 +88,7 @@ export function validateRequest(message) {
   if(message.params.before!==undefined&&(message.method!=='thread.history'||typeof message.params.before!=='string'||message.params.before.length>2000))throw new BridgeError('BAD_PARAMS','历史游标无效');
   if(message.params.beforeMessageId!==undefined&&(message.method!=='thread.history'||typeof message.params.beforeMessageId!=='string'||message.params.beforeMessageId.length>1000))throw new BridgeError('BAD_PARAMS','历史消息起点无效');
   if(message.params.images!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!Array.isArray(message.params.images)||message.params.images.length>3))throw new BridgeError('BAD_PARAMS','图片只能随发送或追加指令提交，每次最多3张');
-  if (UPLOAD_METHODS.has(message.method)) requireString(message.params.threadId, '聊天编号', 200);
+  if (UPLOAD_METHODS.has(message.method)) validateAttachmentScope(message.params);
   if (message.params.attachments !== undefined && (!['turn.send', 'turn.steer'].includes(message.method) || !Array.isArray(message.params.attachments) || message.params.attachments.length > 3)) throw new BridgeError('BAD_ATTACHMENTS', '附件只能随发送或追加指令提交，每次最多3个');
   if (message.method === 'thread.create' || message.method === 'thread.create.settings' || message.method === 'thread.create.permissions' || message.method === 'thread.create.plugins') {
     requireString(message.params.projectId, '项目编号', 200);
@@ -119,6 +129,56 @@ export function validateRequest(message) {
 export function requireString(value, label, maximum = 32000) {
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum) throw new BridgeError('BAD_PARAMS', `${label}为空或超出允许长度`);
   return value;
+}
+
+/** 草稿编号只接受桥接生成的随机 UUID，不能指定原生窗口、路径或内部草稿编号。 */
+export function validateDraftId(value) {
+  if (typeof value !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)) throw new BridgeError('BAD_PARAMS', '草稿编号无效，请重新打开新聊天');
+  return value;
+}
+
+/** 上传必须明确选择一个公开作用域；内部 draft: 命名空间不接受手机直接指定。 */
+export function validateAttachmentScope(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params) || Object.hasOwn(params, 'draftId') === Object.hasOwn(params, 'threadId')) throw new BridgeError('BAD_PARAMS', '附件必须且只能指定草稿编号或聊天编号');
+  if (Object.hasOwn(params, 'draftId')) return { draftId: validateDraftId(params.draftId) };
+  requireString(params.threadId, '聊天编号', 200);
+  if (params.threadId.startsWith('draft:')) throw new BridgeError('BAD_PARAMS', '不能直接指定内部附件作用域');
+  return { threadId: params.threadId };
+}
+
+/** 草稿修订号保持原生类型，按原值比较，不把未知值降级为旧配置或默认设置。 */
+export function validDraftRevision(value) {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value) || Number.isSafeInteger(value) && value >= 0;
+}
+
+/** 原生新聊天只开放定稿的设置和消息字段，权限不能混入发送参数。 */
+export function validateDraftRequest(method, params) {
+  const allowed = {
+    'thread.draft.open': ['projectId'],
+    'thread.draft.read': ['draftId'],
+    'thread.draft.unwatch': ['draftId'],
+    'thread.draft.update': ['draftId', 'expectedRevision', 'changes', 'confirmedFullAccess'],
+    'thread.draft.send': ['draftId', 'expectedRevision', 'text', 'images', 'attachments'],
+  }[method];
+  if (!allowed) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的草稿接口列表中');
+  if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '草稿参数包含不允许的字段');
+  if (method === 'thread.draft.open') return requireString(params.projectId, '项目编号', 200);
+  validateDraftId(params.draftId);
+  if (method === 'thread.draft.read' || method === 'thread.draft.unwatch') return;
+  if (!validDraftRevision(params.expectedRevision)) throw new BridgeError('BAD_PARAMS', '请提供有效的草稿修订号');
+  if (method === 'thread.draft.update') {
+    const changes = params.changes;
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length || Object.keys(changes).some(key => !['model', 'effort', 'serviceTier', 'mode', 'permissionMode'].includes(key)) || Object.values(changes).some(value => typeof value !== 'string' || value.length > 200)) throw new BridgeError('BAD_SETTINGS', '仅支持修改草稿的模型、推理强度、速度、模式和权限');
+    if (changes.model !== undefined) requireString(changes.model, '模型', 200);
+    if (changes.mode !== undefined && !['default', 'plan'].includes(changes.mode)) throw new BridgeError('BAD_SETTINGS', '不支持此执行模式');
+    if ((params.confirmedFullAccess !== undefined && typeof params.confirmedFullAccess !== 'boolean') || (changes.permissionMode !== undefined && !['default', 'auto-review', 'read-only', 'full-access'].includes(changes.permissionMode)) || (changes.permissionMode === 'full-access' && params.confirmedFullAccess !== true)) throw new BridgeError('BAD_PERMISSIONS', '权限参数无效或尚未确认完整访问');
+    return;
+  }
+  if (typeof params.text !== 'string' || params.text.length > 32000) throw new BridgeError('BAD_PARAMS', '消息必须是长度不超过32000的文本');
+  if (params.images !== undefined && (!Array.isArray(params.images) || params.images.length > 3 || params.images.some(image => typeof image !== 'string'))) throw new BridgeError('BAD_IMAGES', '图片参数无效，每次最多3张');
+  if (params.attachments !== undefined && (!Array.isArray(params.attachments) || params.attachments.length > 3 || new Set(params.attachments).size !== params.attachments.length || params.attachments.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id)))) throw new BridgeError('BAD_ATTACHMENTS', '附件编号无效，每次最多3个不同附件');
+  if ((params.images?.length ?? 0) + (params.attachments?.length ?? 0) > 3) throw new BridgeError('BAD_ATTACHMENTS', '每次最多发送3个图片或文件附件');
+  if (!params.text.trim() && !params.images?.length && !params.attachments?.length) throw new BridgeError('BAD_PARAMS', '请输入消息或选择附件');
 }
 
 /** 插件编号只能是有界的目录标识，不能携带 URI、文件路径或转义后的路径。 */

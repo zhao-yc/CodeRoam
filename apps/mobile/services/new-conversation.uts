@@ -1,162 +1,132 @@
-import { PermissionState } from './permissions.uts'
 import { reactive } from 'vue'
 import { bridge, connection } from './bridge.uts'
-import { ExecutionSettings } from './execution-settings.uts'
-import { DraftImage, DraftFile, saveDraft, saveDraftImages, saveDraftFiles, rememberSubmission, settleSubmission } from './composer.uts'
+import { DraftImage, DraftFile, saveDraft, readDraft, saveDraftImages, readDraftImages, saveDraftFiles, readDraftFiles, saveDraftPlugins, readDraftPlugins } from './composer.uts'
 import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
-import { saveDraftPlugins } from './composer.uts'
 import type { SelectedPlugin } from './plugins.uts'
+import { NativeDraftState, nativeDraftState, readNativeDraft, assertNativeDraftReady, sendNativeDraft, acknowledgeNativeDraftPromotion } from './native-draft.uts'
 
 export type NewProject = { id: string, label: string, cwd: string }
-export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], settings: ExecutionSettings | null, settingsChanged: boolean, settingsApplied: boolean, permissionMode: string, permissionConfirmed: boolean, permissionsApplied: boolean, threadId: string, pendingAction: string, pendingCommandId: string }
+export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], attachmentDraftId: string, threadId: string, pendingAction: string, pendingCommandId: string }
 const drafts = reactive<NewDraft[]>([])
 const submitting = new Set<string>()
 
-// 新建草稿和提交状态仅保存在内存，刷新后由用户查看列表决定是否重新发送。
+// 手机文字和插件选择仅存在本地内存，电脑文字不会进入此草稿。
 export function newDraft(hostId: string, projectId: string): NewDraft {
   const found = drafts.find((draft: NewDraft): boolean => draft.hostId == hostId && draft.projectId == projectId)
   if (found != null) return found
-  // 不再恢复升级前的创建目标，避免旧记录锁住发送或将新消息送到历史会话。
   try { uni.removeStorageSync('codex-mobile-new-' + hostId + '-' + projectId) } catch (_) {}
-  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], plugins: [] as SelectedPlugin[], settings: null, settingsChanged: false, settingsApplied: false, permissionMode: '', permissionConfirmed: false, permissionsApplied: false, threadId: '', pendingAction: '', pendingCommandId: '' }
+  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], plugins: [] as SelectedPlugin[], attachmentDraftId: '', threadId: '', pendingAction: '', pendingCommandId: '' }
   drafts.push(draft)
   return drafts[drafts.length - 1]
 }
 
-// 解除执行目标时保留输入与设置；附件需要重新上传到下一条新会话。
-function detachCreatedThread(draft: NewDraft) {
-  draft.threadId = ''; draft.pendingAction = ''; draft.settingsApplied = false; draft.permissionsApplied = false
-  for (const file of draft.files) { file.status = 'local'; file.progress = 0; file.error = '' }
-}
+// 展开不会解除原生编号、清空输入或重放写请求，订阅由 native-draft 管理。
+export function beginNewConversation() {}
 
-// 每次打开新建编辑区开始独立流程，保留草稿；正在发送时不切换目标。
-export function beginNewConversation() {
-  for (const draft of drafts) {
-    if (draft.pendingCommandId.length > 0 || submitting.has(draft.hostId + ':' + draft.projectId)) continue
-    detachCreatedThread(draft)
-  }
-}
-
-// 连接或首次项目读取完成时接住未分配草稿，显式切换项目则保留各自草稿。
+// 首次选项目接住未分配的文字、附件和已有插件选择。
 export function assignUnselectedDraft(hostId: string, projectId: string) {
-  const source = newDraft(hostId, '')
-  const target = newDraft(hostId, projectId)
+  const source = newDraft(hostId, ''), target = newDraft(hostId, projectId)
   if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.plugins.length == 0 && target.threadId.length == 0) {
     target.text = source.text; target.images = source.images; target.files = source.files; target.plugins = source.plugins
     source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]; source.plugins = [] as SelectedPlugin[]
   }
 }
 
-function assertDestination(draft: NewDraft) {
-  if (connection.hostId != draft.hostId || !connection.connected || !connection.computers.some((computer): boolean => computer.id == draft.hostId && computer.online)) throw new Error('电脑连接已变化，请重新连接后发送')
+function assertDraftDestination(draft: NewDraft, state: NativeDraftState, draftId: string) {
+  assertNativeDraftReady(state, true)
+  if (connection.hostId != draft.hostId || state.projectId != draft.projectId || state.draftId != draftId) throw new Error('草稿目标已切换，附件和输入已保留')
 }
 
-// 每一步只执行用户本次发送触发的请求；任何失败都释放提交状态，不自动重放。
-async function writeStep(draft: NewDraft, action: string, method: string, params: UTSJSONObject): Promise<UTSJSONObject> {
-  assertDestination(draft)
-  const request = bridge.request(method, params, true)
-  draft.pendingAction = action; draft.pendingCommandId = bridge.pendingCommand(draft.hostId, action == 'create' ? '' : draft.threadId)
+// 草稿范围变化后必须重新上传，已完成的附件不能跨原生草稿复用。
+function bindDraftAttachments(draft: NewDraft, draftId: string) {
+  if (draft.attachmentDraftId == draftId) return
+  draft.attachmentDraftId = draftId
+  for (const file of draft.files) { file.status = 'local'; file.progress = 0; file.error = '' }
+}
+
+// 文档文件使用草稿分片上传，协议参数只有 draftId，不携带 threadId。
+async function uploadDraftAttachment(draft: NewDraft, state: NativeDraftState, draftId: string, file: DraftFile) {
+  assertDraftDestination(draft, state, draftId)
+  if (file.status == 'ready') return
+  if (file.data.length == 0) file.data = await readFileBase64(file.source)
+  assertDraftDestination(draft, state, draftId)
+  file.status = 'uploading'; file.error = ''
   try {
-    const result = await request
-    if (action == 'create') draft.threadId = result.getString('threadId') ?? ''
-    if (action == 'settings') draft.settingsApplied = true
-    if (action == 'permissions') draft.permissionsApplied = true
-    draft.pendingAction = ''; draft.pendingCommandId = ''
-    return result
-  } catch (error) {
-    draft.pendingAction = ''; draft.pendingCommandId = ''
-    throw error
-  }
+    const started = await bridge.request('attachment.begin', { draftId, uploadId: file.id, name: file.name, size: file.size })
+    let index = started.getNumber('nextChunk') ?? 0
+    const length = FILE_CHUNK_BYTES * 4 / 3
+    while (index * length < file.data.length) {
+      assertDraftDestination(draft, state, draftId)
+      const result = await bridge.request('attachment.chunk', { draftId, uploadId: file.id, index, data: file.data.slice(index * length, (index + 1) * length) })
+      index = result.getNumber('nextChunk') ?? index + 1
+      file.progress = Math.min(99, Math.floor((result.getNumber('received') ?? 0) * 100 / file.size))
+    }
+    assertDraftDestination(draft, state, draftId)
+    await bridge.request('attachment.finish', { draftId, uploadId: file.id })
+    assertDraftDestination(draft, state, draftId)
+    file.status = 'ready'; file.progress = 100
+  } catch (reason) { file.status = 'paused'; file.error = (reason as Error).message; throw reason }
 }
 
-// 文件在创建真实会话后才上传，选择附件和编辑不会提前创建电脑会话。
-async function uploadNewFiles(draft: NewDraft) {
-  for (const file of draft.files) {
-    if (file.status == 'ready') continue
-    assertDestination(draft)
-    if (connection.snapshot?.supportsAttachments != true) throw new Error('请更新电脑连接服务后发送文件附件')
-    if (file.data.length == 0) file.data = await readFileBase64(file.source)
-    file.status = 'uploading'; file.error = ''
-    try {
-      const started = await bridge.request('attachment.begin', { threadId: draft.threadId, uploadId: file.id, name: file.name, size: file.size })
-      let index = started.getNumber('nextChunk') ?? 0
-      const length = FILE_CHUNK_BYTES * 4 / 3
-      while (index * length < file.data.length) {
-        assertDestination(draft)
-        const result = await bridge.request('attachment.chunk', { threadId: draft.threadId, uploadId: file.id, index, data: file.data.slice(index * length, (index + 1) * length) })
-        index = result.getNumber('nextChunk') ?? index + 1
-        file.progress = Math.min(99, Math.floor((result.getNumber('received') ?? 0) * 100 / file.size))
-      }
-      assertDestination(draft)
-      await bridge.request('attachment.finish', { threadId: draft.threadId, uploadId: file.id })
-      file.status = 'ready'; file.progress = 100
-    } catch (error) { file.status = 'paused'; file.error = (error as Error).message; throw error }
-  }
-}
-
-// 确认首条消息后再清空新建草稿，已创建编号在失败重试时继续使用。
+// 只有本次首条消息有明确成功回执后才清空手机草稿，插件选择一并消费。
 export function finishNewDraft(draft: NewDraft) {
-  draft.permissionMode = ''; draft.permissionConfirmed = false
   draft.text = ''; draft.images = [] as DraftImage[]; draft.files = [] as DraftFile[]; draft.plugins = [] as SelectedPlugin[]
-  draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''; draft.settingsApplied = false; draft.permissionsApplied = false
+  draft.attachmentDraftId = ''; draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''
 }
 
+// promotion 只订阅正式聊天，不接管空会话、不重写执行设置、更不补发消息。
+export async function openPromotedConversation(draft: NewDraft, preserveInput: boolean = true): Promise<string> {
+  const state = nativeDraftState(draft.hostId, draft.projectId)
+  if (state.snapshot?.status != 'promoted' || connection.hostId != draft.hostId || !state.watching) throw new Error('草稿目标已变化，请重新读取')
+  const threadId = state.snapshot!.threadId ?? ''
+  if (threadId.length == 0) throw new Error('尚未取得电脑聊天编号')
+  if (preserveInput) {
+    // 正式聊天已有本地输入时不覆盖；原项目草稿也继续保留。
+    if (readDraft(draft.hostId, threadId).length == 0) saveDraft(draft.hostId, threadId, draft.text)
+    if (readDraftImages(draft.hostId, threadId).length == 0) saveDraftImages(draft.hostId, threadId, draft.images.slice())
+    if (readDraftFiles(draft.hostId, threadId).length == 0) saveDraftFiles(draft.hostId, threadId, draft.files.map((file: DraftFile): DraftFile => ({ ...file, status: 'local', progress: 0, error: '' } as DraftFile)))
+    if (readDraftPlugins(draft.hostId, threadId).length == 0) saveDraftPlugins(draft.hostId, threadId, draft.plugins.slice())
+  }
+  draft.threadId = threadId
+  await bridge.openThread(threadId)
+  if (connection.hostId != draft.hostId || !state.watching || state.snapshot?.threadId != threadId) throw new Error('聊天目标已切换，手机草稿已保留')
+  acknowledgeNativeDraftPromotion(state)
+  return threadId
+}
+
+// 重复点击只允许一个提交流程；关闭、重连和事件回调均不能调用此入口。
 export async function sendNewConversation(draft: NewDraft, progress: (message: string) => void): Promise<string> {
   const key = draft.hostId + ':' + draft.projectId
   if (submitting.has(key)) throw new Error('正在提交，请勿重复发送')
   submitting.add(key)
-  try { return await submitNewConversation(draft, progress) }
-  finally { submitting.delete(key) }
-}
-
-// 创建、接管、设置、上传和首条发送顺序执行，任一步失败都保留可继续的草稿。
-async function submitNewConversation(draft: NewDraft, progress: (message: string) => void): Promise<string> {
-  assertDestination(draft)
-  if (draft.pendingCommandId.length > 0 || bridge.pendingCommand(draft.hostId, draft.threadId).length > 0) throw new Error('操作正在提交，请稍后再试')
-  const text = draft.text.trim()
-  if (text.length == 0 && draft.images.length == 0 && draft.files.length == 0) throw new Error('请先输入内容或添加附件')
-  if (draft.projectId.length == 0) throw new Error('请先选择项目')
-  if (draft.threadId.length == 0) {
-    progress('正在创建聊天…')
-    const title = text.split('\n')[0].slice(0, 60)
-    await writeStep(draft, 'create', 'thread.create', { projectId: draft.projectId, title: title.length > 0 ? title : '新聊天' })
-    if (draft.threadId.length == 0) throw new Error('未取得聊天编号，请返回列表查看，按需重新发送')
-  }
-  progress('正在连接电脑聊天…')
-  assertDestination(draft)
-  await bridge.openCreatedThread(draft.threadId)
-  assertDestination(draft)
-  // 同一编辑流程的失败重试也不能向已被电脑端使用的会话发送新消息。
-  const snapshot = connection.snapshot
-  if (snapshot != null && snapshot.threadId == draft.threadId && (snapshot.messages.length > 0 || snapshot.activeTurnId.length > 0 || snapshot.status == 'active')) {
-    detachCreatedThread(draft)
-    throw new Error('原聊天已被使用，已解除关联；请再次发送以创建新聊天')
-  }
-  if (draft.settingsChanged && !draft.settingsApplied && draft.settings != null) {
-    if (connection.snapshot?.supportsExecutionSettings != true) throw new Error('请更新电脑连接服务后使用所选模型或计划模式')
-    progress('正在应用执行设置…')
-    await writeStep(draft, 'settings', 'thread.settings.update', { threadId: draft.threadId, changes: { model: draft.settings!.model, effort: draft.settings!.effort, serviceTier: draft.settings!.serviceTier, mode: draft.settings!.mode } })
-  }
-  if (draft.permissionMode.length > 0 && !draft.permissionsApplied) {
-    if (connection.snapshot?.supportsPermissionSettings != true) throw new Error('请更新电脑连接服务后应用所选权限')
-    progress('正在应用聊天权限…')
-    const current = JSON.parse<PermissionState>(JSON.stringify(await bridge.request('thread.permissions.read', { threadId: draft.threadId })))
-    assertDestination(draft)
-    if (current == null || current.revision.length == 0) throw new Error('无法核对电脑权限，草稿已保留')
-    await writeStep(draft, 'permissions', 'thread.permissions.update', { threadId: draft.threadId, mode: draft.permissionMode, expectedRevision: current.revision, confirmedFullAccess: draft.permissionConfirmed })
-  }
-  if (draft.images.length > 0 && connection.snapshot?.supportsImages != true) throw new Error('请更新电脑连接服务后发送图片')
-  progress('正在准备附件…')
-  await uploadNewFiles(draft)
-  const threadId = draft.threadId
-  saveDraft(draft.hostId, threadId, text); saveDraftImages(draft.hostId, threadId, draft.images.slice()); saveDraftFiles(draft.hostId, threadId, draft.files.slice())
-  if (draft.plugins.length > 0) saveDraftPlugins(draft.hostId, threadId, draft.plugins)
-  progress('正在发送…')
-  const params: UTSJSONObject = { threadId, text, images: draft.images.map((image: DraftImage): string => image.src), attachments: draft.files.map((file: DraftFile): string => file.id), expectedTurnId: '' }
-  if (draft.plugins.length > 0) params['pluginIds'] = draft.plugins.map((plugin: SelectedPlugin): string => plugin.id)
-  const request = writeStep(draft, 'send', 'turn.send', params)
-  const commandId = draft.pendingCommandId
-  rememberSubmission(draft.hostId, threadId, commandId, text)
-  try { await request; settleSubmission(draft.hostId, commandId, true); finishNewDraft(draft); return threadId }
-  catch (error) { if (bridge.pendingCommand(draft.hostId, threadId) != commandId) settleSubmission(draft.hostId, commandId, false); throw error }
+  draft.pendingAction = 'send'
+  try {
+    const state = nativeDraftState(draft.hostId, draft.projectId)
+    if (draft.projectId.length == 0) throw new Error('请先选择项目')
+    assertNativeDraftReady(state, true)
+    const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), plugins = draft.plugins.slice()
+    if (text.length == 0 && images.length == 0 && files.length == 0) throw new Error('请先输入内容或添加附件')
+    if (images.length + files.length > 3) throw new Error('每次最多添加3个附件')
+    if (plugins.length > 0) throw new Error('原生草稿暂不支持插件，请先移除插件后发送')
+    progress('正在核对电脑草稿…')
+    await readNativeDraft(state)
+    const draftId = state.draftId
+    assertDraftDestination(draft, state, draftId)
+    if (images.length > 0 && state.snapshot!.models.find((model): boolean => model.id == state.snapshot!.settings.model)?.supportsImages != true) throw new Error('当前模型不支持图片，请切换模型')
+    bindDraftAttachments(draft, draftId)
+    progress('正在上传草稿附件…')
+    for (const file of files) await uploadDraftAttachment(draft, state, draftId, file)
+    // 上传期间电脑也可能先发送或开始输入；最终提交前再次只读核对。
+    await readNativeDraft(state)
+    assertDraftDestination(draft, state, draftId)
+    progress('正在发送…')
+    // 图片沿用已有发送协议：prepareImage 产出每张最多320 KiB的PNG/JPEG data URI。
+    const message: UTSJSONObject = { text, images: images.map((image: DraftImage): string => image.src), attachments: files.map((file: DraftFile): string => file.id) }
+    const threadId = await sendNativeDraft(state, message)
+    // 成功发送与导航分别处理，导航失败也绝不能再次提交首条消息。
+    finishNewDraft(draft)
+    progress('正在打开聊天…')
+    await openPromotedConversation(draft, false)
+    return threadId
+  } finally { draft.pendingAction = ''; draft.pendingCommandId = ''; submitting.delete(key) }
 }

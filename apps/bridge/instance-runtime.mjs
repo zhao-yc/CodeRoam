@@ -16,6 +16,7 @@ import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { MacInstanceIpcClient, navigateMacInstance } from './macos-instance-client.mjs';
 import { withDesktopUi } from './desktop-ui-coordinator.mjs';
 import { NewThreadService } from './new-thread-service.mjs';
+import { NativeDraftController } from './native-draft-controller.mjs';
 import { ThreadCreationClient, instanceCodexPath } from './thread-creation.mjs';
 
 /** 固定到本次已核验进程和随机管道；管道丢失后不能选择另一个桌面代替。 */
@@ -59,6 +60,8 @@ export class InstanceRuntime {
     const desktopIdentity = { platform: instance.platform, executable: instance.executable };
     const newThreads = new NewThreadService({ codexHome: instance.codexHome, catalog: this.adapter.modelCatalog, creation: new ThreadCreationClient({ codexHome: instance.codexHome, resolveCli: () => instanceCodexPath(desktopIdentity) }) });
     this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });
+    this.agent.nativeDrafts.controller.close();
+    this.agent.nativeDrafts.controller=new NativeDraftController({adapter:this.adapter,instance,discover:async()=>instance.alive&&instance.port?[{pid:instance.pid,port:instance.port,executable:instance.executable}]:[]});
     this.agent.predictions.close();
     this.agent.predictions = new ComposerPredictionReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port }] : [] });
     this.agent.fileReports.close();

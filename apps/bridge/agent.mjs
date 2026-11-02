@@ -9,6 +9,8 @@ import { conversationUpdate } from './updates.mjs';
 import { computerName } from './computer-name.mjs';
 import { hostname } from 'node:os';
 import { NewThreadService } from './new-thread-service.mjs';
+import { NativeDraftController } from './native-draft-controller.mjs';
+import { NativeDraftService } from './native-draft-service.mjs';
 import { archiveThread } from './thread-archive.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
 import { deleteThread, deletionCommandStatus, retainDeletionTarget } from './thread-delete.mjs';
@@ -20,10 +22,12 @@ import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plu
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
-  constructor({ config, adapter, journal, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
+  constructor({ config, adapter, journal, nativeDrafts, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
     this.newThreads=newThreads;
+    this.nativeDrafts=nativeDrafts??new NativeDraftService({controller:new NativeDraftController({adapter}),projects:newThreads,attachments:adapter.attachments});
+    this.nativeDrafts.on('changed',({deviceId,snapshot})=>this.send({v:1,type:'thread.draft.changed',deviceId,snapshot}));
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     adapter.pluginCatalog ??= new PluginCatalog({ creation: newThreads.creation, verify: pluginInstanceVerifier(adapter, newThreads.creation) });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();this.fileReports=new DesktopFileReportReader();
@@ -89,7 +93,12 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.create.plugins')return readProjectPlugins(this.newThreads,this.adapter.pluginCatalog,message.params.projectId,this.adapter);
         if(message.method==='thread.plugins.read')return this.adapter.readPlugins(message.params.threadId,message.deviceId);
         if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
-        if(message.method==='projects.list')return this.newThreads.projects();
+        if(message.method==='projects.list')return {...this.newThreads.projects(),supportsNativeNewDraft:await this.nativeDrafts.controller.capabilities()};
+        if(message.method.startsWith('thread.draft.')) {
+          const action=message.method.slice('thread.draft.'.length);
+          if(action==='read'||action==='unwatch')return this.nativeDrafts[action](message.params,message.deviceId);
+          return this.nativeDrafts[action](message.params,message.deviceId,message.requestId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
+        }
         if(message.method==='thread.create.settings')return this.newThreads.settings(message.params.projectId);
         if(message.method==='thread.create')return this.newThreads.create(message.params.projectId,message.params.title,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
         if(message.method==='thread.archive') {
@@ -114,7 +123,7 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.history'&&message.params.view==='file-report')return this.fileReports.read(this.adapter,message.params,message.deviceId);
         if(message.method==='thread.settings.read')return this.adapter.readSettings(message.params.threadId,message.deviceId);
         if(message.method==='thread.goal.read')return this.adapter.readGoal(message.params.threadId,message.deviceId);
-        if(UPLOAD_METHODS.has(message.method))return this.adapter.transfer(message.method,message.params,message.deviceId);
+        if(UPLOAD_METHODS.has(message.method))return message.params.draftId?this.nativeDrafts.transfer(message.method,message.params,message.deviceId):this.adapter.transfer(message.method,message.params,message.deviceId);
         if(message.method==='threads.watch')return this.threadListFeed.watch(message.deviceId);
         if(message.method==='threads.unwatch')return this.threadListFeed.unwatch(message.deviceId);
         if(message.method==='threads.list') {
@@ -130,12 +139,12 @@ export class BridgeAgent extends EventEmitter {
           return {snapshot:event.snapshot??this.messageQueue?.decorate(snapshot)??snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
         }
         if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!this.adapter.conversations.has(message.params.threadId))this.published.delete(message.params.threadId);return result;}
-        if(message.method==='command.status') { const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
+        if(message.method==='command.status') { const draft=await this.nativeDrafts.commandStatus(this.journal,message.deviceId,message.params.commandId);if(draft.state!=='unknown')return draft;const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
         if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
         throw new BridgeError('METHOD_NOT_ALLOWED','此接口不支持通过电脑执行');
       };
       if(WRITE_METHODS.has(message.method)) {
-        const key=message.method==='thread.create'?'create:'+message.deviceId:message.params.threadId, previous=this.threadLocks.get(key)??Promise.resolve();
+        const key=message.method==='thread.create'?'create:'+message.deviceId:message.method.startsWith('thread.draft.')?'draft:'+(message.params.draftId??message.params.projectId):message.params.threadId, previous=this.threadLocks.get(key)??Promise.resolve();
         // 删除先入账并持有目标，再排队；立即返回、退订和断线均不依赖页面存活。
         if(message.method==='thread.delete') {
           const requestKey=JSON.stringify([message.deviceId,message.requestId]), fingerprint=requestFingerprint(message.method,message.params);
@@ -157,5 +166,5 @@ export class BridgeAgent extends EventEmitter {
     } catch(error) {response.error=errorPayload(error);}
     return response;
   }
-  async close(){this.stopped=true;this.messageQueue?.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.messageQueue?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

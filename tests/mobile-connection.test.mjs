@@ -11,7 +11,7 @@ function mobileFixture(storage=new Map()){
     const socket={callbacks:{},closeCount:0,close(){this.closeCount++;},onMessage(fn){this.callbacks.message=fn;},onClose(fn){this.callbacks.close=fn;},onError(fn){this.callbacks.error=fn;}};sockets.push(socket);return socket;
   }};
   const context=vm.createContext({uni,Map,Promise,Error,JSON,Math,Date,reactive:value=>value,setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
-  let source=fs.readFileSync(new URL('../apps/mobile/services/bridge.uts',import.meta.url),'utf8').replace(/^import .* from 'vue'\r?\n/m,'').replace(/\bexport /g,'');
+  let source=fs.readFileSync(new URL('../apps/mobile/services/bridge.uts',import.meta.url),'utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
   source=stripTypeScriptTypes(source,{mode:'transform'});vm.runInContext(source+'\nglobalThis.subject={MobileBridge,connection};',context);
   const {MobileBridge,connection}=context.subject,bridge=new MobileBridge();bridge.config={relayUrl:'wss://relay.example/ws',hostId:'pc',token:'s'.repeat(43)};
   return {bridge,connection,timers,sockets,storage,uni};

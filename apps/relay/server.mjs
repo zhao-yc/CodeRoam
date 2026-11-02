@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { MAX_MESSAGE_BYTES, WRITE_METHODS, validateRequest, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
+import { MAX_MESSAGE_BYTES, WRITE_METHODS, validateRequest, validateDraftId, validDraftRevision, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
 import { HostProfiles } from './host-profiles.mjs';
 import { HostInstances } from './host-instances.mjs';
 
@@ -58,6 +58,32 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
     return entry;
   };
 
+  const draftKey = (hostId, draftId) => JSON.stringify([hostId, draftId]);
+  const draftRead = method => method === 'thread.draft.open' || method === 'thread.draft.read';
+  const generationOf = hostId => instances.managed.has(instances.row(hostId)?.parentId ?? hostId) ? instances.row(hostId)?.generation : undefined;
+  /** 草稿事件必须匹配实际注册连接及实例代次，不能借父电脑连接伪造其他电脑的来源。 */
+  const draftSource = (socket, hostId, generation) => hosts.get(hostId) === socket && hostOnline(hostId) &&
+    (instances.managed.has(socket.identity.hostId) ? instances.owns(socket.identity.hostId, hostId, generation) : hostId === socket.identity.hostId && generation === undefined);
+  const draftSnapshot = snapshot => {
+    try {
+      validateDraftId(snapshot?.draftId);
+      return typeof snapshot.projectId === 'string' && snapshot.projectId.length > 0 && snapshot.projectId.length <= 200 && validDraftRevision(snapshot.revision) && ['ready', 'detached', 'promoted'].includes(snapshot.status);
+    } catch { return false; }
+  };
+  const draftViewer = (deviceId, key, watch) => [...mobiles].some(mobile => mobile.identity.id === deviceId && mobile.draftWatches.get(key)?.host === watch.host && mobile.draftWatches.get(key)?.generation === watch.generation);
+  /** 只释放仍属原连接、原代次的观察，不把旧草稿退订发送到新实例，更不删除电脑草稿。 */
+  const releaseDraft = (deviceId, watch) => {
+    if (draftViewer(deviceId, draftKey(watch.hostId, watch.draftId), watch) || !draftSource(watch.host, watch.hostId, watch.generation)) return;
+    send(watch.host, { v: 1, type: 'request', requestId: randomUUID(), transportId: randomUUID(), deviceId, hostId: watch.hostId, ...(watch.generation ? { generation: watch.generation } : {}), method: 'thread.draft.unwatch', params: { draftId: watch.draftId } });
+  };
+  /** 换代与重连均撤销草稿订阅；仅相同 generation 的新连接也不能继承旧连接的订阅。 */
+  const invalidateDrafts = predicate => {
+    for (const mobile of mobiles) {
+      for (const [key, watch] of mobile.draftWatches) if (predicate(watch)) mobile.draftWatches.delete(key);
+      for (const [key, watch] of mobile.draftReleases) if (predicate(watch)) mobile.draftReleases.delete(key);
+    }
+  };
+
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, 'http://localhost');
     let identity=authenticate(request);
@@ -76,6 +102,9 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       client.alive = true;
       client.watches = new Set();
       client.listWatches = new Set();
+      client.draftWatches = new Map();
+      client.draftReleases = new Map();
+      client.draftSequence = 0;
       client.on('pong', () => { client.alive = true; });
       sockets.emit('connection', client);
     });
@@ -85,6 +114,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
     const identity = socket.identity;
     if (identity.role === 'host') {
       const previous = hosts.get(identity.hostId);
+      if (previous) invalidateDrafts(watch => watch.host === previous);
       if (previous) for (const [id, connection] of hosts) if (connection === previous) hosts.delete(id);
       instances.disconnect(identity.hostId);
       hosts.set(identity.hostId, socket);
@@ -118,6 +148,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
             for (const [id, entry] of pending) if (entry.host === socket && (!hostOnline(entry.hostId) || entry.generation && instances.row(entry.hostId)?.generation !== entry.generation)) {
               complete(id); fail(entry.mobile, entry.requestId, new BridgeError(WRITE_METHODS.has(entry.method) ? 'OUTCOME_UNKNOWN' : 'INSTANCE_CHANGED', '实例连接已变化，请先核对原操作', WRITE_METHODS.has(entry.method)));
             }
+            invalidateDrafts(watch => watch.host === socket && !draftSource(socket, watch.hostId, watch.generation));
             notifyHosts();
           } catch { socket.close(1008, '实例清单或归属无效'); }
           return;
@@ -126,10 +157,46 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           const entry = pending.get(message.transportId);
           if (!entry || entry.host !== socket) return;
           if (entry.generation && (message.hostId !== entry.hostId || message.generation !== entry.generation || !instances.owns(identity.hostId, entry.hostId, entry.generation))) return;
+          if (entry.method.startsWith('thread.draft.') && !draftSource(socket, entry.hostId, entry.generation)) return;
           complete(message.transportId);
+          if (!message.error && draftRead(entry.method) && (!draftSnapshot(message.result) || (entry.method === 'thread.draft.read' ? message.result.draftId !== entry.draftId : message.result.projectId !== entry.projectId))) {
+            fail(entry.mobile, entry.requestId, new BridgeError('BAD_DRAFT_RESPONSE', '电脑返回的草稿与原请求不匹配，请重新核对')); return;
+          }
+          if (entry.method.startsWith('thread.draft.') && !instances.authorized(entry.mobile.identity.hostIds, entry.hostId)) {
+            if (!message.error && draftRead(entry.method)) releaseDraft(entry.mobile.identity.id, { host: socket, hostId: entry.hostId, generation: entry.generation, draftId: message.result.draftId });
+            fail(entry.mobile, entry.requestId, new BridgeError('HOST_FORBIDDEN', '这台电脑已不在当前手机的授权范围内')); return;
+          }
           if (message.error && entry.method === 'threads.watch') entry.mobile.listWatches.delete(entry.hostId);
           if (message.error && entry.method === 'thread.watch') entry.mobile.watches.delete(`${entry.hostId}:${entry.threadId}`);
+          if (!message.error && draftRead(entry.method) && draftSnapshot(message.result)) {
+            const snapshot = message.result, key = draftKey(entry.hostId, snapshot.draftId);
+            const matches = entry.method === 'thread.draft.read' ? snapshot.draftId === entry.draftId : snapshot.projectId === entry.projectId;
+            if (matches) {
+              const watch = { host: socket, hostId: entry.hostId, generation: entry.generation, draftId: snapshot.draftId, projectId: snapshot.projectId, sequence: entry.draftSequence };
+              const released = entry.mobile.draftReleases.get(key);
+              if (mobiles.has(entry.mobile) && entry.mobile.readyState === WebSocket.OPEN && instances.authorized(entry.mobile.identity.hostIds, entry.hostId) && !(released?.host === socket && released.generation === entry.generation && released.sequence > entry.draftSequence)) {
+                const existing = entry.mobile.draftWatches.get(key);
+                if (!existing || existing.sequence < watch.sequence) entry.mobile.draftWatches.set(key, watch);
+              } else releaseDraft(entry.mobile.identity.id, watch);
+            }
+          }
+          if (!message.error && entry.method === 'thread.draft.unwatch' && message.result?.ok === true) {
+            const key = draftKey(entry.hostId, entry.draftId), current = entry.mobile.draftWatches.get(key);
+            if (!current || current.sequence <= entry.draftSequence) entry.mobile.draftWatches.delete(key);
+            entry.mobile.draftReleases.set(key, { host: socket, hostId: entry.hostId, generation: entry.generation, sequence: entry.draftSequence });
+          }
           send(entry.mobile, { v: 1, type: 'response', requestId: entry.requestId, result: message.result, error: message.error });
+        } else if (message.type === 'thread.draft.changed') {
+          if (message.v !== 1 || typeof message.deviceId !== 'string' || !draftSnapshot(message.snapshot)) return;
+          const hostId = message.hostId ?? identity.hostId;
+          if (!draftSource(socket, hostId, message.generation)) return;
+          const key = draftKey(hostId, message.snapshot.draftId);
+          for (const mobile of mobiles) {
+            const watch = mobile.draftWatches.get(key);
+            if (mobile.identity.id === message.deviceId && instances.authorized(mobile.identity.hostIds, hostId) && watch?.host === socket && watch.generation === message.generation && watch.projectId === message.snapshot.projectId) {
+              send(mobile, { v: 1, type: 'thread.draft.changed', deviceId: message.deviceId, hostId, ...(message.generation ? { generation: message.generation } : {}), snapshot: message.snapshot });
+            }
+          }
         } else if (message.type === 'threads.event' && Array.isArray(message.threads)) {
           const hostId = instances.managed.has(identity.hostId) ? message.hostId : identity.hostId;
           if (instances.managed.has(identity.hostId) && !instances.owns(identity.hostId, hostId, message.generation)) return;
@@ -156,6 +223,17 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         if (!host || !hostOnline(message.hostId)) throw new BridgeError('HOST_OFFLINE', instances.row(message.hostId)?.reason || '电脑或实例尚未连接，请确认已启动连接服务');
         if (pending.size >= 1024 || [...pending.values()].filter(entry => entry.mobile === socket).length >= 16) throw new BridgeError('BUSY', '待处理请求过多，请稍后重试');
         const transportId = randomUUID();
+        const generation = generationOf(message.hostId);
+        const draftSequence = message.method.startsWith('thread.draft.') ? ++socket.draftSequence : undefined;
+        // 同配对多标签页仅释放当前观看者，最后一个观看者才通知电脑停止轮询。
+        if (message.method === 'thread.draft.unwatch') {
+          const key = draftKey(message.hostId, message.params.draftId), watch = { host, hostId: message.hostId, generation, draftId: message.params.draftId };
+          const shared = [...mobiles].some(other => other !== socket && other.identity.id === identity.id && other.draftWatches.get(key)?.host === host && other.draftWatches.get(key)?.generation === generation);
+          if (shared) {
+            socket.draftWatches.delete(key); socket.draftReleases.set(key, { ...watch, sequence: draftSequence });
+            send(socket, { v: 1, type: 'response', requestId: message.requestId, result: { ok: true } }); return;
+          }
+        }
         const key = `${message.hostId}:${message.params.threadId}`;
         if (message.method === 'threads.watch') socket.listWatches.add(message.hostId);
         if (message.method === 'threads.unwatch') socket.listWatches.delete(message.hostId);
@@ -169,13 +247,13 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           const entry = complete(transportId);
           if (entry) fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method)));
         }, message.method === 'thread.delete' ? Math.max(60000, requestTimeoutMs) : message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
-        const generation = instances.managed.has(instances.row(message.hostId)?.parentId ?? message.hostId) ? instances.row(message.hostId)?.generation : undefined;
-        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, timer });
+        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, timer });
         send(host, { ...message, deviceId: identity.id, transportId, ...(generation ? { generation } : {}) });
       } catch (error) { fail(socket, message.requestId, error); }
     });
     socket.on('close', () => {
       mobiles.delete(socket);
+      if (identity.role === 'mobile') for (const watch of socket.draftWatches.values()) releaseDraft(identity.id, watch);
       // 释放已离线手机的只读订阅；同一身份的其他在线连接仍在观看时保留。
       if(identity.role==='mobile')for(const key of socket.watches){
         if([...mobiles].some(other=>other.identity.id===identity.id&&other.watches.has(key)))continue;
@@ -187,8 +265,13 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const host=hosts.get(hostId);
         if(host)send(host,{v:1,type:'request',requestId:randomUUID(),transportId:randomUUID(),deviceId:identity.id,hostId,generation:instances.row(hostId)?.generation,method:'threads.unwatch',params:{}});
       }
-      if (identity.role === 'host' && hosts.get(identity.hostId) === socket) { for (const [id, connection] of hosts) if (connection === socket) hosts.delete(id); instances.disconnect(identity.hostId); notifyHosts(); }
+      if (identity.role === 'host' && hosts.get(identity.hostId) === socket) { invalidateDrafts(watch => watch.host === socket); for (const [id, connection] of hosts) if (connection === socket) hosts.delete(id); instances.disconnect(identity.hostId); notifyHosts(); }
       for (const [id, entry] of pending) if (entry.host === socket || entry.mobile === socket) {
+        // 打开回执可能晚于手机断线，保留 transport 到原超时，以便拿到编号后只转发 unwatch。
+        if (entry.mobile === socket && entry.host !== socket && draftRead(entry.method)) {
+          if (entry.draftId) releaseDraft(identity.id, { host: entry.host, hostId: entry.hostId, generation: entry.generation, draftId: entry.draftId });
+          continue;
+        }
         complete(id);
         if (entry.mobile !== socket) fail(entry.mobile, entry.requestId, new BridgeError(WRITE_METHODS.has(entry.method) ? 'OUTCOME_UNKNOWN' : 'HOST_OFFLINE', '电脑连接已断开，请先核对会话状态', WRITE_METHODS.has(entry.method)));
       }

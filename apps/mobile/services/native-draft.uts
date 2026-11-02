@@ -1,0 +1,231 @@
+import { reactive } from 'vue'
+import { bridge, connection } from './bridge.uts'
+import { ExecutionSettings, ModelOption } from './execution-settings.uts'
+import { PermissionState } from './permissions.uts'
+
+// revision 是服务端的不透明版本，原样回传，不与权限自身的版本混用。
+export type NativeDraftRevision = string | number
+export type NativeDraftSnapshot = { draftId: string, projectId: string, revision: NativeDraftRevision, status: string, settings: ExecutionSettings, models: ModelOption[], permissions: PermissionState, threadId?: string, hasDesktopText: boolean }
+export type NativeDraftState = { hostId: string, projectId: string, cacheNamespace: string, draftId: string, snapshot: NativeDraftSnapshot | null, watching: boolean, busy: boolean, operations: number, needsReadback: boolean, error: string, outcomeUnknown: boolean, pendingCommandId: string, pendingAction: string, session: number, version: number }
+type NativeDraftPending = { draftId: string, commandId: string, action: string }
+const nativeDrafts = reactive<NativeDraftState[]>([])
+const openingDrafts = new Map<string, Promise<UTSJSONObject>>()
+
+// 每台电脑、每个项目保留独立的原生编号；收起编辑区不会丢弃电脑草稿。
+export function nativeDraftState(hostId: string, projectId: string): NativeDraftState {
+  const cacheNamespace = connection.cacheNamespace ?? ''
+  const found = nativeDrafts.find((entry: NativeDraftState): boolean => entry.hostId == hostId && entry.projectId == projectId && entry.cacheNamespace == cacheNamespace)
+  if (found != null) return found
+  const state: NativeDraftState = { hostId, projectId, cacheNamespace, draftId: '', snapshot: null, watching: false, busy: false, operations: 0, needsReadback: false, error: '', outcomeUnknown: false, pendingCommandId: '', pendingAction: '', session: 0, version: 0 }
+  // 仅保存核对所需编号，不持久化文字、图片或插件。刷新也不能遗失未知写保护。
+  try {
+    const saved = uni.getStorageSync(nativePendingKey(state))
+    if (typeof saved == 'string' && saved.length > 0) {
+      const pending = JSON.parse<NativeDraftPending>(saved)
+      if (pending != null && ['open', 'update', 'send'].indexOf(pending.action) >= 0) { state.draftId = pending.draftId; state.pendingAction = pending.action; state.pendingCommandId = pending.commandId; state.outcomeUnknown = true; state.needsReadback = true; state.error = '上次操作结果需要核对，请勿重复提交' }
+    }
+  } catch (_) { state.outcomeUnknown = true; state.error = '无法读取原生操作核对信息，请检查本地存储并核对电脑端' }
+  nativeDrafts.push(state)
+  return nativeDrafts[nativeDrafts.length - 1]
+}
+
+function nativePendingKey(state: NativeDraftState): string { return 'codex-mobile-native-pending-' + state.cacheNamespace + ':' + state.hostId + ':' + state.projectId }
+function saveNativePending(state: NativeDraftState) { uni.setStorageSync(nativePendingKey(state), JSON.stringify({ draftId: state.draftId, commandId: state.pendingCommandId, action: state.pendingAction })) }
+// 共享 open 的多个观察者分别收口，迟到读取不能提前解除另一个操作的 busy。
+function beginNativeOperation(state: NativeDraftState) { state.operations++; state.busy = true }
+function endNativeOperation(state: NativeDraftState) { state.operations--; state.busy = state.operations > 0 }
+
+function assertNativeHost(state: NativeDraftState) {
+  if (connection.hostId != state.hostId || (connection.cacheNamespace ?? '') != state.cacheNamespace || !connection.connected || !connection.computers.some((computer): boolean => computer.id == state.hostId && computer.online)) throw new Error('电脑连接已变化，请重新连接原生草稿')
+}
+function currentNativeSession(state: NativeDraftState, session: number): boolean { return state.watching && state.session == session && connection.hostId == state.hostId && (connection.cacheNamespace ?? '') == state.cacheNamespace && connection.connected }
+function parseNativeSnapshot(raw: UTSJSONObject, projectId: string): NativeDraftSnapshot {
+  const snapshot = JSON.parse<NativeDraftSnapshot>(JSON.stringify(raw['snapshot'] ?? raw))
+  if (snapshot == null || snapshot.draftId.length == 0 || snapshot.projectId != projectId || (typeof snapshot.revision != 'string' && typeof snapshot.revision != 'number') || ['ready', 'detached', 'promoted'].indexOf(snapshot.status) < 0 || snapshot.settings == null || !Array.isArray(snapshot.models) || snapshot.permissions == null || typeof snapshot.hasDesktopText != 'boolean') throw new Error('原生草稿快照无效，请更新电脑连接服务')
+  if (snapshot.status == 'promoted' && (snapshot.threadId ?? '').length == 0) throw new Error('原生草稿缺少已创建的聊天编号')
+  return snapshot
+}
+function acceptNativeSnapshot(state: NativeDraftState, snapshot: NativeDraftSnapshot) {
+  if (state.draftId.length > 0 && snapshot.draftId != state.draftId) return
+  const previous = state.snapshot
+  const oldRevision = previous?.revision
+  if (previous?.status == 'promoted' && snapshot.status != 'promoted') return
+  if (typeof oldRevision == 'number' && typeof snapshot.revision == 'number' && snapshot.revision < oldRevision) return
+  state.draftId = snapshot.draftId; state.snapshot = snapshot; state.version++
+  state.error = snapshot.status == 'detached' ? '电脑已切换项目或离开草稿，同步已暂停，请手动重新连接' : ''
+}
+
+// bridge 的 thread.draft.changed 入口调用此函数；不建立手机轮询或隐式写请求。
+export function applyNativeDraftSnapshot(snapshot: UTSJSONObject, hostId: string) {
+  if (hostId != connection.hostId) return
+  const projectId = snapshot.getString('projectId') ?? ''
+  const state = nativeDrafts.find((entry: NativeDraftState): boolean => entry.hostId == hostId && entry.projectId == projectId && entry.cacheNamespace == (connection.cacheNamespace ?? '') && entry.watching)
+  if (state == null || state.pendingAction == 'update') return
+  try { acceptNativeSnapshot(state, parseNativeSnapshot(snapshot, projectId)) }
+  catch (_) { state.error = '收到无效的原生草稿状态，请重新读取' }
+}
+
+// unwatch 先在原电脑发送；取消订阅只结束观察，不关闭电脑上的原生编辑器。
+export function closeNativeDraft(hostId: string, projectId: string) {
+  for (const state of nativeDrafts) {
+    if (state.hostId != hostId || state.projectId != projectId) continue
+    state.watching = false; state.session++
+    if (state.draftId.length > 0 && state.cacheNamespace == (connection.cacheNamespace ?? '') && connection.connected && connection.hostId == hostId) bridge.request('thread.draft.unwatch', { draftId: state.draftId }).then((_: UTSJSONObject) => {}, (_: Error) => {})
+  }
+}
+
+// 所有写操作保留原始命令编号；异常只能查账，禁止自动重放 open/update/send。
+async function writeNativeDraft(state: NativeDraftState, action: string, method: string, params: UTSJSONObject): Promise<UTSJSONObject> {
+  assertNativeHost(state)
+  if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
+  if (bridge.pendingCommand(state.hostId, '').length > 0) throw new Error('操作正在提交，请稍后再试')
+  state.pendingAction = action
+  // 在发出请求前验证存储，不能等提交后才发现无法保存未知结果的核对入口。
+  try { saveNativePending(state) }
+  catch (_) { throw new Error('无法保存原生操作核对信息，请检查本地存储后重试') }
+  const request = bridge.request(method, params, true)
+  state.pendingCommandId = bridge.pendingCommand(state.hostId, '')
+  try { saveNativePending(state) } catch (_) {}
+  try { return await request }
+  catch (reason) {
+    state.outcomeUnknown = true; state.error = (reason as Error).message + '；请核对原操作结果，勿重复提交'
+    throw new Error(state.error)
+  }
+}
+function settleNativeWrite(state: NativeDraftState) { if (!state.outcomeUnknown) { try { uni.removeStorageSync(nativePendingKey(state)) } catch (_) {}; state.pendingCommandId = ''; state.pendingAction = '' } }
+
+// read 同时恢复后端订阅；只有当前展开、当前电脑、当前项目能接收异步结果。
+export async function readNativeDraft(state: NativeDraftState): Promise<NativeDraftSnapshot> {
+  assertNativeHost(state)
+  if (!state.watching || state.draftId.length == 0) throw new Error('请先连接电脑原生草稿')
+  const session = state.session, version = state.version
+  const result = await bridge.request('thread.draft.read', { draftId: state.draftId })
+  if (!currentNativeSession(state, session)) throw new Error('草稿目标已切换，已忽略旧读取结果')
+  const snapshot = parseNativeSnapshot(result, state.projectId)
+  if (snapshot.draftId != state.draftId) throw new Error('电脑草稿已变化，请手动重新连接')
+  if (state.version == version) acceptNativeSnapshot(state, snapshot)
+  state.needsReadback = false
+  return state.snapshot ?? snapshot
+}
+
+// 仅在用户展开并确定项目或点击重新连接时调用。重开同一草稿只 read。
+export async function watchNativeDraft(hostId: string, projectId: string, reconnect: boolean = false): Promise<NativeDraftSnapshot> {
+  const state = nativeDraftState(hostId, projectId)
+  assertNativeHost(state)
+  if (projectId.length == 0) throw new Error('请先选择项目')
+  for (const previous of nativeDrafts) if (previous.watching && previous != state) closeNativeDraft(previous.hostId, previous.projectId)
+  if (!state.watching) { state.watching = true; state.session++ }
+  const session = state.session
+  if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重新打开草稿')
+  const key = nativePendingKey(state)
+  if (state.busy && !openingDrafts.has(key)) throw new Error('原生草稿正在同步，请稍后再试')
+  beginNativeOperation(state); state.error = ''
+  try {
+    if (state.draftId.length == 0 || reconnect || openingDrafts.has(key)) {
+      let request = openingDrafts.get(key)
+      if (request == null) {
+        request = writeNativeDraft(state, 'open', 'thread.draft.open', { projectId })
+        openingDrafts.set(key, request)
+      }
+      const result = await request
+      let snapshot: NativeDraftSnapshot
+      try { snapshot = parseNativeSnapshot(result, projectId) }
+      catch (reason) { state.outcomeUnknown = true; throw reason }
+      // 迟到的 open 仅记住原项目编号，不能更新新目标的展示或触发下一步写操作。
+      state.draftId = snapshot.draftId
+      if (!currentNativeSession(state, session)) {
+        if (!state.watching && connection.hostId == hostId && connection.connected) bridge.request('thread.draft.unwatch', { draftId: snapshot.draftId }).then((_: UTSJSONObject) => {}, (_: Error) => {})
+        throw new Error('草稿目标已切换，已忽略旧打开结果')
+      }
+      if (state.snapshot?.draftId != snapshot.draftId) state.snapshot = null
+      acceptNativeSnapshot(state, snapshot)
+    }
+    return await readNativeDraft(state)
+  } catch (reason) { if (currentNativeSession(state, session)) state.error = (reason as Error).message; throw reason }
+  finally { openingDrafts.delete(key); endNativeOperation(state); settleNativeWrite(state) }
+}
+
+// 断开或已提升的草稿不能更新或提交，电脑已有文字也不能由手机覆盖。
+export function assertNativeDraftReady(state: NativeDraftState, sending: boolean = false) {
+  assertNativeHost(state)
+  if (!state.watching || state.snapshot == null || state.snapshot!.status != 'ready') throw new Error(state.snapshot?.status == 'promoted' ? '电脑已发送此草稿，请打开对应聊天；手机输入已保留' : '原生草稿同步已暂停，请手动重新连接')
+  if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
+  if (state.needsReadback) throw new Error('执行设置尚未回读确认，请先重新读取电脑草稿')
+  if (sending && state.snapshot!.hasDesktopText) throw new Error('电脑草稿已有内容，请先在电脑处理；手机不会覆盖电脑输入')
+}
+
+// 手机只提交变更，显示值必须来自随后 read 的完整快照，不能乐观冒充同步成功。
+export async function updateNativeDraft(state: NativeDraftState, changes: UTSJSONObject, confirmedFullAccess: boolean = false): Promise<NativeDraftSnapshot> {
+  assertNativeDraftReady(state)
+  if (state.busy) throw new Error('原生草稿正在同步，请稍后再试')
+  if (changes['permissionMode'] == 'full-access' && !confirmedFullAccess) throw new Error('请先确认电脑完整访问权限')
+  const session = state.session
+  beginNativeOperation(state); state.needsReadback = true; state.error = ''
+  try {
+    await writeNativeDraft(state, 'update', 'thread.draft.update', { draftId: state.draftId, expectedRevision: state.snapshot!.revision, changes, confirmedFullAccess })
+    if (!currentNativeSession(state, session)) throw new Error('草稿目标已切换，已忽略旧设置结果')
+    return await readNativeDraft(state)
+  } catch (reason) { if (currentNativeSession(state, session)) state.error = (reason as Error).message; throw reason }
+  finally { endNativeOperation(state); settleNativeWrite(state) }
+}
+
+// 首条消息只有一个原生提交入口；服务端确认 threadId 后只订阅正式聊天。
+export async function sendNativeDraft(state: NativeDraftState, message: UTSJSONObject): Promise<string> {
+  assertNativeDraftReady(state, true)
+  if (state.busy) throw new Error('原生草稿正在同步，请稍后再试')
+  // 原生输入暂未开放插件传输，不能静默忽略用户选择或改用旧创建通道。
+  if (message['plugins'] != null) throw new Error('原生草稿暂不支持插件，请先移除插件后发送')
+  const session = state.session
+  beginNativeOperation(state); state.error = ''
+  try {
+    const params: UTSJSONObject = { draftId: state.draftId, expectedRevision: state.snapshot!.revision, text: message['text'], images: message['images'], attachments: message['attachments'] }
+    const result = await writeNativeDraft(state, 'send', 'thread.draft.send', params)
+    const threadId = result.getString('threadId') ?? ''
+    if (threadId.length == 0) { state.outcomeUnknown = true; state.error = '未取得聊天编号，请核对原发送结果，勿重复提交'; throw new Error(state.error) }
+    acceptNativeSnapshot(state, { ...state.snapshot!, status: 'promoted', threadId } as NativeDraftSnapshot)
+    if (!currentNativeSession(state, session)) throw new Error('草稿目标已切换，手机输入已保留，请核对原聊天')
+    return threadId
+  } finally { endNativeOperation(state); settleNativeWrite(state) }
+}
+
+// 未知、进行中和查无记录都保持写保护；仅账本明确 done/failed 才能解除。
+export async function checkNativeDraftCommand(state: NativeDraftState): Promise<string> {
+  assertNativeHost(state)
+  if (!state.outcomeUnknown || state.pendingCommandId.length == 0 || state.busy) throw new Error('暂无可核对的原操作编号，请核对电脑端')
+  const session = state.session, action = state.pendingAction, commandId = state.pendingCommandId
+  beginNativeOperation(state)
+  try {
+    const status = await bridge.request('command.status', { commandId })
+    if (!currentNativeSession(state, session)) throw new Error('草稿目标已切换，核对结果未应用')
+    let outcome = status.getString('state') ?? ''
+    // 现有 Journal 用 done + error 表示确定失败，不能误当成功或永远锁住草稿。
+    const failure = status['error'] as UTSJSONObject | null
+    if (outcome == 'done' && failure != null) {
+      if (failure.getBoolean('outcomeUnknown') == true) throw new Error('原操作结果仍待核对，请勿重复提交')
+      outcome = 'failed'
+    }
+    if (outcome != 'done' && outcome != 'failed') throw new Error('原操作结果仍待核对，请勿重复提交')
+    const result = (status['result'] ?? {}) as UTSJSONObject
+    if (outcome == 'done' && action == 'open') state.draftId = parseNativeSnapshot(result, state.projectId).draftId
+    const threadId = outcome == 'done' && action == 'send' ? result.getString('threadId') ?? '' : ''
+    if (outcome == 'done' && action == 'send' && threadId.length == 0) throw new Error('原发送回执缺少聊天编号，请继续核对')
+    if (state.draftId.length > 0) await readNativeDraft(state)
+    if (threadId.length > 0) {
+      if (state.snapshot == null) throw new Error('原发送已确认，请继续读取电脑聊天状态')
+      acceptNativeSnapshot(state, { ...state.snapshot!, status: 'promoted', threadId } as NativeDraftSnapshot)
+    }
+    bridge.clearCommand(commandId, state.hostId)
+    state.outcomeUnknown = false; state.error = ''
+    settleNativeWrite(state)
+    if (outcome == 'failed') state.error = '原操作已确认失败，草稿已保留；可由用户重新操作'
+    return threadId
+  } catch (reason) { if (currentNativeSession(state, session)) state.error = (reason as Error).message; throw reason }
+  finally { endNativeOperation(state) }
+}
+
+// 导航完成后才消费 promotion；下次用户展开可开始新的原生草稿。
+export function acknowledgeNativeDraftPromotion(state: NativeDraftState) {
+  if (state.snapshot?.status != 'promoted' || state.outcomeUnknown) return
+  closeNativeDraft(state.hostId, state.projectId)
+  state.draftId = ''; state.snapshot = null; state.error = ''
+}

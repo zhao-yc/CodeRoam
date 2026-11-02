@@ -68,21 +68,20 @@ test('插件选择上限与发送协议一致，到达上限后仍可取消并�
 
 /** 草稿及新建编排使用同一套实际实现，验证成功回执的选择清理边界。 */
 function draftFixture() {
-  const calls = []; let command = 0, failSend = false;
+  const calls = [];
   const connection = { hostId: 'computer-a', connected: true, computers: [{ id: 'computer-a', online: true }], snapshot: null };
-  const bridge = { commandId: '', pendingCommand: () => bridge.commandId,
-    request(method, params) {
-      calls.push({ method, params }); bridge.commandId = 'command-' + ++command;
-      return Promise.resolve().then(() => {
-        bridge.commandId = ''; if (method === 'turn.send' && failSend) throw new Error('发送未成功');
-        return { getString: key => key === 'threadId' ? 'created-thread' : null };
-      });
-    },
-    async openCreatedThread(threadId) { connection.snapshot = { threadId, messages: [], status: 'idle', activeTurnId: '' }; },
-  };
-  const c = vm.createContext({ reactive: value => value, connection, bridge, uni: { removeStorageSync() {} } });
+  // 此处模拟已展开并连接的原生草稿，只替换新建编排导入的状态 API。
+  const native = { hostId: 'computer-a', projectId: 'project', draftId: 'example-native-draft', watching: true, snapshot: { status: 'ready', revision: 1, hasDesktopText: false } };
+  const bridge = { async openThread(threadId) { calls.push({ method: 'thread.watch', params: { threadId } }); } };
+  const c = vm.createContext({ reactive: value => value, connection, bridge, uni: { removeStorageSync() {} },
+    nativeDraftState: () => native,
+    assertNativeDraftReady(state) { if (!state.watching || state.snapshot.status !== 'ready') throw Error('原生草稿未就绪'); },
+    async readNativeDraft(state) { calls.push({ method: 'thread.draft.read', params: { draftId: state.draftId } }); return state.snapshot; },
+    async sendNativeDraft(state, message) { calls.push({ method: 'thread.draft.send', params: plain(message) }); state.snapshot = { ...state.snapshot, status: 'promoted', threadId: 'created-thread' }; return 'created-thread'; },
+    acknowledgeNativeDraftPromotion(state) { state.watching = false; },
+  });
   vm.runInContext(compile(read('apps/mobile/services/composer.uts') + '\n' + read('apps/mobile/services/new-conversation.uts')) + '\nglobalThis.subject={readDraftPlugins,saveDraftPlugins,rememberSubmission,settleSubmission,clearDeletedDrafts,newDraft,sendNewConversation,beginNewConversation};', c);
-  return { ui: c.subject, calls, fail: value => { failSend = value; } };
+  return { ui: c.subject, calls };
 }
 
 test('插件草稿按电脑与会话隔离，失败及未知保留，旧回执不清理重新选择的插件', () => {
@@ -98,13 +97,14 @@ test('插件草稿按电脑与会话隔离，失败及未知保留，旧回执�
   ui.clearDeletedDrafts('computer-b', ['thread']); assert.equal(ui.readDraftPlugins('computer-b', 'thread').length, 0);
 });
 
-test('新对话插件随首条消息发送，失败保留原选择，重试成功清空且不重复创建', async () => {
+test('新对话原生通道未开放插件时明确拒绝并保留选择，移除插件后才发送首条消息', async () => {
   const f = draftFixture(), draft = f.ui.newDraft('computer-a', 'project'); draft.text = '整理需求'; draft.plugins = [{ id: 'docs@example', displayName: '文档工具' }];
   assert.equal(f.ui.newDraft('computer-a', 'other').plugins.length, 0);
-  f.fail(true); await assert.rejects(f.ui.sendNewConversation(draft, () => {}), /发送未成功/);
-  assert.equal(draft.plugins.length, 1); assert.deepEqual(plain(f.calls.at(-1).params.pluginIds), ['docs@example']);
-  f.fail(false); await f.ui.sendNewConversation(draft, () => {});
-  assert.equal(draft.plugins.length, 0); assert.equal(f.calls.filter(call => call.method === 'thread.create').length, 1);
+  await assert.rejects(f.ui.sendNewConversation(draft, () => {}), /原生草稿暂不支持插件/);
+  assert.deepEqual(plain(draft.plugins), [{ id: 'docs@example', displayName: '文档工具' }]); assert.equal(draft.text, '整理需求'); assert.equal(f.calls.length, 0);
+  draft.plugins = []; await f.ui.sendNewConversation(draft, () => {});
+  assert.equal(draft.plugins.length, 0); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
+  assert.equal(f.calls.some(call => call.method === 'thread.create' || call.method === 'turn.send'), false);
 });
 
 test('只选择插件不会创建空对话或发送消息', async () => {

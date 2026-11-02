@@ -127,8 +127,15 @@ test('已有会话仍以快照显示权限且菜单每次刷新，不在挂载�
  f.openMenu(); await settle(); assert.equal(f.calls.length, 2);
 });
 
-test('新建权限自动加载跟随展开状态，默认值不写入手动权限草稿', () => {
+test('新建权限跟随原生状态及展开状态，只在用户select后更新，不默写本地权限', () => {
  const source = fs.readFileSync('apps/mobile/components/new-conversation/new-conversation.uvue', 'utf8');
- assert.match(source, /<permissions-control :active="props.expanded" :project-id="projectId" :selected-mode="draft.permissionMode"/);
+ const binding = source.match(/<permissions-control\b[\s\S]*?\/>/)?.[0] ?? '';
+ for (const prop of [':active="props.expanded"', ':project-id="projectId"', ':native-draft="true"', ':draft-id="native.draftId"', ':native-state="native.snapshot?.permissions ?? null"', ':native-status="native.snapshot?.status ?? \'\'"', '@select="selectPermission"']) assert.ok(binding.includes(prop), prop);
+ assert.doesNotMatch(binding, /selected-mode/);
+ assert.doesNotMatch(source, /draft\.value\.(?:permissionMode|permissionConfirmed)\s*=/);
  assert.doesNotMatch(source, /@(?:load|loaded|change)="selectPermission"/);
+ const f = fixture({ initialProps: { threadId: '', projectId: 'project', nativeDraft: true, draftId: 'native-draft', nativeState: { mode: 'full-access', revision: 'native-permission-1', options: [{ id: 'full-access', enabled: true }] }, nativeStatus: 'ready' } });
+ assert.equal(f.mode.value, 'full-access'); assert.equal(f.props.selectedMode, ''); assert.deepEqual(f.calls, []); assert.deepEqual(f.events, []);
+ f.props.nativeState = { ...f.props.nativeState, mode: 'read-only', revision: 'native-permission-2' }; f.sync();
+ assert.equal(f.mode.value, 'read-only'); assert.equal(f.props.selectedMode, ''); assert.deepEqual(f.calls, []); assert.deepEqual(f.events, []);
 });

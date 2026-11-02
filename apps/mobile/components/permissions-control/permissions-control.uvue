@@ -21,16 +21,17 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
-const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true })
-const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean] }>()
+const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false })
+const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean], refresh: [] }>()
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
 const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
 let alive = true, request = 0
 // 新建权限不依赖已有会话订阅；展开、联网及电脑在线状态均参与请求失效判断。
-const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + (props.threadId.length > 0 ? connection.subscriptionRevision.toString() : '') + ':' + connection.connected.toString() + ':' + props.active.toString() + ':' + available.value.toString())
-const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : 'new'))
-const available = computed((): boolean => props.active && connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
-const mode = computed((): string => props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
+const isNative = computed((): boolean => props.nativeDraft == true || (props.draftId ?? '').length > 0 || props.nativeState != null)
+const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + props.draftId + ':' + props.nativeStatus + ':' + (props.nativeState?.revision ?? '') + ':' + (props.threadId.length > 0 ? connection.subscriptionRevision.toString() : '') + ':' + connection.connected.toString() + ':' + props.active.toString() + ':' + available.value.toString())
+const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : (props.draftId ?? '').length > 0 ? props.draftId! : 'new'))
+const available = computed((): boolean => props.active && connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (isNative.value ? (props.draftId ?? '').length > 0 && props.nativeState != null && props.nativeStatus == 'ready' : props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
+const mode = computed((): string => isNative.value ? props.nativeState?.mode ?? 'unknown' : props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
 const label = computed((): string => loading.value ? '正在读取电脑权限…' : permissionLabel(mode.value))
 const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0)
 // 权限图标统一使用随包线性 PNG，不依赖系统字体或表情渲染。
@@ -40,6 +41,8 @@ function current(key: string, id: number): boolean { return alive && available.v
 // 同一目标只允许一次在途读取；默认值只用于展示，不作为用户的权限选择写入草稿。
 async function load() {
   if (!available.value || busy.value || loading.value) return
+  // 原生草稿由父组件统一 read；即使尚无编号，也绝不降级为 CLI 创建权限。
+  if (isNative.value) { state.value = props.nativeState; emit('refresh'); return }
   const key = context.value, id = ++request
   loading.value = true; error.value = ''; state.value = null
   try {
@@ -52,7 +55,7 @@ async function load() {
   finally { if (current(key, id)) loading.value = false }
 }
 function openMenu() {
-  if (props.disabled || !available.value) return
+  if (props.disabled || props.nativeBusy || !available.value) return
   const info = uni.getWindowInfo(), rect = uni.getElementById(triggerId.value)?.getBoundingClientRect()
   panelWidth.value = Math.min(340, info.windowWidth - 28)
   panelLeft.value = Math.max(14, Math.min(rect?.left ?? 14, info.windowWidth - panelWidth.value - 14))
@@ -60,19 +63,20 @@ function openMenu() {
   panelHeight.value = Math.max(100, Math.min(390, info.windowHeight - panelBottom.value - 100))
   opened.value = true
   // 新建菜单复用自动加载的结果；已有会话仍在打开菜单时刷新权限版本。
-  if (props.threadId.length > 0 || (state.value == null && error.value.length == 0)) load()
+  if (isNative.value) state.value = props.nativeState
+  else if (props.threadId.length > 0 || (state.value == null && error.value.length == 0)) load()
 }
 function closeMenu() { if (!busy.value) opened.value = false }
 // 每次切入完整访问都先确认；确认弹窗返回后再次检查目标和权限版本。
 async function choose(value: string) {
-  if (props.disabled || busy.value || loading.value || state.value == null || !available.value || !state.value!.options!.some((option): boolean => option.id == value && option.enabled)) return
+  if (props.disabled || props.nativeBusy || busy.value || loading.value || state.value == null || !available.value || !(state.value!.options ?? []).some((option): boolean => option.id == value && option.enabled)) return
   if (value == mode.value) { closeMenu(); return }
   const key = context.value, id = request, revision = state.value!.revision
   if (value == 'full-access') {
     const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完整访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此聊天启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
-    if (!confirmed || !current(key, id) || props.disabled || !available.value) return
+    if (!confirmed || !current(key, id) || props.disabled || props.nativeBusy || !available.value || state.value?.revision != revision) return
   }
-  if (props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }
+  if (isNative.value || props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }
   busy.value = true; emit('busy', true); error.value = ''
   try {
     const result = await bridge.request('thread.permissions.update', { threadId: props.threadId, mode: value, expectedRevision: revision, confirmedFullAccess: value == 'full-access' }, true)
@@ -87,7 +91,8 @@ watch(context, () => {
   request++; state.value = null; error.value = ''; opened.value = false; loading.value = false
   if (busy.value) emit('busy', false)
   busy.value = false
-  if (props.threadId.length == 0 && available.value) load()
+  if (isNative.value) state.value = props.nativeState
+  else if (props.threadId.length == 0 && available.value) load()
 }, { immediate: true, flush: 'sync' })
 onUnmounted(() => { emit('visibility', false); alive = false; request++; if (busy.value) emit('busy', false) })
 </script>

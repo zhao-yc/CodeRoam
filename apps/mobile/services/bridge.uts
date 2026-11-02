@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { applyNativeDraftSnapshot } from './native-draft.uts'
 import type { QueuedMessage } from './message-queue.uts'
 import type { ThreadGoal } from './goals.uts'
 import type { PermissionState } from './permissions.uts'
@@ -232,7 +233,7 @@ class MobileBridge {
   rejectPending() {
     this.pending.forEach((entry: PendingReply, id: string) => {
       clearTimeout(entry.timer)
-      if (entry.write && entry.method != 'thread.delete' && entry.method != 'turn.retry') this.clearCommand(id, entry.hostId)
+      if (entry.write && entry.method != 'thread.delete' && entry.method != 'turn.retry' && !(entry.method ?? '').startsWith('thread.draft.')) this.clearCommand(id, entry.hostId)
       entry.reject(new Error(entry.method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作，勿重复提交' : entry.write ? '连接已中断，恢复后请查看聊天，按需重新发送' : '连接已中断'))
     })
     this.pending.clear()
@@ -304,7 +305,14 @@ class MobileBridge {
 
   receive(envelope: UTSJSONObject) {
     const type = envelope.getString('type') ?? ''
-    if (type == 'threads.event') {
+    if (type == 'thread.draft.changed') {
+      const hostId = envelope.getString('hostId') ?? ''
+      if (hostId != connection.hostId) return
+      const source = connection.computers.find((computer: Computer): boolean => computer.id == hostId)
+      if (source == null || !source.online || ((source.instanceGeneration ?? '').length > 0 && source.instanceGeneration != envelope.getString('generation'))) return
+      const snapshot = envelope['snapshot'] as UTSJSONObject | null
+      if (snapshot != null) applyNativeDraftSnapshot(snapshot, hostId)
+    } else if (type == 'threads.event') {
       const hostId = envelope.getString('hostId') ?? ''
       if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId)) return
       const source = connection.computers.find((computer: Computer): boolean => computer.id == hostId)
@@ -342,7 +350,7 @@ class MobileBridge {
       clearTimeout(entry.timer); this.pending.delete(id)
       const error = envelope['error'] as UTSJSONObject | null
       if (error != null) {
-        if (entry.write && !((entry.method == 'thread.delete' || entry.method == 'turn.retry') && error.getBoolean('outcomeUnknown') == true)) this.clearCommand(id, entry.hostId)
+        if (entry.write && !((entry.method == 'thread.delete' || entry.method == 'turn.retry' || (entry.method ?? '').startsWith('thread.draft.')) && error.getBoolean('outcomeUnknown') == true)) this.clearCommand(id, entry.hostId)
         entry.reject(new Error(entry.method == 'turn.retry' && error.getBoolean('outcomeUnknown') == true ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' && error.getBoolean('outcomeUnknown') == true ? '永久删除结果需要核对，请核对原操作，勿重复提交' : error.getBoolean('outcomeUnknown') == true ? '未收到明确结果，请查看聊天，按需重新操作' : error.getString('message') ?? '操作失败'))
       } else {
         const result = envelope['result'] as UTSJSONObject
@@ -439,9 +447,9 @@ class MobileBridge {
       const id = commandId.length > 0 ? commandId : Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2)
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        if (write && method != 'thread.delete' && method != 'turn.retry') this.clearCommand(id, hostId)
+        if (write && method != 'thread.delete' && method != 'turn.retry' && !method.startsWith('thread.draft.')) this.clearCommand(id, hostId)
         reject(new Error(method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : method == 'thread.delete' ? '永久删除结果需要核对，请核对原操作，勿重复提交' : write ? '操作响应超时，请查看聊天，按需重新操作' : '读取超时，请重试'))
-      }, method == 'thread.delete' ? 65000 : method == 'thread.goal.update' ? 30000 : 20000)
+      }, method == 'thread.delete' || method == 'thread.draft.send' ? 65000 : method == 'thread.goal.update' || method == 'thread.draft.open' ? 30000 : 20000)
       if (write) {
         try { this.rememberCommand(id, hostId, threadId, method) }
         catch (_) { clearTimeout(timer); reject(new Error(method == 'thread.delete' ? '无法保存删除核对信息，请检查本地存储后重试' : '操作正在提交，请稍后再试')); return }
@@ -451,7 +459,7 @@ class MobileBridge {
         const entry = this.pending.get(id)
         if (entry == null) return
         clearTimeout(entry.timer); this.pending.delete(id)
-        if (write && method != 'thread.delete' && method != 'turn.retry') this.clearCommand(id, hostId)
+        if (write && method != 'thread.delete' && method != 'turn.retry' && !method.startsWith('thread.draft.')) this.clearCommand(id, hostId)
         reject(new Error(method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作' : write ? '未收到发送结果，请查看聊天，按需重新发送' : '发送失败，请重新连接'))
       } })
     })
