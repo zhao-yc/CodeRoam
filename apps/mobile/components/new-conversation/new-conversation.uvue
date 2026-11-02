@@ -1,7 +1,8 @@
 <template>
   <view class="new-conversation" :style="{ paddingBottom: keyboardInset + 'px' }">
     <view class="new-space" @click="dismissEditor"></view>
-    <view class="destination-row action-frame"><app-icon :name="currentComputerIcon" :size="20" tone="muted" /><text class="destination-label">{{ computerLabel }}</text><app-icon name="chevron-down" :size="15" tone="muted" /><button class="action-hitbox" :disabled="busy" aria-label="选择执行电脑" @click="openPicker('computers')"></button></view>
+    <!-- 多台已授权电脑时才显示切换入口，单台时直接使用当前电脑。 -->
+    <view v-if="connection.computers.length > 1" class="destination-row action-frame"><app-icon :name="currentComputerIcon" :size="20" tone="muted" /><text class="destination-label">{{ computerLabel }}</text><app-icon name="chevron-down" :size="15" tone="muted" /><button class="action-hitbox" :disabled="busy" aria-label="选择执行电脑" @click="openPicker('computers')"></button></view>
     <view class="destination-row action-frame"><app-icon name="folder" :size="20" tone="muted" /><text class="destination-label">{{ projectLabel }}</text><app-icon name="chevron-down" :size="15" tone="muted" /><button class="action-hitbox" :disabled="busy" aria-label="选择执行项目" @click="openPicker('projects')"></button></view>
     <view class="new-dock"><view class="new-panel">
       <scroll-view direction="vertical" :show-scrollbar="false" :scroll-into-view="contentTarget" class="editor-content" :style="{ height: editorContentHeight + 'px' }">
