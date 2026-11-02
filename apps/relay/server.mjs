@@ -130,6 +130,10 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         if (message.method === 'threads.unwatch') socket.listWatches.delete(message.hostId);
         if (message.method === 'thread.watch') socket.watches.add(key);
         if (message.method === 'thread.unwatch') socket.watches.delete(key);
+        // 同一配对可同时打开多个标签页。显式退出与断线一样，只有最后一个观看者才释放电脑订阅。
+        const sharedWatch=message.method==='thread.unwatch'&&[...mobiles].some(other=>other!==socket&&other.identity.id===identity.id&&other.watches.has(key));
+        const sharedList=message.method==='threads.unwatch'&&[...mobiles].some(other=>other!==socket&&other.identity.id===identity.id&&other.listWatches.has(message.hostId));
+        if(sharedWatch||sharedList){send(socket,{v:1,type:'response',requestId:message.requestId,result:{ok:true}});return;}
         const timer = setTimeout(() => {
           const entry = complete(transportId);
           if (entry) fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method)));

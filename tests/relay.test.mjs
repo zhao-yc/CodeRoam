@@ -72,6 +72,32 @@ test('手机断开会释放订阅，同一设备的其他观看连接仍然保�
   second.socket.terminate();const release=await host.next(value=>value.type==='request'&&value.method==='thread.unwatch');assert.equal(release.params.threadId,'t');assert.equal(release.deviceId,'phone');
 });
 
+test('同一配对多个标签页退出详情时保留其他页的预测订阅，最后一页退出才释放',async t=>{
+  const f=await fixture(t),host=await f.open(f.hostToken),first=await f.open(f.mobileToken),second=await f.open(f.mobileToken);
+  let watching=false,releases=0;
+  host.socket.on('message',data=>{
+    const request=JSON.parse(data);if(request.type!=='request')return;
+    if(request.method==='thread.watch')watching=true;
+    if(request.method==='thread.unwatch'){watching=false;releases++;}
+    const error=request.method==='thread.prediction.read'&&!watching?{code:'SUBSCRIPTION_REQUIRED',message:'订阅已释放'}:undefined;
+    host.socket.send(JSON.stringify({type:'response',transportId:request.transportId,error,result:error?undefined:{ok:true,prediction:{threadId:'t',sourceTurnId:'turn-1',text:'保持原有预测'}}}));
+  });
+  const call=async(mobile,method)=>{const requestId=randomUUID();mobile.socket.send(JSON.stringify({v:1,type:'request',requestId,hostId:'pc',method,params:{threadId:'t'}}));return mobile.next(value=>value.requestId===requestId);};
+  await call(first,'thread.watch');await call(second,'thread.watch');
+  assert.equal((await call(first,'thread.unwatch')).result.ok,true);
+  const prediction=await call(second,'thread.prediction.read');assert.equal(prediction.error,undefined);assert.equal(prediction.result.prediction.text,'保持原有预测');assert.equal(releases,0);
+  await call(second,'thread.unwatch');assert.equal(releases,1);assert.equal(watching,false);
+});
+
+test('同一配对多个标签页退出列表时保留共享订阅，最后连接断开才释放',async t=>{
+  const f=await fixture(t),host=await f.open(f.hostToken),first=await f.open(f.mobileToken),second=await f.open(f.mobileToken),forwarded=[];
+  host.socket.on('message',data=>{const request=JSON.parse(data);if(request.type!=='request')return;forwarded.push(request.method);host.socket.send(JSON.stringify({type:'response',transportId:request.transportId,result:{ok:true}}));});
+  const call=async(mobile,method)=>{const requestId=randomUUID();mobile.socket.send(JSON.stringify({v:1,type:'request',requestId,hostId:'pc',method,params:{}}));return mobile.next(value=>value.requestId===requestId);};
+  await call(first,'threads.watch');await call(second,'threads.watch');await call(first,'threads.unwatch');assert.equal(forwarded.filter(method=>method==='threads.unwatch').length,0);
+  host.socket.send(JSON.stringify({type:'threads.event',revision:3,threads:[{id:'t'}]}));assert.equal((await second.next(value=>value.type==='threads.event')).revision,3);
+  second.socket.terminate();await host.next(value=>value.method==='threads.unwatch');assert.equal(forwarded.filter(method=>method==='threads.unwatch').length,1);
+});
+
 test('Android 默认 localhost 来源持有效一次性票据时可以握手，票据仍只能使用一次',async t=>{
   const f=await fixture(t),response=await fetch(f.url.replace('ws:','http:').replace('/ws','/session'),{method:'POST',headers:{Authorization:`Bearer ${f.mobileToken}`}}),{ticket}=await response.json();
   const socket=new WebSocket(f.url,['codex-mobile-v1',`ticket.${ticket}`],{headers:{Origin:'http://localhost'}});

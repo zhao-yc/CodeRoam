@@ -28,7 +28,12 @@ test('固定表达式按所选标签和目标会话过滤，内容使用内存�
   const editor={parentElement:host,getAttribute:()=>null,querySelector:()=>({textContent:'格式化后的文字'})};view.dom=editor;
   doc.querySelectorAll=()=>[editor];doc.querySelector=()=>({getAttribute:()=>selected});
   const read=()=>JSON.parse(JSON.stringify(vm.runInNewContext(predictionExpression('local','thread-1','turn-1'),{document:doc})));
-  assert.deepEqual(read(),[prediction]);selected='false';assert.deepEqual(read(),[]);selected='true';hidden=true;assert.deepEqual(read(),[]);
+  assert.deepEqual(read(),[prediction]);
+  // 浏览器置前导致桌面文档 hidden，不能把仍存在的当前会话预测误判为空。
+  doc.visibilityState='hidden';assert.deepEqual(read(),[prediction]);
+  selected='false';assert.deepEqual(read(),[]);selected='true';hidden=true;assert.deepEqual(read(),[]);
+  hidden=false;view.state.doc.content.content[0].content.size=1;assert.deepEqual(read(),[]);
+  view.state.doc.content.content[0].content.size=0;view.state['cumberbatch$'].prediction={...prediction,sourceTurnId:'old'};assert.deepEqual(read(),[]);
 });
 
 /** 执行手机页面实际预测方法，验证异步回执、过期状态与采纳行为。 */

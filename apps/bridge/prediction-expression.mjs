@@ -1,8 +1,17 @@
 /** 此函数仅在已核对身份的桌面页面内只读执行；不调用预测生成、采纳或编辑器写方法。 */
 function readDisplayedPrediction(expectedHost, expectedThread, expectedTurn) {
   const results=[];
-  if(document.visibilityState!=='visible')return results;
   for(const editor of document.querySelectorAll('.ProseMirror[data-codex-composer]')) {
+    // 桌面被浏览器遮挡时 visibilityState 也会变为 hidden，但预测仍在原输入框中。
+    // 以选中的会话面板和实际预测组件为准，并先排除后台旧编辑器以减少读取耗时。
+    if(!editor.querySelector('[data-cumberbatch] .cumberbatch-content'))continue;
+    let panel=null,hidden=false;
+    for(let ancestor=editor;ancestor;ancestor=ancestor.parentElement){
+      if(panel===null&&ancestor.getAttribute('role')==='tabpanel')panel=ancestor;
+      if(ancestor.getAttribute('hidden')!==null||ancestor.getAttribute('inert')!==null||ancestor.getAttribute('aria-hidden')==='true')hidden=true;
+    }
+    const tab=panel?.id?document.querySelector('[role="tab"][aria-controls="'+panel.id+'"]'):null;
+    if(hidden||tab?.getAttribute('aria-selected')!=='true')continue;
     let host=editor;
     while(host&&!Object.keys(host).some(key=>key.startsWith('__reactFiber$')))host=host.parentElement;
     let fiber=host?.[Object.keys(host).find(key=>key.startsWith('__reactFiber$'))];
@@ -23,13 +32,6 @@ function readDisplayedPrediction(expectedHost, expectedThread, expectedTurn) {
     if(typeof prediction?.text!=='string'||prediction.text.length===0||prediction.text.length>32000||prediction.sourceTurnId!==expectedTurn)continue;
     const paragraphs=state.doc?.content?.content;
     if(paragraphs?.length!==1||paragraphs[0]?.type?.name!=='paragraph'||paragraphs[0]?.content?.size!==0||view.input?.composing===true||plugin.hiddenForComposition===true)continue;
-    let panel=null,hidden=false;
-    for(let ancestor=editor;ancestor;ancestor=ancestor.parentElement){
-      if(panel===null&&ancestor.getAttribute('role')==='tabpanel')panel=ancestor;
-      if(ancestor.getAttribute('hidden')!==null||ancestor.getAttribute('inert')!==null||ancestor.getAttribute('aria-hidden')==='true')hidden=true;
-    }
-    const tab=panel?.id?document.querySelector('[role="tab"][aria-controls="'+panel.id+'"]'):null;
-    if(hidden||tab?.getAttribute('aria-selected')!=='true'||!editor.querySelector('[data-cumberbatch] .cumberbatch-content'))continue;
     results.push({threadId:expectedThread,sourceTurnId:expectedTurn,text:prediction.text});
   }
   return results;
