@@ -1,10 +1,11 @@
 <template>
   <view class="page">
-    <view id="connection-header" class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
+    <view id="connection-header" class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回聊天列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
     <scroll-view direction="vertical" class="content" :scroll-into-view="connectionAnchor">
       <view class="body">
-        <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的会话会自动同步到首页。</text>
-        <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的会话' : '恢复连接后会自动同步会话' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><app-icon name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" aria-label="重新连接" @click="reconnect"></button></view></view></view>
+        <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的聊天会自动同步到首页。</text>
+        <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的聊天' : '恢复连接后会自动同步聊天' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><app-icon name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" aria-label="重新连接" @click="reconnect"></button></view></view></view>
+        <view id="notification-preferences" class="section"><view class="notification-setting action-frame"><view class="notification-copy"><text class="section-title">通知时长</text><text class="notification-description">{{ taskNotifications.durationMs == 0 ? '向上划走通知后显示下一条。' : '通知也可以随时向上划走。' }}</text></view><text class="notification-value">{{ noticeDurationLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'通知时长，当前' + noticeDurationLabel + '，点击选择'" hover-class="action-pressed" @click="chooseNoticeDuration"></button></view></view>
         <message-sending-setting />
         <view id="connection-config" class="section"><text class="section-title">接入配置</text><text class="description">粘贴电脑生成的连接配置。</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands" /><text class="privacy-note">配置仅用于连接你的电脑，请勿分享给他人。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands" @click="importConfig">导入并连接</button><text class="hint">更换连接前，请先确认当前操作已完成。</text></view>
         <view v-if="connection.computers.length > 0" class="section"><text class="section-title">已授权的电脑</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame" ><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', computer.online ? 'online' : 'offline']"></view><text class="state">{{ computer.online ? '在线' : '离线' }}</text><view class="selected-mark"><app-icon v-if="computer.id == connection.hostId" name="check" :size="20" /></view><button class="action-hitbox" hover-class="action-pressed"  :aria-label="'切换到' + computer.label" @click="selectComputer(computer.id)"></button></view></view>
@@ -21,6 +22,7 @@
 import { computed, ref } from 'vue'
 import MessageSendingSetting from '../../components/message-sending-setting/message-sending-setting.uvue'
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
+import { taskNotifications, setTaskNoticeDuration, taskNoticeDurationLabel } from '../../services/task-notifications.uts'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 const pageVisible = ref(false)
@@ -28,6 +30,17 @@ onShow(() => { pageVisible.value = true })
 onHide(() => { pageVisible.value = false })
 const configuration = ref('')
 const connectionAnchor = ref('')
+const noticeDurationLabel = computed((): string => taskNoticeDurationLabel(taskNotifications.durationMs))
+// 通知偏好保存在当前设备，与电脑配对及任务审批独立。
+function chooseNoticeDuration() {
+  uni.hideKeyboard()
+  uni.showActionSheet({ itemList: ['5 秒', '10 秒', '不自动关闭'], success: (result) => {
+    const options = [5000, 10000, 0]
+    if (result.tapIndex < 0 || result.tapIndex >= options.length) return
+    try { setTaskNoticeDuration(options[result.tapIndex]); notify('通知时长已设为' + noticeDurationLabel.value) }
+    catch (error) { notify((error as Error).message) }
+  }, fail: (_) => {} })
+}
 // 菜单的添加连接入口直接定位配置区，普通设置入口仍从概览开始。
 onLoad((options) => { if (options['add'] == 'true') connectionAnchor.value = 'connection-config' })
 const currentComputerIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId) ?? null))
@@ -81,6 +94,10 @@ function selectComputer(id: string) {
 .section { padding: 24px 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
 .current-section { padding-top: 34px; }
 .section-title { color: #202c28; font-size: 16px; line-height: 24px; font-weight: bold; }
+.notification-setting { min-height: 52px; flex-direction: row; align-items: center; }
+.notification-copy { flex: 1; min-width: 0; margin-right: 12px; }
+.notification-description { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 6px; }
+.notification-value { color: #657269; font-size: 14px; line-height: 22px; margin-right: 10px; flex-shrink: 0; }
 .current-computer { flex-direction: row; align-items: center; margin-top: 18px; }
 .computer-content { flex: 1; min-width: 0; margin-left: 16px; }
 .computer-heading { flex-direction: row; align-items: center; }

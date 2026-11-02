@@ -11,6 +11,7 @@ export class TaskNotificationCenter {
   current: TaskNotice | null = null
   phase = 'idle'
   deadline = 0
+  durationMs = 5000
 
   // 连接代次结束时整体清空，恢复后重新建立基线。
   reset() { this.hosts = [] as NoticeHost[]; this.seen.clear(); this.queue = [] as TaskNotice[]; this.current = null; this.phase = 'idle'; this.deadline = 0 }
@@ -61,10 +62,18 @@ export class TaskNotificationCenter {
     return row.notificationState?.pending.some((action: NotificationAction): boolean => action.kind == notice.kind && action.id == notice.targetId && action.turnId == notice.turnId) == true
   }
 
-  // 先挂载一帧，再做 200ms 进入动画，完整停留 5 秒后淡出 200ms。
+  // 设置变更立即作用于当前卡片；重复选择不延长计时，离场动画不受影响。
+  setDuration(durationMs: number, now: number) {
+    if (this.durationMs == durationMs) return
+    this.durationMs = durationMs
+    if (this.phase == 'visible') this.deadline = durationMs == 0 ? 0 : now + durationMs
+  }
+
+  // 先挂载一帧，再做 200ms 进入动画；时长为零时仅由点击或上滑关闭。
   tick(now: number) {
+    if (this.phase == 'visible' && this.deadline == 0) return
     if (this.phase != 'idle' && now < this.deadline) return
-    if (this.phase == 'enter') { this.phase = 'visible'; this.deadline = now + 5200; return }
+    if (this.phase == 'enter') { this.phase = 'visible'; this.deadline = this.durationMs == 0 ? 0 : now + 200 + this.durationMs; return }
     if (this.phase == 'visible') { this.phase = 'leave'; this.deadline = now + 200; return }
     if (this.phase == 'leave' || this.phase == 'swipe') { this.current = null; this.phase = 'idle' }
     while (this.queue.length > 0) {

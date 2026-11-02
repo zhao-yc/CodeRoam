@@ -3,14 +3,35 @@ import { bridge, connection, Computer, ThreadSummary } from './bridge.uts'
 import { threadList, ComputerThreads, syncThreadComputers, refreshComputerThreads, disconnectThreadLists } from './thread-list.uts'
 import { TaskNotificationCenter, TaskNotice } from './task-notification-state.uts'
 
-type NotificationView = { current: TaskNotice | null, phase: string, focus: TaskNotice | null, focusRevision: number }
-export const taskNotifications = reactive<NotificationView>({ current: null, phase: 'idle', focus: null, focusRevision: 0 })
+type NotificationView = { current: TaskNotice | null, phase: string, focus: TaskNotice | null, focusRevision: number, durationMs: number }
+export const taskNotifications = reactive<NotificationView>({ current: null, phase: 'idle', focus: null, focusRevision: 0, durationMs: 5000 })
 const center = new TaskNotificationCenter()
 let installed = false
 let displayTimer = 0
 let configuration = -1
 let navigationRevision = 0
 let navigationNotice: TaskNotice | null = null
+const durationStorageKey = 'codex-mobile-notice-duration-ms'
+
+// 本机偏好只接受三个明确选项；缺失、损坏或无法读取时沿用默认 5 秒。
+function restoreNoticeDuration() {
+  let duration = 5000
+  try { const saved = uni.getStorageSync(durationStorageKey); if (typeof saved == 'number' && [5000, 10000, 0].indexOf(saved as number) >= 0) duration = saved as number } catch (_) {}
+  taskNotifications.durationMs = duration
+  center.setDuration(duration, Date.now())
+}
+
+// 先保存成功再更新内存和计时，存储失败不能伪装成已设置。
+export function setTaskNoticeDuration(durationMs: number) {
+  if ([5000, 10000, 0].indexOf(durationMs) < 0) throw new Error('通知时长选项无效')
+  try { uni.setStorageSync(durationStorageKey, durationMs) } catch (_) { throw new Error('无法保存通知时长，请检查本地存储权限') }
+  taskNotifications.durationMs = durationMs
+  center.setDuration(durationMs, Date.now())
+  publishNotice()
+}
+
+// 显示文案与存储值分开，零值明确表示不自动关闭。
+export function taskNoticeDurationLabel(durationMs: number): string { return durationMs == 0 ? '不自动关闭' : durationMs == 10000 ? '10 秒' : '5 秒' }
 
 // 单一计时器跨页面运行；组件只展示状态，不接管倒计时。
 function publishNotice() {
@@ -30,6 +51,7 @@ export function resetTaskNotifications() {
 export function startTaskNotifications() {
   if (installed) return
   installed = true
+  restoreNoticeDuration()
   watch((): string => connection.configurationRevision.toString() + ':' + connection.configured + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online + ':' + computer.label + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
     if (configuration != connection.configurationRevision || !connection.connected) { configuration = connection.configurationRevision; resetTaskNotifications() }
     syncThreadComputers()
@@ -61,7 +83,7 @@ function focusNotice(notice: TaskNotice) { taskNotifications.focus = notice; tas
 // 显式点击才导航电脑；旧页面先卸载，再打开新目标，避免清理旧订阅时误清新快照。
 export function openTaskNotice(notice: TaskNotice, hostId: string = '', threadId: string = '') {
   const online = connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == notice.hostId && computer.online && (computer.instanceGeneration ?? '') == notice.generation)
-  if (!online) { uni.showToast({ title: '电脑离线或实例已变化，请恢复连接后查看会话', icon: 'none' }); return }
+  if (!online) { uni.showToast({ title: '电脑离线或实例已变化，请恢复连接后查看聊天', icon: 'none' }); return }
   center.dismiss(Date.now()); publishNotice()
   if (hostId == notice.hostId && threadId == notice.threadId) { focusNotice(notice); return }
   const revision = ++navigationRevision
@@ -79,7 +101,7 @@ export function openTaskNotice(notice: TaskNotice, hostId: string = '', threadId
       } catch (error) { uni.showToast({ title: (error as Error).message, icon: 'none' }) }
     })
   }
-  const failed = () => { if (revision == navigationRevision) navigationNotice = null; uni.showToast({ title: '无法打开会话，请从列表重试', icon: 'none' }) }
+  const failed = () => { if (revision == navigationRevision) navigationNotice = null; uni.showToast({ title: '无法打开聊天，请从列表重试', icon: 'none' }) }
   if (currentRoute == 'pages/conversation/index') uni.redirectTo({ url, success: (_) => { opened() }, fail: (_) => { failed() } })
   else uni.navigateTo({ url, success: (_) => { opened() }, fail: (_) => { failed() } })
 }
