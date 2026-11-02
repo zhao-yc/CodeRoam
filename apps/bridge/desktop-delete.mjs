@@ -67,8 +67,10 @@ export class DesktopDeleteController {
     if (!this.diagnosticPath) return;
     const entry = { at: new Date().toISOString(), commandId: /^[a-zA-Z0-9-]{8,160}$/.test(params.commandId ?? '') ? params.commandId : '', phase: state.phase };
     for (const key of ['target', 'dialog', 'matched', 'ready', 'committed', 'selected']) if (typeof state[key] === 'boolean') entry[key] = state[key];
-    for (const key of ['targetCount', 'visibleCount', 'aliasCount', 'pageCount', 'candidateCount']) if (Number.isInteger(state[key]) && state[key] >= 0) entry[key] = Math.min(10000, state[key]);
+    for (const key of ['targetCount', 'visibleCount', 'aliasCount', 'pageCount', 'candidateCount', 'windowCount', 'itemCount', 'menuItemCount']) if (Number.isInteger(state[key]) && state[key] >= 0) entry[key] = Math.min(10000, state[key]);
     if (/^DELETE_[A-Z_]{1,60}$/.test(state.code ?? '')) entry.code = state.code;
+    if (['identity', 'activate', 'enumerate', 'invoke'].includes(state.stage)) entry.stage = state.stage;
+    if (/^[A-Za-z]{1,80}$/.test(state.errorKind ?? '')) entry.errorKind = state.errorKind;
     try { fs.appendFileSync(this.diagnosticPath, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 }); } catch {}
   }
   delete(params, beforeCommit) { return withDesktopUi(() => this.run(params, beforeCommit)); }
@@ -81,7 +83,7 @@ export class DesktopDeleteController {
       const finish = success => { if (done) return; done = true; clearTimeout(timer); child.kill(); success ? resolve() : reject(new BridgeError(action === 'activate' ? 'DELETE_WINDOW_UNAVAILABLE' : 'DELETE_MENU_UNAVAILABLE', action === 'activate' ? '无法激活原桌面窗口，请稍后重试' : '原桌面永久删除菜单不可用，请确认目标对话在列表中')); };
       const timer = setTimeout(() => finish(false), Math.max(1, Math.min(7000, deadline - Date.now())));
       child.on('error', () => finish(false)); child.on('exit', () => finish(false)); child.stdin.on('error', () => finish(false)); child.stderr.on('data', () => {});
-      child.stdout.on('data', bytes => { output += bytes.toString('utf8'); if (output.length > 4096) return finish(false); if (output.includes('\n')) { try { const result=JSON.parse(output.trim());this.record(params,{phase:'menu-'+action,selected:result.selected===true});finish(result.selected === true); } catch { finish(false); } } });
+      child.stdout.on('data', bytes => { output += bytes.toString('utf8'); if (output.length > 4096) return finish(false); if (output.includes('\n')) { try { const result=JSON.parse(output.trim());this.record(params,{...result,phase:'menu-'+action,selected:result.selected===true});finish(result.selected === true); } catch { finish(false); } } });
       child.stdin.end(JSON.stringify({ processId, deadline, action }) + '\n');
     });
   }

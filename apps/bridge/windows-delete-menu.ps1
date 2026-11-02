@@ -77,6 +77,7 @@ try {
   } while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $limit)
   throw 'DELETE_MENU_UNAVAILABLE'
 } catch {
-  [Console]::WriteLine((@{selected=$false;stage=$stage;windowCount=@($windows).Count;itemCount=@($items).Count;menuItemCount=@($allMenuItems).Count}|ConvertTo-Json -Compress))
+  $code=if($_.Exception.Message -match '^DELETE_[A-Z_]+$'){$_.Exception.Message}else{'DELETE_HELPER_FAILED'}
+  [Console]::WriteLine((@{selected=$false;stage=$stage;code=$code;errorKind=$_.Exception.GetType().Name;windowCount=@($windows).Count;itemCount=@($items).Count;menuItemCount=@($allMenuItems).Count}|ConvertTo-Json -Compress))
   exit 1
 }
