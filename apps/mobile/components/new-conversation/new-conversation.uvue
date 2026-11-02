@@ -79,6 +79,7 @@ const currentWindowHeight = ref(baseWindowHeight)
 const contentTarget = ref('')
 const pluginOpen = ref(false)
 let projectRequest = 0, settingsRequest = 0
+let nativeOpenRequested = false
 let alive = true
 let editorRevision = 0, editorLayoutTimer = 0
 const draft = computed((): NewDraft => newDraft(connection.hostId, projectId.value))
@@ -112,7 +113,8 @@ function openPicker(section: string) { if (busy.value) return; focused.value = f
 function openOptions(section: string) { if (!props.expanded || busy.value || imageBusy.value) return; picker.value = ''; menu.value = menu.value == section ? '' : section }
 function changeSection(section: string) { menu.value = section }
 
-function loadSettings() { connectDraft(false) }
+// 显式展开或选择新项目才触发原生新聊天；网络恢复只读原绑定，不自动重放新建。
+function loadSettings() { if (!props.expanded) return; const open = nativeOpenRequested; nativeOpenRequested = false; connectDraft(open) }
 function reconnectDraft() { connectDraft(true) }
 // 仅展开并确定合法项目后打开原生新聊天；回读和重连入口明确分开。
 async function connectDraft(reconnect: boolean) {
@@ -146,7 +148,7 @@ function chooseComputer(id: string) { if (busy.value) return; try { if (id != co
 function chooseProject(id: string) {
   if (busy.value || !projects.value.some((project: NewProject): boolean => project.id == id)) return
   if (projectId.value.length == 0) assignUnselectedDraft(connection.hostId, id)
-  if (id != projectId.value) closeNativeDraft(connection.hostId, projectId.value)
+  if (id != projectId.value) { closeNativeDraft(connection.hostId, projectId.value); nativeOpenRequested = true }
   projectId.value = id; settingsRequest++; settingsLoading.value = false; closeMenus(); error.value = ''
   try { uni.setStorageSync('codex-mobile-new-project-' + connection.hostId, id) } catch (_) {}
   loadSettings()
@@ -241,8 +243,8 @@ async function send() {
 function syncEditorVisibility(expanded: boolean) {
   const revision = ++editorRevision
   clearTimeout(editorLayoutTimer); focused.value = false; closeMenus()
-  if (!expanded) { closeNativeDraft(connection.hostId, projectId.value); projectRequest++; settingsRequest++; projectsLoading.value = false; settingsLoading.value = false; keyboardInset.value = 0; return }
-  beginNewConversation(); error.value = ''; settingsError.value = ''
+  if (!expanded) { nativeOpenRequested = false; closeNativeDraft(connection.hostId, projectId.value); projectRequest++; settingsRequest++; projectsLoading.value = false; settingsLoading.value = false; keyboardInset.value = 0; return }
+  nativeOpenRequested = true; beginNewConversation(); error.value = ''; settingsError.value = ''
   baseWindowHeight = uni.getWindowInfo().windowHeight; currentWindowHeight.value = baseWindowHeight
   loadProjects()
   nextTick(() => { if (alive && props.expanded && revision == editorRevision) focused.value = true })

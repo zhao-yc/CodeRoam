@@ -81,7 +81,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
-  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend' : '') + '};', context);
+  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
   return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
@@ -380,4 +380,16 @@ test('新建组件只在展开并通过 projects 能力检查后 open，设置�
   assert.equal(f.settings.value.effort, 'high');
   const legacy = fixture({ component: true }); legacy.props.expanded = true; legacy.hooks.set('projects.list', () => ({ supportsThreadCreation: true, projects: [] }));
   legacy.loadProjects(); await tick(); assert.equal(legacy.calls.some(call => call.method === 'thread.draft.open'), false);
+});
+
+test('显式重新展开仍调用原生新聊天，连接恢复读取不能自动重复打开', async () => {
+  const f=fixture({component:true});
+  f.props.expanded=true;f.syncEditorVisibility(true);await tick();await tick();await tick();
+  const first=f.calls.filter(call=>call.method==='thread.draft.open').length;
+  assert.equal(first,1);
+  f.props.expanded=false;f.syncEditorVisibility(false);await tick();
+  f.props.expanded=true;f.syncEditorVisibility(true);await tick();await tick();await tick();
+  assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
+  f.loadProjects();await tick();await tick();
+  assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
 });
