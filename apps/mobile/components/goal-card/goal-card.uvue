@@ -87,7 +87,7 @@ watch((): boolean => props.busy, (value: boolean, previous: boolean) => { if (!v
 .goal-panel-editor .goal-close { width: 36px; height: 36px; }
 .goal-editor-field { border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 16px; background-color: #f5f7f2; padding: 12px 14px 10px; }
 .goal-editor-actions { flex-direction: row; align-items: center; margin-top: 16px; }
-.goal-cancel { flex: 1; min-width: 0; height: 46px; margin: 0 10px 0 0; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 13px; background-color: #ffffff; color: #263c31; line-height: 44px; font-size: 15px; }
+.goal-cancel { flex: 1; min-width: 0; height: 46px; margin: 0 10px 0 0; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 13px; background-color: #ffffff; color: #263c31; line-height: 44px; font-size: 15px; align-items: center; justify-content: center; }
 .goal-save { position: relative; flex: 1.8; min-width: 0; height: 46px; padding: 0 12px; background-color: #285c49; border-radius: 13px; flex-direction: row; align-items: center; justify-content: center; }
 .goal-save-label { color: #ffffff; font-size: 15px; line-height: 24px; }
 .goal-save-arrow { color: #ffffff; font-size: 18px; line-height: 24px; margin-left: 8px; }
