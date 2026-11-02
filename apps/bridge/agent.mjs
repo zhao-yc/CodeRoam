@@ -14,6 +14,7 @@ import { deleteThread, deletionCommandStatus } from './thread-delete.mjs';
 import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
 import { readAccountUsage } from './account-usage.mjs';
+import { MessageQueue } from './message-queue.mjs';
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
@@ -24,6 +25,7 @@ export class BridgeAgent extends EventEmitter {
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();
     this.deleteController=deleteController;this.deletingIds=new Set();
+    this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
     adapter.on('conversation',snapshot=>{if(!adapter.conversations||[...adapter.conversations.get(snapshot.threadId)?.watchers??[]].some(id=>id!=='list-status'))this.publish(snapshot);});
     adapter.on('adapterWarning',warning=>this.emit('warning',warning));
@@ -53,8 +55,20 @@ export class BridgeAgent extends EventEmitter {
     this.socket.send(JSON.stringify(message));return true;
   }
   publish(snapshot) {
+    snapshot=this.messageQueue?.decorate(snapshot)??snapshot;
     const event=this.journal.append(snapshot.threadId,conversationUpdate(this.published.get(snapshot.threadId),snapshot));
     this.published.set(snapshot.threadId,{snapshot,seq:event.seq});this.send(event);return event;
+  }
+  /** 自动出队与手机写请求共用同一把会话锁，取消、追加和删除不会同时发送。 */
+  async queueExclusive(threadId, operation) {
+    const previous=this.threadLocks.get(threadId)??Promise.resolve();
+    const running=previous.catch(()=>{}).then(operation);this.threadLocks.set(threadId,running);
+    try{return await running;}finally{if(this.threadLocks.get(threadId)===running)this.threadLocks.delete(threadId);}
+  }
+  /** 队列变化重新发布当前桌面快照，不伪造用户消息或任务状态。 */
+  publishQueue(threadId) {
+    const entry=this.adapter.conversations?.get(threadId);
+    if(entry?.state)this.publish(this.adapter.snapshot(entry.state));
   }
   async handleRequest(message) {
     const response={v:1,type:'response',transportId:message.transportId};
@@ -63,6 +77,10 @@ export class BridgeAgent extends EventEmitter {
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
       const execute=async()=>{
         if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该对话正在永久删除，请先核对删除结果');
+        if(message.method==='turn.send'&&message.params.queueAction) {
+          if(!this.messageQueue)throw new BridgeError('QUEUE_UNAVAILABLE','请更新电脑连接服务后使用消息排队');
+          return this.messageQueue.operate(message.params,message.requestId,message.deviceId);
+        }
         if(message.method==='thread.create.permissions')return this.adapter.permissionCatalog.read(this.newThreads.project(message.params.projectId).cwd);
         if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
         if(message.method==='projects.list')return this.newThreads.projects();
@@ -70,6 +88,7 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.create')return this.newThreads.create(message.params.projectId,message.params.title,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
         if(message.method==='thread.archive') {
           const result=await archiveThread(this.adapter,this.archiveController,message.params.threadId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result),message.requestId);
+          this.messageQueue?.forget([message.params.threadId]);
           this.published.delete(message.params.threadId);return result;
         }
         if(message.method==='thread.delete') {
@@ -81,6 +100,7 @@ export class BridgeAgent extends EventEmitter {
             catch(error){release();throw error;}
           };
           const result=await deleteThread(this.adapter,this.deleteController,message.params.threadId,message.deviceId,result=>{this.journal.checkpoint(message.deviceId,message.requestId,result);if(result.deleted===true)this.journal.forgetThreads(result.deletedThreadIds);},message.requestId,lockRelated);
+          this.messageQueue?.forget(result.deletedThreadIds);
           for(const id of result.deletedThreadIds)this.published.delete(id);
           this.threadListFeed.schedule();return result;
         }
@@ -100,7 +120,7 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.watch'||message.method==='thread.history') {
           const snapshot=await this.adapter.watch(message.params.threadId,message.deviceId,{activate:message.params.activate===true});
           const event=this.publish(snapshot);
-          return {snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
+          return {snapshot:event.snapshot??this.messageQueue?.decorate(snapshot)??snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
         }
         if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!this.adapter.conversations.has(message.params.threadId))this.published.delete(message.params.threadId);return result;}
         if(message.method==='command.status') { const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
@@ -116,5 +136,5 @@ export class BridgeAgent extends EventEmitter {
     } catch(error) {response.error=errorPayload(error);}
     return response;
   }
-  async close(){this.stopped=true;clearTimeout(this.reconnectTimer);this.socket?.terminate();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.messageQueue?.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

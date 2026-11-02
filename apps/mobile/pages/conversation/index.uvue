@@ -55,12 +55,14 @@
         <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
+        <message-queue :messages="queuedMessages" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" @cancel="cancelQueuedMessage" />
         <view id="timeline-bottom" class="bottom-space"></view>
       </scroll-view>
       <view v-if="!atTimelineBottom" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing"></button></view>
     </view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
+      <text v-if="activeTurnId.length > 0 || queuedMessages.length > 0" class="queue-compose-hint">发送后默认排队，可在消息上点击追加到当前任务</text>
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
       <view class="composer-panel" :class="{ 'composer-compact': !composerExpanded }" @click="dismissGoal">
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
@@ -95,6 +97,8 @@
 <script setup lang="uts">
 import { computed, ref, watch, nextTick } from 'vue'
 import { showPluginManagement } from '../../services/composer-actions.uts'
+import MessageQueue from '../../components/message-queue/message-queue.uvue'
+import { QueuedMessage } from '../../services/message-queue.uts'
 import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
@@ -257,6 +261,7 @@ let layoutUntil = 0
 let touchingTimeline = false
 let pageAlive = true
 const activeTurnId = computed((): string => connection.snapshot?.activeTurnId ?? '')
+const queuedMessages = computed((): QueuedMessage[] => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.queuedMessages ?? [] as QueuedMessage[] : [] as QueuedMessage[])
 const approvalCount = computed((): number => connection.snapshot?.approvals.length ?? 0)
 // 末尾只保留可回答题组；已回答记录沿原聊天时间线展示，不再追加重复卡片。
 const pendingQuestionGroups = computed((): QuestionGroup[] => connection.snapshot?.questionGroups.filter((group: QuestionGroup): boolean => group.state == 'pending') ?? [])
@@ -1014,13 +1019,28 @@ function send() {
   busy.value = true; pendingAction.value = 'send'
   const hostId = pageHostId.value
   const threadId = pageThreadId.value
-  const method = activeTurnId.value.length > 0 ? 'turn.steer' : 'turn.send'
-  const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id), expectedTurnId: activeTurnId.value }
+  const method = 'turn.send'
+  const queue = connection.snapshot?.supportsMessageQueue == true
+  if (!queue && (activeTurnId.value.length > 0 || connection.snapshot?.status == 'active')) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
+  const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id) }
+  if (queue) params['queueAction'] = 'enqueue'
   const request = bridge.request(method, params, true)
   const commandId = connection.pendingCommandId
   rememberSubmission(hostId, threadId, commandId, text)
-  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(method == 'turn.steer' ? '已追加到当前任务' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(queue ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
+// 追加和取消都指向电脑保存的同一条消息，避免手机重传正文形成重复指令。
+function operateQueuedMessage(id: string, action: string) {
+  if (!canWrite.value || connection.snapshot?.supportsMessageQueue != true) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  busy.value = true; pendingAction.value = 'queue:' + id; operationError.value = ''
+  bridge.request('turn.send', { threadId, queueAction: action, queueId: id, expectedTurnId: activeTurnId.value }, true).then((_: UTSJSONObject) => {
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { notify(action == 'steer' ? '已追加到当前任务' : '已移除排队消息'); refresh() }
+  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+}
+function steerQueuedMessage(id: string) { if (activeTurnId.value.length > 0) operateQueuedMessage(id, 'steer') }
+function cancelQueuedMessage(id: string) { operateQueuedMessage(id, 'cancel') }
 let stopPromptOpen = false
 // 所有停止入口共用确认框，确认时复核原会话及任务，避免误停后续任务。
 function stop() {
@@ -1078,6 +1098,7 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 </script>
 
 <style>
+.queue-compose-hint { color: #69766b; font-size: 12px; line-height: 18px; margin: 0 4px 8px; }
 /* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
 .annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #cdd6cc; background-color: #f8faf6; flex-direction: row; align-items: center; align-self: flex-start; }
 .annotation-after-text { margin-top: 12px; }

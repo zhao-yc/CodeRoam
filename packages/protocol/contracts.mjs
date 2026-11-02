@@ -82,6 +82,14 @@ export function validateRequest(message) {
     requireString(message.params.messageId, '消息编号', 200);
     if(Object.keys(message.params).some(key=>!['threadId','messageId'].includes(key)))throw new BridgeError('BAD_PARAMS','查看图片只接受会话编号和消息编号');
   }
+  // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
+  if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {
+    const p = message.params, enqueue = p.queueAction === 'enqueue';
+    if (message.method !== 'turn.send' || !['enqueue','steer','cancel'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
+    if (!enqueue) requireString(p.queueId, '排队消息编号', 80);
+    if (p.queueAction === 'steer') requireString(p.expectedTurnId, '当前任务编号', 200);
+    if (enqueue && p.attachments?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id))) throw new BridgeError('BAD_ATTACHMENTS', '排队附件编号无效');
+  }
   if (message.method === 'thread.prediction.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取预测仅接受会话编号');
   if (message.method === 'thread.goal.update') validateGoalUpdate(message.params);
   if (message.method === 'thread.goal.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取目标仅接受会话编号');
