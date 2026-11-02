@@ -28,7 +28,8 @@
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
             <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
-            <markdown-body v-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
+            <plan-preview v-if="entry.role == 'assistant' && entry.kind == 'planImplementation'" :source="planSource(entry.id, entry.text)" @open="openPlan(entry.id, entry.text)" />
+            <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? pluginMessageText(entry.text) : entry.text }}</text>
             <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :large="true" @layout="afterMarkdownLayout" />
             <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
@@ -50,12 +51,24 @@
             </scroll-view>
           </template>
         </view>
-        <!-- 计划确认与聊天草稿独立，避免覆盖附件和未发送正文。 -->
+        <!-- 方案可能不在当前消息窗口，仍使用桌面提供的原文显示独立预览。 -->
+        <view v-if="pendingPlanOutsideTimeline && pendingPlan != null" class="plan-fallback"><plan-preview :source="pendingPlan!.text" @open="openPlan(pendingPlan!.id, pendingPlan!.text)" /></view>
+        <!-- 确认操作与方案预览分成两张卡；修改意见不使用聊天草稿。 -->
         <view v-if="pendingPlan != null && hiddenPlanId != pendingPlan.id" id="notice-plan" class="plan-confirm">
-          <text class="plan-confirm-title">实施此计划？</text>
-          <button class="button-primary" :disabled="!canWrite || busy" @click="replyPlan('implement')">{{ pendingAction == 'plan' ? '提交中…' : '是，实施此计划' }}</button>
-          <textarea class="plan-feedback" v-model="planFeedback" :disabled="busy" placeholder="否，告诉 Codex 应该如何调整" :maxlength="32000"></textarea>
-          <view class="plan-confirm-actions"><button class="button-secondary" :disabled="busy" @click="hidePlan">跳过</button><button class="button-secondary" :disabled="!canWrite || busy || planFeedback.trim().length == 0" @click="replyPlan('feedback')">发送修改意见</button></view>
+          <view class="plan-confirm-header"><text class="plan-confirm-title">{{ planEditing ? '修改方案' : '确认方案' }}</text><button v-if="planEditing" class="plan-cancel" :disabled="busy" @click="cancelPlanFeedback">取消</button></view>
+          <view class="plan-confirm-body">
+            <template v-if="!planEditing">
+              <text class="plan-confirm-note">同意后开始实施，也可以先提出修改。</text>
+              <view class="plan-confirm-actions"><button class="plan-action button-secondary" :disabled="!canWrite || busy" @click="editPlan">修改方案</button><button class="plan-action plan-implement button-primary" :disabled="!canWrite || busy" @click="replyPlan('implement')">{{ pendingAction == 'plan' ? '提交中…' : '同意并实施' }}</button></view>
+              <button class="plan-defer" :disabled="busy" @click="hidePlan">稍后处理</button>
+            </template>
+            <template v-else>
+              <text class="plan-confirm-note">补充调整意见，我会据此更新方案。</text>
+              <textarea class="plan-feedback" v-model="planFeedback" :disabled="!canWrite || busy" placeholder="告诉我你希望如何调整…" aria-label="方案修改意见" :maxlength="32000"></textarea>
+              <button class="plan-send button-primary" :disabled="!canWrite || busy || planFeedback.trim().length == 0" @click="replyPlan('feedback')">{{ pendingAction == 'plan' ? '发送中…' : '发送修改意见' }}</button>
+              <text class="plan-feedback-note">更新方案后，仍需你确认实施。</text>
+            </template>
+          </view>
         </view>
         <view id="questions-anchor"></view>
         <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
@@ -102,6 +115,7 @@
     <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected && !showingCachedContent" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
+    <plan-sheet v-if="selectedPlanId.length > 0" :source="selectedPlanSource" @close="closePlan" />
     <task-notice :active="pageVisible" header-id="conversation-header" :host-id="pageHostId" :thread-id="pageThreadId" />
     <plugin-picker v-if="pluginOpen && pageVisible" :host-id="pageHostId" :thread-id="pageThreadId" project-id="" :plugins="draftPlugins" @confirm="selectPlugins" @close="pluginOpen = false" />
   </view>
@@ -143,6 +157,8 @@ import DeleteConfirmation from '../../components/delete-confirmation/delete-conf
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
+import PlanPreview from '../../components/plan-preview/plan-preview.uvue'
+import PlanSheet from '../../components/plan-sheet/plan-sheet.uvue'
 import MessageImages from '../../components/message-images/message-images.uvue'
 import PermissionsControl from '../../components/permissions-control/permissions-control.uvue'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
@@ -202,20 +218,26 @@ let settingsRetryCount = 0
 let settingsSnapshotRevision = 0
 const hiddenPlanId = ref('')
 const planFeedback = ref('')
-const pendingPlan = computed(() => connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.readOnly != true ? connection.snapshot?.pendingPlan ?? null : null)
+const planEditing = ref(false)
+const pendingPlan = computed(() => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.readOnly != true ? connection.snapshot?.pendingPlan ?? null : null)
 // 切换会话或计划时清空旧反馈。
-watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + (pendingPlan.value?.id ?? ''), () => { planFeedback.value = ''; hiddenPlanId.value = '' })
+watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + (pendingPlan.value?.id ?? ''), () => { planFeedback.value = ''; hiddenPlanId.value = ''; planEditing.value = false })
+// 取消只收起编辑区，重新进入时保留尚未发送的意见。
+function editPlan() { if (!busy.value && canWrite.value) planEditing.value = true }
+function cancelPlanFeedback() { if (!busy.value) planEditing.value = false }
 function hidePlan() { hiddenPlanId.value = pendingPlan.value?.id ?? '' }
 // 使用幂等写入通道；未知结果由命令状态核对，不自动重发。
 function replyPlan(action: string) {
   if (!canWrite.value || busy.value || pendingPlan.value == null) return
+  if (action != 'implement' && action != 'feedback') return
+  if (action == 'feedback' && planFeedback.value.trim().length == 0) return
   const planId = pendingPlan.value!.id
   const hostId = pageHostId.value
   const threadId = pageThreadId.value
   busy.value = true; pendingAction.value = 'plan'; operationError.value = ''
   bridge.request('turn.send', { threadId, planId, planAction: action, text: planFeedback.value.trim() }, true).then((_: UTSJSONObject) => {
     busy.value = false; pendingAction.value = ''
-    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { hiddenPlanId.value = planId; planFeedback.value = ''; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && pendingPlan.value?.id == planId) { hiddenPlanId.value = planId; planFeedback.value = ''; planEditing.value = false; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
   }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
 }
 const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
@@ -289,6 +311,23 @@ const timeline = computed((): TimelineEntry[] => {
   return entries
 })
 const expandedExecutionIds = ref<string[]>([])
+const pendingPlanOutsideTimeline = computed((): boolean => pendingPlan.value != null && !timeline.value.some((entry: TimelineEntry): boolean => entry.id == pendingPlan.value!.id))
+const selectedPlanId = ref('')
+const selectedPlanSource = ref('')
+// 待确认方案使用桌面给出的完整正文，避免消息窗口中的截取影响详情阅读。
+function planSource(id: string, fallback: string): string {
+  if (pendingPlan.value?.id == id) return pendingPlan.value!.text
+  return displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == id)?.text ?? fallback
+}
+// 详情位于页面根部，独立滚动且不改变聊天草稿和原时间线位置。
+function openPlan(id: string, source: string) {
+  closeActions(); closeComposerMenu(); dismissGoal(); uni.hideKeyboard(); pauseFollowing()
+  selectedPlanSource.value = planSource(id, source); selectedPlanId.value = id
+}
+function closePlan() { selectedPlanId.value = ''; selectedPlanSource.value = '' }
+onHide(() => { closePlan() })
+onUnload(() => { closePlan() })
+watch((): string => [pageHostId.value, pageThreadId.value, connection.hostId, connection.activeThreadId].join(':'), () => { closePlan() })
 const expandedQuestionIds = ref<string[]>([])
 const handledApprovalIds = ref<string[]>([])
 const submittedGroupIds = ref<string[]>([])
@@ -1260,7 +1299,7 @@ function operateGoal(action: string, objective: string, revision: string) {
 function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value) }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
-onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
+onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedPlanId.value.length > 0) { closePlan(); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
 </script>
 
 <style>
@@ -1430,10 +1469,20 @@ onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(f
 .composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
 .settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
 .settings-trigger-label { flex-shrink: 1; min-width: 0; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
-.plan-confirm { padding: 16px; margin: 12px 0; border: 1px solid #deded8; border-radius: 18px; background-color: #ffffff; }
-.plan-confirm-title { font-size: 18px; font-weight: 600; margin-bottom: 14px; }
-.plan-feedback { height: 72px; width: 100%; margin-top: 14px; font-size: 14px; }
-.plan-confirm-actions { flex-direction: row; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+.plan-fallback { margin: 8px 16px 10px; }
+.plan-confirm { margin: 4px 16px 16px; border-width: 1px; border-style: solid; border-color: #d8dfd5; border-radius: 18px; background-color: #fffefa; overflow: hidden; flex-shrink: 0; }
+.plan-confirm-header { min-height: 44px; padding: 0 16px; flex-direction: row; align-items: center; background-color: #f0f3ed; }
+.plan-confirm-title { flex: 1; color: #202c28; font-size: 16px; line-height: 24px; font-weight: 600; }
+.plan-confirm-body { padding: 12px 14px 4px; }
+.plan-confirm-note { color: #657269; font-size: 13px; line-height: 21px; }
+.plan-confirm-actions { flex-direction: row; margin-top: 14px; gap: 8px; }
+.plan-action { flex: 1; min-width: 0; height: 48px; line-height: 48px; margin: 0; padding: 0 6px; }
+.plan-implement { flex: 1.1; }
+.plan-cancel { height: 44px; line-height: 44px; margin: 0 -8px 0 0; padding: 0 8px; font-size: 13px; color: #657269; background-color: transparent; }
+.plan-defer { height: 44px; line-height: 44px; margin: 2px 0 0; padding: 0; font-size: 13px; color: #7b827a; background-color: transparent; align-items: center; justify-content: center; text-align: center; }
+.plan-feedback { width: 100%; height: 96px; margin-top: 12px; padding: 12px; font-size: 16px; line-height: 24px; color: #202c28; background-color: #fdfdfb; border-width: 1px; border-style: solid; border-color: #d8dfd5; border-radius: 12px; }
+.plan-send { height: 48px; line-height: 48px; margin: 14px 0 0; padding: 0 12px; }
+.plan-feedback-note { color: #7b827a; font-size: 12px; line-height: 20px; text-align: center; margin: 10px 0; }
 /* 计划入口紧跟权限图标，固定胶囊宽度，模型名称可继续收缩。 */
 .plan-chip { flex-shrink: 0; height: 28px; padding: 0 8px; margin-left: 4px; border-radius: 14px; flex-direction: row; align-items: center; background-color: #eeeeee; }
 .plan-close { margin-left: 8px; }

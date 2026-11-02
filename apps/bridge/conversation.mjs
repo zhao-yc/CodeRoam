@@ -46,6 +46,8 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
   const messages = [];
   const seen = new Set();
   for (const turn of turns) {
+    // 先用原文确认重复关系，不能根据截断后的相同尾部误删另一份最终回复。
+    const planContents = new Set((turn.items ?? []).filter(item => item.type === 'planImplementation' && typeof item.planContent === 'string').map(item => item.planContent.trim()));
     for (const item of turn.items ?? []) {
       if (seen.has(item.id)) continue;
       seen.add(item.id);
@@ -81,7 +83,9 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       }
       // 日常快照只同步数量；查看时仅读取桌面目标消息已附加的图片，不抓取远程地址。
       const images=String(item.id)===imageMessageId?readMessageImages(imageParts,imageIndex):[];
-      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
+      // 方案及与其原文完全相同的最终回复保留全文，供展示层准确去重；总预算仍有效。
+      const preservePlan = item.type === 'planImplementation' || (role === 'assistant' && item.phase === 'final_answer' && planContents.has(text.trim()));
+      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }
   // 先给提问和最终报告预留空间，避免长任务的命令记录挤掉所有早期对话。

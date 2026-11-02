@@ -1,0 +1,25 @@
+import { parseMarkdown, MarkdownBlock } from './markdown.uts'
+
+export type PlanPresentation = { title: string, excerpt: string }
+
+// 预览只提取原方案的标题与开头正文；完整 Markdown 始终保留给详情面板。
+export function planPresentation(source: string): PlanPresentation {
+  const blocks = parseMarkdown(source)
+  let title = '实施方案'
+  let start = 0
+  if (blocks.length > 0 && blocks[0].kind == 'heading') {
+    title = blocks[0].runs.map((run): string => run.text).join('')
+    start = 1
+  }
+  const parts = [] as string[]
+  let length = 0
+  for (let index = start; index < blocks.length && length < 320; index++) {
+    const block: MarkdownBlock = blocks[index]
+    let text = block.runs.map((run): string => run.text).join('')
+    if (block.kind == 'code') text = block.code
+    if (block.kind == 'image') text = block.alt
+    if (block.kind == 'table') text = block.rows.map((row): string => row.cells.map((cell): string => cell.map((run): string => run.text).join('')).join(' · ')).join('；')
+    if (text.trim().length > 0) { parts.push(text.trim()); length += text.length }
+  }
+  return { title, excerpt: parts.join(' ').slice(0, 320) }
+}

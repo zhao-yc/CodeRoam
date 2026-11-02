@@ -1,7 +1,7 @@
 import { ChatMessage, Conversation, ConversationTurn, Approval, QuestionGroup } from './bridge.uts'
 import type { MessageAnnotation, MessageAttachment } from './annotations.uts'
 
-export type TimelineEntry = { reportId?: string, id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[], attachments?: MessageAttachment[] }
+export type TimelineEntry = { kind?: string, reportId?: string, id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[], attachments?: MessageAttachment[] }
 
 // 返回每段明确最终回复前的正文起点，保留段首提问，段中追加仍属于过程。
 function reportPromptEnd(messages: ChatMessage[], start: number, end: number): number {
@@ -62,7 +62,7 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
   if (snapshot == null) return [] as TimelineEntry[]
   const collapsible = reportTurnIds(snapshot)
   const entries = [] as TimelineEntry[]
-  const messages = snapshot.messages
+  const messages = planPreviewMessages(snapshot.messages)
   let cursor = 0
   while (cursor < messages.length) {
     let end = cursor + 1
@@ -100,12 +100,23 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
   return entries
 }
 
+// 桌面可能同时记录最终回复与方案项；只去掉同轮正文相同的重复最终回复。
+function planPreviewMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter((message: ChatMessage): boolean => {
+    if (message.role != 'assistant' || message.phase != 'final_answer' || message.kind == 'planImplementation' || (message.imageCount ?? 0) > 0) return true
+    return !messages.some((plan: ChatMessage): boolean => {
+      if (plan.kind != 'planImplementation' || plan.turnId != message.turnId || plan.id == message.id) return false
+      return plan.text.trim() == message.text.trim()
+    })
+  })
+}
+
 // 仅合并同轮次的相邻操作，正文始终保留原来的时间线位置。
 export function executionTimeline(messages: ChatMessage[]): TimelineEntry[] {
   const entries = [] as TimelineEntry[]
   messages.forEach((message: ChatMessage) => {
     if (message.role == 'user' || message.role == 'assistant') {
-      entries.push({ reportId: message.role == 'assistant' && message.phase == 'final_answer' ? message.id : '', id: message.id, role: message.role, text: message.text, imageCount: message.imageCount ?? 0, turnId: message.turnId, executions: [] as ChatMessage[], label: '' })
+      entries.push({ kind: message.kind, reportId: message.role == 'assistant' && message.phase == 'final_answer' ? message.id : '', id: message.id, role: message.role, text: message.text, imageCount: message.imageCount ?? 0, turnId: message.turnId, executions: [] as ChatMessage[], label: '' })
       return
     }
     const previous = entries.length > 0 ? entries[entries.length - 1] : null

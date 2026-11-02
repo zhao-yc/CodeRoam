@@ -1,0 +1,38 @@
+<template>
+  <view class="plan-overlay" @click="emit('close')">
+    <view class="plan-sheet" role="dialog" aria-modal="true" aria-label="方案详情" @click.stop>
+      <view class="plan-grip"></view>
+      <view class="plan-sheet-header"><text class="plan-sheet-title">方案详情</text><view class="plan-close action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭方案详情" @click="emit('close')"></button></view></view>
+      <scroll-view direction="vertical" class="plan-scroll"><view class="plan-body"><markdown-body :source="source" /></view></scroll-view>
+      <view class="plan-safe-area"></view>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import MarkdownBody from '../markdown-body/markdown-body.uvue'
+import AppIcon from '../app-icon/app-icon.uvue'
+// 详情只负责独立阅读，实施与修改操作保留在聊天中的另一张卡片。
+defineProps<{ source: string }>()
+const emit = defineEmits<{ (event: 'close'): void }>()
+</script>
+<style>
+.plan-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(20, 32, 26, 0.32); justify-content: flex-end; z-index: 60; }
+.plan-sheet { height: 78%; border-top-left-radius: 20px; border-top-right-radius: 20px; background-color: #f8f8f3; overflow: hidden; }
+.plan-grip { width: 36px; height: 4px; border-radius: 2px; background-color: #c7cbc1; align-self: center; margin-top: 10px; flex-shrink: 0; }
+.plan-sheet-header { flex-direction: row; align-items: center; padding: 6px 8px 8px 20px; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #e3e5dc; flex-shrink: 0; }
+.plan-sheet-title { flex: 1; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
+.plan-close { width: 44px; height: 44px; align-items: center; justify-content: center; }
+.plan-scroll { flex: 1; height: 0; min-height: 0; }
+.plan-body { padding: 18px 20px 12px; }
+.plan-safe-area { height: 16px; flex-shrink: 0; }
+.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
+/* #ifdef APP */
+.plan-safe-area { height: var(--uni-safe-area-inset-bottom); min-height: 16px; }
+/* #endif */
+/* #ifdef WEB */
+.plan-safe-area { height: max(16px, env(safe-area-inset-bottom)); }
+.action-hitbox::after { border: none; }
+/* #endif */
+</style>
