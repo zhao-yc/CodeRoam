@@ -32,7 +32,7 @@ function homeFixture(consumeArchiveSuccessNotice) {
   const source = fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8');
   const lifecycle = source.slice(source.indexOf('// 归档反馈由列表页显示'), source.indexOf('// 列表状态来自实际读取结果'));
   const renders = [], toasts = [], callbacks = {};
-  const context = { consumeArchiveSuccessNotice, archiveToastRequest: 0, pageVisible: { value: false }, editingNewConversation: { value: false }, statusTimer: 0, restoreThreadScroll() {}, updateClock() {}, closeComputerMenu() {}, clearInterval() {}, setInterval: () => 1, nextTick: callback => renders.push(callback), uni: { showToast: options => toasts.push(options) }, onShow: callback => { callbacks.show = callback; }, onHide: callback => { callbacks.hide = callback; }, onUnload: callback => { callbacks.unload = callback; } };
+  const context = { consumeArchiveSuccessNotice, archiveToastRequest: 0, pageVisible: { value: false }, menuVisible: { value: false }, editingNewConversation: { value: false }, statusTimer: 0, restoreThreadScroll() {}, updateClock() {}, closeComputerMenu() {}, clearInterval() {}, setInterval: () => 1, nextTick: callback => renders.push(callback), uni: { showToast: options => toasts.push(options) }, onShow: callback => { callbacks.show = callback; }, onHide: callback => { callbacks.hide = callback; }, onUnload: callback => { callbacks.unload = callback; } };
   vm.runInNewContext(stripTypeScriptTypes(lifecycle, { mode: 'transform' }), context);
   return { ...callbacks, toasts, render: () => { renders.splice(0).forEach(callback => callback()); } };
 }

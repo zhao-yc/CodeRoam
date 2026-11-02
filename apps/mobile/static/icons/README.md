@@ -11,3 +11,5 @@
 权限选择补充：`hand-stop`、`shield-check`、`lock`、`alert-triangle` 来自同一版本 Tabler 官方线性图标，沿用 72×72 PNG 与三种基础颜色；警告图标另提供琥珀色 `warning`，工具栏、选中项及关闭入口统一复用 `app-icon`。
 
 会话菜单补充：`target` 来自同版本 Tabler 官方图标，用于新建／查看目标；取消入口复用已有 `close`。
+
+列表下拉菜单补充：`bell`、`archive`、`link`、`recent` 为项目自行绘制的线性图标，沿用 72×72 PNG 与三种基础颜色。

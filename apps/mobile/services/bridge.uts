@@ -333,6 +333,12 @@ class MobileBridge {
     return this.requestForComputer(connection.hostId, method, params, write)
   }
 
+  // 菜单查询不切换执行电脑，仅向已授权电脑读取归档列表与账户用量。
+  readComputerMenu(hostId: string, params: UTSJSONObject): Promise<UTSJSONObject> {
+    if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
+    return this.requestForComputer(hostId, 'threads.list', params, false)
+  }
+
   // 编辑外观不切换执行电脑、不占用会话写锁，服务端再次检查目标电脑授权。
   updateComputerProfile(hostId: string, displayName: string, icon: string, expectedRevision: number): Promise<UTSJSONObject> {
     if (!connection.supportsHostProfiles) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('请更新中转服务后再编辑连接')) })

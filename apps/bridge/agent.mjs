@@ -11,6 +11,7 @@ import { NewThreadService } from './new-thread-service.mjs';
 import { archiveThread } from './thread-archive.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
+import { readAccountUsage } from './account-usage.mjs';
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
@@ -73,7 +74,11 @@ export class BridgeAgent extends EventEmitter {
         if(UPLOAD_METHODS.has(message.method))return this.adapter.transfer(message.method,message.params,message.deviceId);
         if(message.method==='threads.watch')return this.threadListFeed.watch(message.deviceId);
         if(message.method==='threads.unwatch')return this.threadListFeed.unwatch(message.deviceId);
-        if(message.method==='threads.list')return {threads:await this.adapter.list(message.params)};
+        if(message.method==='threads.list') {
+          // 通过已有白名单接口扩展只读信息；显式归档标记供手机识别旧服务。
+          const threads=await this.adapter.list(message.params);
+          return {threads,...(message.params.archived===true?{archived:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
+        }
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {

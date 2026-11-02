@@ -54,7 +54,7 @@ export class StateReader {
     }
     return readHistoricalSnapshot(row,path.join(path.dirname(this.filePath),'sessions'),undefined,options);
   }
-  list({ limit = 50, offset = 0, search = '' } = {}) {
+  list({ limit = 50, offset = 0, search = '', archived = false } = {}) {
     if (!fs.existsSync(this.filePath)) throw new BridgeError('INDEX_NOT_FOUND', '未找到 Codex 会话索引，请先打开桌面客户端');
     const db = new DatabaseSync(this.filePath, { readOnly: true });
     try {
@@ -62,7 +62,7 @@ export class StateReader {
       const time = columns.has('updated_at_ms') ? 'COALESCE(updated_at_ms,updated_at*1000)' : 'updated_at*1000';
       const title = columns.has('name') ? "COALESCE(NULLIF(name,''),title)" : 'title';
       // 按来源排除内部审核和子智能体，在搜索与分页前过滤；不凭标题或消息是否为空隐藏普通聊天。
-      const visible = ['archived=0'];
+      const visible = [archived === true ? 'archived=1' : 'archived=0'];
       // 已命名的新会话也属于正常列表；标题和首条消息索引可能滞后，不能据此隐藏会话。
       if(columns.has('thread_source')) visible.push("COALESCE(thread_source,'') NOT IN ('guardian_review','subagent')");
       // 旧索引可能没有规范来源字段；只识别结构化 subagent 来源，兼容空值、未知来源和非 JSON 字符串。

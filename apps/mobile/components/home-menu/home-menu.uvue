@@ -1,0 +1,110 @@
+<template>
+  <view class="menu-overlay" @click="emit('dismiss')">
+    <view class="menu-panel" :style="{ width: panelWidth + 'px' }" @click.stop>
+      <template v-if="section == 'main'">
+        <scroll-view direction="vertical" :style="{ height: mainHeight + 'px' }" :show-scrollbar="false">
+          <view v-for="option in options" :key="option.id" class="menu-row"><view class="check-slot"><app-icon v-if="sort == option.id" name="check" :size="17" /></view><app-icon :name="option.icon" :size="22" /><text class="menu-label">{{ option.label }}</text><button class="menu-hitbox" :aria-label="option.label" :aria-pressed="sort == option.id" hover-class="menu-pressed" @click="emit('sort', option.id)"></button></view>
+          <view class="menu-separator"></view>
+          <view class="menu-row"><view class="check-slot"><app-icon v-if="recentFirst" name="check" :size="17" /></view><app-icon name="recent" :size="22" /><text class="menu-label">优先显示“最近”</text><button class="menu-hitbox" aria-label="优先显示最近" :aria-pressed="recentFirst" hover-class="menu-pressed" @click="emit('recent')"></button></view>
+          <view class="menu-separator"></view><text class="menu-caption">管理</text>
+          <view class="menu-row"><view class="check-slot"></view><app-icon name="archive" :size="22" /><text class="menu-label">已归档任务</text><button class="menu-hitbox" aria-label="已归档任务" hover-class="menu-pressed" @click="showArchives"></button></view>
+          <view class="menu-row"><view class="check-slot"></view><app-icon name="link" :size="22" /><text class="menu-label">添加连接</text><button class="menu-hitbox" aria-label="添加连接" hover-class="menu-pressed" @click="emit('connection', true)"></button></view>
+          <view class="menu-row"><view class="check-slot"></view><app-icon name="settings" :size="22" /><text class="menu-label">设置</text><button class="menu-hitbox" aria-label="设置" hover-class="menu-pressed" @click="emit('connection', false)"></button></view>
+          <view class="menu-separator"></view><text class="menu-caption">剩余用量</text>
+          <text v-if="entries.length == 0" class="menu-note">连接电脑后查看</text>
+          <view v-for="entry in entries" :key="entry.hostId" class="usage-entry"><text class="usage-computer">{{ entry.label }}</text><text v-if="entry.usageLoading" class="menu-note">正在读取…</text><text v-else-if="entry.windows.length == 0" class="menu-note">{{ entry.online ? '暂无法获取' : '电脑离线' }}</text><text v-for="window in entry.windows" :key="window.label" class="usage-value">{{ window.label }} {{ window.remainingPercent }}%</text></view>
+        </scroll-view>
+      </template>
+      <template v-else>
+        <view class="archive-heading"><view class="back-action"><app-icon name="back" :size="20" /><button class="menu-hitbox" aria-label="返回列表菜单" @click="section = 'main'"></button></view><text class="archive-title">已归档任务</text><view class="back-action"><app-icon name="refresh" :size="19" /><button class="menu-hitbox" aria-label="刷新归档列表" @click="refreshArchives"></button></view></view>
+        <scroll-view direction="vertical" :style="{ height: archiveHeight + 'px' }">
+          <text v-if="entries.length == 0" class="menu-note">连接电脑后查看已归档任务</text>
+          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading" class="menu-note">正在读取…</text><button v-else-if="entry.more && entry.archiveError.length == 0" class="load-more" @click="loadArchives(entry)">加载更多</button></view>
+        </scroll-view><text class="archive-footnote">归档列表仅供查看</text>
+      </template>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref, watch, onUnmounted } from 'vue'
+import { bridge, connection, Computer, ThreadSummary } from '../../services/bridge.uts'
+import AppIcon from '../app-icon/app-icon.uvue'
+type UsageWindow = { label: string, remainingPercent: number }
+type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loaded: boolean, more: boolean, archiveError: string }
+const props = defineProps<{ sort: string, recentFirst: boolean, computerId: string }>()
+const emit = defineEmits<{ dismiss: [], sort: [value: string], recent: [], connection: [adding: boolean] }>()
+const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'project', label: '按项目', icon: 'folder' }, { id: 'time', label: '按时间倒序排列', icon: 'clock' }]
+const section = ref('main')
+const entries = ref([] as MenuComputer[])
+const panelWidth = Math.min(310, uni.getWindowInfo().windowWidth - 32)
+const mainHeight = computed((): number => Math.min(entries.value.length == 0 ? 474 : 441 + entries.value.reduce((height: number, entry: MenuComputer): number => height + 24 + (entry.windows.length > 0 ? entry.windows.length * 30 : 33), 0), uni.getWindowInfo().windowHeight - 82))
+const archiveHeight = Math.max(120, Math.min(440, uni.getWindowInfo().windowHeight - 160))
+let revision = 0
+let archiveRevision = 0
+// 筛选、断线与授权变化立即作废旧结果，额度只在打开菜单时读取。
+function syncEntries() {
+  const version = ++revision
+  archiveRevision++
+  entries.value = connection.computers.filter((computer: Computer): boolean => props.computerId.length == 0 || computer.id == props.computerId).map((computer: Computer): MenuComputer => ({ hostId: computer.id, label: computer.label, online: connection.connected && computer.online, usageLoading: connection.connected && computer.online, windows: [] as UsageWindow[], threads: [] as ThreadSummary[], loading: false, loaded: false, more: false, archiveError: '' } as MenuComputer))
+  entries.value.forEach((entry: MenuComputer) => {
+    if (!entry.online) return
+    bridge.readComputerMenu(entry.hostId, { limit: 1, archived: true, includeUsage: true }).then((result: UTSJSONObject) => {
+      if (version != revision) return
+      const usage = result['usage'] as UTSJSONObject | null
+      entry.windows = usage?.['available'] == true ? JSON.parse<UsageWindow[]>(JSON.stringify(usage!['windows'])) ?? [] as UsageWindow[] : [] as UsageWindow[]
+      entry.usageLoading = false
+    }, (_reason: Error) => { if (version == revision) entry.usageLoading = false })
+  })
+  if (section.value == 'archives') refreshArchives()
+}
+// 分页固定为只读归档查询；旧服务不提供归档确认标记时拒绝显示普通列表。
+function loadArchives(entry: MenuComputer) {
+  if (entry.loading) return
+  if (!entry.online) { entry.archiveError = '电脑离线，恢复连接后重试'; return }
+  const version = revision, pageVersion = archiveRevision
+  entry.loading = true; entry.archiveError = ''
+  bridge.readComputerMenu(entry.hostId, { archived: true, limit: 30, offset: entry.threads.length }).then((result: UTSJSONObject) => {
+    if (version != revision || pageVersion != archiveRevision) return
+    entry.loading = false
+    if (result['archived'] != true) { entry.archiveError = '请更新电脑连接服务后查看归档任务'; return }
+    const rows = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[]
+    entry.threads = entry.threads.concat(rows); entry.loaded = true; entry.more = rows.length == 30 && entry.threads.length < 10000
+  }, (_reason: Error) => { if (version == revision && pageVersion == archiveRevision) { entry.loading = false; entry.archiveError = '暂无法读取，请刷新重试' } })
+}
+// 刷新先作废所有归档在途回执，防止旧分页重新混入新列表。
+function refreshArchives() { archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.more = false; loadArchives(entry) }) }
+function showArchives() { section.value = 'archives'; refreshArchives() }
+function projectName(cwd: string): string { const parts = cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0); return parts.length > 0 ? parts[parts.length - 1] : cwd }
+watch((): string => props.computerId + ':' + connection.configurationRevision + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.label + ':' + computer.online).join('|'), () => { syncEntries() }, { immediate: true })
+onUnmounted(() => { revision++ })
+</script>
+
+<style>
+.menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 50; padding-top: var(--status-bar-height); padding-left: 16px; background-color: rgba(32, 44, 40, 0.04); }
+.menu-panel { margin-top: 50px; border-radius: 28px; padding: 10px 8px; background-color: #fcfcf9; border-style: solid; border-width: 1px; border-color: #dedfd8; overflow: hidden; }
+.menu-row { position: relative; min-height: 46px; flex-direction: row; align-items: center; padding-right: 10px; border-radius: 14px; }
+.check-slot { width: 30px; align-items: center; flex-shrink: 0; }
+.menu-label { margin-left: 14px; font-size: 17px; line-height: 24px; color: #202c28; }
+.menu-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; border-radius: 14px; }
+.menu-pressed { background-color: rgba(40, 92, 73, 0.07); }
+.menu-separator { height: 1px; background-color: #e3e5dc; margin: 10px 18px; }
+.menu-caption { color: #94998f; font-size: 12px; line-height: 20px; padding: 4px 38px; }
+.menu-note { color: #7b827a; font-size: 13px; line-height: 22px; padding: 3px 38px 8px; }
+.usage-entry { padding-bottom: 6px; }
+.usage-computer { color: #7b827a; font-size: 12px; line-height: 18px; padding: 0 38px; }
+.usage-value { font-size: 16px; line-height: 26px; color: #202c28; padding: 2px 38px; }
+.archive-heading { flex-direction: row; align-items: center; padding: 0 8px 8px; }
+.back-action { position: relative; width: 36px; height: 36px; align-items: center; justify-content: center; }
+.archive-title { flex: 1; font-size: 17px; color: #202c28; font-weight: bold; padding-left: 8px; }
+.archive-row { flex-direction: row; padding: 10px 18px; align-items: center; }
+.archive-copy { flex: 1; min-width: 0; margin-left: 12px; }
+.archive-name { color: #202c28; font-size: 15px; line-height: 22px; lines: 2; text-overflow: ellipsis; }
+.archive-project { color: #7b827a; font-size: 12px; line-height: 18px; lines: 1; text-overflow: ellipsis; }
+.archive-footnote { color: #94998f; font-size: 12px; line-height: 20px; padding: 8px 18px 0; }
+.load-more { margin: 8px 18px; padding: 0; height: 36px; font-size: 13px; line-height: 36px; border-radius: 12px; color: #285c49; background-color: #e8eee6; }
+/* #ifdef WEB */
+.menu-panel { box-shadow: 0 12px 40px rgba(32, 44, 40, 0.14); }
+.menu-hitbox::after { border: 0; }
+/* #endif */
+</style>

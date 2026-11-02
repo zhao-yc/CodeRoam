@@ -50,6 +50,8 @@ export class DesktopAdapter extends EventEmitter {
   /** 列表状态来自桌面实时快照；不存在所有者或读取失败时明确返回未知，绝不猜测空闲。 */
   async list(params) {
     const rows=this.index.list(params), result=new Array(rows.length);
+    // 归档列表只读索引，不能订阅或唤醒已经归档的桌面会话。
+    if(params?.archived===true)return rows;
     await this.refreshReadState(rows.map(row=>row.id));
     let next=0;
     const worker=async()=>{

@@ -1,0 +1,57 @@
+import type { ComputerThread } from './thread-list.uts'
+import { taskState, threadIndicator } from './bridge.uts'
+
+export type ThreadGroup = { key: string, title: string, threads: ComputerThread[] }
+export type ListPreferences = { sort: string, recentFirst: boolean }
+export type RecentThread = { key: string, viewedAt: number }
+
+// 未设置偏好或存储内容无效时，统一按项目排列。
+export function normalizeListPreferences(value: ListPreferences | null): ListPreferences {
+  return { sort: value != null && ['priority', 'project', 'time'].indexOf(value.sort) >= 0 ? value.sort : 'project', recentFirst: value?.recentFirst == true }
+}
+
+// 只有真实查看动作才记为最近；仅保存电脑与会话标识，不保存标题和消息。
+export function rememberRecentThread(entries: RecentThread[], key: string, now: number): RecentThread[] {
+  return [{ key, viewedAt: now } as RecentThread].concat(entries.filter((entry: RecentThread): boolean => entry.key != key)).slice(0, 30)
+}
+
+// 待用户处理优先于运行和未读，离线状态不冒充正在运行。
+function priority(thread: ComputerThread): number {
+  if (thread.online && (thread.unansweredQuestionCount ?? 0) > 0) return 0
+  const state = threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? []), thread.hasUnreadTurn ?? null)
+  return state == 'question' || state == 'approval' ? 0 : state == 'running' ? 1 : state == 'unread' ? 2 : 3
+}
+
+// 保留完整规范路径作分组键；末级名称相同的不同路径、不同电脑不会误合并。
+export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: boolean, recent: RecentThread[], dayStart: number): ThreadGroup[] {
+  const threads = rows.slice().sort((left: ComputerThread, right: ComputerThread): number => right.updatedAt - left.updatedAt || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0))
+  const result = [] as ThreadGroup[]
+  const recentRows = recentFirst ? recent.map((entry: RecentThread): ComputerThread | null => threads.find((thread: ComputerThread): boolean => thread.key == entry.key) ?? null).filter((thread: ComputerThread | null): boolean => thread != null) as ComputerThread[] : [] as ComputerThread[]
+  if (recentRows.length > 0) result.push({ key: 'recent', title: '最近', threads: recentRows } as ThreadGroup)
+  threads.forEach((thread: ComputerThread) => {
+    if (recentRows.some((entry: ComputerThread): boolean => entry.key == thread.key)) return
+    let key = '', title = ''
+    if (sort == 'project') {
+      let cwd = thread.cwd.split('\\').join('/')
+      while (cwd.endsWith('/') && cwd.length > 1) cwd = cwd.slice(0, -1)
+      key = 'project:' + thread.hostId + ':' + cwd
+      const parts = cwd.split('/')
+      title = cwd.length > 0 ? parts[parts.length - 1] : '未指定项目'
+      // 同名项目使用电脑名和完整路径区分，普通项目保留简洁名称。
+      const duplicate = threads.some((entry: ComputerThread): boolean => entry.key != thread.key && entry.cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0).pop() == title && (entry.hostId != thread.hostId || entry.cwd.split('\\').join('/').replace(/\/$/, '') != cwd))
+      if (duplicate) title += ' · ' + thread.hostLabel + ' · ' + cwd
+    } else if (sort == 'priority') {
+      const rank = priority(thread)
+      key = 'priority:' + rank.toString()
+      title = ['待处理', '执行中', '未读', '其他会话'][rank]
+    } else {
+      key = thread.updatedAt >= dayStart ? 'today' : thread.updatedAt >= dayStart - 86400000 ? 'yesterday' : 'older'
+      title = key == 'today' ? '今天' : key == 'yesterday' ? '昨天' : '更早'
+    }
+    let group = result.find((entry: ThreadGroup): boolean => entry.key == key)
+    if (group == null) { group = { key, title, threads: [] as ComputerThread[] } as ThreadGroup; result.push(group) }
+    group.threads.push(thread)
+  })
+  if (sort == 'priority') result.sort((left: ThreadGroup, right: ThreadGroup): number => left.key == 'recent' ? -1 : right.key == 'recent' ? 1 : left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
+  return result
+}

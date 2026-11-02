@@ -1,11 +1,11 @@
 <template>
   <view class="page">
     <view class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
-    <scroll-view direction="vertical" class="content">
+    <scroll-view direction="vertical" class="content" :scroll-into-view="connectionAnchor">
       <view class="body">
         <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的会话会自动同步到首页。</text>
         <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的会话' : '恢复连接后会自动同步会话' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><app-icon name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" aria-label="重新连接" @click="reconnect"></button></view></view></view>
-        <view class="section"><text class="section-title">接入配置</text><text class="description">粘贴电脑生成的连接配置。</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands" /><text class="privacy-note">配置仅用于连接你的电脑，请勿分享给他人。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands" @click="importConfig">导入并连接</button><text class="hint">更换连接前，请先确认当前操作已完成。</text></view>
+        <view id="connection-config" class="section"><text class="section-title">接入配置</text><text class="description">粘贴电脑生成的连接配置。</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands" /><text class="privacy-note">配置仅用于连接你的电脑，请勿分享给他人。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands" @click="importConfig">导入并连接</button><text class="hint">更换连接前，请先确认当前操作已完成。</text></view>
         <view v-if="connection.computers.length > 0" class="section"><text class="section-title">已授权的电脑</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame" ><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', computer.online ? 'online' : 'offline']"></view><text class="state">{{ computer.online ? '在线' : '离线' }}</text><view class="selected-mark"><app-icon v-if="computer.id == connection.hostId" name="check" :size="20" /></view><button class="action-hitbox" hover-class="action-pressed"  :aria-label="'切换到' + computer.label" @click="selectComputer(computer.id)"></button></view></view>
         <text v-if="connection.error.length > 0" class="pending-note">{{ connection.error }}</text>
         <text class="hint closing-note">连接配置会保存在当前设备，刷新后自动连接，请勿在公共设备上保存。</text>
@@ -20,6 +20,9 @@ import { computed, ref } from 'vue'
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 const configuration = ref('')
+const connectionAnchor = ref('')
+// 菜单的添加连接入口直接定位配置区，普通设置入口仍从概览开始。
+onLoad((options) => { if (options['add'] == 'true') connectionAnchor.value = 'connection-config' })
 const currentComputerIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId) ?? null))
 function iconForComputer(computer: Computer): string { return computerIcon(computer) }
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }

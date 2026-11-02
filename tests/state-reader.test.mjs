@@ -15,6 +15,21 @@ function fixture(extraColumns=[]) {
   return {db,reader,add(row){const keys=Object.keys(row);db.prepare(`INSERT INTO threads (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`).run(...keys.map(key=>row[key]));},close(){db.close();fs.rmSync(directory,{recursive:true});}};
 }
 
+test('归档查询分页搜索且不混入普通会话，也不修改索引',()=>{
+  const f=fixture(['thread_source']);
+  try {
+    f.add({id:'active',title:'当前会话',cwd:'/synthetic',updated_at:4});
+    f.add({id:'archived-new',title:'归档甲',cwd:'/synthetic',updated_at:3,archived:1});
+    f.add({id:'archived-old',title:'归档乙',cwd:'/synthetic',updated_at:2,archived:1});
+    f.add({id:'hidden',title:'内部',updated_at:5,archived:1,thread_source:'subagent'});
+    const before=f.db.prepare('SELECT * FROM threads ORDER BY id').all();
+    assert.deepEqual(f.reader.list().map(row=>row.id),['active']);
+    assert.deepEqual(f.reader.list({archived:true,limit:1,offset:1}).map(row=>row.id),['archived-old']);
+    assert.deepEqual(f.reader.list({archived:true,search:'归档甲'}).map(row=>row.id),['archived-new']);
+    assert.deepEqual(f.db.prepare('SELECT * FROM threads ORDER BY id').all(),before);
+  } finally {f.close();}
+});
+
 test('按真实来源隐藏内部审核和子智能体，保留同名及未知来源的普通聊天',()=>{
   const f=fixture(['source','thread_source']);
   try {
