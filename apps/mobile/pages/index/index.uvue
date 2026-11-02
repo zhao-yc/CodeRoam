@@ -43,7 +43,7 @@
     <view v-if="!editingNewConversation" class="new-entry-dock"><view class="new-entry action-frame"><text class="new-entry-plus">＋</text><text class="new-entry-placeholder">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="openNewConversation"></button></view><view class="entry-safe-area"></view></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
     <new-conversation v-if="editingNewConversation" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
-    <view v-if="archiveSuccessVisible" class="archive-success" role="status" aria-label="归档成功"><text class="archive-success-text">归档成功</text></view>
+    <view v-if="archiveSuccessVisible" class="archive-success" role="status" aria-label="归档成功"><app-icon name="check" :size="22" tone="light" /><text class="archive-success-text">归档成功</text></view>
   </view>
 </template>
 
@@ -246,8 +246,8 @@ onBackPress((): boolean => { if (editingComputerId.value.length > 0) { if (!conn
 .notice { margin: 8px 16px 0; padding: 12px; border-radius: 12px; background-color: #fff1e9; flex-shrink: 0; }
 .notice-text { font-size: 12px; line-height: 18px; color: #8d4d2b; }
 /* 提示由列表节点持有，独立于 uni.showToast 和详情页生命周期。 */
-.archive-success { position: absolute; left: 100px; right: 100px; bottom: 110px; padding: 12px; border-radius: 12px; background-color: #202c28; align-items: center; z-index: 20; }
-.archive-success-text { color: #ffffff; font-size: 14px; line-height: 22px; }
+.archive-success { position: absolute; left: 100px; right: 100px; bottom: 110px; padding: 12px; border-radius: 12px; background-color: #202c28; flex-direction: row; align-items: center; justify-content: center; z-index: 20; }
+.archive-success-text { color: #ffffff; font-size: 14px; line-height: 22px; margin-left: 8px; }
 .thread-list { flex: 1; height: 0; min-height: 0; }
 .list-content { padding: 0 16px; }
 .thread-group { margin-top: 8px; }
