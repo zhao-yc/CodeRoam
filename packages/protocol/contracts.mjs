@@ -18,6 +18,8 @@ WRITE_METHODS.add('thread.archive');
 WRITE_METHODS.add('thread.delete');
 READ_METHODS.add('thread.permissions.read');
 READ_METHODS.add('thread.create.permissions');
+READ_METHODS.add('thread.plugins.read');
+READ_METHODS.add('thread.create.plugins');
 WRITE_METHODS.add('thread.permissions.update');
 export const METHODS = new Set([...READ_METHODS, ...WRITE_METHODS, ...UPLOAD_METHODS, ...RELAY_METHODS]);
 export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
@@ -39,6 +41,11 @@ export function validateRequest(message) {
   if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(message.requestId)) throw new BridgeError('BAD_REQUEST_ID', '请求编号不合法');
   if (!METHODS.has(message.method)) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的接口列表中');
   if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new BridgeError('BAD_PARAMS', '请求参数必须是对象');
+  if (message.params.pluginIds !== undefined) {
+    if (!['turn.send', 'turn.steer'].includes(message.method) || (message.params.queueAction !== undefined && message.params.queueAction !== 'enqueue')) throw new BridgeError('BAD_PARAMS', '插件只能随发送、追加指令或入队提交');
+    validatePluginIds(message.params.pluginIds);
+  }
+  if (['turn.send', 'turn.steer'].includes(message.method)) validateTurnInput(message.params);
   if (message.method === 'turn.retry') validateTurnRetry(message.params);
   if (message.method === 'threads.list') {
     const p=message.params;
@@ -73,13 +80,14 @@ export function validateRequest(message) {
   if(message.params.images!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!Array.isArray(message.params.images)||message.params.images.length>3))throw new BridgeError('BAD_PARAMS','图片只能随发送或追加指令提交，每次最多3张');
   if (UPLOAD_METHODS.has(message.method)) requireString(message.params.threadId, '聊天编号', 200);
   if (message.params.attachments !== undefined && (!['turn.send', 'turn.steer'].includes(message.method) || !Array.isArray(message.params.attachments) || message.params.attachments.length > 3)) throw new BridgeError('BAD_ATTACHMENTS', '附件只能随发送或追加指令提交，每次最多3个');
-  if (message.method === 'thread.create' || message.method === 'thread.create.settings' || message.method === 'thread.create.permissions') {
+  if (message.method === 'thread.create' || message.method === 'thread.create.settings' || message.method === 'thread.create.permissions' || message.method === 'thread.create.plugins') {
     requireString(message.params.projectId, '项目编号', 200);
     const allowed = message.method === 'thread.create' ? ['projectId', 'title'] : ['projectId'];
     if (Object.keys(message.params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '创建聊天仅接受电脑端项目编号与标题');
     if (message.params.title !== undefined) requireString(message.params.title, '聊天标题', 80);
   } else if (message.method.startsWith('thread.') || message.method.startsWith('turn.') || message.method === 'approval.reply' || message.method === 'question.reply') requireString(message.params.threadId, '聊天编号', 200);
   if (message.method === 'thread.permissions.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '权限读取仅接受聊天编号');
+  if (message.method === 'thread.plugins.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '插件读取仅接受聊天编号');
   if (message.method === 'thread.permissions.update') {
     const p = message.params;
     if (Object.keys(p).some(key => !['threadId','mode','expectedRevision','confirmedFullAccess'].includes(key)) || !['default','auto-review','read-only','full-access'].includes(p.mode) || typeof p.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(p.expectedRevision) || (p.confirmedFullAccess !== undefined && typeof p.confirmedFullAccess !== 'boolean') || (p.mode === 'full-access' && p.confirmedFullAccess !== true)) throw new BridgeError('BAD_PERMISSIONS', '权限参数无效或尚未确认完整访问');
@@ -92,7 +100,7 @@ export function validateRequest(message) {
   // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
   if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {
     const p = message.params, enqueue = p.queueAction === 'enqueue';
-    if (message.method !== 'turn.send' || !['enqueue','steer','cancel'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
+    if (message.method !== 'turn.send' || !['enqueue','steer','cancel'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
     if (!enqueue) requireString(p.queueId, '排队消息编号', 80);
     if (p.queueAction === 'steer') requireString(p.expectedTurnId, '当前任务编号', 200);
     if (enqueue && p.attachments?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id))) throw new BridgeError('BAD_ATTACHMENTS', '排队附件编号无效');
@@ -108,6 +116,20 @@ export function validateRequest(message) {
 export function requireString(value, label, maximum = 32000) {
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum) throw new BridgeError('BAD_PARAMS', `${label}为空或超出允许长度`);
   return value;
+}
+
+/** 插件编号只能是有界的目录标识，不能携带 URI、文件路径或转义后的路径。 */
+export function validatePluginIds(ids) {
+  if (ids === undefined) return [];
+  if (!Array.isArray(ids) || ids.length > 20 || ids.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._@-]{0,199}$/.test(id))) throw new BridgeError('BAD_PARAMS', '插件编号无效，每条消息最多选择20个插件');
+  return [...new Set(ids)];
+}
+
+/** 手机只提交消息内容和目录编号，原生输入及恢复上下文均由电脑构造。 */
+export function validateTurnInput(params) {
+  const allowed = ['threadId','text','images','attachments','expectedTurnId','planMode','resetPlanAfterSend','planId','planAction','queueAction','queueId','pluginIds'];
+  if (Object.keys(params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '发送参数包含不允许的字段');
+  return validatePluginIds(params.pluginIds);
 }
 
 /** 重试只能指定失败轮次，正文、模型和权限等设置均由原桌面会话继承。 */

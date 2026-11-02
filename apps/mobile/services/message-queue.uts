@@ -1,4 +1,5 @@
-export type QueuedMessage = { id: string, text: string, imageCount: number, attachmentCount: number, state: string, error: string }
+import type { SelectedPlugin } from './plugins.uts'
+export type QueuedMessage = { id: string, text: string, imageCount: number, attachmentCount: number, state: string, error: string, plugins?: SelectedPlugin[] }
 
 // 排队和已执行消息分开展示，不能把成功入队误报成已经送达模型。
 export function queuedMessageLabel(state: string): string {

@@ -5,6 +5,7 @@
       <text class="queue-state">{{ statusLabel(message.state) }}</text>
       <text v-if="message.text.length > 0" class="queue-text" selectable>{{ message.text }}</text>
       <text v-if="message.imageCount + message.attachmentCount > 0" class="queue-caption">{{ message.imageCount > 0 ? message.imageCount + ' 张图片 ' : '' }}{{ message.attachmentCount > 0 ? message.attachmentCount + ' 个附件' : '' }}</text>
+      <text v-for="plugin in message.plugins ?? []" :key="plugin.id" class="queue-caption">插件 · {{ plugin.displayName }}</text>
       <text v-if="message.error.length > 0" class="queue-error">{{ message.error }}</text>
       <view class="queue-actions">
         <button v-if="message.state == 'queued'" class="queue-steer" :disabled="disabled || !running" @click="steer(message.id)">追加到当前任务</button>

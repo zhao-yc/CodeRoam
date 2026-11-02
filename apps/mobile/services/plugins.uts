@@ -1,0 +1,19 @@
+export type SelectedPlugin = { id: string, displayName: string }
+export type PluginOption = { id: string, name: string, displayName: string, description: string }
+export type PluginsResponse = { supportsPluginSelection: boolean, plugins: PluginOption[] }
+
+// 搜索只处理电脑已确认的显示字段，不读取插件目录、配置或授权信息。
+export function filterPlugins(plugins: PluginOption[], query: string): PluginOption[] {
+  const keyword = query.trim().toLowerCase()
+  return keyword.length == 0 ? plugins : plugins.filter((plugin: PluginOption): boolean => (plugin.displayName + ' ' + plugin.name + ' ' + plugin.description).toLowerCase().indexOf(keyword) >= 0)
+}
+
+// 弹层编辑独立副本，只有点击确认才覆盖调用方的草稿选择。
+export function copyPluginSelection(plugins: SelectedPlugin[]): SelectedPlugin[] {
+  return plugins.map((plugin: SelectedPlugin): SelectedPlugin => ({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin))
+}
+
+// 用户消息保留可读插件标签；引用仅作展示，不把内部协议链接交给浏览器打开。
+export function pluginMessageText(text: string): string {
+  return text.replace(/\[@((?:\\.|[^\\\]])+)\]\(plugin:\/\/[a-zA-Z0-9][a-zA-Z0-9._@-]{0,199}\)/g, (_match: string, label: string): string => '@' + label.replace(/\\([\\\[\]])/g, '$1'))
+}

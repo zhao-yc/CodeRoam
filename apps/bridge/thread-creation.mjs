@@ -45,6 +45,22 @@ export function desktopCodexPath(configuredPath, { platform = process.platform, 
   throw new BridgeError('CREATION_UNSUPPORTED', '未找到可访问的 Codex 程序，请先打开电脑端 Codex，或配置电脑连接服务的本机 CLI 路径');
 }
 
+/** 实例模式只认已核验桌面安装目录的随附 CLI，不回退到其他安装或环境变量。 */
+export function instanceCodexPath(instance, { exists = fs.existsSync, stat = fs.statSync } = {}) {
+  const paths = instance.platform === 'darwin' ? path.posix : path.win32;
+  const executable = instance.executable;
+  if (typeof executable === 'string' && paths.isAbsolute(executable)) {
+    const directory = paths.dirname(executable);
+    const candidates = instance.platform === 'darwin'
+      ? ['../Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', '../Resources/codex'].map(relative => paths.resolve(directory, relative))
+      : [paths.join(directory, 'resources', 'codex.exe')];
+    for (const candidate of candidates) {
+      try { if (exists(candidate) && stat(candidate).isFile()) return candidate; } catch { /* 原安装不可用时拒绝跨实例回退。 */ }
+    }
+  }
+  throw new BridgeError('CREATION_UNSUPPORTED', '所选桌面的随附 Codex 程序不可用，请核对该实例的安装');
+}
+
 /** 短连接只读取配置或创建空会话；轮次执行仍交给原桌面所有者。 */
 export class ThreadCreationClient {
   constructor({ codexHome = path.join(os.homedir(), '.codex'), codexCliPath, launch = spawn, resolveCli = desktopCodexPath, timeoutMs = 12000 } = {}) {

@@ -29,7 +29,7 @@
             <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
             <markdown-body v-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
-            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.text }}</text>
+            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? pluginMessageText(entry.text) : entry.text }}</text>
             <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
               <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
               <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
@@ -74,6 +74,7 @@
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
       <view class="composer-panel" :class="{ 'composer-compact': !composerExpanded }" @click="dismissGoal">
+        <scroll-view v-if="draftPlugins.length > 0" direction="vertical" class="draft-plugins" :style="{ height: Math.min(132, draftPlugins.length * 44) + 'px' }"><plugin-chips :plugins="draftPlugins" :disabled="!canWrite" @remove="removePlugin" /></scroll-view>
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
@@ -101,13 +102,18 @@
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
     <task-notice :active="pageVisible" header-id="conversation-header" :host-id="pageHostId" :thread-id="pageThreadId" />
+    <plugin-picker v-if="pluginOpen && pageVisible" :host-id="pageHostId" :thread-id="pageThreadId" project-id="" :plugins="draftPlugins" @confirm="selectPlugins" @close="pluginOpen = false" />
   </view>
 </template>
 
 
 <script setup lang="uts">
 import { computed, ref, watch, nextTick } from 'vue'
-import { showPluginManagement } from '../../services/composer-actions.uts'
+import PluginPicker from '../../components/plugin-picker/plugin-picker.uvue'
+import PluginChips from '../../components/plugin-chips/plugin-chips.uvue'
+import type { SelectedPlugin } from '../../services/plugins.uts'
+import { pluginMessageText } from '../../services/plugins.uts'
+import { readDraftPlugins, saveDraftPlugins } from '../../services/composer.uts'
 import MessageQueue from '../../components/message-queue/message-queue.uvue'
 import { QueuedMessage } from '../../services/message-queue.uts'
 import { messageSendingPreferences } from '../../services/message-sending-preferences.uts'
@@ -172,6 +178,8 @@ let predictionRevision = 0
 let predictionDeadline = 0
 const draft = computed((): string => readDraft(pageHostId.value, pageThreadId.value))
 const draftImages = computed((): DraftImage[] => readDraftImages(pageHostId.value, pageThreadId.value))
+const draftPlugins = computed((): SelectedPlugin[] => readDraftPlugins(pageHostId.value, pageThreadId.value))
+const pluginOpen = ref(false)
 const imageBusy = ref(false)
 const draftFiles = computed((): DraftFile[] => readDraftFiles(pageHostId.value, pageThreadId.value))
 const filesReady = computed((): boolean => draftFiles.value.every((file: DraftFile): boolean => file.status == 'ready'))
@@ -228,7 +236,8 @@ const goalOpenRequest = ref(0)
 const goalCloseRequest = ref(0)
 const pageVisible = ref(false)
 onShow(() => { pageVisible.value = true })
-onHide(() => { pageVisible.value = false })
+onHide(() => { pageVisible.value = false; pluginOpen.value = false })
+watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false })
 const pendingAction = ref('')
 const activating = ref(false)
 const autoConnectPending = ref(false)
@@ -381,7 +390,7 @@ onLoad((options: OnLoadOptions) => {
 })
 
 // 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
-const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && pendingQuestionCount.value == 0 && approvalCount.value == 0)
+const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && draftPlugins.value.length == 0 && pendingQuestionCount.value == 0 && approvalCount.value == 0)
 const visiblePrediction = computed((): string => predictionAllowed.value ? predictionText.value : '')
 function resetPrediction() { predictionRevision++; clearTimeout(predictionTimer); clearTimeout(predictionExpiryTimer); predictionText.value = ''; predictionDeadline = 0 }
 // 按完成时间串行轮询；旧页面和旧轮次的迟到回执不会写回当前输入框。
@@ -1018,7 +1027,7 @@ function removeFile(id: string) {
 }
 function composerAction(action: string) {
   if (!canWrite.value) return
-  if (action == 'plugin') { closeComposerMenu(); showPluginManagement(); return }
+  if (action == 'plugin') { closeComposerMenu(); predictionFocus.value = false; uni.hideKeyboard(); pluginOpen.value = true; return }
   if (action == 'goal') { showGoal(); return }
   if (action == 'plan') { if (selectSetting('mode', planEnabled.value ? 'default' : 'plan')) focusComposerInput(); return }
   closeComposerMenu()
@@ -1036,6 +1045,9 @@ function focusComposerInput() {
     predictionFocus.value = true
   })
 }
+// 面板挂载期间固定会话归属，关闭页面或切换电脑后不保留旧面板。
+function selectPlugins(plugins: SelectedPlugin[]) { if (!canWrite.value) return; saveDraftPlugins(pageHostId.value, pageThreadId.value, plugins); pluginOpen.value = false; focusComposerInput() }
+function removePlugin(id: string) { if (canWrite.value) saveDraftPlugins(pageHostId.value, pageThreadId.value, draftPlugins.value.filter((plugin: SelectedPlugin): boolean => plugin.id != id)) }
 function sizeLabel(size: number): string { return fileSizeLabel(size) }
 
 
@@ -1058,7 +1070,7 @@ function onDraftLineChange(event: UniTextareaLineChangeEvent) {
   if (draft.value.length > 0) draftHeight.value = Math.max(64, Math.min(144, event.detail.height))
   updateComposerGeometry()
 }
-const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value, attachmentBusy: imageBusy.value }))
+const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || draftPlugins.value.length > 0, attachmentBusy: imageBusy.value }))
 const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
 // 高度由一行工具栏及编辑空间组成，数值过渡期间两端按钮始终贴住底边。
 const composerStageHeight = computed((): number => composerExpanded.value ? composerHeight.value + 58 : 44)
@@ -1166,6 +1178,7 @@ function send() {
   const queue = messageSendingPreferences.behavior == 'queue' && connection.snapshot?.supportsMessageQueue == true
   if (!steer && !queue && running) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
   const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id) }
+  if (draftPlugins.value.length > 0) params['pluginIds'] = draftPlugins.value.map((plugin: SelectedPlugin): string => plugin.id)
   if (queue) params['queueAction'] = 'enqueue'
   if (steer) params['expectedTurnId'] = activeTurnId.value
   const request = bridge.request(method, params, true)

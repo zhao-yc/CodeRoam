@@ -1,0 +1,27 @@
+<template>
+  <view v-if="plugins.length > 0" class="plugin-chips" aria-label="本次消息使用的插件">
+    <view v-for="plugin in plugins" :key="plugin.id" class="plugin-chip">
+      <app-icon name="plugin" :size="15" tone="muted" /><text class="plugin-chip-name">{{ plugin.displayName }}</text>
+      <view class="plugin-chip-remove action-frame"><app-icon name="close" :size="12" tone="muted" /><button class="action-hitbox" :disabled="disabled" :aria-label="'移除插件 ' + plugin.displayName" @click="remove(plugin.id)"></button></view>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import AppIcon from '../app-icon/app-icon.uvue'
+import type { SelectedPlugin } from '../../services/plugins.uts'
+const props = defineProps<{ plugins: SelectedPlugin[], disabled: boolean }>()
+const emit = defineEmits<{ (event: 'remove', id: string): void }>()
+// 删除只修改本次草稿，插件本身仍由电脑端管理。
+function remove(id: string) { if (!props.disabled) emit('remove', id) }
+</script>
+<style>
+.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.plugin-chips { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
+.plugin-chip { flex-direction: row; align-items: center; max-width: 100%; background-color: #eef0eb; border-radius: 10px; padding: 3px 2px 3px 9px; gap: 5px; }
+.plugin-chip-name { color: #536050; font-size: 12px; line-height: 20px; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-chip-remove { width: 32px; height: 32px; align-items: center; justify-content: center; flex-shrink: 0; }
+/* #ifdef WEB */
+.action-hitbox::after { border: none; }
+/* #endif */
+</style>

@@ -15,6 +15,8 @@ import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { MacInstanceIpcClient, navigateMacInstance } from './macos-instance-client.mjs';
 import { withDesktopUi } from './desktop-ui-coordinator.mjs';
+import { NewThreadService } from './new-thread-service.mjs';
+import { ThreadCreationClient, instanceCodexPath } from './thread-creation.mjs';
 
 /** 固定到本次已核验进程和随机管道；管道丢失后不能选择另一个桌面代替。 */
 class InstanceNativeDesktop extends NativeDesktop {
@@ -53,7 +55,10 @@ export class InstanceRuntime {
       if (!own && await this.client.ownedElsewhere(id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '此聊天正在另一个实例中打开，请切换到对应设备');
       return activate(id, options);
     };
-    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });
+    // 目录查询和创建共用原实例的 CODEX_HOME 与已核验桌面随附 CLI。
+    const desktopIdentity = { platform: instance.platform, executable: instance.executable };
+    const newThreads = new NewThreadService({ codexHome: instance.codexHome, catalog: this.adapter.modelCatalog, creation: new ThreadCreationClient({ codexHome: instance.codexHome, resolveCli: () => instanceCodexPath(desktopIdentity) }) });
+    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });
     this.agent.predictions.close();
     this.agent.predictions = new ComposerPredictionReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port }] : [] });
     this.agent.fileReports.close();

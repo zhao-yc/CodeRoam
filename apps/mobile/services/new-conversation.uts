@@ -4,9 +4,11 @@ import { bridge, connection } from './bridge.uts'
 import { ExecutionSettings } from './execution-settings.uts'
 import { DraftImage, DraftFile, saveDraft, saveDraftImages, saveDraftFiles, rememberSubmission, settleSubmission } from './composer.uts'
 import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
+import { saveDraftPlugins } from './composer.uts'
+import type { SelectedPlugin } from './plugins.uts'
 
 export type NewProject = { id: string, label: string, cwd: string }
-export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], settings: ExecutionSettings | null, settingsChanged: boolean, settingsApplied: boolean, permissionMode: string, permissionConfirmed: boolean, permissionsApplied: boolean, threadId: string, pendingAction: string, pendingCommandId: string }
+export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], settings: ExecutionSettings | null, settingsChanged: boolean, settingsApplied: boolean, permissionMode: string, permissionConfirmed: boolean, permissionsApplied: boolean, threadId: string, pendingAction: string, pendingCommandId: string }
 const drafts = reactive<NewDraft[]>([])
 const submitting = new Set<string>()
 
@@ -16,7 +18,7 @@ export function newDraft(hostId: string, projectId: string): NewDraft {
   if (found != null) return found
   // 不再恢复升级前的创建目标，避免旧记录锁住发送或将新消息送到历史会话。
   try { uni.removeStorageSync('codex-mobile-new-' + hostId + '-' + projectId) } catch (_) {}
-  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], settings: null, settingsChanged: false, settingsApplied: false, permissionMode: '', permissionConfirmed: false, permissionsApplied: false, threadId: '', pendingAction: '', pendingCommandId: '' }
+  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], plugins: [] as SelectedPlugin[], settings: null, settingsChanged: false, settingsApplied: false, permissionMode: '', permissionConfirmed: false, permissionsApplied: false, threadId: '', pendingAction: '', pendingCommandId: '' }
   drafts.push(draft)
   return drafts[drafts.length - 1]
 }
@@ -39,9 +41,9 @@ export function beginNewConversation() {
 export function assignUnselectedDraft(hostId: string, projectId: string) {
   const source = newDraft(hostId, '')
   const target = newDraft(hostId, projectId)
-  if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.threadId.length == 0) {
-    target.text = source.text; target.images = source.images; target.files = source.files
-    source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]
+  if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.plugins.length == 0 && target.threadId.length == 0) {
+    target.text = source.text; target.images = source.images; target.files = source.files; target.plugins = source.plugins
+    source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]; source.plugins = [] as SelectedPlugin[]
   }
 }
 
@@ -95,7 +97,7 @@ async function uploadNewFiles(draft: NewDraft) {
 // 确认首条消息后再清空新建草稿，已创建编号在失败重试时继续使用。
 export function finishNewDraft(draft: NewDraft) {
   draft.permissionMode = ''; draft.permissionConfirmed = false
-  draft.text = ''; draft.images = [] as DraftImage[]; draft.files = [] as DraftFile[]
+  draft.text = ''; draft.images = [] as DraftImage[]; draft.files = [] as DraftFile[]; draft.plugins = [] as SelectedPlugin[]
   draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''; draft.settingsApplied = false; draft.permissionsApplied = false
 }
 
@@ -148,8 +150,11 @@ async function submitNewConversation(draft: NewDraft, progress: (message: string
   await uploadNewFiles(draft)
   const threadId = draft.threadId
   saveDraft(draft.hostId, threadId, text); saveDraftImages(draft.hostId, threadId, draft.images.slice()); saveDraftFiles(draft.hostId, threadId, draft.files.slice())
+  if (draft.plugins.length > 0) saveDraftPlugins(draft.hostId, threadId, draft.plugins)
   progress('正在发送…')
-  const request = writeStep(draft, 'send', 'turn.send', { threadId, text, images: draft.images.map((image: DraftImage): string => image.src), attachments: draft.files.map((file: DraftFile): string => file.id), expectedTurnId: '' })
+  const params: UTSJSONObject = { threadId, text, images: draft.images.map((image: DraftImage): string => image.src), attachments: draft.files.map((file: DraftFile): string => file.id), expectedTurnId: '' }
+  if (draft.plugins.length > 0) params['pluginIds'] = draft.plugins.map((plugin: SelectedPlugin): string => plugin.id)
+  const request = writeStep(draft, 'send', 'turn.send', params)
   const commandId = draft.pendingCommandId
   rememberSubmission(draft.hostId, threadId, commandId, text)
   try { await request; settleSubmission(draft.hostId, commandId, true); finishNewDraft(draft); return threadId }

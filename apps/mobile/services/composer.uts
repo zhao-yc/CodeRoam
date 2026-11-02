@@ -1,16 +1,20 @@
 import { reactive } from 'vue'
+import type { SelectedPlugin } from './plugins.uts'
 
 type Draft = { hostId: string, threadId: string, text: string, revision: number }
 export type DraftImage = { id: string, src: string }
 export type DraftFile = { id: string, name: string, size: number, source: string, data: string, status: string, progress: number, error: string }
 type FileDraft = { hostId: string, threadId: string, files: DraftFile[] }
 type ImageDraft = { hostId: string, threadId: string, images: DraftImage[] }
-export type Submission = { hostId: string, threadId: string, commandId: string, text: string, draftRevision: number, imageIds?: string[], fileIds?: string[] }
+type PluginDraft = { hostId: string, threadId: string, plugins: SelectedPlugin[], revision: number }
+export type Submission = { hostId: string, threadId: string, commandId: string, text: string, draftRevision: number, imageIds?: string[], fileIds?: string[], pluginRevision?: number }
 type ComposerMemory = { drafts: Draft[], submissions: Submission[], nextRevision: number }
 // 草稿只保存在应用运行期内存，按电脑和会话隔离，不写入浏览器持久存储。
 const memory = reactive<ComposerMemory>({ drafts: [] as Draft[], submissions: [] as Submission[], nextRevision: 0 })
 const imageDrafts = reactive<ImageDraft[]>([])
 const fileDrafts = reactive<FileDraft[]>([])
+const pluginDrafts = reactive<PluginDraft[]>([])
+let pluginRevision = 0
 
 // 仅在原桌面确认永久删除后清理同一电脑的草稿、附件和发送记录。
 export function clearDeletedDrafts(hostId: string, threadIds: string[]) {
@@ -18,6 +22,19 @@ export function clearDeletedDrafts(hostId: string, threadIds: string[]) {
   for (let index = memory.submissions.length - 1; index >= 0; index--) if (memory.submissions[index].hostId == hostId && threadIds.indexOf(memory.submissions[index].threadId) >= 0) memory.submissions.splice(index, 1)
   for (let index = imageDrafts.length - 1; index >= 0; index--) if (imageDrafts[index].hostId == hostId && threadIds.indexOf(imageDrafts[index].threadId) >= 0) imageDrafts.splice(index, 1)
   for (let index = fileDrafts.length - 1; index >= 0; index--) if (fileDrafts[index].hostId == hostId && threadIds.indexOf(fileDrafts[index].threadId) >= 0) fileDrafts.splice(index, 1)
+  for (let index = pluginDrafts.length - 1; index >= 0; index--) if (pluginDrafts[index].hostId == hostId && threadIds.indexOf(pluginDrafts[index].threadId) >= 0) pluginDrafts.splice(index, 1)
+}
+
+// 插件选择只属于本次消息；按电脑和会话保留，绝不写入持久存储。
+export function readDraftPlugins(hostId: string, threadId: string): SelectedPlugin[] {
+  return pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.plugins ?? [] as SelectedPlugin[]
+}
+
+export function saveDraftPlugins(hostId: string, threadId: string, plugins: SelectedPlugin[]) {
+  const index = pluginDrafts.findIndex((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  if (index >= 0) pluginDrafts.splice(index, 1)
+  pluginRevision++
+  if (plugins.length > 0) pluginDrafts.push({ hostId, threadId, plugins: plugins.map((plugin: SelectedPlugin): SelectedPlugin => ({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin)), revision: pluginRevision } as PluginDraft)
 }
 
 // 文件和图片一样按电脑与会话隔离，仅在运行期保留，上传正文不写持久化配置。
@@ -57,7 +74,7 @@ export function saveDraft(hostId: string, threadId: string, text: string) {
 
 export function rememberSubmission(hostId: string, threadId: string, commandId: string, text: string) {
   const draft = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == threadId)
-  memory.submissions.push({ hostId, threadId, commandId, text, draftRevision: draft?.revision ?? -1, imageIds: readDraftImages(hostId, threadId).map((image: DraftImage): string => image.id), fileIds: readDraftFiles(hostId, threadId).map((file: DraftFile): string => file.id) } as Submission)
+  memory.submissions.push({ hostId, threadId, commandId, text, draftRevision: draft?.revision ?? -1, imageIds: readDraftImages(hostId, threadId).map((image: DraftImage): string => image.id), fileIds: readDraftFiles(hostId, threadId).map((file: DraftFile): string => file.id), pluginRevision: pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1 } as Submission)
 }
 
 // 成功回执或账本核对成功才清除原草稿，发送后新输入的文字始终保留。
@@ -70,5 +87,7 @@ export function settleSubmission(hostId: string, commandId: string, success: boo
   // 只移除本次已成功发送的图片，保留提交后新选的图片；失败和未知结果继续保留。
   if (success) saveDraftImages(hostId, submitted.threadId, readDraftImages(hostId, submitted.threadId).filter((image: DraftImage): boolean => (submitted.imageIds ?? [] as string[]).indexOf(image.id) < 0))
   if (success) saveDraftFiles(hostId, submitted.threadId, readDraftFiles(hostId, submitted.threadId).filter((file: DraftFile): boolean => (submitted.fileIds ?? [] as string[]).indexOf(file.id) < 0))
+  // 发送期间重新选择过插件时，旧回执不能清掉下一条消息的选择。
+  if (success && pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)?.revision == submitted.pluginRevision) saveDraftPlugins(hostId, submitted.threadId, [] as SelectedPlugin[])
   memory.submissions.splice(index, 1)
 }

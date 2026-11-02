@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BridgeError } from '../../packages/protocol/contracts.mjs';
+import { BridgeError, validatePluginIds } from '../../packages/protocol/contracts.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
 
 const WATCHER = 'message-queue';
@@ -26,7 +26,7 @@ export class MessageQueue {
   decorate(snapshot) {
     const queuedMessages = this.rows(snapshot.threadId).map(row => {
       const payload = JSON.parse(row.payload);
-      return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error };
+      return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({id,displayName}) => ({id,displayName})) } : {}) };
     });
     return { ...snapshot, supportsMessageQueue: true, queuedMessages };
   }
@@ -40,13 +40,20 @@ export class MessageQueue {
     const { threadId, queueAction } = params;
     if (this.blocked(threadId)) throw new BridgeError('DELETE_IN_PROGRESS', '该聊天正在删除，不能操作排队消息');
     if (queueAction === 'enqueue') {
+      const pluginIds = validatePluginIds(params.pluginIds);
       const images = validateImages(params.images), text = params.text ?? '', attachments = params.attachments ?? [];
       if (typeof text !== 'string' || text.length > 32000 || (!text.trim() && !images.length && !attachments.length)) throw new BridgeError('BAD_PARAMS', '请输入消息或选择附件');
       if (this.rows(threadId).length >= 20) throw new BridgeError('QUEUE_FULL', '最多排队20条消息，请先处理已有消息');
       const snapshot = await this.snapshot(threadId);
       if (snapshot.readOnly) throw new BridgeError('HISTORY_READ_ONLY', '请先连接原桌面聊天再排队');
+      let selection;
+      try {
+        selection = pluginIds.length ? await this.adapter.selectPlugins(threadId, WATCHER, pluginIds) : null;
+        selection?.check();
+      } catch (error) { this.release(threadId); throw error; }
+      const plugins = selection?.plugins.map(({id,displayName}) => ({id,displayName}));
       const id = randomUUID();
-      this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments }));
+      this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments, ...(plugins?.length ? {pluginIds: plugins.map(plugin => plugin.id), plugins} : {}) }));
       this.changed(threadId);
       return { ok: true, queued: true, queueId: id };
     }
@@ -67,7 +74,9 @@ export class MessageQueue {
   async deliver(row, method, previousTurn) {
     this.db.prepare("UPDATE message_queue SET state='sending', previous_turn=? WHERE id=?").run(previousTurn, row.id); this.changed(row.thread_id);
     try {
-      const result = await this.adapter.operate(method, { ...JSON.parse(row.payload), expectedTurnId: previousTurn }, row.id, row.device_id);
+      // 展示名称只供队列快照使用；投递重新解析编号和最新名称，不信任持久化的标记。
+      const { plugins, ...params } = JSON.parse(row.payload);
+      const result = await this.adapter.operate(method, { ...params, expectedTurnId: previousTurn }, row.id, row.device_id);
       if (method === 'turn.steer') this.db.prepare('DELETE FROM message_queue WHERE id=?').run(row.id);
       else this.db.prepare("UPDATE message_queue SET state='dispatched' WHERE id=?").run(row.id);
       this.changed(row.thread_id); this.release(row.thread_id); return result;
@@ -75,7 +84,8 @@ export class MessageQueue {
       const unknown = error.outcomeUnknown || /timeout|超时|连接已关闭|not-connected/i.test(error.message);
       // 空闲快照之后桌面先开始了另一任务时安全回队，绝不改为追加。
       const state = error.code === 'TURN_ACTIVE' || error.code === 'STALE_TURN' ? 'queued' : unknown ? 'unknown' : 'failed';
-      this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, state === 'queued' ? '' : unknown ? '发送结果需要核对，请先查看聊天；此消息不会自动重发' : '发送失败，请核对聊天和附件后取消此消息并重新发送', row.id);
+      const pluginFailure = ['PLUGIN_UNAVAILABLE','PLUGINS_UNAVAILABLE','PLUGINS_CHANGED'].includes(error.code);
+      this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, state === 'queued' ? '' : unknown ? '发送结果需要核对，请先查看聊天；此消息不会自动重发' : pluginFailure ? '所选插件已不可用或目录已变化，队列已暂停；请取消此消息并重新选择插件发送' : '发送失败，请核对聊天和附件后取消此消息并重新发送', row.id);
       this.changed(row.thread_id); throw error;
     }
   }

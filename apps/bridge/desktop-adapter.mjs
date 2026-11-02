@@ -4,7 +4,7 @@ import { predictionTurnId } from './prediction-turn.mjs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { IpcClient } from '../../packages/protocol/ipc-client.mjs';
-import { BridgeError, validateTurnRetry } from '../../packages/protocol/contracts.mjs';
+import { BridgeError, validateTurnRetry, validateTurnInput } from '../../packages/protocol/contracts.mjs';
 import { applyPatches, normalizeConversation } from './conversation.mjs';
 import { formatQuestionReply, validateQuestionAnswers, questionCounts } from './questions.mjs';
 import { DesktopNavigation } from './desktop-navigation.mjs';
@@ -16,6 +16,7 @@ import { ModelCatalog, executionSettings, validateSettings } from './model-setti
 import { AttachmentStore } from './attachment-store.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { readGoal, updateGoal } from './goals.mjs';
+import { readThreadPlugins, selectThreadPlugins, pluginPrompt } from './plugins.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
@@ -213,6 +214,10 @@ export class DesktopAdapter extends EventEmitter {
 
   readPermissions(threadId,deviceId) { return readPermissions(this,threadId,deviceId); }
 
+  /** 插件只读和发送选择共用订阅及实例核对，不接收手机提供的原生路径。 */
+  readPlugins(threadId,deviceId) { return readThreadPlugins(this,threadId,deviceId); }
+  selectPlugins(threadId,deviceId,ids) { return selectThreadPlugins(this,threadId,deviceId,ids); }
+
   async readSettings(threadId,deviceId) {
     const entry=this.subscribed(threadId,deviceId),owner=entry.owner;
     const response=await this.client.request('thread-follower-read-model-settings',{conversationId:threadId},1,{targetClientId:owner.clientId,timeoutMs:5000});
@@ -275,6 +280,7 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   async operate(method,params,commandId,deviceId,checkpoint=()=>{}) {
+    if(method==='turn.send'||method==='turn.steer')validateTurnInput(params);
     if(method==='turn.retry')return this.retryTurn(params,commandId,deviceId);
     // 正文由最新桌面计划提供，手机只能选择计划编号。
     if(method==='turn.send'&&params.planAction!==undefined) {
@@ -295,12 +301,17 @@ export class DesktopAdapter extends EventEmitter {
       if(current.activeTurnId||current.status==='active')throw new BridgeError('TURN_ACTIVE','任务正在运行，请使用追加指令');
       await preparePlanForSend(this,params,deviceId,commandId);
     }
+    // 未选择插件时沿用原路径，不启动目录短连接；选择后在异步返回时再次核对上下文。
+    const selection=['turn.send','turn.steer'].includes(method)&&params.pluginIds?.length?await this.selectPlugins(params.threadId,deviceId,params.pluginIds):null;
+    selection?.check();
+    const plugins=selection?.plugins??[];
     const entry=this.conversations.get(params.threadId), snapshot=normalizeConversation(entry.state), base={conversationId:params.threadId};
     let ipcMethod,version,payload;
     // 桌面高层发送接口需要可恢复的用户消息上下文，工作目录沿用原会话。
     const text=typeof params.text==='string'?params.text:'';
     const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd??'/';
-    const restoreMessage={id:commandId,text,cwd,createdAt:Date.now(),context:{prompt:text,addedFiles:[],fileAttachments:[],ideContext:null,imageAttachments:[],workspaceRoots:[cwd]}};
+    const prompt=pluginPrompt(text,plugins);
+    const restoreMessage={id:commandId,text:prompt,cwd,createdAt:Date.now(),context:{prompt,addedFiles:[],fileAttachments:[],ideContext:null,imageAttachments:[],workspaceRoots:[cwd]}};
     let input;
     if(method==='turn.send'||method==='turn.steer') {
       const images=validateImages(params.images);
@@ -312,7 +323,7 @@ export class DesktopAdapter extends EventEmitter {
       restoreMessage.context.fileAttachments=files.map(({label,path})=>({label,path}));
       // 与桌面附件提示一致，正文引用由电脑生成的路径，手机不能传入本地路径。
       const attachmentText=files.length?'\n\n# 用户附带的文件\n'+files.map(file=>'\n## '+file.label+': '+file.path).join('\n'):'';
-      input=[...((text.trim()||attachmentText)?[{type:'text',text:text+attachmentText,text_elements:[]}]:[]),...images.map(url=>({type:'image',url}))];
+      input=[...((prompt.trim()||attachmentText)?[{type:'text',text:prompt+attachmentText,text_elements:[]}]:[]),...images.map(url=>({type:'image',url})),...plugins.map(plugin=>({type:'mention',name:plugin.name,path:'plugin://'+plugin.id}))];
       restoreMessage.context.imageAttachments=images.map((src,index)=>({id:`${commandId}:image:${index}`,src}));
     }
     if(method==='turn.send') {

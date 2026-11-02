@@ -16,6 +16,7 @@ import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
+import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
@@ -24,6 +25,7 @@ export class BridgeAgent extends EventEmitter {
     this.published=new Map();
     this.newThreads=newThreads;
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
+    adapter.pluginCatalog ??= new PluginCatalog({ creation: newThreads.creation, verify: pluginInstanceVerifier(adapter, newThreads.creation) });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();this.fileReports=new DesktopFileReportReader();
     this.deleteController=deleteController;this.deletingIds=new Set();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
@@ -83,6 +85,8 @@ export class BridgeAgent extends EventEmitter {
           return this.messageQueue.operate(message.params,message.requestId,message.deviceId);
         }
         if(message.method==='thread.create.permissions')return this.adapter.permissionCatalog.read(this.newThreads.project(message.params.projectId).cwd);
+        if(message.method==='thread.create.plugins')return readProjectPlugins(this.newThreads,this.adapter.pluginCatalog,message.params.projectId,this.adapter);
+        if(message.method==='thread.plugins.read')return this.adapter.readPlugins(message.params.threadId,message.deviceId);
         if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
         if(message.method==='projects.list')return this.newThreads.projects();
         if(message.method==='thread.create.settings')return this.newThreads.settings(message.params.projectId);

@@ -1,4 +1,0 @@
-// 插件由电脑端统一安装和授权，手机入口只提供明确的管理指引。
-export function showPluginManagement() {
-  uni.showModal({ title: '插件', content: '请前往电脑端 Codex 管理插件。手机端暂不支持安装、配置或选择插件。', showCancel: false, confirmText: '知道了' })
-}
