@@ -1,12 +1,12 @@
 import fs from 'node:fs';import net from 'node:net';import path from 'node:path';import {fileURLToPath} from 'node:url';import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {randomUUID} from 'node:crypto';import {EventEmitter} from 'node:events';
-import {encodeFrame,FrameDecoder,defaultIpcSocketPath} from '../../packages/protocol/ipc-client.mjs';import {BridgeError} from '../../packages/protocol/contracts.mjs';
+import {encodeFrame,FrameDecoder} from '../../packages/protocol/ipc-client.mjs';import {BridgeError} from '../../packages/protocol/contracts.mjs';
 import {selectNativeEndpoint} from './native-endpoint.mjs';
 const execute=promisify(execFile),helper=fileURLToPath(new URL('./windows-native-pipe.ps1',import.meta.url));
 const allowed=new Set(['list_threads','navigate_to_codex_page','set_thread_read_state']);
 
 /** 只调用原桌面的三个固定接口，所有账号、主机和未读判断均由原桌面完成。 */
 export class NativeDesktop extends EventEmitter {
- constructor({platform=process.platform,invoke=null,stateDirectory=null,ipcSocketPath=defaultIpcSocketPath()}={}){super();this.platform=platform;this.invokeOverride=invoke;this.ipcSocketPath=ipcSocketPath;this.socket=null;this.pending=new Map();this.connecting=null;this.reading=null;this.unread=new Map();this.context='';this.closed=false;this.refreshTimer=null;this.stateDirectory=stateDirectory;this.watcher=null;this.watchedIds=[];}
+ constructor({platform=process.platform,invoke=null,stateDirectory=null,ipcSocketPath='\\\\.\\pipe\\codex-ipc'}={}){super();this.platform=platform;this.invokeOverride=invoke;this.ipcSocketPath=ipcSocketPath;this.socket=null;this.pending=new Map();this.connecting=null;this.reading=null;this.unread=new Map();this.context='';this.closed=false;this.refreshTimer=null;this.stateDirectory=stateDirectory;this.watcher=null;this.watchedIds=[];}
  /** 只监听桌面全局状态文件的变更通知，内容及账号状态始终由原生接口解释。 */
  watchReadState(){if(this.watcher||!this.stateDirectory||this.closed)return;try{this.watcher=fs.watch(this.stateDirectory,(_event,name)=>{if(name==null||String(name)==='.codex-global-state.json')this.schedule(this.watchedIds);});this.watcher.on('error',()=>{this.watcher?.close();this.watcher=null;});this.watcher.unref();}catch{}}
  invalidate(){const changed=[...this.unread.keys()];this.unread.clear();if(changed.length)this.emit('changed',changed);}
