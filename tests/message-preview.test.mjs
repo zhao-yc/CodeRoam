@@ -99,3 +99,9 @@ test('消息默认加载缩略图，点击才预览，重连可重试且卸载�
   const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
   assert.match(page,/<message-images v-if=/);assert.doesNotMatch(page,/查看图片|previewedMessageId/);
 });
+
+test('助手图片入口不打断正文与用户文字的互斥渲染',()=>{
+  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  assert.match(page,/<markdown-body[^\n]+\n\s*<text v-else-if=/);
+  assert.match(page,/<text v-else-if=[^\n]+\n\s*<message-images v-if="entry.role == 'assistant'/);
+});
