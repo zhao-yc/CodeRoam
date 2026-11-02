@@ -1,20 +1,20 @@
 <template>
   <view class="question-card">
-    <text class="card-title">{{ group.state == 'answered' ? '已回答' : group.state == 'expired' ? '问题已失效' : submitted ? '回答已提交，等待同步' : '需要你的回答' }}</text>
-    <view v-for="item in drafts" :key="item.question.id" class="question">
+    <text v-if="group.state != 'pending' || submitted" class="card-title">{{ group.state == 'answered' ? '已回答' : group.state == 'expired' ? '问题已失效' : '回答已提交，等待同步' }}</text>
+    <view v-for="(item, index) in drafts" :key="item.question.id" :class="['question', index > 0 ? 'question-following' : '']">
       <text v-if="item.question.header.length > 0" class="header">{{ item.question.header }}</text>
       <text class="title">{{ item.question.title }}</text>
       <text v-if="item.question.answer.length > 0" class="answer">{{ item.question.isSecret ? '已填写' : item.question.answer }}</text>
       <template v-else-if="group.state == 'pending'">
         <view v-for="option in item.question.options" :key="option.label" :class="['option', !item.custom && item.text == option.label ? 'selected' : '']" @click="choose(item.question.id, option.label)">
-          <view class="option-indicator"><AppIcon v-if="!item.custom && item.text == option.label" name="check" :size="18" tone="dark" /></view>
+          <view :class="['option-indicator', !item.custom && item.text == option.label ? 'indicator-selected' : '']"><AppIcon v-if="!item.custom && item.text == option.label" name="check" :size="14" tone="light" /></view>
           <view class="option-content">
             <text class="option-label">{{ option.label }}</text>
             <text v-if="option.description.length > 0" class="description">{{ option.description }}</text>
           </view>
         </view>
         <view v-if="item.question.isOther && item.question.options.length > 0" :class="['option', item.custom ? 'selected' : '']" @click="chooseOther(item.question.id)">
-          <view class="option-indicator"><AppIcon v-if="item.custom" name="check" :size="18" tone="dark" /></view>
+          <view :class="['option-indicator', item.custom ? 'indicator-selected' : '']"><AppIcon v-if="item.custom" name="check" :size="14" tone="light" /></view>
           <view class="option-content"><text class="option-label">其他答案</text></view>
         </view>
         <input v-if="item.question.isSecret && (item.custom || item.question.options.length == 0)" v-model="item.text" class="custom-input secret-input" password :maxlength="32000" :disabled="locked" placeholder="请输入答案" />
@@ -53,21 +53,22 @@ function submit() {
 </script>
 
 <style>
-/* 对齐正文的紧凑留白，选项和提交按钮保留触控高度。 */
-.question-card { margin: 0px 16px 10px; padding: 8px 0px; background-color: #f8f8f3; }
-.card-title { color: #6b6b6b; font-size: 13px; line-height: 20px; }
-.question { margin-top: 12px; }
-.header { color: #7b827a; font-size: 12px; line-height: 18px; margin-bottom: 5px; }
-.title { color: #202c28; font-size: 16px; line-height: 25px; margin-bottom: 6px; font-weight: bold; }
-.option { flex-direction: row; align-items: flex-start; min-height: 44px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; background-color: #f8f8f3; padding: 10px; margin-top: 6px; }
-.selected { border-color: #285c49; }
-.option-indicator { width: 18px; height: 22px; flex-shrink: 0; align-items: center; justify-content: center; margin-right: 10px; }
+/* 白底与黑白灰选择态组成独立操作区，多题保持正常阅读间距。 */
+.question-card { padding: 20px 16px 18px; background-color: #ffffff; }
+.card-title { color: #747474; font-size: 13px; line-height: 20px; margin-bottom: 12px; }
+.question-following { margin-top: 24px; }
+.header { color: #747474; font-size: 12px; line-height: 18px; margin-bottom: 6px; }
+.title { color: #161616; font-size: 18px; line-height: 28px; margin-bottom: 4px; font-weight: bold; }
+.option { flex-direction: row; align-items: flex-start; min-height: 56px; border-style: solid; border-width: 1px; border-color: #e4e4e4; border-radius: 13px; background-color: #ffffff; padding: 14px 12px; margin-top: 10px; }
+.selected { border-color: #bdbdbd; background-color: #f5f5f5; }
+.option-indicator { width: 20px; height: 20px; flex-shrink: 0; align-items: center; justify-content: center; margin-right: 10px; margin-top: 2px; border-width: 1px; border-style: solid; border-color: #d5d5d5; border-radius: 10px; background-color: #ffffff; }
+.indicator-selected { border-color: #111111; background-color: #111111; }
 .option-content { flex: 1; }
-.option-label { color: #202c28; font-size: 14px; line-height: 22px; }
-.description { color: #7b827a; font-size: 12px; line-height: 19px; margin-top: 3px; }
-.custom-input { height: 88px; margin-top: 10px; padding: 12px; border-radius: 12px; background-color: #eeefe8; color: #202c28; font-size: 14px; }
-.secret-input { height: 46px; }
-.answer { color: #404040; font-size: 14px; line-height: 24px; }
-.submit { margin-top: 12px; height: 44px; line-height: 44px; padding: 0px 18px; border-radius: 12px; background-color: #285c49; color: #f8f8f3; font-size: 14px; font-weight: bold; }
-.submit-disabled { background-color: #e9e9e9; color: #999999; }
+.option-label { color: #161616; font-size: 14px; line-height: 24px; }
+.description { color: #747474; font-size: 13px; line-height: 20px; margin-top: 3px; }
+.custom-input { height: 88px; margin-top: 12px; padding: 12px; border-radius: 12px; border-width: 1px; border-style: solid; border-color: #dedede; background-color: #ffffff; color: #161616; font-size: 16px; line-height: 24px; }
+.secret-input { height: 48px; }
+.answer { color: #404040; font-size: 15px; line-height: 25px; }
+.submit { margin: 18px 0px 0px; height: 48px; line-height: 48px; padding: 0px 18px; border-radius: 13px; background-color: #0b0b0b; color: #ffffff; font-size: 15px; font-weight: bold; align-items: center; justify-content: center; }
+.submit-disabled { background-color: #dedede; color: #858585; }
 </style>

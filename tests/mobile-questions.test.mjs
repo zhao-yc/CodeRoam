@@ -50,11 +50,10 @@ test('页面末尾只显示待答题组，回答或失效后移除且保留其�
   connection.snapshot=null;assert.equal(page.pendingQuestionCount.value,0);
 });
 
-test('新问题独立提醒并自动展开，重复同步保留收起，阅读历史时不强制滚动',()=>{
+test('移除顶部重复提示后，新问题仍自动展开，重复同步保留收起且不打断历史阅读',()=>{
   const {pageSource,page,connection,watches,plain}=pageFixture();
-  const template=pageSource.split('<script')[0],notice=template.indexOf('class="question-notice action-frame"');
-  assert.ok(notice>0&&notice<template.indexOf('class="timeline-region"'));
-  assert.match(template,/aria-label="查看待回答问题" @click="showQuestions"/);
+  const template=pageSource.split('<script')[0];
+  assert.doesNotMatch(template,/question-notice|查看待回答问题/);
   const update=watches.find(watch=>watch.source===page.pendingQuestionGroups).callback;
   page.pageVisible.value=true;update(page.pendingQuestionGroups.value,[]);
   assert.deepEqual(plain(page.expandedQuestionIds.value),['pending','other']);assert.equal(page.scrollTarget.value,'timeline-bottom');

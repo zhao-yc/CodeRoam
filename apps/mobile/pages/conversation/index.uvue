@@ -14,8 +14,6 @@
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
     <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
-    <!-- 问题提醒独立于运行状态和消息滚动位置，点击后定位原题。 -->
-    <view v-if="pendingQuestionCount > 0 && !readOnly" class="question-notice action-frame"><text class="question-notice-label">有 {{ pendingQuestionCount }} 组问题待回答</text><text class="question-notice-action">查看问题</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" aria-label="查看待回答问题" @click="showQuestions"></button></view>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch">
         <view v-if="connection.snapshot?.supportsHistoryPages == true && (loadingHistory || historyError.length > 0 || historyPage?.hasMore == false)" class="history-controls"><view v-if="loadingHistory" class="history-loading"><loading class="history-spinner" :paused="!pageVisible" /><text class="history-note">正在读取更早的对话…</text></view><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的对话，请再次下拉重试</text><text v-else class="history-note">已显示全部对话</text></view>
@@ -41,7 +39,8 @@
           </template>
         </view>
         <view id="questions-anchor"></view>
-        <view v-for="group in pendingQuestionGroups" :key="group.id" class="question-section"><view class="question-entry" @click="toggleQuestion(group.id)"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><app-icon name="chevron-down" :size="18" tone="muted" /></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
+        <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
+        <view v-for="group in pendingQuestionGroups" :key="group.id" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
         <view id="approvals-anchor"></view>
         <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
         <view v-if="activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
@@ -880,10 +879,16 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .sheet-actions { padding: 8px 16px 10px; flex-shrink: 0; }
 .sheet-copy { height: 46px; margin: 0; border-radius: 12px; border-style: solid; border-width: 1px; border-color: #285c49; flex-direction: row; align-items: center; justify-content: center; }
 .sheet-copy-label { font-size: 14px; color: #202c28; margin-left: 10px; }
-.question-section { margin: 10px 0; }
-.question-entry { flex-direction: row; align-items: center; padding: 2px 16px; min-height: 44px; }
-.question-label { color: #202c28; font-size: 16px; font-weight: bold; flex: 1; }
-.question-state { color: #888888; font-size: 12px; margin-right: 8px; }
+.question-section { margin: 18px 12px 20px; border-width: 1px; border-style: solid; border-color: #d5d5d5; border-radius: 20px; background-color: #ffffff; overflow: hidden; }
+.question-entry { flex-direction: row; align-items: center; padding: 10px 16px; min-height: 56px; background-color: #ffffff; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #eeeeee; }
+.question-label { color: #747474; font-size: 16px; line-height: 24px; flex: 1; }
+.question-state { color: #747474; font-size: 12px; margin-right: 12px; }
+.question-collapse-label { color: #747474; font-size: 13px; line-height: 22px; }
+.question-pressed { background-color: rgba(0, 0, 0, 0.04); }
+/* #ifdef WEB */
+/* 阴影只用于 Web，原生沿用白底与描边的操作区层次。 */
+.question-section { box-shadow: 0px 12px 30px rgba(0, 0, 0, 0.12); }
+/* #endif */
 .approval { margin: 10px 16px; padding: 12px; background-color: #e8eee6; border-radius: 14px; }
 .approval-title { color: #202c28; font-size: 16px; font-weight: bold; }
 .approval-detail { color: #444444; font-size: 13px; line-height: 21px; margin-top: 8px; }
@@ -953,7 +958,4 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .settings-trigger-label, .file-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
 
-.question-notice { margin: 0 16px 8px; min-height: 44px; padding: 8px 12px; border-radius: 12px; flex-direction: row; align-items: center; background-color: #e4edfb; flex-shrink: 0; }
-.question-notice-label { flex: 1; min-width: 0; color: #285c49; font-size: 14px; line-height: 22px; }
-.question-notice-action { color: #285c49; font-size: 13px; margin: 0 6px; }
 </style>
