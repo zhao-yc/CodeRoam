@@ -51,21 +51,14 @@
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
-      <!-- 建议与输入框分开，点击输入框只聚焦，只有点击建议才填入草稿。 -->
-      <view v-if="visiblePrediction.length > 0" class="prediction-suggestion action-frame">
-        <text class="prediction-label">建议 · 点击填入</text>
-        <text class="prediction-text">{{ visiblePrediction }}</text>
-        <button class="action-hitbox" hover-class="action-pressed" aria-label="将建议填入输入框" @click="acceptPrediction"></button>
-      </view>
-      <!-- 与列表页保持双行输入布局，空草稿和失焦时也保留底部工具栏。 -->
       <view class="composer-panel" @click="dismissGoal">
         <view v-if="planEnabled" class="plan-chip action-frame"><app-icon name="plan" :size="17" /><text class="plan-label">计划</text><app-icon name="close" :size="13" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || settingsBusy" aria-label="关闭计划模式" @click="togglePlan"></button></view>
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><button class="remove-image" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)">×</button></view></view>
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
         <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :style="{ height: draftHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : '问问 Codex'" :maxlength="32000"></textarea>
-        <view class="composer-actions"><button class="add-image" :class="{ 'add-image-disabled': !canWrite }" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
-        <text v-if="connection.snapshot?.supportsExecutionSettings != true" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
+        <view class="composer-actions"><button v-if="draft.length > 0" class="clear-draft" aria-label="清空输入框" @click="clearComposerDraft">清空</button><button class="add-image" :class="{ 'add-image-disabled': !canWrite }" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
+        <text v-if="executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
         <text v-if="settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
         <text v-if="activeTurnId.length > 0 && settings != null" class="composer-caption">模型、推理强度和计划模式应用于下一轮</text>
       </view>
@@ -133,10 +126,13 @@ let settingsRequest = 0
 let settingsSnapshotRevision = 0
 const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
 const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
+// 只有当前会话已同步后才能判断能力，初次加载或切换会话时不显示升级提示。
+const executionSettingsUnavailable = computed((): boolean => connection.snapshot != null && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.supportsExecutionSettings != true)
 const modelLabel = computed((): string => {
   if (settingsBusy.value) return '正在同步…'
   if (connection.snapshot?.readOnly == true) return '历史浏览'
   if (!connection.connected) return '等待连接'
+  if (connection.snapshot?.threadId != pageThreadId.value) return '正在加载…'
   if (settings.value == null) return '跟随电脑端'
   const model = models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)
   return shortModelLabel(model?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort)
@@ -235,8 +231,16 @@ onLoad((options: OnLoadOptions) => {
 })
 
 // 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
-const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && pendingQuestionCount.value == 0 && approvalCount.value == 0)
+const predictionAllowed = computed((): boolean => pageVisible.value && clearedPredictionKey != predictionKey() && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && pendingQuestionCount.value == 0 && approvalCount.value == 0)
 const visiblePrediction = computed((): string => predictionAllowed.value ? predictionText.value : '')
+let clearedPredictionKey = ''
+// 清空后屏蔽当前会话的同一轮建议，避免轮询马上填回；新轮次仍可加载。
+function predictionKey(): string { return pageHostId.value + ':' + pageThreadId.value + ':' + (connection.snapshot?.predictionTurnId ?? '') }
+function clearComposerDraft() {
+  clearedPredictionKey = predictionKey()
+  resetPrediction()
+  saveDraft(pageHostId.value, pageThreadId.value, '')
+}
 function resetPrediction() { predictionRevision++; clearTimeout(predictionTimer); clearTimeout(predictionExpiryTimer); predictionText.value = ''; predictionDeadline = 0 }
 // 按完成时间串行轮询；旧页面和旧轮次的迟到回执不会写回当前输入框。
 function pollPrediction(revision: number) {
@@ -248,6 +252,7 @@ function pollPrediction(revision: number) {
     const prediction = result['prediction'] as UTSJSONObject | null
     predictionText.value = prediction?.getString('threadId') == threadId && prediction?.getString('sourceTurnId') == turnId ? prediction?.getString('text') ?? '' : ''
     predictionDeadline = Date.now() + 5000
+    if (predictionText.value.length > 0) { acceptPrediction(false); return }
     clearTimeout(predictionExpiryTimer)
     predictionExpiryTimer = setTimeout(() => { if (revision == predictionRevision) predictionText.value = '' }, 5000)
     predictionTimer = setTimeout(() => { if (revision == predictionRevision) pollPrediction(revision) }, 2500)
@@ -258,13 +263,13 @@ function pollPrediction(revision: number) {
   })
 }
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.epoch + ':' + connection.subscriptionRevision + ':' + (connection.snapshot?.predictionTurnId ?? '') + ':' + predictionAllowed.value, () => { resetPrediction(); if (predictionAllowed.value) pollPrediction(predictionRevision) }, { flush: 'sync' })
-// 点击仅写入本地草稿，沿用既有手动发送入口。
-function acceptPrediction() {
+// 自动填入只写本地空草稿，不唤起键盘、不发送消息；已有输入受原条件保护。
+function acceptPrediction(focus: boolean = true) {
   if (!predictionAllowed.value || visiblePrediction.value.length == 0 || Date.now() > predictionDeadline) { resetPrediction(); return }
   const text = visiblePrediction.value
   resetPrediction()
   saveDraft(pageHostId.value, pageThreadId.value, text)
-  nextTick(() => { predictionFocus.value = true })
+  if (focus) nextTick(() => { predictionFocus.value = true })
 }
 onUnload(() => { resetPrediction() })
 
@@ -914,6 +919,7 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
 .composer-panel { border-radius: 24px; padding: 14px 12px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
 .draft { width: 100%; min-height: 64px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
+.clear-draft { flex-shrink: 0; padding: 0 8px; margin: 0 6px 0 0; height: 36px; line-height: 36px; color: #777777; font-size: 13px; background-color: transparent; }
 .composer-actions { flex-direction: row; align-items: center; margin-top: 6px; }
 .composer-context { flex-direction: row; align-items: center; flex: 1; }
 .composer-hint { color: #7b827a; font-size: 12px; margin-left: 8px; }
@@ -940,9 +946,6 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .composer-menu-open { z-index: 40; }
 .composer-dismiss { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 35; background-color: rgba(32, 44, 40, 0.08); }
 .composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
-.prediction-suggestion { flex-shrink: 0; min-width: 0; margin-bottom: 8px; padding: 10px 14px; border-radius: 16px; background-color: #e8eee6; }
-.prediction-label { color: #7b827a; font-size: 12px; line-height: 18px; margin-bottom: 3px; }
-.prediction-text { color: #66746b; font-size: 14px; line-height: 22px; lines: 3; text-overflow: ellipsis; }
 .settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
 .settings-trigger-label { flex-shrink: 1; min-width: 0; color: #657269; font-size: 13px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
 .plan-chip { align-self: flex-start; height: 30px; padding: 0 10px; margin-bottom: 10px; border-radius: 15px; flex-direction: row; align-items: center; background-color: #e8eee6; }
