@@ -12,3 +12,14 @@ export function conversationDisplayTitle(listTitle: string, snapshotTitle: strin
   if (listTitle.trim().length > 0) return listTitle
   return openingTitle
 }
+
+// 快照尚未提供项目路径时沿用列表项目名，路径分隔符和末尾斜杠与列表保持一致。
+export function conversationProjectName(listProjectName: string, snapshotCwd: string): string {
+  if (snapshotCwd.trim().length > 0) {
+    let normalized = snapshotCwd.split('\\').join('/')
+    while (normalized.endsWith('/') && normalized.length > 1) normalized = normalized.slice(0, -1)
+    const parts = normalized.split('/')
+    return parts[parts.length - 1].length > 0 ? parts[parts.length - 1] : normalized
+  }
+  return listProjectName.trim().length > 0 ? listProjectName : '会话'
+}

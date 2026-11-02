@@ -102,7 +102,7 @@ import { removeArchivedThread, removeDeletedThreads } from '../../services/threa
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice, queueDeleteSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import { clearDeletedDrafts } from '../../services/composer.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
-import { conversationOpeningTitle, conversationDisplayTitle } from '../../services/conversation-opening.uts'
+import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
 import { MessageAnnotation, MessagePresentation, parseAnnotationReferences } from '../../services/annotations.uts'
@@ -127,6 +127,7 @@ const detailError = computed((): string => operationError.value.length > 0 ? ope
 const pageHostId = ref('')
 const pageThreadId = ref('')
 const listTitle = ref('')
+const listProjectName = ref('')
 const predictionText = ref('')
 const predictionFocus = ref(false)
 const inputFocused = ref(false)
@@ -254,7 +255,8 @@ const pendingQuestionGroups = computed((): QuestionGroup[] => connection.snapsho
 const pendingQuestionCount = computed((): number => pendingQuestionGroups.value.length)
 const currentTaskState = computed((): string => conversationTaskState(connection.snapshot, connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)))
 const hostName = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == pageHostId.value)?.label ?? '电脑')
-const projectName = computed((): string => { const parts = (connection.snapshot?.cwd ?? '').split('\\').join('/').split('/'); const name = parts[parts.length - 1]; return name.length > 0 ? name : '会话' })
+// 与标题共用当前电脑和会话的身份限制，加载期间不显示其他会话的项目。
+const projectName = computed((): string => conversationProjectName(listProjectName.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.cwd ?? '' : ''))
 // 后台历史只用于浏览，写操作须有原桌面的实时所有者和快照。
 const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
 const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
@@ -280,6 +282,7 @@ onLoad((options: OnLoadOptions) => {
   pageHostId.value = connection.hostId
   const id = options['threadId'] ?? ''; pageThreadId.value = id
   listTitle.value = decodeURIComponent(options['title'] ?? '') ?? ''
+  listProjectName.value = decodeURIComponent(options['projectName'] ?? '') ?? ''
   if (id.length > 0) bridge.watch(id)
 })
 
