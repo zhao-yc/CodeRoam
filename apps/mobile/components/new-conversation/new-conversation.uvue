@@ -169,10 +169,21 @@ function composerAction(action: string) {
   if (action == 'plugin') { closeMenus(); showPluginManagement(); return }
   // 目标属于真实会话，首次发送前只说明入口，保留尚未发送的草稿。
   if (action == 'goal') { closeMenus(); uni.showModal({ title: '追求目标', content: '请先发送消息创建对话，再从加号菜单设置目标。', showCancel: false, confirmText: '知道了' }); return }
-  if (action == 'plan') { if (draft.value.settings != null) { draft.value.settings!.mode = draft.value.settings!.mode == 'plan' ? 'default' : 'plan'; draft.value.settingsChanged = true; draft.value.settingsApplied = false }; closeMenus(); return }
+  if (action == 'plan') {
+    if (draft.value.settings == null) return
+    draft.value.settings!.mode = draft.value.settings!.mode == 'plan' ? 'default' : 'plan'
+    draft.value.settingsChanged = true; draft.value.settingsApplied = false
+    closeMenus(); focusDraftInput(); return
+  }
   closeMenus(); if (action == 'camera' || action == 'album') chooseImages(action); else if (action == 'file') chooseFiles()
 }
 
+// 强制产生新的聚焦变化，菜单收起后继续编辑同一电脑与项目的草稿。
+function focusDraftInput() {
+  const hostId = connection.hostId, selectedProjectId = projectId.value
+  focused.value = false
+  nextTick(() => { if (alive && hostId == connection.hostId && selectedProjectId == projectId.value && !busy.value) focused.value = true })
+}
 function removeImage(id: string) { if (!busy.value) draft.value.images = draft.value.images.filter((image: DraftImage): boolean => image.id != id) }
 function removeFile(id: string) { if (!busy.value) draft.value.files = draft.value.files.filter((file: DraftFile): boolean => file.id != id) }
 function previewImage(src: string) { uni.previewImage({ urls: draft.value.images.map((image: DraftImage): string => image.src), current: src }) }

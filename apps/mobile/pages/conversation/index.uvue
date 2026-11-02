@@ -659,10 +659,10 @@ function openComposerMenu(section: string) {
 }
 
 // 选中即同步电脑输入框设置，无需发送消息；失败和未知结果均保留最后确认值。
-function selectSetting(key: string, value: string) {
-  if (!canWrite.value || settings.value == null || settingsBusy.value) return
+function selectSetting(key: string, value: string): boolean {
+  if (!canWrite.value || settings.value == null || settingsBusy.value) return false
   // 运行中的轮次不能切换计划模式；回调执行时再次读取快照，防止菜单打开后任务才启动。
-  if (key == 'mode' && ((connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active')) return
+  if (key == 'mode' && ((connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active')) return false
   const changes: UTSJSONObject = {}
   changes[key] = value
   const request = ++settingsRequest
@@ -684,6 +684,7 @@ function selectSetting(key: string, value: string) {
     // 设置失败后由用户查看同步结果，重连不会自动再次提交。
     // 保留失败原因，用户点击重新读取后再核对桌面设置。
   })
+  return true
 }
 // 权限写入期间沿用详情页操作锁，防止首条消息抢在设置确认之前发送。
 // 原生组件事件显式声明布尔类型，避免模板把载荷推断为 Any。
@@ -774,11 +775,21 @@ function composerAction(action: string) {
   if (!canWrite.value) return
   if (action == 'plugin') { closeComposerMenu(); showPluginManagement(); return }
   if (action == 'goal') { showGoal(); return }
-  if (action == 'plan') { togglePlan(); return }
+  if (action == 'plan') { if (selectSetting('mode', planEnabled.value ? 'default' : 'plan')) focusComposerInput(); return }
   closeComposerMenu()
   if (action == 'camera' || action == 'album') {
     if (modelSupportsImages.value) chooseImages(action); else notify('当前模型不支持图片，请切换模型')
   } else if (action == 'file') chooseFiles()
+}
+// 菜单选择后立即恢复编辑，焦点不等待电脑端回执；不会采纳预测或发送草稿。
+function focusComposerInput() {
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  closeComposerMenu(); clearTimeout(composerBlurTimer)
+  inputFocused.value = true; predictionFocus.value = false
+  nextTick(() => {
+    if (!isCurrentPage() || pageHostId.value != hostId || pageThreadId.value != threadId || readOnly.value) return
+    predictionFocus.value = true
+  })
 }
 function sizeLabel(size: number): string { return fileSizeLabel(size) }
 
