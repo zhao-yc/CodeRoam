@@ -50,7 +50,7 @@
       <view v-if="!atTimelineBottom" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing"></button></view>
     </view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
-    <view id="composer-dock" class="composer-dock" :class="{ 'keyboard-open': keyboardInset > 0, 'composer-menu-open': composerMenu.length > 0 }">
+    <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
       <!-- 建议与输入框分开，点击输入框只聚焦，只有点击建议才填入草稿。 -->
       <view v-if="visiblePrediction.length > 0" class="prediction-suggestion action-frame">
@@ -58,16 +58,17 @@
         <text class="prediction-text">{{ visiblePrediction }}</text>
         <button class="action-hitbox" hover-class="action-pressed" aria-label="将建议填入输入框" @click="acceptPrediction"></button>
       </view>
-      <view class="composer-panel" @click="dismissGoal" :class="{ 'composer-compact': !composerExpanded }">
+      <!-- 与列表页保持双行输入布局，空草稿和失焦时也保留底部工具栏。 -->
+      <view class="composer-panel" @click="dismissGoal">
         <view v-if="planEnabled" class="plan-chip action-frame"><app-icon name="plan" :size="17" /><text class="plan-label">计划</text><app-icon name="close" :size="13" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || settingsBusy" aria-label="关闭计划模式" @click="togglePlan"></button></view>
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><button class="remove-image" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)">×</button></view></view>
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
-        <view class="draft-line"><button v-if="!composerExpanded" class="compact-add" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :class="{ 'compact-draft': !composerExpanded }" :style="{ height: (composerExpanded ? Math.max(48, draftHeight) : 24) + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : '继续说说你的想法…'" :maxlength="32000"></textarea><view v-if="!composerExpanded" class="primary-action action-frame" :style="{ opacity: !canWrite || activeTurnId.length == 0 ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || activeTurnId.length == 0" :aria-label="activeTurnId.length > 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
-        <view v-if="composerExpanded" class="composer-actions"><button class="add-image" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
-        <text v-if="composerExpanded && connection.snapshot?.supportsExecutionSettings != true" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
-        <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
-        <text v-if="composerExpanded && activeTurnId.length > 0 && settings != null" class="composer-caption">模型、推理强度和计划模式应用于下一轮</text>
+        <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :style="{ height: draftHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : '问问 Codex'" :maxlength="32000"></textarea>
+        <view class="composer-actions"><button class="add-image" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
+        <text v-if="connection.snapshot?.supportsExecutionSettings != true" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
+        <text v-if="settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
+        <text v-if="activeTurnId.length > 0 && settings != null" class="composer-caption">模型、推理强度和计划模式应用于下一轮</text>
       </view>
     </view>
       <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :note="readOnly ? '历史浏览模式，请先继续此会话' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
@@ -119,10 +120,7 @@ const draftImages = computed((): DraftImage[] => readDraftImages(pageHostId.valu
 const imageBusy = ref(false)
 const draftFiles = computed((): DraftFile[] => readDraftFiles(pageHostId.value, pageThreadId.value))
 const filesReady = computed((): boolean => draftFiles.value.every((file: DraftFile): boolean => file.status == 'ready'))
-const inputFocused = ref(false)
-let draftBlurTimer = 0
 const composerMenu = ref('')
-const permissionMenuVisible = ref(false)
 const settings = ref<ExecutionSettings | null>(null)
 const models = ref<ModelOption[]>([])
 const settingsLoading = ref(false)
@@ -136,7 +134,6 @@ let settingsRequest = 0
 let settingsSnapshotRevision = 0
 const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
 const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
-const composerExpanded = computed((): boolean => inputFocused.value || permissionMenuVisible.value || composerMenu.value.length > 0 || draft.value.length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || planEnabled.value)
 const modelLabel = computed((): string => {
   if (settingsBusy.value) return '正在同步…'
   if (connection.snapshot?.readOnly == true) return '历史浏览'
@@ -192,7 +189,7 @@ const expandedExecutionIds = ref<string[]>([])
 const expandedQuestionIds = ref<string[]>([])
 const handledApprovalIds = ref<string[]>([])
 const submittedGroupIds = ref<string[]>([])
-const draftHeight = ref(24)
+const draftHeight = ref(64)
 const keyboardInset = ref(0)
 const goalViewportHeight = ref(uni.getWindowInfo().windowHeight)
 // 用户气泡保留左侧层级留白，正文使用两侧各 16px 以内的宽度。
@@ -213,7 +210,7 @@ const projectName = computed((): string => { const parts = (connection.snapshot?
 // 后台历史只用于浏览，写操作须有原桌面的实时所有者和快照。
 const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
 const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
-const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - (composerExpanded.value ? 360 : 280))))
+const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - 360)))
 const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '操作正在提交，请稍候。' : '')
 const conversationConnectionHint = computed((): string => {
   if (activating.value) return '正在连接会话…'
@@ -268,7 +265,6 @@ function acceptPrediction() {
   const text = visiblePrediction.value
   resetPrediction()
   saveDraft(pageHostId.value, pageThreadId.value, text)
-  inputFocused.value = true
   nextTick(() => { predictionFocus.value = true })
 }
 onUnload(() => { resetPrediction() })
@@ -555,10 +551,8 @@ function chooseImages(source: string = 'album') {
 }
 function removeImage(id: string) { if (busy.value || imageBusy.value || connection.pendingCommandId.length > 0) return; saveDraftImages(pageHostId.value, pageThreadId.value, draftImages.value.filter((image: DraftImage): boolean => image.id != id)) }
 function previewImage(src: string) { uni.previewImage({ urls: draftImages.value.map((image: DraftImage): string => image.src), current: src }) }
-// 聚焦状态与键盘高度分开记录，系统缩小窗口时仍能正确展开输入区。
-function onDraftFocus() { clearTimeout(draftBlurTimer); inputFocused.value = true }
-// 给工具栏点击事件留出派发时间，避免失焦先收起输入区而吞掉模型菜单点击。
-function onDraftBlur() { predictionFocus.value = false; clearTimeout(draftBlurTimer); draftBlurTimer = setTimeout(() => { if (pageAlive) inputFocused.value = false }, 150) }
+// 工具栏始终显示，失焦只复位建议采纳的聚焦标记。
+function onDraftBlur() { predictionFocus.value = false }
 function updateMenuHeight() {
   const windowHeight = uni.getWindowInfo().windowHeight
   const pageBottom = uni.getElementById('conversation-page')?.getBoundingClientRect().bottom ?? windowHeight
@@ -624,7 +618,6 @@ function selectSetting(key: string, value: string) {
 }
 // 权限写入期间沿用详情页操作锁，防止首条消息抢在设置确认之前发送。
 // 原生组件事件显式声明布尔类型，避免模板把载荷推断为 Any。
-function onPermissionVisibility(value: boolean) { permissionMenuVisible.value = value }
 function onPermissionBusy(value: boolean) { busy.value = value }
 function togglePlan() { selectSetting('mode', planEnabled.value ? 'default' : 'plan') }
 // 附件变更始终写回原电脑和会话，不将系统选择器的迟到结果放进其他草稿。
@@ -730,7 +723,7 @@ watch((): string => JSON.stringify(connection.snapshot?.executionSettings ?? nul
 })
 
 
-function onDraftLineChange(event: UniTextareaLineChangeEvent) { draftHeight.value = Math.max(24, Math.min(144, event.detail.height)); if (following.value) scrollLatest() }
+function onDraftLineChange(event: UniTextareaLineChangeEvent) { draftHeight.value = Math.max(64, Math.min(144, event.detail.height)); if (following.value) scrollLatest() }
 // 键盘由输入区处理，扣除系统已缩小的窗口高度，避免自定义顶栏被整体上推或重复留白。
 function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
   const height = event.detail.height
@@ -781,7 +774,8 @@ function reply(id: string, turnId: string, decision: string) {
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
 function dismissGoal() { if (!goalBusy.value && goalExpanded.value) { goalCloseRequest.value++; goalExpanded.value = false } }
-function onComposerFocus() { dismissGoal(); onDraftFocus() }
+// 聚焦聊天输入时收起目标表单，输入框尺寸不随焦点切换。
+function onComposerFocus() { dismissGoal() }
 function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
 function showGoal() {
   closeActions(); closeComposerMenu()
@@ -902,23 +896,24 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .bottom-space { height: 12px; }
 /* 浮钮独立定位，不能叠加会将原生position覆盖为relative的通用点击容器。 */
 .jump-latest { position: absolute; bottom: 8px; right: 16px; width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 22px; background-color: #f8f8f3; border-style: solid; border-width: 1px; border-color: #e3e5dc; align-items: center; justify-content: center; overflow: hidden; }
-.composer-dock { padding: 6px 10px; flex-shrink: 0; border-style: solid; border-width: 0; border-top-width: 1px; border-top-color: #e3e5dc; }
+.composer-dock { position: relative; z-index: 10; flex-shrink: 0; padding: 12px 12px 8px; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
-.keyboard-open { padding-bottom: 6px; }
 .draft-images { flex-direction: row; margin-bottom: 10px; }
 .draft-image { width: 64px; height: 64px; margin-right: 10px; position: relative; }
 .draft-thumbnail { width: 64px; height: 64px; border-radius: 8px; }
 .remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; line-height: 22px; padding: 0; margin: 0; border-radius: 12px; font-size: 18px; color: #ffffff; background-color: #285c49; }
 /* 加号在固定点击区域内水平、垂直居中，不靠偏短行高调整位置。 */
-.add-image { align-items: center; justify-content: center; flex-shrink: 0; width: 36px; height: 36px; line-height: 36px; padding: 0; margin: 0 8px 0 0; border-radius: 10px; font-size: 25px; color: #285c49; background-color: #e8eee6; }
+.add-image { align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; line-height: 44px; margin: 0; padding: 0; font-size: 29px; color: #202c28; background-color: transparent; }
+/* 与列表页一致，禁用加号时保留透明底色。 */
+.composer-actions .add-image[disabled] { background-color: transparent; color: #a0a6a0; }
 .image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
-.composer-panel { border-radius: 14px; background-color: #f8f8f3; padding: 8px 12px 6px; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
-.draft { width: 100%; min-height: 24px; color: #202c28; font-size: 15px; line-height: 24px; padding: 0; background-color: transparent; }
-.composer-actions { flex-direction: row; align-items: center; justify-content: space-between; margin-top: 4px; }
+.composer-panel { border-radius: 24px; padding: 14px 12px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
+.draft { width: 100%; min-height: 64px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
+.composer-actions { flex-direction: row; align-items: center; margin-top: 6px; }
 .composer-context { flex-direction: row; align-items: center; flex: 1; }
 .composer-hint { color: #7b827a; font-size: 12px; margin-left: 8px; }
 .primary-actions { flex-direction: row; align-items: center; }
-.primary-action { width: 44px; height: 44px; border-radius: 22px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
+.primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
 .primary-disabled { background-color: #96a89b; }
 .stop-secondary { margin-right: 10px; width: 44px; height: 44px; background-color: #e8eee6; }
 .menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(0,0,0,0.12); z-index: 30; }
@@ -937,21 +932,14 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .execution-label, .execution-summary { display: block; white-space: nowrap; overflow: hidden; }
 .menu-item { justify-content: flex-start; }
 /* #endif */
-.composer-dock { position: relative; z-index: 10; border-top-width: 0; padding: 8px 12px; }
 .composer-menu-open { z-index: 40; }
 .composer-dismiss { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 35; background-color: rgba(32, 44, 40, 0.08); }
 .composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
-.composer-panel { border-radius: 23px; padding: 12px 12px 8px; }
-.composer-compact { border-radius: 30px; padding: 5px 6px; }
 .prediction-suggestion { flex-shrink: 0; min-width: 0; margin-bottom: 8px; padding: 10px 14px; border-radius: 16px; background-color: #e8eee6; }
 .prediction-label { color: #7b827a; font-size: 12px; line-height: 18px; margin-bottom: 3px; }
 .prediction-text { color: #66746b; font-size: 14px; line-height: 22px; lines: 3; text-overflow: ellipsis; }
-.draft-line { flex-direction: row; align-items: center; }
-.draft { flex: 1; width: 0; min-width: 0; }
-.compact-draft { margin: 0 8px; }
-.compact-add { align-items: center; justify-content: center; flex-shrink: 0; width: 38px; height: 42px; line-height: 42px; margin: 0; padding: 0; background-color: transparent; color: #285c49; font-size: 29px; }
-.settings-trigger { flex: 1; min-width: 0; height: 42px; flex-direction: row; justify-content: flex-end; align-items: center; margin: 0 10px 0 2px; padding: 0 3px; }
-.settings-trigger-label { min-width: 0; flex-shrink: 1; lines: 1; text-overflow: ellipsis; font-size: 13px; color: #202c28; margin-right: 4px; }
+.settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
+.settings-trigger-label { flex-shrink: 1; min-width: 0; color: #657269; font-size: 13px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
 .plan-chip { align-self: flex-start; height: 30px; padding: 0 10px; margin-bottom: 10px; border-radius: 15px; flex-direction: row; align-items: center; background-color: #e8eee6; }
 .plan-label { color: #285c49; font-size: 13px; margin: 0 6px; }
 .draft-file { flex-direction: row; align-items: center; padding: 9px; margin-bottom: 8px; background-color: #e8eee6; border-radius: 12px; }
