@@ -88,7 +88,7 @@
           </view>
           <!-- 两端操作始终使用同一节点，展开时只增加上方的编辑空间。 -->
           <view class="composer-add"><view class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view></view>
-          <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view></view>
+          <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view></view>
           <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!primaryAvailable) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!primaryAvailable" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
         </view>
       </view>
@@ -1234,7 +1234,7 @@ function operateGoal(action: string, objective: string, revision: string) {
   }, (error: Error) => { busy.value = false; goalBusy.value = false; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
 }
 
-// 主按钮随上下文切换：有草稿发送，空草稿运行中停止；追加时仍保留独立停止入口。
+// 主按钮随上下文切换：有草稿发送，空草稿运行中停止。
 function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value) }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
@@ -1381,7 +1381,6 @@ onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(f
 .primary-actions { flex-direction: row; align-items: center; }
 .primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
 .primary-disabled { background-color: #96a89b; }
-.stop-secondary { margin-right: 10px; width: 44px; height: 44px; background-color: #e8eee6; }
 .menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(0,0,0,0.12); z-index: 30; }
 .menu-top-space { height: 54px; }
 .menu-panel { width: 245px; align-self: flex-end; margin-right: 14px; padding: 10px 0; border-radius: 14px; background-color: #f8f8f3; }
