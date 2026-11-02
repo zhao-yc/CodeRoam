@@ -24,6 +24,7 @@
 
 ```powershell
 npm ci --ignore-scripts
+npm run setup:hooks
 npm run check:privacy
 npm test
 ```

@@ -13,7 +13,10 @@
     "relay": "node apps/relay/cli.mjs",
     "bridge": "node apps/bridge/cli.mjs",
     "provision": "node scripts/provision.mjs",
-    "check:privacy": "node scripts/check-public-files.mjs"
+    "check:privacy": "node scripts/check-public-files.mjs",
+    "setup:hooks": "node scripts/install-privacy-hooks.mjs",
+    "check:privacy:staged": "node scripts/check-public-files.mjs --staged",
+    "check:privacy:history": "node scripts/check-public-files.mjs --history"
   },
   "dependencies": {
     "ws": "^8.18.3"

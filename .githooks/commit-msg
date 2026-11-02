@@ -1,0 +1,3 @@
+#!/bin/sh
+# 生成提交前检查提交说明与作者信息，失败时保留本地修改并终止提交。
+exec node scripts/check-public-files.mjs --message "$1"
