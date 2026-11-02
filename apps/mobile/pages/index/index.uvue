@@ -33,11 +33,11 @@
         <view v-for="group in groups" :key="group.key" class="thread-group">
           <text class="group-title">{{ group.title }}</text>
           <view v-for="thread in group.threads" :key="thread.key" :class="['thread', connection.hostId == thread.hostId && connection.activeThreadId == thread.id ? 'thread-selected' : '']" @click="openThread(thread)">
-            <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><task-status v-if="threadState(thread) == 'failed'" class="thread-failure" state="failed" /><text v-if="threadState(thread) != 'running'" class="thread-time">{{ updatedLabel(thread.updatedAt) }}</text></view>
-            <!-- 待回答数量已表达问答状态，只隐藏重复提示；运行指示和其他状态继续显示。 -->
+            <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><task-status v-if="threadState(thread) == 'failed'" class="thread-failure" state="failed" /><task-status v-if="threadState(thread) != 'failed' && (threadState(thread) != 'question' || (thread.unansweredQuestionCount ?? 0) == 0)" :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" /></view>
+            <!-- 状态放在标题右侧，时间放在项目右侧；保留待回答数量和原有显示条件。 -->
             <view class="thread-meta">
               <view v-if="selectedComputerId.length == 0 && connection.computers.length > 1" class="thread-computer-meta"><app-icon class="thread-meta-icon" :name="iconForThread(thread)" :size="16" tone="muted" /><text class="thread-computer">{{ thread.hostLabel }}</text></view>
-              <app-icon class="thread-meta-icon" name="folder" :size="16" tone="muted" /><text class="thread-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text><text v-if="thread.online && (thread.unansweredQuestionCount ?? 0) > 0" class="thread-question">待回答 {{ thread.unansweredQuestionCount }}</text><task-status v-if="threadState(thread) != 'failed' && (threadState(thread) != 'question' || (thread.unansweredQuestionCount ?? 0) == 0)" :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" />
+              <app-icon class="thread-meta-icon" name="folder" :size="16" tone="muted" /><text class="thread-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text><text v-if="thread.online && (thread.unansweredQuestionCount ?? 0) > 0" class="thread-question">待回答 {{ thread.unansweredQuestionCount }}</text><text v-if="threadState(thread) != 'running'" class="thread-time">{{ updatedLabel(thread.updatedAt) }}</text>
             </view>
           </view>
         </view>
