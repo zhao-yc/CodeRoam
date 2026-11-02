@@ -41,7 +41,7 @@ test('列表跳转携带完整标题和项目名，中文和查询分隔符不�
   const list=fs.readFileSync(new URL('../apps/mobile/pages/index/index.uvue',import.meta.url),'utf8');
   const detail=fs.readFileSync(new URL('../apps/mobile/pages/conversation/index.uvue',import.meta.url),'utf8');
   let url='';
-  const navigation=vm.createContext({encodeURIComponent,uni:{navigateTo:options=>{url=options.url;}},bridge:{selectComputer(){},openThread(){return Promise.resolve({});}}});
+  const navigation=vm.createContext({connection:{connected:true},encodeURIComponent,uni:{navigateTo:options=>{url=options.url;}},bridge:{selectComputer(){},openThread(){return Promise.resolve({});}}});
   const openThread=list.match(/^function openThread\(thread: ComputerThread\).*$/m)[0];
   const projectName=list.match(/^function projectName\(cwd: string\): string \{[\s\S]*?\n\}/m)[0];
   vm.runInContext(stripTypeScriptTypes(projectName+'\n'+openThread,{mode:'transform'})+';globalThis.open=openThread;',navigation);
