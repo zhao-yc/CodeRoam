@@ -24,7 +24,8 @@ try {
   agent.on('disconnected',()=>{writeStatus(false);console.log('中转连接已断开');});
   agent.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
   adapter.connect().catch(()=>console.log('等待 Codex 桌面客户端启动'));
+  agent.predictions.start().catch(()=>{});
   agent.start();
-  let closing=false;const close=async()=>{if(closing)return;closing=true;try{await agent.close();}finally{releaseBridgeLock();}};
+  let closing=false;const close=async()=>{if(closing)return;closing=true;try{agent.predictions.close();await agent.close();}finally{releaseBridgeLock();}};
   process.on('SIGINT',close);process.on('SIGTERM',close);
 }catch(error){releaseBridgeLock();console.error(`电脑连接服务启动失败：${error.message}`);process.exitCode=1;}
