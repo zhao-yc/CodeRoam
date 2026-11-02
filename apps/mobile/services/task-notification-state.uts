@@ -1,0 +1,92 @@
+import type { ThreadSummary, NotificationAction } from './bridge.uts'
+
+export type TaskNotice = { key: string, hostId: string, generation: string, threadId: string, threadTitle: string, turnId: string, kind: string, targetId: string }
+type NoticeHost = { hostId: string, generation: string, threads: ThreadSummary[] }
+
+// 纯状态机只保存运行期身份；页面和连接切换不能各自创建计时器或重复通知。
+export class TaskNotificationCenter {
+  hosts = [] as NoticeHost[]
+  seen = new Set<string>()
+  queue = [] as TaskNotice[]
+  current: TaskNotice | null = null
+  phase = 'idle'
+  deadline = 0
+
+  // 连接代次结束时整体清空，恢复后重新建立基线。
+  reset() { this.hosts = [] as NoticeHost[]; this.seen.clear(); this.queue = [] as TaskNotice[]; this.current = null; this.phase = 'idle'; this.deadline = 0 }
+
+  // 授权撤回或实例换代后，旧通知不可继续打开其他实例的同号会话。
+  retainHosts(keys: string[]) {
+    this.hosts = this.hosts.filter((host: NoticeHost): boolean => keys.indexOf(JSON.stringify([host.hostId, host.generation])) >= 0)
+    this.queue = this.queue.filter((notice: TaskNotice): boolean => this.valid(notice))
+    if (this.current != null && !this.valid(this.current!)) { this.current = null; this.phase = 'idle'; this.deadline = 0 }
+  }
+
+  // 首份完整列表只补待交互；随后按事项编号和轮次终态识别新事件。
+  observe(hostId: string, generation: string, threads: ThreadSummary[], now: number) {
+    const previous = this.hosts.find((host: NoticeHost): boolean => host.hostId == hostId && host.generation == generation)
+    const baseline = previous == null
+    const oldThreads = previous?.threads ?? [] as ThreadSummary[]
+    this.hosts = this.hosts.filter((host: NoticeHost): boolean => host.hostId != hostId)
+    this.hosts.push({ hostId, generation, threads } as NoticeHost)
+    threads.forEach((thread: ThreadSummary) => {
+      const state = thread.notificationState
+      if (state == null) return
+      state.pending.forEach((action: NotificationAction) => { this.add(hostId, generation, thread, action.kind, action.turnId, action.id) })
+      const oldRow = oldThreads.find((row: ThreadSummary): boolean => row.id == thread.id)
+      const old = oldRow?.notificationState
+      const terminal = state.latestTurnStatus == 'completed' || state.latestTurnStatus == 'failed'
+      const changed = old?.latestTurnId != state.latestTurnId || old?.latestTurnStatus != state.latestTurnStatus
+      const needsInteraction = state.pending.some((action: NotificationAction): boolean => action.turnId == state.latestTurnId)
+      if (!baseline && (oldRow == null || old != null && old.latestTurnId.length > 0) && changed && terminal && state.latestTurnId.length > 0 && (state.latestTurnStatus == 'failed' || !needsInteraction)) this.add(hostId, generation, thread, state.latestTurnStatus, state.latestTurnId, '')
+    })
+    this.queue = this.queue.filter((notice: TaskNotice): boolean => this.valid(notice))
+    this.tick(now)
+  }
+
+  // 去重身份包含电脑及实例代次，不按会话标题或待办数量猜测。
+  private add(hostId: string, generation: string, thread: ThreadSummary, kind: string, turnId: string, targetId: string) {
+    if (['question', 'approval', 'plan', 'completed', 'failed'].indexOf(kind) < 0) return
+    const key = JSON.stringify([hostId, generation, thread.id, kind, turnId, targetId])
+    if (this.seen.has(key)) return
+    this.seen.add(key)
+    this.queue.push({ key, hostId, generation, threadId: thread.id, threadTitle: thread.title, turnId, kind, targetId } as TaskNotice)
+  }
+
+  // 排队中已回答的问题、已处理的审批和已归档的会话不再展示。
+  valid(notice: TaskNotice): boolean {
+    const row = this.hosts.find((host: NoticeHost): boolean => host.hostId == notice.hostId && host.generation == notice.generation)?.threads.find((thread: ThreadSummary): boolean => thread.id == notice.threadId)
+    if (row == null) return false
+    if (notice.kind == 'completed' || notice.kind == 'failed') return true
+    return row.notificationState?.pending.some((action: NotificationAction): boolean => action.kind == notice.kind && action.id == notice.targetId && action.turnId == notice.turnId) == true
+  }
+
+  // 先挂载一帧，再做 200ms 进入动画，完整停留 5 秒后淡出 200ms。
+  tick(now: number) {
+    if (this.phase != 'idle' && now < this.deadline) return
+    if (this.phase == 'enter') { this.phase = 'visible'; this.deadline = now + 5200; return }
+    if (this.phase == 'visible') { this.phase = 'leave'; this.deadline = now + 200; return }
+    if (this.phase == 'leave') { this.current = null; this.phase = 'idle' }
+    while (this.queue.length > 0) {
+      const next = this.queue.shift()!
+      if (!this.valid(next)) continue
+      this.current = next; this.phase = 'enter'; this.deadline = now + 16; return
+    }
+    this.deadline = 0
+  }
+
+  // 点击只结束当前卡片，下一条继续沿用同一队列。
+  dismiss(now: number) { this.current = null; this.phase = 'idle'; this.deadline = 0; this.tick(now) }
+}
+
+// 标题只表达结构化事件类型，详情名称单独展示。
+export function taskNoticeTitle(kind: string): string {
+  if (kind == 'completed') return 'Codex 任务已完成'
+  if (kind == 'failed') return 'Codex 任务失败'
+  if (kind == 'question') return 'Codex 需要你回答'
+  if (kind == 'approval') return 'Codex 等待审批'
+  return 'Codex 计划待确认'
+}
+
+// 原生与 Web 的滚动锚点仅使用安全字符，兼容含冒号及引号的请求编号。
+export function taskNoticeAnchor(kind: string, id: string): string { return 'notice-' + kind + '-' + id.split('').map((part: string): string => part.charCodeAt(0).toString(16)).join('-') }

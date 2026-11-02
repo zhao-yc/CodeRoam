@@ -109,10 +109,11 @@ test('新对话粘贴捕获原草稿，沿用图片处理并遵守图片与文�
   const source = read('apps/mobile/components/new-conversation/new-conversation.uvue');
   const method = source.slice(source.indexOf('async function pasteImages('), source.indexOf('async function acceptFiles('));
   const original = { images: [], files: [{}, {}] }, accepted = [], notices = [];
-  const c = { alive: true, busy: { value: false }, imageBusy: { value: false }, modelSupportsImages: { value: true }, draft: { value: original },
+  const c = { props: { expanded: true }, alive: true, busy: { value: false }, imageBusy: { value: false }, modelSupportsImages: { value: true }, draft: { value: original },
     remaining: () => 3 - c.draft.value.images.length - c.draft.value.files.length,
     acceptImages: async (target, paths) => { accepted.push({ target, paths: [...paths] }); }, notify: message => notices.push(message) };
   vm.createContext(c); vm.runInContext(compile(method) + '\nglobalThis.paste = pasteImages;', c);
   await c.paste(['one', 'two']); assert.equal(accepted[0].target, original); assert.deepEqual(accepted[0].paths, ['one']);
+  c.props.expanded = false; await c.paste(['collapsed']); assert.equal(accepted.length, 1); c.props.expanded = true;
   c.busy.value = true; await c.paste(['blocked']); assert.equal(accepted.length, 1); assert.equal(notices.length, 1);
 });

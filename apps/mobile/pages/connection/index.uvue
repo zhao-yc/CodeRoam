@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
+    <view id="connection-header" class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
     <scroll-view direction="vertical" class="content" :scroll-into-view="connectionAnchor">
       <view class="body">
         <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的会话会自动同步到首页。</text>
@@ -12,13 +12,18 @@
         <button v-if="connection.configured" class="forget-button button-secondary" :disabled="hasPendingCommands" @click="forgetConfiguration">清除本地连接</button>
       </view>
     </scroll-view>
+    <task-notice :active="pageVisible" header-id="connection-header" />
   </view>
 </template>
 
 <script setup lang="uts">
 import { computed, ref } from 'vue'
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
+import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
+const pageVisible = ref(false)
+onShow(() => { pageVisible.value = true })
+onHide(() => { pageVisible.value = false })
 const configuration = ref('')
 const connectionAnchor = ref('')
 // 菜单的添加连接入口直接定位配置区，普通设置入口仍从概览开始。

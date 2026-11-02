@@ -1,7 +1,7 @@
 <template>
   <view id="conversation-page" class="page" :style="{ paddingBottom: keyboardInset + 'px' }">
     <view class="status-spacer"></view>
-    <view class="conversation-header" @click="dismissGoal">
+    <view id="conversation-header" class="conversation-header" @click="dismissGoal">
       <view class="icon-button round-button action-frame"><app-icon name="back" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view>
       <view class="thread-capsule" @click="showConversationInfo">
         <!-- 状态紧跟标题，长标题省略时仍为状态保留完整宽度。 -->
@@ -42,7 +42,7 @@
           </template>
         </view>
         <!-- 计划确认与聊天草稿独立，避免覆盖附件和未发送正文。 -->
-        <view v-if="pendingPlan != null && hiddenPlanId != pendingPlan.id" class="plan-confirm">
+        <view v-if="pendingPlan != null && hiddenPlanId != pendingPlan.id" id="notice-plan" class="plan-confirm">
           <text class="plan-confirm-title">实施此计划？</text>
           <button class="button-primary" :disabled="!canWrite || busy" @click="replyPlan('implement')">{{ pendingAction == 'plan' ? '提交中…' : '是，实施此计划' }}</button>
           <textarea class="plan-feedback" v-model="planFeedback" :disabled="busy" placeholder="否，告诉 Codex 应该如何调整" :maxlength="32000"></textarea>
@@ -50,9 +50,9 @@
         </view>
         <view id="questions-anchor"></view>
         <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
-        <view v-for="group in pendingQuestionGroups" :key="group.id" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
+        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
         <view id="approvals-anchor"></view>
-        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
+        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
         <view id="timeline-bottom" class="bottom-space"></view>
@@ -87,6 +87,7 @@
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">会话操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">会话信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="会话信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档会话"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除对话"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
+    <task-notice :active="pageVisible" header-id="conversation-header" :host-id="pageHostId" :thread-id="pageThreadId" />
   </view>
 </template>
 
@@ -98,7 +99,7 @@ import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, rea
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
-import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, conversationTaskState } from '../../services/bridge.uts'
+import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, Approval, conversationTaskState } from '../../services/bridge.uts'
 import { removeArchivedThread, removeDeletedThreads } from '../../services/thread-list.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice, queueDeleteSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import { clearDeletedDrafts } from '../../services/composer.uts'
@@ -113,6 +114,9 @@ import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
 import MessageImages from '../../components/message-images/message-images.uvue'
 import PermissionsControl from '../../components/permissions-control/permissions-control.uvue'
+import TaskNotice from '../../components/task-notice/task-notice.uvue'
+import { taskNotifications, pendingTaskNotice } from '../../services/task-notifications.uts'
+import { taskNoticeAnchor } from '../../services/task-notification-state.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
@@ -282,12 +286,13 @@ onLoad((options: OnLoadOptions) => {
   if (!connection.configured) { uni.reLaunch({ url: '/pages/index/index' }); return }
   // #endif
   baseWindowHeight = uni.getWindowInfo().windowHeight
-  pageHostId.value = connection.hostId
+  const notice = (options['noticeKey'] ?? '').length > 0 ? pendingTaskNotice(options['noticeKey'] ?? '') : null
+  pageHostId.value = notice?.hostId ?? connection.hostId
   const id = options['threadId'] ?? ''; pageThreadId.value = id
   // 页面参数已由框架解码，直接保留百分号及形似转义序列的原始名称。
   listTitle.value = options['title'] ?? ''
   listProjectName.value = options['projectName'] ?? ''
-  if (id.length > 0) bridge.watch(id)
+  if (id.length > 0 && notice == null) bridge.watch(id)
 })
 
 // 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
@@ -674,6 +679,29 @@ function toggleExecution(id: string) { pauseFollowing(); uni.hideKeyboard(); sel
 function closeExecution() { selectedExecutionId.value = '' }
 function toggleQuestion(id: string) { pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
 function jumpTo(anchor: string) { closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''; nextTick(() => { scrollTarget.value = anchor }) }
+// 点击通知后等待目标快照和布局就绪；后续流式更新不重复抢走阅读位置。
+function questionNoticeAnchor(id: string): string { return taskNoticeAnchor('question', id) }
+function approvalNoticeAnchor(id: string): string { return taskNoticeAnchor('approval', id) }
+let focusedNoticeRevision = 0
+watch((): string => taskNotifications.focusRevision + ':' + pageVisible.value + ':' + connection.hostId + ':' + (connection.snapshot?.threadId ?? '') + ':' + connection.sequence + ':' + connection.subscriptionRevision, () => {
+  const notice = taskNotifications.focus
+  if (notice == null || focusedNoticeRevision == taskNotifications.focusRevision || !pageVisible.value || !isCurrentPage() || pageHostId.value != notice.hostId || pageThreadId.value != notice.threadId || connection.snapshot?.threadId != notice.threadId) return
+  focusedNoticeRevision = taskNotifications.focusRevision
+  closeActions(); closeComposerMenu(); closeAnnotations(); selectedExecutionId.value = ''; goalExpanded.value = false; uni.hideKeyboard()
+  nextTick(() => {
+    if (!pageVisible.value || !isCurrentPage()) return
+    if (notice.kind == 'question') {
+      const group = pendingQuestionGroups.value.find((item: QuestionGroup): boolean => item.id == notice.targetId)
+      if (group != null) { if (expandedQuestionIds.value.indexOf(group.id) < 0) expandedQuestionIds.value.push(group.id); jumpTo(questionNoticeAnchor(group.id)); return }
+    } else if (notice.kind == 'approval') {
+      if (connection.snapshot?.approvals.some((item: Approval): boolean => item.id == notice.targetId) == true) { jumpTo(approvalNoticeAnchor(notice.targetId)); return }
+    } else if (notice.kind == 'plan' && pendingPlan.value?.id == notice.targetId) {
+      hiddenPlanId.value = ''; jumpTo('notice-plan'); return
+    }
+    const results = timeline.value.filter((entry: TimelineEntry): boolean => entry.turnId == notice.turnId && entry.role == 'assistant')
+    jumpTo(results.length > 0 ? entryAnchor(results[results.length - 1]) : 'timeline-bottom')
+  })
+})
 function showApprovals() { jumpTo('approvals-anchor') }
 function showQuestions() { const groups = pendingQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
 function updateDraft(event: UniInputEvent) { saveDraft(pageHostId.value, pageThreadId.value, event.detail.value) }

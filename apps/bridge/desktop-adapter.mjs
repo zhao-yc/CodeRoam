@@ -304,7 +304,8 @@ export class DesktopAdapter extends EventEmitter {
       const {settings,models}=await this.readSettings(params.threadId,deviceId);
       const {threadSettings}=validateSettings(params.changes,settings,models,entry.state.latestCollaborationMode);
       ipcMethod='thread-follower-update-thread-settings';version=2;
-      payload={...base,threadSettings,condition:{ifModelEquals:settings.model,ifEffortEquals:settings.effort}};
+      // 桌面用原始字段检查并发；显示设置可能从协作模式补全，不能代替 null 或缺省原值。
+      payload={...base,threadSettings,condition:{ifModelEquals:entry.state.latestModel,ifEffortEquals:entry.state.latestReasoningEffort}};
     } else if(method==='turn.stop') {
       if(!snapshot.activeTurnId||snapshot.activeTurnId!==params.expectedTurnId) throw new BridgeError('STALE_TURN','目标任务已经结束或发生变化');
       ipcMethod='thread-follower-interrupt-turn';version=4;payload={...base,mode:'user-stop',expectedTurnId:params.expectedTurnId};

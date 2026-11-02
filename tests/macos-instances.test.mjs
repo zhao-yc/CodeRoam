@@ -78,7 +78,8 @@ test('Mac 区分大小写的目录不会合并设备身份，Windows 保留原�
   const options = { file: path.join(root, 'instances.json'), hostId: 'computer', defaultHome: root, platform: 'darwin' };
   const registry = new InstanceRegistry(options);
   assert.notEqual(registry.identify({ codexHome: root + '/One' }).id, registry.identify({ codexHome: root + '/one' }).id);
-  assert.equal(new InstanceRegistry({ ...options, file: path.join(root, 'windows.json'), platform: 'win32' }).canonical(root + '/One'), (root + '/one').toLowerCase());
+  // 预期路径沿用运行平台的分隔符，避免在 Windows 上因混用斜杠误报。
+  assert.equal(new InstanceRegistry({ ...options, file: path.join(root, 'windows.json'), platform: 'win32' }).canonical(root + '/One'), path.join(root, 'one').toLowerCase());
 });
 
 test('实例离线时先关闭 IPC，已有实时订阅不会阻止账本和上下文释放', async t => {

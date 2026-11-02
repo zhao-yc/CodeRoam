@@ -1,0 +1,35 @@
+<template>
+  <view v-if="active && taskNotifications.current != null" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible' }" :style="{ top: top + 'px' }" role="status" aria-live="polite">
+    <view class="task-notice-copy"><text class="task-notice-title">{{ title }}</text><text class="task-notice-subtitle">{{ taskNotifications.current!.threadTitle }}</text></view>
+    <app-icon name="chevron-right" :size="20" />
+    <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，打开会话'" @click="openNotice"></button>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref, watch, nextTick, onMounted } from 'vue'
+import { taskNotifications, openTaskNotice } from '../../services/task-notifications.uts'
+import { taskNoticeTitle } from '../../services/task-notification-state.uts'
+import AppIcon from '../app-icon/app-icon.uvue'
+const props = withDefaults(defineProps<{ active: boolean, headerId: string, hostId?: string, threadId?: string }>(), { hostId: '', threadId: '' })
+const top = ref(72)
+const title = computed((): string => taskNoticeTitle(taskNotifications.current?.kind ?? 'completed'))
+// 实测标题栏底边，适应不同页面、状态栏和横竖屏，不占用正文布局。
+function measureTop() { nextTick(() => { const rect = uni.getElementById(props.headerId)?.getBoundingClientRect(); if (rect != null) top.value = rect.bottom + 8 }) }
+onMounted(() => { measureTop() })
+watch((): string => props.active.toString() + ':' + (taskNotifications.current?.key ?? '') + ':' + uni.getWindowInfo().windowWidth, () => { if (props.active) measureTop() })
+function openNotice() { const notice = taskNotifications.current; if (notice != null) openTaskNotice(notice, props.hostId, props.threadId) }
+</script>
+
+<style>
+.task-notice { position: fixed; left: 12px; right: 12px; z-index: 100; min-height: 64px; padding: 12px 16px; flex-direction: row; align-items: center; border-radius: 26px; border-width: 1px; border-style: solid; border-color: rgba(112, 123, 113, 0.24); background-color: rgba(252, 253, 248, 0.96); box-shadow: 0 5px 18px rgba(28, 42, 32, 0.12); opacity: 0; transform: translateY(-8px); transition-property: opacity, transform; transition-duration: 200ms; }
+.task-notice-visible { opacity: 1; transform: translateY(0px); }
+.task-notice-copy { flex: 1; min-width: 0; margin-right: 12px; }
+.task-notice-title { color: #202c28; font-size: 15px; line-height: 22px; font-weight: bold; lines: 1; text-overflow: ellipsis; }
+.task-notice-subtitle { color: #788177; font-size: 13px; line-height: 19px; lines: 1; text-overflow: ellipsis; }
+.task-notice-hit { position: absolute; left: 0; right: 0; top: 0; bottom: 0; margin: 0; padding: 0; border-radius: 26px; background-color: transparent; }
+/* #ifdef WEB */
+.task-notice { backdrop-filter: blur(16px); }
+.task-notice-title, .task-notice-subtitle { display: block; overflow: hidden; white-space: nowrap; }
+/* #endif */
+</style>

@@ -1,6 +1,6 @@
 <template>
   <view id="home-page" class="page">
-    <view class="header">
+    <view id="home-header" class="header">
       <template v-if="searchVisible && !editingNewConversation">
         <view class="search-field header-search"><app-icon name="search" :size="20" tone="muted" /><input v-model="search" class="search-input" :focus="searchFocused" placeholder="搜索会话或项目" :maxlength="100" confirm-type="search" @blur="searchFocused = false" /></view>
         <view class="header-button action-frame"><app-icon name="close" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭搜索" @click="closeSearch"></button></view>
@@ -34,7 +34,7 @@
         <view v-for="group in groups" :key="group.key" class="thread-group">
           <text class="group-title">{{ group.title }}</text>
           <view v-for="thread in group.threads" :key="thread.key" :class="['thread', connection.hostId == thread.hostId && connection.activeThreadId == thread.id ? 'thread-selected' : '']" @click="openThread(thread)">
-            <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><text class="thread-time">{{ updatedLabel(thread.updatedAt) }}</text></view>
+            <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><text v-if="threadState(thread) != 'running'" class="thread-time">{{ updatedLabel(thread.updatedAt) }}</text></view>
             <!-- 待回答数量已表达问答状态，只隐藏重复提示；运行指示和其他状态继续显示。 -->
             <view class="thread-meta">
               <view v-if="selectedComputerId.length == 0 && connection.computers.length > 1" class="thread-computer-meta"><app-icon class="thread-meta-icon" :name="iconForThread(thread)" :size="16" tone="muted" /><text class="thread-computer">{{ thread.hostLabel }}</text></view>
@@ -46,9 +46,9 @@
       </view>
     </scroll-view>
     </view>
-    <view v-if="!editingNewConversation" class="new-entry-dock"><view class="new-entry action-frame"><view class="new-entry-plus"><composer-plus /></view><text class="new-entry-placeholder">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="openNewConversation"></button></view><view class="entry-safe-area"></view></view>
+    <new-conversation :expanded="editingNewConversation" @expand="openNewConversation" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
-    <new-conversation v-if="editingNewConversation" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
+    <task-notice :active="pageVisible" header-id="home-header" />
     <home-menu v-if="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="menuVisible = false" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
   </view>
 </template>
@@ -56,10 +56,10 @@
 <script setup lang="uts">
 import { computed, ref, nextTick, watch } from 'vue'
 import { bridge, connection, Computer, computerIcon, taskState, conversationTaskState, threadIndicator } from '../../services/bridge.uts'
-import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, syncThreadComputers, refreshComputerThreads, disconnectThreadLists } from '../../services/thread-list.uts'
+import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, refreshComputerThreads } from '../../services/thread-list.uts'
 import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
+import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
-import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
 import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
@@ -235,15 +235,10 @@ function resetThreadScroll() { savedThreadScrollTop = 0; threadScrollTop.value =
 function openSearch() { searchVisible.value = true; nextTick(() => { searchFocused.value = true }) }
 function closeSearch() { search.value = ''; searchFocused.value = false; searchVisible.value = false; uni.hideKeyboard() }
 function chooseComputerFilter(id: string) { if (editingComputerId.value.length > 0 || Date.now() < suppressComputerClickUntil) return; if (id.length > 0 && !connection.computers.some((computer: Computer): boolean => computer.id == id)) return; selectedComputerId.value = id; resetThreadScroll(); refreshComputerThreads(id) }
-// 配对及授权变化只同步当前可见的电脑；断线保留内存缓存，不保留旧请求。
-watch((): string => connection.configurationRevision + ':' + connection.configured + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online).join('|'), () => {
-  syncThreadComputers()
+// 全局订阅由应用维护；首页只清理已撤回的筛选选项。
+watch((): string => connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
   if (selectedComputerId.value.length > 0 && !connection.computers.some((computer: Computer): boolean => computer.id == selectedComputerId.value)) selectedComputerId.value = ''
-  if (!connection.connected) disconnectThreadLists()
-  else refreshComputerThreads()
-}, { immediate: true })
-// 外观推送仅同步列表归属文字，避免重新加载已有订阅。
-watch((): string => connection.computers.map((computer: Computer): string => computer.id + ':' + computer.label).join('|'), () => { syncThreadComputers() })
+})
 watch(search, () => { resetThreadScroll() })
 
 // 列表仅展示末级项目名，完整路径仍可搜索并在详情中查看。
@@ -272,12 +267,6 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .list-title-text { flex-shrink: 0; margin-right: 6px; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
 .new-page-title { flex: 1; text-align: center; }
 .list-shell { flex: 1; height: 0; min-height: 0; }
-.new-entry-dock { flex-shrink: 0; padding: 4px 16px 12px; }
-.entry-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
-.new-entry { height: 50px; border-radius: 25px; border-style: solid; border-width: 1px; border-color: #e3e5dc; background-color: #ffffff; flex-direction: row; align-items: center; padding: 0 14px; }
-/* 加号与占位文字共用入口中心轴，图形不依赖字体基线。 */
-.new-entry-plus { width: 22px; height: 22px; margin-right: 12px; flex-shrink: 0; align-items: center; justify-content: center; }
-.new-entry-placeholder { color: #94998f; font-size: 16px; line-height: 24px; }
 /* 全部标签固定，电脑标签在剩余宽度内横向滚动。 */
 .computer-tabs { height: 56px; padding: 4px 16px 8px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .computer-tab { height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
