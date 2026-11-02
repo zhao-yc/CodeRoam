@@ -1,13 +1,14 @@
 <template>
   <view v-if="goal != null || editing" class="goal-widget">
-    <view v-if="expanded || editing" class="goal-panel">
-      <view class="goal-heading"><text class="goal-title">{{ editing ? (creating ? '新建目标' : '编辑目标') : '目标' }}</text><text v-if="!editing && goal != null" class="goal-state">{{ statusLabel }}</text><button class="goal-close" aria-label="收起目标详情" :disabled="busy" @click="collapse">×</button></view>
+    <view v-if="expanded || editing" class="goal-panel" :class="{ 'goal-panel-editor': editing }">
+      <view class="goal-heading"><view v-if="editing" class="goal-title-icon"><app-icon name="target" :size="19" /></view><text class="goal-title">{{ editing ? (creating ? '新建目标' : '编辑目标') : '目标' }}</text><text v-if="!editing && goal != null" class="goal-state">{{ statusLabel }}</text><button class="goal-close" aria-label="收起目标详情" :disabled="busy" @click="collapse">×</button></view>
       <template v-if="editing">
-        <textarea class="goal-editor" :style="{ height: Math.max(72, Math.min(120, contentHeight)) + 'px' }" :value="objective" :maxlength="4000" :disabled="disabled || busy" :adjust-position="false" placeholder="描述希望完成的目标…" aria-label="目标正文" @input="updateObjective" @keyboardheightchange="keyboardChange"></textarea>
-        <text class="goal-counter">{{ objective.length }} / 4000</text>
+        <view class="goal-editor-field">
+          <textarea class="goal-editor" :style="{ height: Math.max(72, Math.min(144, contentHeight)) + 'px' }" :value="objective" :maxlength="4000" :disabled="disabled || busy" :adjust-position="false" placeholder="描述你希望完成的目标…" placeholder-class="goal-placeholder" aria-label="目标正文" @input="updateObjective" @keyboardheightchange="keyboardChange"></textarea>
+          <text class="goal-counter">{{ objective.length }} / 4000</text>
+        </view>
         <text v-if="editorRevision != revision" class="goal-note">电脑端目标已变化，请取消后重新编辑。</text>
-        <text v-else class="goal-note">保存后按电脑端规则启动或继续目标。</text>
-        <view class="goal-actions"><button class="goal-action" :disabled="busy" @click="cancelEdit">取消</button><button class="goal-action goal-primary" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save">{{ busy ? '正在同步…' : '保存目标' }}</button></view>
+        <view class="goal-editor-actions"><button class="goal-action goal-cancel" :disabled="busy" @click="cancelEdit">取消</button><view class="goal-save" :class="{ 'goal-save-disabled': disabled || busy || objective.trim().length == 0 || editorRevision != revision }"><text class="goal-save-label">{{ busy ? '正在同步…' : '保存目标' }}</text><text v-if="!busy" class="goal-save-arrow">→</text><button class="action-hitbox" :aria-label="busy ? '正在同步目标' : '保存目标'" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save"></button></view></view>
       </template>
       <template v-else-if="goal != null">
         <scroll-view direction="vertical" class="goal-body" :style="{ maxHeight: contentHeight + 'px' }"><text class="goal-objective" selectable>{{ goal.objective }}</text></scroll-view>
@@ -23,6 +24,7 @@
 
 <script setup lang="uts">
 import { computed, ref, watch } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
 import { ThreadGoal, goalStatusLabel, goalUsageLabel, goalCanResume } from '../../services/goals.uts'
 const props = defineProps<{ goal: ThreadGoal | null, revision: string, disabled: boolean, busy: boolean, unavailableReason: string, openRequest: number, closeRequest: number, resetKey: string, contentHeight: number }>()
 const emit = defineEmits<{ operate: [action: string, objective: string, revision: string], expanded: [value: boolean], keyboard: [height: number] }>()
@@ -70,13 +72,28 @@ watch((): boolean => props.busy, (value: boolean, previous: boolean) => { if (!v
 .goal-heading { flex-direction: row; align-items: center; }
 .goal-title { font-size: 14px; font-weight: bold; color: #202c28; }
 .goal-state { font-size: 11px; color: #7b827a; margin-left: 8px; flex: 1; }
-.goal-close { width: 36px; height: 32px; padding: 0; margin: 0 0 0 auto; background-color: transparent; color: #7b827a; font-size: 22px; line-height: 30px; border-width: 0; }
+.goal-close { width: 36px; height: 32px; padding: 0; margin: 0 0 0 auto; background-color: transparent; color: #7b827a; font-size: 22px; line-height: 30px; border-width: 0; align-items: center; justify-content: center; }
 .goal-body { flex-shrink: 1; }
 .goal-objective { font-size: 14px; line-height: 22px; color: #39473f; }
 .goal-usage { font-size: 10px; color: #7b827a; line-height: 18px; margin-top: 4px; }
 .goal-actions { flex-direction: row; align-items: center; margin-top: 2px; }
 .goal-action { min-width: 58px; height: 42px; margin: 0 8px 0 0; padding: 0 12px; border-width: 0; background-color: transparent; color: #285c49; font-size: 14px; line-height: 42px; }
 .goal-primary { background-color: #285c49; color: #ffffff; border-radius: 12px; min-width: 110px; }
+/* 编辑态采用独立输入区与整行操作区，窄屏和键盘弹起时仍保留可用空间。 */
+.goal-panel-editor { background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 24px; padding: 16px; }
+.goal-panel-editor .goal-heading { margin-bottom: 16px; }
+.goal-title-icon { width: 34px; height: 34px; border-radius: 11px; background-color: #edf2e9; align-items: center; justify-content: center; margin-right: 10px; flex-shrink: 0; }
+.goal-panel-editor .goal-title { font-size: 18px; }
+.goal-panel-editor .goal-close { width: 36px; height: 36px; }
+.goal-editor-field { border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 16px; background-color: #f5f7f2; padding: 12px 14px 10px; }
+.goal-editor-actions { flex-direction: row; align-items: center; margin-top: 16px; }
+.goal-cancel { flex: 1; min-width: 0; height: 46px; margin: 0 10px 0 0; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 13px; background-color: #ffffff; color: #263c31; line-height: 44px; font-size: 15px; }
+.goal-save { position: relative; flex: 1.8; min-width: 0; height: 46px; padding: 0 12px; background-color: #285c49; border-radius: 13px; flex-direction: row; align-items: center; justify-content: center; }
+.goal-save-label { color: #ffffff; font-size: 15px; line-height: 24px; }
+.goal-save-arrow { color: #ffffff; font-size: 18px; line-height: 24px; margin-left: 8px; }
+.goal-save-disabled { background-color: #e5eae1; color: #8a968c; }
+.goal-save-disabled .goal-save-label { color: #8a968c; }
+.goal-save-disabled .goal-save-arrow { color: #8a968c; }
 .goal-summary { position: relative; flex-direction: row; align-items: center; height: 36px; max-height: 36px; overflow: hidden; padding: 0 10px; border-radius: 18px; background-color: #f0f1eb; }
 .goal-symbol { font-size: 19px; color: #285c49; margin-right: 5px; flex-shrink: 0; }
 .goal-summary-label { flex: 1; flex-shrink: 1; min-width: 0; height: 20px; line-height: 20px; overflow: hidden; lines: 1; text-overflow: ellipsis; font-size: 12px; color: #39473f; }
@@ -85,7 +102,8 @@ watch((): boolean => props.busy, (value: boolean, previous: boolean) => { if (!v
 /* #endif */
 .goal-summary-state { font-size: 10px; color: #7b827a; margin-left: 8px; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; }
-.goal-editor { width: 100%; font-size: 14px; line-height: 22px; padding: 6px 0; color: #202c28; }
-.goal-counter { font-size: 10px; text-align: right; color: #7b827a; }
+.goal-editor { width: 100%; font-size: 15px; line-height: 26px; padding: 0; color: #263c31; }
+.goal-placeholder { color: #7c8780; }
+.goal-counter { font-size: 11px; line-height: 20px; text-align: right; color: #7c8780; margin-top: 8px; }
 .goal-note { font-size: 11px; line-height: 17px; color: #7b827a; margin-top: 2px; }
 </style>
