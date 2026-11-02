@@ -15,18 +15,29 @@ export function activityHeading(summary) {
   return heading.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_ACTIVITY_LENGTH);
 }
 
-/** 仅当前运行轮次可以产生动作；优先复用桌面底部显示的最新摘要标题。 */
+/** 仅当前运行轮次可以产生动作；压缩状态优先于公开摘要，结束后只取压缩之后的新动作。 */
 export function currentActivity(turn) {
   if (turn?.status !== 'inProgress' || turn.error) return '';
   const items = turn.items ?? [];
+  let firstActivityIndex = 0;
   for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item.type !== 'contextCompaction') continue;
+    // 桌面实时快照使用 completed；历史项目缺少该标记时不能误报正在压缩。
+    const running = item.completed === false || (item.completed == null && item.status === 'inProgress');
+    if (running && item.completedAtMs == null && !['completed', 'failed', 'declined', 'interrupted'].includes(item.status)) return '正在压缩上下文 · 可能需要几分钟';
+    // 只认最近一次压缩，避免恢复旧压缩标记或压缩前已经过期的动作标题。
+    firstActivityIndex = index + 1;
+    break;
+  }
+  for (let index = items.length - 1; index >= firstActivityIndex; index--) {
     const item = items[index];
     if (item.type !== 'reasoning') continue;
     const heading = activityHeading(item.summary);
     if (heading) return heading;
   }
   // 未提供公开标题时，只按结构化类型描述动作，不把原始命令或私有推理当进度。
-  for (let index = items.length - 1; index >= 0; index--) {
+  for (let index = items.length - 1; index >= firstActivityIndex; index--) {
     const item = items[index];
     if (item.completedAtMs != null || ['completed', 'failed', 'declined', 'interrupted'].includes(item.status)) continue;
     if (item.type === 'commandExecution') {
