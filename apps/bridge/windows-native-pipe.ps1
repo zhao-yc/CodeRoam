@@ -1,5 +1,5 @@
-# 只核对原桌面通道的服务进程与主窗口，不读取鉴权文件或操作界面。
-param([ValidatePattern('^[A-Za-z0-9._-]+$')][string]$IpcPipeName='codex-ipc')
+﻿# 只核对原桌面通道的服务进程与主窗口，不读取鉴权文件或操作界面。
+param([ValidatePattern('^[A-Za-z0-9._-]+$')][string]$IpcPipeName='codex-ipc',[switch]$AsObject)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 Add-Type -TypeDefinition @'
@@ -31,4 +31,5 @@ try {
  [uint32]$serverPid=0
  if([NativePipeIdentity]::GetNamedPipeServerProcessId($ipc.SafePipeHandle.DangerousGetHandle(),[ref]$serverPid)){$ipcProcessId=$serverPid}
 } catch {} finally {$ipc.Dispose()}
-[Console]::WriteLine((ConvertTo-Json -InputObject @{candidates=@($found.ToArray());ipcProcessId=$ipcProcessId} -Depth 3 -Compress))
+$result=@{candidates=@($found.ToArray());ipcProcessId=$ipcProcessId}
+if($AsObject){Write-Output $result}else{[Console]::WriteLine((ConvertTo-Json -InputObject $result -Depth 3 -Compress))}

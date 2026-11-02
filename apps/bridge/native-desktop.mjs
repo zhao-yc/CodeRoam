@@ -10,15 +10,19 @@ export class NativeDesktop extends EventEmitter {
  /** 只监听桌面全局状态文件的变更通知，内容及账号状态始终由原生接口解释。 */
  watchReadState(){if(this.watcher||!this.stateDirectory||this.closed)return;try{this.watcher=fs.watch(this.stateDirectory,(_event,name)=>{if(name==null||String(name)==='.codex-global-state.json')this.schedule(this.watchedIds);});this.watcher.on('error',()=>{this.watcher?.close();this.watcher=null;});this.watcher.unref();}catch{}}
  invalidate(){const changed=[...this.unread.keys()];this.unread.clear();if(changed.length)this.emit('changed',changed);}
+ /** 单实例沿用发现规则，多实例子类必须提供已绑定的固定端点。 */
+ async resolveEndpoint(){
+  const executable=path.join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe');
+  const pipe=/^\\\\\.\\pipe\\([A-Za-z0-9._-]+)$/.exec(this.ipcSocketPath);if(!pipe)throw new Error('会话 IPC 通道无效');
+  const result=await execute(executable,['-NoProfile','-NonInteractive','-File',helper,'-IpcPipeName',pipe[1]],{windowsHide:true,timeout:6000,maxBuffer:16384});
+  return selectNativeEndpoint(JSON.parse(result.stdout.trim()),process.env.CODEX_APP_TOOLS_PIPE_PATH);
+ }
  /** 连接已核对安装路径及服务进程的管道，连接失败不向手机泄露本机路径。 */
  async connect(){
   if(this.socket?.writable)return;if(this.connecting)return this.connecting;
   this.connecting=(async()=>{
    if(this.platform!=='win32')throw new BridgeError('DESKTOP_NATIVE_UNAVAILABLE','当前电脑不支持原生会话同步');
-   const executable=path.join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe');
-   const pipe=/^\\\\\.\\pipe\\([A-Za-z0-9._-]+)$/.exec(this.ipcSocketPath);if(!pipe)throw new Error('会话 IPC 通道无效');
-   const result=await execute(executable,['-NoProfile','-NonInteractive','-File',helper,'-IpcPipeName',pipe[1]],{windowsHide:true,timeout:6000,maxBuffer:16384});
-   const endpoint=selectNativeEndpoint(JSON.parse(result.stdout.trim()),process.env.CODEX_APP_TOOLS_PIPE_PATH);
+   const endpoint=await this.resolveEndpoint();
    this.processId=endpoint.pid;
    await new Promise((resolve,reject)=>{const socket=net.createConnection(endpoint.path);this.socket=socket;const connectingTimer=setTimeout(()=>{socket.destroy();reject(new Error('原生通道连接超时'));},3000);const decoder=new FrameDecoder(message=>{const entry=this.pending.get(message.id);if(!entry)return;this.pending.delete(message.id);clearTimeout(entry.timer);message.error?entry.reject(new Error('原生请求失败')):entry.resolve(message.result);},8*1024*1024);
     socket.on('data',chunk=>{try{decoder.push(chunk);}catch{socket.destroy();}});socket.on('error',()=>{clearTimeout(connectingTimer);reject(new Error('原生通道不可用'));});socket.on('close',()=>{clearTimeout(connectingTimer);if(this.socket===socket){this.socket=null;this.invalidate();}for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(new Error('原生通道已关闭'));}this.pending.clear();});socket.once('connect',()=>{clearTimeout(connectingTimer);socket.unref();resolve();});

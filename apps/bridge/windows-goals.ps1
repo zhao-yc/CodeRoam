@@ -96,11 +96,13 @@ function Connect-Desktop {
   foreach ($file in [IO.Directory]::GetFiles('\\.\pipe\')) {
     $name = [IO.Path]::GetFileName($file)
     if ($name -notmatch '^codex-app-tools-[0-9a-f-]+$') { continue }
+    if ($script:inputData.PSObject.Properties.Name -contains 'nativePipe' -and $file -ne $script:inputData.nativePipe) { continue }
     $candidate = New-Object IO.Pipes.NamedPipeClientStream('.', $name, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
     try {
       $candidate.Connect(400)
       [uint32]$serverProcessId = 0
       if (![GoalDesktop]::GetNamedPipeServerProcessId($candidate.SafePipeHandle.DangerousGetHandle(), [ref]$serverProcessId)) { throw 'GOAL_UI_PROCESS_UNAVAILABLE' }
+      if ($script:inputData.PSObject.Properties.Name -contains 'processId' -and $serverProcessId -ne [long]$script:inputData.processId) { throw 'GOAL_UI_PROCESS_MISMATCH' }
       $process = Get-Process -Id $serverProcessId
       if ($process.Path -notmatch '\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\(?:ChatGPT|Codex)\.exe$') { throw 'GOAL_UI_PROCESS_MISMATCH' }
       $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$serverProcessId)

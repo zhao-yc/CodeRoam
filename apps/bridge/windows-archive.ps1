@@ -34,9 +34,15 @@ try{
   if($script:inputData.threadId -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or $script:inputData.hostId -notin @('local','durable')){throw 'ARCHIVE_BAD_INPUT'}
   # 优先使用桌面给本机服务继承的原生工具管道；手机不能传入管道名称。
   $preferred=[IO.Path]::GetFileName($env:CODEX_APP_TOOLS_PIPE_PATH)
+  # 多实例约束仅来自电脑连接服务，固定管道消失时不能退回扫描其他实例。
+  $bound=$script:inputData.PSObject.Properties.Name -contains 'nativePipe'
+  if($bound){
+    if($script:inputData.nativePipe -notmatch '^\\\\\.\\pipe\\codex-app-tools-[0-9a-f-]+$' -or [long]$script:inputData.processId -le 0){throw 'ARCHIVE_BAD_PIPE'}
+    $preferred=[IO.Path]::GetFileName($script:inputData.nativePipe)
+  }
   if($preferred -and $preferred -notmatch '^codex-app-tools-[0-9a-f-]+$'){throw 'ARCHIVE_BAD_PIPE'}
   $pipes=[IO.Directory]::GetFiles('\\.\pipe\')
-  if($preferred -and !@($pipes|Where-Object {[IO.Path]::GetFileName($_) -eq $preferred}).Count){$preferred=''}
+  if($preferred -and !@($pipes|Where-Object {[IO.Path]::GetFileName($_) -eq $preferred}).Count){if($bound){throw 'ARCHIVE_PROCESS_UNAVAILABLE'};$preferred=''}
   $candidates=@()
   foreach($file in $pipes){
     Assert-Deadline;$name=[IO.Path]::GetFileName($file);if($name -notmatch '^codex-app-tools-[0-9a-f-]+$'){continue}
@@ -45,6 +51,7 @@ try{
     try{
       $candidate.Connect(400);[uint32]$serverProcessId=0
       if(![ArchivePipe]::GetNamedPipeServerProcessId($candidate.SafePipeHandle.DangerousGetHandle(),[ref]$serverProcessId)){throw 'ARCHIVE_PROCESS_UNAVAILABLE'}
+      if($bound -and $serverProcessId -ne [long]$script:inputData.processId){throw 'ARCHIVE_PROCESS_MISMATCH'}
       $process=Get-Process -Id $serverProcessId
       if($process.Path -notmatch '\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\(?:ChatGPT|Codex)\.exe$'){throw 'ARCHIVE_PROCESS_MISMATCH'}
       $script:pipe=$candidate;$tools=Send-NativeRequest 'tools/list' @{threadStartKind='all'}

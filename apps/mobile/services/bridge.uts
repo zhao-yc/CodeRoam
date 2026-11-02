@@ -3,7 +3,7 @@ import type { ThreadGoal } from './goals.uts'
 import type { PermissionState } from './permissions.uts'
 import type { ExecutionSettings } from './execution-settings.uts'
 
-export type Computer = { id: string, label: string, online: boolean, icon?: string, hostname?: string, connectionType?: string, lastConnectedAt?: number, profileRevision?: number }
+export type Computer = { id: string, label: string, online: boolean, icon?: string, hostname?: string, connectionType?: string, lastConnectedAt?: number, profileRevision?: number, parentHostId?: string, instanceGeneration?: string, unavailableReason?: string }
 // 图标只允许随包资源，旧中转或未知值继续显示笔记本。
 export function computerIcon(computer: Computer | null): string { const icon = computer?.icon ?? ''; return ['code', 'terminal', 'laptop', 'desktop'].indexOf(icon) >= 0 ? icon : 'laptop' }
 export type ThreadSummary = { id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
@@ -270,6 +270,8 @@ class MobileBridge {
     if (type == 'threads.event') {
       const hostId = envelope.getString('hostId') ?? ''
       if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId)) return
+      const source = connection.computers.find((computer: Computer): boolean => computer.id == hostId)
+      if ((source?.instanceGeneration ?? '').length > 0 && source?.instanceGeneration != envelope.getString('generation')) return
       const update = { hostId, threads: JSON.parse<ThreadSummary[]>(JSON.stringify(envelope['threads'])) ?? [] as ThreadSummary[], revision: envelope.getNumber('revision') ?? 0 } as ThreadListUpdate
       const existing = liveThreadLists.updates.findIndex((item: ThreadListUpdate): boolean => item.hostId == hostId)
       if (existing >= 0) { if (liveThreadLists.updates[existing].revision >= update.revision) return; liveThreadLists.updates.splice(existing, 1, update) }
@@ -288,9 +290,14 @@ class MobileBridge {
       const previousComputers = connection.computers
       const wasOnline = connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online)
       connection.computers = JSON.parse<Computer[]>(JSON.stringify(envelope['hosts'])) ?? []
-      liveThreadLists.updates = liveThreadLists.updates.filter((item: ThreadListUpdate): boolean => connection.computers.some((computer: Computer): boolean => computer.id == item.hostId && computer.online) && previousComputers.some((computer: Computer): boolean => computer.id == item.hostId && computer.online))
+      liveThreadLists.updates = liveThreadLists.updates.filter((item: ThreadListUpdate): boolean => connection.computers.some((computer: Computer): boolean => computer.id == item.hostId && computer.online && (computer.instanceGeneration ?? '') == (previousComputers.find((previous: Computer): boolean => previous.id == item.hostId)?.instanceGeneration ?? '')) && previousComputers.some((computer: Computer): boolean => computer.id == item.hostId && computer.online))
       const online = connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online)
-      if (!wasOnline && online) { liveThreadLists.updates = liveThreadLists.updates.filter((item: ThreadListUpdate): boolean => item.hostId != connection.hostId); if (connection.activeThreadId.length > 0) this.watch(connection.activeThreadId) }
+      const previousGeneration = previousComputers.find((computer: Computer): boolean => computer.id == connection.hostId)?.instanceGeneration ?? ''
+      const currentGeneration = connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)?.instanceGeneration ?? ''
+      const replaced = previousGeneration.length > 0 && currentGeneration.length > 0 && previousGeneration != currentGeneration
+      // 实例换代立即废弃旧快照；只恢复只读订阅，不重放导航和写操作。
+      if (replaced) { this.openingRevision++; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0; connection.desktopNavigationError = ''; this.syncingThread = '' }
+      if ((!wasOnline || replaced) && online) { liveThreadLists.updates = liveThreadLists.updates.filter((item: ThreadListUpdate): boolean => item.hostId != connection.hostId); if (connection.activeThreadId.length > 0) this.watch(connection.activeThreadId) }
     } else if (type == 'response') {
       const id = envelope.getString('requestId') ?? ''
       const entry = this.pending.get(id)
@@ -311,6 +318,8 @@ class MobileBridge {
       }
     } else if (type == 'event') {
       if (envelope.getString('hostId') != connection.hostId || envelope.getString('threadId') != connection.activeThreadId) return
+      const source = connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)
+      if ((source?.instanceGeneration ?? '').length > 0 && source?.instanceGeneration != envelope.getString('generation')) return
       const epoch = envelope.getString('epoch') ?? ''
       const sequence = envelope.getNumber('seq') ?? 0
       if (epoch == connection.epoch && sequence <= connection.sequence) return

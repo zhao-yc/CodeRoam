@@ -19,13 +19,13 @@ import { readGoal, updateGoal } from './goals.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
-  constructor({ client = new IpcClient(), index, hosts = ['local','durable'], snapshotTimeoutMs = 8000, activateThread=openDesktopThread, loadTimeoutMs=10000, modelCatalog=new ModelCatalog(), attachments=new AttachmentStore(), goalController=new DesktopGoalController(), permissionCatalog=null } = {}) {
+  constructor({ client = new IpcClient(), native=null, index, hosts = ['local','durable'], snapshotTimeoutMs = 8000, activateThread=openDesktopThread, loadTimeoutMs=10000, modelCatalog=new ModelCatalog(), attachments=new AttachmentStore(), goalController=new DesktopGoalController(), permissionCatalog=null } = {}) {
     super();
     this.client=client; this.index=index; this.hosts=hosts; this.snapshotTimeoutMs=snapshotTimeoutMs;
     this.modelCatalog=modelCatalog;this.attachments=attachments;
     this.goalController=goalController;this.permissionCatalog=permissionCatalog;
     this.conversations=new Map(); this.connecting=null; this.reconnectTimer=null; this.stopped=false;
-    this.native=client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null,ipcSocketPath:client.socketPath}):null;
+    this.native=native??(client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null,ipcSocketPath:client.socketPath}):null);
     this.native?.on('changed',ids=>{if(this.stopped)return;for(const id of ids){const entry=this.conversations.get(id);if(entry?.state)this.emit('conversation',this.snapshot(entry.state));else this.emit('readState',{threadId:id,hasUnreadTurn:this.native.unread.get(id)});}});
     this.activateThread=(id,options)=>activateThread(id,{...options,nativeApi:this.native??undefined});this.loadTimeoutMs=loadTimeoutMs;this.loadingThreads=new Map();this.navigation=new DesktopNavigation();
     client.on('broadcast', message => this.onBroadcast(message));

@@ -10,6 +10,7 @@ import { AttachmentStore } from './attachment-store.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { BridgeAgent } from './agent.mjs';
 import { IpcClient, defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
+import { InstanceHub } from './instance-hub.mjs';
 
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
 let releaseBridgeLock=()=>{};
@@ -18,6 +19,15 @@ try {
   releaseBridgeLock=await acquireBridgeLock(values.config);
   const config=JSON.parse(fs.readFileSync(values.config,'utf8'));
   const dataPath=path.resolve(config.dataPath??'.local/bridge');fs.mkdirSync(dataPath,{recursive:true});
+  if(process.platform==='win32' && config.multiInstance!==false) {
+    const hub=new InstanceHub({config,dataPath});
+    const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
+    hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
+    hub.on('disconnected',()=>status(false));
+    hub.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
+    let closing=false;const close=async()=>{if(closing)return;closing=true;try{await hub.close();}finally{releaseBridgeLock();}};
+    process.on('SIGINT',close);process.on('SIGTERM',close);hub.start();
+  } else {
   const client=new IpcClient({socketPath:config.ipcSocketPath??defaultIpcSocketPath({codexHome:config.codexHome})});
   const adapter=new DesktopAdapter({client,index:new StateReader(config.codexHome),modelCatalog:new ModelCatalog({codexHome:config.codexHome}),attachments:new AttachmentStore({root:path.join(dataPath,'attachments')}),goalController:new DesktopGoalController({diagnosticPath:path.join(dataPath,'goal-ui-diagnostics.jsonl')})});
   const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite'))});
@@ -30,4 +40,5 @@ try {
   agent.start();
   let closing=false;const close=async()=>{if(closing)return;closing=true;try{agent.predictions.close();await agent.close();}finally{releaseBridgeLock();}};
   process.on('SIGINT',close);process.on('SIGTERM',close);
+  }
 }catch(error){releaseBridgeLock();console.error(`电脑连接服务启动失败：${error.message}`);process.exitCode=1;}

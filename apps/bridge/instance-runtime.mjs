@@ -1,0 +1,76 @@
+import path from 'node:path';
+import { NativeDesktop } from './native-desktop.mjs';
+import { DesktopAdapter } from './desktop-adapter.mjs';
+import { BridgeAgent } from './agent.mjs';
+import { StateReader } from './state-reader.mjs';
+import { ModelCatalog } from './model-settings.mjs';
+import { AttachmentStore } from './attachment-store.mjs';
+import { Journal } from './journal.mjs';
+import { DesktopGoalController } from './desktop-goals.mjs';
+import { DesktopArchiveController } from './desktop-archive.mjs';
+import { ComposerPredictionReader } from './composer-prediction.mjs';
+import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
+import { BridgeError } from '../../packages/protocol/contracts.mjs';
+
+/** 固定到本次已核验进程和随机管道；管道丢失后不能选择另一个桌面代替。 */
+class InstanceNativeDesktop extends NativeDesktop {
+  constructor(instance, client, options) { super(options); this.instance = instance; this.boundClient = client; this.processId = instance.pid; }
+  async resolveEndpoint() {
+    this.boundClient.assertCurrent();
+    return { path: this.instance.nativePipe, pid: this.instance.pid };
+  }
+  async call(...args) { this.boundClient.assertCurrent(); return super.call(...args); }
+  async connect() { try { return await super.connect(); } catch { throw new BridgeError('INSTANCE_NOT_READY', '所选实例的原生连接尚未就绪，请在电脑检查该实例后重试'); } }
+  /** 冷会话在原桌面加载后立即补核后台身份，避免等到下次周期发现才可跟随。 */
+  async navigate(...args) { await super.navigate(...args); await this.instance.refreshOwners?.(); }
+}
+
+/** 原生帮助程序只接收连接服务生成的实例约束，手机不能指定 PID 或管道。 */
+class InstanceArchiveController extends DesktopArchiveController {
+  constructor(instance, client) { super(); this.instance = instance; this.client = client; }
+  archive(params, verify) { this.client.assertCurrent(); return super.archive({ ...params, processId: this.instance.pid, nativePipe: this.instance.nativePipe }, async () => { this.client.assertCurrent(); await verify(); }); }
+}
+class InstanceGoalController extends DesktopGoalController {
+  constructor(instance, client, options) { super(options); this.instance = instance; this.client = client; }
+  perform(params, verify) { this.client.assertCurrent(); return super.perform({ ...params, processId: this.instance.pid, nativePipe: this.instance.nativePipe }, async () => { this.client.assertCurrent(); await verify(); }); }
+}
+
+/** 一个实例一份上下文，默认实例沿用原账本，其余实例独立保存附件和去重状态。 */
+export class InstanceRuntime {
+  constructor({ instance, config, dataPath, send, bind = bindInstanceClients }) {
+    this.instance = instance; this.bind = bind; this.closed = false; this.bindings = null;
+    this.client = new InstanceIpcClient({ instance, socketPath: config.ipcSocketPath });
+    this.native = new InstanceNativeDesktop(instance, this.client, { stateDirectory: instance.codexHome });
+    this.adapter = new DesktopAdapter({ client: this.client, native: this.native, index: new StateReader(instance.codexHome), modelCatalog: new ModelCatalog({ codexHome: instance.codexHome }), attachments: new AttachmentStore({ root: path.join(dataPath, 'attachments') }), goalController: new InstanceGoalController(instance, this.client, { diagnosticPath: path.join(dataPath, 'goal-ui-diagnostics.jsonl') }) });
+    const activate = this.adapter.activateThread;
+    this.adapter.activateThread = async (id, options) => {
+      const own = await this.adapter.discoverOwner(id, 400);
+      if (!own && await this.client.ownedElsewhere(id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '此会话正在另一个实例中打开，请切换到对应设备');
+      return activate(id, options);
+    };
+    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client) });
+    this.agent.predictions.close();
+    this.agent.predictions = new ComposerPredictionReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port }] : [] });
+    this.agent.send = message => instance.alive && instance.ready && send({ ...message, hostId: instance.id, generation: instance.generation });
+    this.client.on('disconnected', () => { instance.ready = false; });
+  }
+  /** 初次连接与 IPC 重连都重新核对页面来源，不复用已失效的客户端编号。 */
+  async ready() {
+    if (this.closed || !this.instance.alive) return false;
+    if (this.instance.ready && this.client.allowedClients.size) return true;
+    if (!this.bindings) this.bindings = (async () => {
+      await this.client.connect();
+      const ids = await this.bind(this.client, this.instance);
+      if (this.closed || !this.instance.alive) return false;
+      this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
+      await this.agent.predictions.start(); return true;
+    })().finally(() => { this.bindings = null; });
+    return this.bindings;
+  }
+  async request(message) {
+    if (message.generation !== this.instance.generation || !this.instance.alive) throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
+    this.client.assertCurrent();
+    return this.agent.handleRequest(message);
+  }
+  async close() { this.closed = true; this.instance.alive = false; this.instance.ready = false; await this.agent.close(); }
+}
