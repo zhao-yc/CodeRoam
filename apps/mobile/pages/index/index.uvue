@@ -305,7 +305,7 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .computer-spinner { width: 16px; height: 16px; border-color: #285c49; }
 .computer-unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #285c49; }
 /* 三角形标记保留方形留白并允许边角完整显示，避免默认溢出隐藏和圆角裁切。 */
-.computer-sync-badge { position: absolute; right: 6px; top: 6px; width: 16px; height: 16px; align-items: center; justify-content: center; overflow: visible; }
+.computer-sync-badge { position: absolute; right: 6px; top: 2px; width: 16px; height: 16px; align-items: center; justify-content: center; overflow: visible; }
 .computer-connection-content { flex-direction: row; align-items: center; transition-property: opacity; transition-duration: 800ms; transition-timing-function: ease-in-out; }
 .thread-computer-meta { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
 .thread-computer { max-width: 84px; margin-left: 6px; font-size: 13px; line-height: 20px; color: #7b827a; lines: 1; text-overflow: ellipsis; }
