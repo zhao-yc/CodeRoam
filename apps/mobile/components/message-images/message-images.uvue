@@ -23,9 +23,9 @@ function loadImages() {
     loading = false
     sources.value = JSON.parse<string[]>(JSON.stringify(result['images'])) ?? [] as string[]
     if (sources.value.length == 0) error.value = '这条记录未保留图片'
-  }, (_failure: Error) => {
+  }, (failure: Error) => {
     if (!alive || version != requestVersion) return
-    loading = false; error.value = '图片加载失败'
+    loading = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
   })
 }
 // 仅点击缩略图时打开当前消息的图片组。

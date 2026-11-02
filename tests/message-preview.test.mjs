@@ -31,8 +31,9 @@ test('指定消息按需返回内嵌图片，日常同步只有数量且纯图�
 
 test('预览白名单只接受有效PNG/JPEG，不暴露本机路径或抓取远程地址',()=>{
   const source=state();source.turns[0].items[0].content=[{type:'localImage',path:'C:/私人文件.png'},{type:'image',url:'https://example.com/private.png'},{type:'image',url:'data:image/svg+xml;base64,PHN2Zz4='}];
-  const result=normalizeConversation(source,{imageMessageId:'picture'});
+  const result=normalizeConversation(source);
   assert.equal(result.messages[0].imageCount,3);assert.equal(result.messages[0].images,undefined);assert.equal(JSON.stringify(result).includes('私人'),false);
+  assert.throws(()=>normalizeConversation(source,{imageMessageId:'picture'}),error=>error.code==='IMAGE_UNAVAILABLE'&&!error.message.includes('私人'));
 });
 
 test('图片读取必须属于当前手机订阅和可见消息，历史原图可读且不激活桌面',async()=>{
@@ -91,7 +92,7 @@ test('消息默认加载缩略图，点击才预览，重连可重试且卸载�
   assert.equal(f.sources.value.length,2);assert.equal(calls.length,0);
   f.preview(image);assert.equal(calls[0].urls.length,2);assert.equal(calls[0].current,image);
   props.messageId='other';watches[0].callback();assert.equal(f.sources.value.length,0);
-  reject(new Error('无法读取'));await new Promise(setImmediate);assert.equal(f.error.value,'图片加载失败');
+  reject(new Error('无法读取'));await new Promise(setImmediate);assert.equal(f.error.value,'无法读取');
   props.connected=false;watches[1].callback(false);f.loadImages();assert.equal(requests.length,2);
   props.connected=true;watches[1].callback(true);assert.equal(requests.length,3);
   dispose();resolve({images:[image]});await new Promise(setImmediate);assert.equal(f.sources.value.length,0);

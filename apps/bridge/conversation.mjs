@@ -2,7 +2,8 @@ import { permissionState } from './permissions.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { executionSettings } from './model-settings.mjs';
 import { normalizeQuestions, parseQuestionReply, questionResponseText } from './questions.mjs';
-import { validateImages, MAX_IMAGES } from '../../packages/protocol/images.mjs';
+import { MAX_IMAGES } from '../../packages/protocol/images.mjs';
+import { readMessageImages } from './message-images.mjs';
 import { currentActivity } from './activity.mjs';
 import { normalizeGoal, goalRevision } from './goals.mjs';
 
@@ -66,8 +67,8 @@ export function normalizeConversation(state, { imageMessageId, maxMessages = 80,
         const paths = changes.map(change => change.path).filter(path => typeof path === 'string' && path.length > 0);
         if (paths.length > 0) summary = `${paths[0]}${paths.length > 1 ? ` 等${paths.length}个文件` : ''}`.slice(0,240);
       }
-      // 日常快照只同步图片数量；点击时才读取目标消息的内嵌图片，不读取路径或抓取远程地址。
-      const images=String(item.id)===imageMessageId?imageParts.flatMap(part=>{try{return validateImages([part.url]);}catch{return [];}}):[];
+      // 日常快照只同步数量；查看时仅读取桌面目标消息已附加的图片，不抓取远程地址。
+      const images=String(item.id)===imageMessageId?readMessageImages(imageParts):[];
       if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }

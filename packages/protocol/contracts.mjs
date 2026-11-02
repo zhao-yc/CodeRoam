@@ -77,7 +77,10 @@ export function validateRequest(message) {
     if (Object.keys(p).some(key => !['threadId','mode','expectedRevision','confirmedFullAccess'].includes(key)) || !['default','auto-review','read-only','full-access'].includes(p.mode) || typeof p.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(p.expectedRevision) || (p.confirmedFullAccess !== undefined && typeof p.confirmedFullAccess !== 'boolean') || (p.mode === 'full-access' && p.confirmedFullAccess !== true)) throw new BridgeError('BAD_PERMISSIONS', '权限参数无效或尚未确认完整访问');
   }
   if (message.method === 'question.reply') requireString(message.params.questionGroupId, '题组编号', 1000);
-  if (message.method === 'thread.images') requireString(message.params.messageId, '消息编号', 200);
+  if (message.method === 'thread.images') {
+    requireString(message.params.messageId, '消息编号', 200);
+    if(Object.keys(message.params).some(key=>!['threadId','messageId'].includes(key)))throw new BridgeError('BAD_PARAMS','查看图片只接受会话编号和消息编号');
+  }
   if (message.method === 'thread.prediction.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取预测仅接受会话编号');
   if (message.method === 'thread.goal.update') validateGoalUpdate(message.params);
   if (message.method === 'thread.goal.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取目标仅接受会话编号');
