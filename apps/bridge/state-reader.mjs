@@ -84,7 +84,25 @@ export class StateReader {
     }
     return snapshot;
   }
-  list({ limit = 50, offset = 0, search = '', archived = false } = {}) {
+  /** 引用候选只读索引，不订阅、不导航，也不回传工作目录或消息正文。 */
+  listMentions({ search = '', offset = 0, limit = 30, excludeThreadId = '' } = {}) {
+    const rows = this.list({ search, offset, limit: limit + 1, excludeThreadId });
+    return { threads: rows.slice(0, limit).map(({ id, title, cwd, updatedAt }) => ({ id, title, projectLabel: path.win32.basename(String(cwd ?? '').replaceAll('/', '\\')) || '未指定项目', updatedAt })), hasMore: rows.length > limit };
+  }
+  /** 发送前逐个按编号重新核验；不能因搜索分页或同名标题改为另一条聊天。 */
+  readMentionThreads(ids) {
+    if (!ids.length) return [];
+    const db = new DatabaseSync(this.filePath, { readOnly: true });
+    try {
+      const columns = new Set(db.prepare('PRAGMA table_info(threads)').all().map(column => column.name));
+      const title = columns.has('name') ? "COALESCE(NULLIF(name,''),title)" : 'title';
+      const visible = ['archived=0'];
+      if (columns.has('thread_source')) visible.push("COALESCE(thread_source,'') NOT IN ('guardian_review','subagent')");
+      if (columns.has('source')) visible.push("CASE WHEN json_valid(source) THEN COALESCE(json_type(source,'$.subagent'),'null') = 'null' ELSE 1 END");
+      return db.prepare(`SELECT id,${title} AS title FROM threads WHERE ${visible.join(' AND ')} AND id IN (${ids.map(() => '?').join(',')})`).all(...ids).map(row => ({ id: row.id, title: row.title || '未命名聊天' }));
+    } finally { db.close(); }
+  }
+  list({ limit = 50, offset = 0, search = '', archived = false, excludeThreadId = '' } = {}) {
     if (!fs.existsSync(this.filePath)) throw new BridgeError('INDEX_NOT_FOUND', '未找到 Codex 聊天索引，请先打开桌面客户端');
     const db = new DatabaseSync(this.filePath, { readOnly: true });
     try {
@@ -97,7 +115,7 @@ export class StateReader {
       if(columns.has('thread_source')) visible.push("COALESCE(thread_source,'') NOT IN ('guardian_review','subagent')");
       // 旧索引可能没有规范来源字段；只识别结构化 subagent 来源，兼容空值、未知来源和非 JSON 字符串。
       if(columns.has('source')) visible.push("CASE WHEN json_valid(source) THEN COALESCE(json_type(source,'$.subagent'),'null') = 'null' ELSE 1 END");
-      const rows = db.prepare(`SELECT id,${title} AS title,cwd,${time} AS updatedAt FROM threads WHERE ${visible.join(' AND ')} AND (${title} LIKE ? OR cwd LIKE ?) ORDER BY ${time} DESC LIMIT ? OFFSET ?`).all(`%${String(search).slice(0,100)}%`, `%${String(search).slice(0,100)}%`, Math.max(1,Math.min(100,Number(limit)||50)), Math.max(0,Math.min(10000,Number(offset)||0)));
+      const rows = db.prepare(`SELECT id,${title} AS title,cwd,${time} AS updatedAt FROM threads WHERE ${visible.join(' AND ')} AND id<>? AND (${title} LIKE ? OR cwd LIKE ?) ORDER BY ${time} DESC,id ASC LIMIT ? OFFSET ?`).all(excludeThreadId, `%${String(search).slice(0,100)}%`, `%${String(search).slice(0,100)}%`, Math.max(1,Math.min(101,Number(limit)||50)), Math.max(0,Math.min(10000,Number(offset)||0)));
       return rows.map(row => ({ ...row, title: row.title || '未命名聊天' }));
     } finally { db.close(); }
   }

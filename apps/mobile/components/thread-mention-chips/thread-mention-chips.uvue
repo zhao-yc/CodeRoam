@@ -1,0 +1,25 @@
+<template>
+  <view v-if="mentions.length > 0" class="mention-chips" aria-label="本次消息引用的聊天">
+    <view v-for="mention in mentions" :key="mention.id" class="mention-chip">
+      <text class="mention-name">@{{ mention.title }}</text>
+      <button v-if="!readonly" class="mention-remove" :disabled="disabled" :aria-label="'移除聊天引用 ' + mention.title" @click="remove(mention.id)">×</button>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import type { SelectedThreadMention } from '../../services/thread-mentions.uts'
+const props = withDefaults(defineProps<{ mentions: SelectedThreadMention[], disabled?: boolean, readonly?: boolean }>(), { disabled: false, readonly: false })
+const emit = defineEmits<{ (event: 'remove', id: string): void }>()
+// 标签只修改本次消息选择，不改变被引用聊天。
+function remove(id: string) { if (!props.disabled && !props.readonly) emit('remove', id) }
+</script>
+<style>
+.mention-chips { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
+.mention-chip { max-width: 100%; flex-direction: row; align-items: center; border-radius: 10px; background-color: #e8eee6; padding: 3px 8px; }
+.mention-name { flex-shrink: 1; color: #285c49; font-size: 12px; line-height: 24px; lines: 1; overflow: hidden; text-overflow: ellipsis; }
+.mention-remove { flex-shrink: 0; width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0 0 0 4px; color: #657269; background-color: transparent; }
+/* #ifdef WEB */
+.mention-name { white-space: nowrap; }
+.mention-remove::after { border: none; }
+/* #endif */
+</style>

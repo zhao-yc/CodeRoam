@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { BridgeError, UPLOAD_METHODS, requireString, requestFingerprint, validDraftRevision, validateAttachmentScope, validateDraftRequest } from '../../packages/protocol/contracts.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
+import { threadMentionPrompt } from './thread-mentions.mjs';
 
 const unavailable = () => new BridgeError('DRAFT_UNAVAILABLE', '暂时无法核对原生草稿，请在电脑端确认后重新读取');
 const isUnknown = error => error?.outcomeUnknown === true || !error?.code || /超时|连接已关闭|not-connected|timeout/i.test(error.message ?? '');
@@ -53,11 +54,12 @@ function publicSnapshot(entry, native) {
 
 /** 以设备和项目管理原生草稿；所有桌面动作只交给控制器，不读取旧配置或模型缓存。 */
 export class NativeDraftService extends EventEmitter {
-  constructor({ controller, projects, attachments, now = Date.now }) {
+  constructor({ controller, projects, attachments, threadMentions, now = Date.now }) {
     super();
     this.controller = controller;
     this.projects = projects;
     this.attachments = attachments;
+    this.threadMentions = threadMentions;
     this.now = now;
     this.sessions = new Map();
     this.current = new Map();
@@ -97,7 +99,7 @@ export class NativeDraftService extends EventEmitter {
   /** 只在修订号或状态变化时发布；返回副本，避免消费者篡改服务里的并发基线。 */
   accept(entry, native, notify = true) {
     this.assertOpen();
-    const snapshot = publicSnapshot(entry, native), previous = entry.snapshot;
+    const snapshot = { ...publicSnapshot(entry, native), ...(this.threadMentions ? { supportsThreadMentions: this.threadMentions.supported === true } : {}) }, previous = entry.snapshot;
     // 已确认创建的聊天不可被迟到的 ready 响应变回可发送的草稿。
     if (previous?.status === 'promoted' && snapshot.status !== 'promoted') return structuredClone(previous);
     entry.snapshot = snapshot;
@@ -231,7 +233,10 @@ export class NativeDraftService extends EventEmitter {
       };
       try {
         // input 的 attachments 是由 AttachmentStore 核验过的文件描述，禁止透传手机附件编号或任意路径。
-        const result = await this.controller.send(entry.binding, { text: params.text, images, attachments: files }, { expectedRevision: params.expectedRevision, commandId, onCreated });
+        const mentions=params.threadMentionIds?.length?await this.threadMentions?.select(params.threadMentionIds):null;
+        if(params.threadMentionIds?.length&&!mentions)throw new BridgeError('THREAD_MENTIONS_UNAVAILABLE','请更新电脑连接服务后引用聊天');
+        mentions?.check();
+        const result = await this.controller.send(entry.binding, { text: threadMentionPrompt(params.text,mentions), images, attachments: files, ...(mentions?.references.length?{threadReferences:mentions.references}:{}) }, { expectedRevision: params.expectedRevision, commandId, onCreated });
         returned = true;
         this.assertOpen();
         requireString(result?.threadId, '聊天编号', 200);

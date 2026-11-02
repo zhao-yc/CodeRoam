@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {AsarReader} from '../../packages/protocol/asar-reader.mjs';
 import {BridgeError} from '../../packages/protocol/contracts.mjs';
+import {threadMentionModules} from './thread-mention-modules.mjs';
 
 /** 只从已核验安装包解析原生入口；导出名变化时重新定位，不复制或修改桌面代码。 */
 export function nativeDraftModules(executable) {
@@ -43,7 +44,10 @@ export function nativeDraftModules(executable) {
     const registerStart=registration?primary.indexOf('function '+registration+'('):-1;
     const nativeSubmitAtom=registerStart<0?null:primary.slice(registerStart,registerStart+1000).match(/\.set\(([\w$]+),[\w$]+\)/)?.[1];
     if(![permissionModes,permissionWorkspaceMode,remember,nativeSubmitAtom].every(Boolean))throw Error();
-    return {initial:path.posix.basename(names[0]),primary:path.posix.basename(primaryNames[0]),newChat:exported(name),draftAtom:exported(draftAtom),draftLocation:exported(location),routeAtom:exported(routeAtom),promotionAtom:exported(promotionAtom),permissionModes:exported(permissionModes),permissionWorkspaceMode:exported(permissionWorkspaceMode),rememberPermissionSelection:exported(remember),nativeSubmitAtom:exported(nativeSubmitAtom,primary)};
+    // 引用模块不兼容时保留原有无引用草稿能力，发送引用时再明确拒绝。
+    let threadMentions;
+    try { threadMentions=threadMentionModules(executable); } catch {}
+    return {initial:path.posix.basename(names[0]),primary:path.posix.basename(primaryNames[0]),newChat:exported(name),draftAtom:exported(draftAtom),draftLocation:exported(location),routeAtom:exported(routeAtom),promotionAtom:exported(promotionAtom),permissionModes:exported(permissionModes),permissionWorkspaceMode:exported(permissionWorkspaceMode),rememberPermissionSelection:exported(remember),nativeSubmitAtom:exported(nativeSubmitAtom,primary),...(threadMentions?{threadMentions}:{})};
   } catch { throw new BridgeError('DRAFT_UNSUPPORTED','原生新建草稿接口暂不兼容，请更新电脑连接服务'); }
   finally { reader.close(); }
 }

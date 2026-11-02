@@ -43,7 +43,7 @@ test('主操作和菜单停止在禁用态无副作用，启用后保留发送�
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
   const methods=['primaryAction','stopFromMenu'].map(name=>source.split(/\r?\n/).find(line=>line.startsWith('function '+name+'('))).join('\n');
   const calls=[];
-  const context={canWrite:{value:false},imageBusy:{value:false},filesReady:{value:true},draftFiles:{value:[]},draftImages:{value:[]},draft:{value:'继续'},activeTurnId:{value:'turn'},send:()=>calls.push('发送'),stop:()=>calls.push('停止'),closeActions:()=>calls.push('关闭菜单')};
+  const context={canWrite:{value:false},imageBusy:{value:false},filesReady:{value:true},draftFiles:{value:[]},draftMentions:{value:[]},draftImages:{value:[]},draft:{value:'继续'},activeTurnId:{value:'turn'},send:()=>calls.push('发送'),stop:()=>calls.push('停止'),closeActions:()=>calls.push('关闭菜单')};
   vm.runInNewContext(methods+'\nprimaryAction(); stopFromMenu();',context);assert.deepEqual(calls,[]);
   context.canWrite.value=true;vm.runInNewContext(methods+'\nprimaryAction();',context);assert.deepEqual(calls,['发送']);
   context.draft.value='';vm.runInNewContext(methods+'\nprimaryAction(); stopFromMenu();',context);assert.deepEqual(calls,['发送','停止','关闭菜单','停止']);

@@ -1,3 +1,5 @@
+import {prepareThreadMentionsNative,threadMentionExpression} from './thread-mention-expression.mjs';
+
 /** 所有动作仅作用于原桌面的可见原生草稿；手机不能传入脚本、模块或本机地址。 */
 async function operateNativeDraft(modules, action, input) {
   const initial = await import('app://-/assets/'+modules.initial);
@@ -209,6 +211,15 @@ async function sendNativeDraft(store,initial,modules,properties,input,commands) 
   if(!/^app-primary-[a-f0-9]+\.js$/.test(modules.primary??'')||typeof modules.nativeSubmitAtom!=='string')throw Error('DRAFT_SEND_UNAVAILABLE');
   const primary=await import('app://-/assets/'+modules.primary);
   const native=await readPermissionsNative(store,initial,modules,properties,input,true);
+  // 此字段仅由电脑连接服务构造；严格核对规范编号和原生 local，绝不接受桥接主机编号或标题。
+  const threadReferences=input.threadReferences??[];
+  if(!Array.isArray(threadReferences)||threadReferences.length>20||threadReferences.some(reference=>!reference||Object.keys(reference).length!==2||reference.hostId!=='local'||typeof reference.threadId!=='string'||!(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).test(reference.threadId))||new Set(threadReferences.map(reference=>reference.threadId)).size!==threadReferences.length)throw Error('DRAFT_SEND_UNAVAILABLE');
+  if(threadReferences.length){
+    if(!modules.threadMentions)throw Error('DRAFT_SEND_UNAVAILABLE');
+    try { await prepareThreadMentionsNative(modules.threadMentions,{ids:threadReferences.map(reference=>reference.threadId)},native.composerScope); }
+    catch { throw Error('DRAFT_SEND_UNAVAILABLE'); }
+  }
+  // 异步能力读取置于原有项目、正文和命令 guard 之前，保持并发及幂等语义。
   if(native.root.getBoundingClientRect().width<=0||native.root.closest('[data-app-shell-active-page="false"]')||native.composerScope.value?.kind!=='new'||native.composerScope.value.clientThreadId!==input.clientDraftId)throw Error('DRAFT_SEND_UNAVAILABLE');
   // 权限摘要计算含异步步骤；提交前重新读取当前项目，不能用旧 props 向另一个目录发送。
   const start=native.root[Object.keys(native.root).find(key=>key.startsWith('__reactFiber$'))],stack=[start];
@@ -250,7 +261,7 @@ async function sendNativeDraft(store,initial,modules,properties,input,commands) 
   commands.set(input.commandId,entry);
   try {
     // 服务内部合并原生项目、模型与权限，检查图片能力，并调用原生新建及首轮提交。
-    await service.submit({prompt:input.text,imageAttachments,fileAttachments,addedFiles:[],ideContext:null,pastedTextAttachments:[],commentAttachments:[],appshotContexts:[]});
+    await service.submit({prompt:input.text,imageAttachments,fileAttachments,addedFiles:[],ideContext:null,pastedTextAttachments:[],commentAttachments:[],appshotContexts:[],...(threadReferences.length?{threadReferences}:{})});
     for(let attempt=0;attempt<100;attempt++) {
       const threadId=store.get(initial[modules.promotionAtom],input.clientDraftId);
       if(typeof threadId==='string'&&/^[a-f0-9-]{36}$/i.test(threadId)) {
@@ -269,6 +280,6 @@ async function sendNativeDraft(store,initial,modules,properties,input,commands) 
 
 export function nativeDraftExpression(modules,action,input) {
   if(!/^app-initial-[a-f0-9]+\.js$/.test(modules.initial) || !['capabilities','open','read','update','send'].includes(action))throw Error('原生草稿请求无效');
-  for(const [key,value] of Object.entries(modules))if(key==='primary'?!/^app-primary-[a-f0-9]+\.js$/.test(value):key!=='initial'&&!/^[\w$]+$/.test(value))throw Error('原生草稿模块无效');
-  return `(()=>{const readPermissionsNative=${readPermissionsNative.toString()};const updatePermissionsNative=${updatePermissionsNative.toString()};const sendNativeDraft=${sendNativeDraft.toString()};return (${operateNativeDraft.toString()})(${JSON.stringify(modules)},${JSON.stringify(action)},${JSON.stringify(input)})})()`;
+  for(const [key,value] of Object.entries(modules))if(key==='threadMentions'){threadMentionExpression(value,{});}else if(key==='primary'?!/^app-primary-[a-f0-9]+\.js$/.test(value):key!=='initial'&&!/^[\w$]+$/.test(value))throw Error('原生草稿模块无效');
+  return `(()=>{const prepareThreadMentionsNative=${prepareThreadMentionsNative.toString()};const readPermissionsNative=${readPermissionsNative.toString()};const updatePermissionsNative=${updatePermissionsNative.toString()};const sendNativeDraft=${sendNativeDraft.toString()};return (${operateNativeDraft.toString()})(${JSON.stringify(modules)},${JSON.stringify(action)},${JSON.stringify(input)})})()`;
 }

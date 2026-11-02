@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BridgeError, validatePluginIds } from '../../packages/protocol/contracts.mjs';
+import { BridgeError, validatePluginIds, validateThreadMentionIds } from '../../packages/protocol/contracts.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
 
 const WATCHER = 'message-queue';
@@ -26,7 +26,7 @@ export class MessageQueue {
   decorate(snapshot) {
     const queuedMessages = this.rows(snapshot.threadId).map(row => {
       const payload = JSON.parse(row.payload);
-      return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({id,displayName}) => ({id,displayName})) } : {}) };
+      return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({id,displayName}) => ({id,displayName})) } : {}), ...(payload.threadMentions?.length ? { threadMentions: payload.threadMentions.map(({id,title}) => ({id,title})) } : {}) };
     });
     return { ...snapshot, supportsMessageQueue: true, supportsQueueEditing: true, queuedMessages };
   }
@@ -41,6 +41,7 @@ export class MessageQueue {
     if (this.blocked(threadId)) throw new BridgeError('DELETE_IN_PROGRESS', '该聊天正在删除，不能操作排队消息');
     if (queueAction === 'enqueue') {
       const pluginIds = validatePluginIds(params.pluginIds);
+      const threadMentionIds = validateThreadMentionIds(params.threadMentionIds);
       const images = validateImages(params.images), text = params.text ?? '', attachments = params.attachments ?? [];
       if (typeof text !== 'string' || text.length > 32000 || (!text.trim() && !images.length && !attachments.length)) throw new BridgeError('BAD_PARAMS', '请输入消息或选择附件');
       if (this.rows(threadId).length >= 20) throw new BridgeError('QUEUE_FULL', '最多排队20条消息，请先处理已有消息');
@@ -51,7 +52,7 @@ export class MessageQueue {
       const waitingForInput = snapshot.approvals?.length || snapshot.pendingPlan || snapshot.questionGroups?.some(group => group.state === 'pending' && group.kind === 'native');
       if (!hasBacklog && snapshot.status === 'idle' && !snapshot.activeTurnId && !waitingForInput) {
         try {
-          const result = await this.adapter.operate('turn.send', { threadId, text, images, attachments, ...(pluginIds.length ? { pluginIds } : {}) }, commandId, deviceId);
+          const result = await this.adapter.operate('turn.send', { threadId, text, images, attachments, ...(pluginIds.length ? { pluginIds } : {}), ...(threadMentionIds.length ? { threadMentionIds } : {}) }, commandId, deviceId);
           this.release(threadId);
           return { ...result, queued: false };
         } catch (error) {
@@ -59,14 +60,17 @@ export class MessageQueue {
           if (error.code !== 'TURN_ACTIVE' || error.outcomeUnknown) { this.release(threadId); throw error; }
         }
       }
-      let selection;
+      let selection, mentions;
       try {
         selection = pluginIds.length ? await this.adapter.selectPlugins(threadId, WATCHER, pluginIds) : null;
+        mentions = threadMentionIds.length ? await this.adapter.threadMentions?.select(threadMentionIds,threadId,WATCHER) : null;
+        if(threadMentionIds.length&&!mentions)throw new BridgeError('THREAD_MENTIONS_UNAVAILABLE','请更新电脑连接服务后引用聊天');
         selection?.check();
+        mentions?.check();
       } catch (error) { this.release(threadId); throw error; }
       const plugins = selection?.plugins.map(({id,displayName}) => ({id,displayName}));
       const id = randomUUID();
-      this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments, ...(plugins?.length ? {pluginIds: plugins.map(plugin => plugin.id), plugins} : {}) }));
+      this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments, ...(plugins?.length ? {pluginIds: plugins.map(plugin => plugin.id), plugins} : {}), ...(mentions?.mentions.length ? {threadMentionIds,threadMentions:mentions.mentions} : {}) }));
       this.changed(threadId);
       return { ok: true, queued: true, queueId: id };
     }
@@ -94,7 +98,7 @@ export class MessageQueue {
       return { id, name: metadata.name, size: metadata.size };
     });
     // 只返回原上传编号和显示信息，不允许手机获得服务器文件路径。
-    const draft = { text: payload.text, images: payload.images, attachments, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({ id, displayName }) => ({ id, displayName })) } : {}) };
+    const draft = { text: payload.text, images: payload.images, attachments, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({ id, displayName }) => ({ id, displayName })) } : {}), ...(payload.threadMentions?.length ? { threadMentions: payload.threadMentions.map(({ id, title }) => ({ id, title })) } : {}) };
     this.db.prepare("UPDATE message_queue SET state='editing',error='' WHERE id=?").run(row.id);
     this.changed(row.thread_id);
     return { ok: true, edited: true, queueId: row.id, draft };
@@ -105,7 +109,7 @@ export class MessageQueue {
     this.db.prepare("UPDATE message_queue SET state='sending', previous_turn=? WHERE id=?").run(previousTurn, row.id); this.changed(row.thread_id);
     try {
       // 展示名称只供队列快照使用；投递重新解析编号和最新名称，不信任持久化的标记。
-      const { plugins, ...params } = JSON.parse(row.payload);
+      const { plugins, threadMentions, ...params } = JSON.parse(row.payload);
       const result = await this.adapter.operate(method, { ...params, expectedTurnId: previousTurn }, row.id, row.device_id);
       if (method === 'turn.steer') this.db.prepare('DELETE FROM message_queue WHERE id=?').run(row.id);
       else this.db.prepare("UPDATE message_queue SET state='dispatched' WHERE id=?").run(row.id);
@@ -115,7 +119,8 @@ export class MessageQueue {
       // 空闲快照之后桌面先开始了另一任务时安全回队，绝不改为追加。
       const state = error.code === 'TURN_ACTIVE' || error.code === 'STALE_TURN' ? 'queued' : unknown ? 'unknown' : 'failed';
       const pluginFailure = ['PLUGIN_UNAVAILABLE','PLUGINS_UNAVAILABLE','PLUGINS_CHANGED'].includes(error.code);
-      this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, state === 'queued' ? '' : unknown ? '发送结果需要核对，请先查看聊天；此消息不会自动重发' : pluginFailure ? '所选插件已不可用或目录已变化，队列已暂停；请取消此消息并重新选择插件发送' : '发送失败，请核对聊天和附件后取消此消息并重新发送', row.id);
+      const mentionFailure = String(error.code).startsWith('THREAD_MENTION');
+      this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, state === 'queued' ? '' : unknown ? '发送结果需要核对，请先查看聊天；此消息不会自动重发' : pluginFailure ? '所选插件已不可用或目录已变化，队列已暂停；请取消此消息并重新选择插件发送' : mentionFailure ? '所引用聊天已不可用，队列已暂停；请撤回编辑并重新选择聊天' : '发送失败，请核对聊天和附件后取消此消息并重新发送', row.id);
       this.changed(row.thread_id); throw error;
     }
   }

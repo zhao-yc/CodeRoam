@@ -17,6 +17,7 @@ import { AttachmentStore } from './attachment-store.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { readGoal, updateGoal } from './goals.mjs';
 import { readThreadPlugins, selectThreadPlugins, pluginPrompt } from './plugins.mjs';
+import { threadMentionPrompt } from './thread-mentions.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
@@ -244,7 +245,7 @@ export class DesktopAdapter extends EventEmitter {
 
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
-    const snapshot={...normalizeConversation(state,options),supportsFileReports:process.platform==='win32',supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
+    const snapshot={...normalizeConversation(state,options),supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:process.platform==='win32',supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
     // 侧边栏保存的未读独立于流式快照，不能用快照默认 false 提前清理桌面蓝点。
     if(this.native){if(this.native.unread.has(state.id))snapshot.hasUnreadTurn=this.native.unread.get(state.id);else delete snapshot.hasUnreadTurn;}
     const entry=this.conversations.get(state.id);
@@ -315,13 +316,17 @@ export class DesktopAdapter extends EventEmitter {
     const selection=['turn.send','turn.steer'].includes(method)&&params.pluginIds?.length?await this.selectPlugins(params.threadId,deviceId,params.pluginIds):null;
     selection?.check();
     const plugins=selection?.plugins??[];
+    const mentions=['turn.send','turn.steer'].includes(method)&&params.threadMentionIds?.length?await this.threadMentions?.select(params.threadMentionIds,params.threadId,deviceId):null;
+    if(params.threadMentionIds?.length&&!mentions)throw new BridgeError('THREAD_MENTIONS_UNAVAILABLE','请更新电脑连接服务后引用聊天');
+    selection?.check(); mentions?.check();
     const entry=this.conversations.get(params.threadId), snapshot=normalizeConversation(entry.state), base={conversationId:params.threadId};
     let ipcMethod,version,payload;
     // 桌面高层发送接口需要可恢复的用户消息上下文，工作目录沿用原会话。
     const text=typeof params.text==='string'?params.text:'';
     const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd??'/';
-    const prompt=pluginPrompt(text,plugins);
+    const prompt=threadMentionPrompt(pluginPrompt(text,plugins),mentions);
     const restoreMessage={id:commandId,text:prompt,cwd,createdAt:Date.now(),context:{prompt,addedFiles:[],fileAttachments:[],ideContext:null,imageAttachments:[],workspaceRoots:[cwd]}};
+    if(mentions?.references.length)restoreMessage.context.threadReferences=mentions.references;
     let input;
     if(method==='turn.send'||method==='turn.steer') {
       const images=validateImages(params.images);
@@ -333,7 +338,7 @@ export class DesktopAdapter extends EventEmitter {
       restoreMessage.context.fileAttachments=files.map(({label,path})=>({label,path}));
       // 与桌面附件提示一致，正文引用由电脑生成的路径，手机不能传入本地路径。
       const attachmentText=files.length?'\n\n# 用户附带的文件\n'+files.map(file=>'\n## '+file.label+': '+file.path).join('\n'):'';
-      input=[...((prompt.trim()||attachmentText)?[{type:'text',text:prompt+attachmentText,text_elements:[]}]:[]),...images.map(url=>({type:'image',url})),...plugins.map(plugin=>({type:'mention',name:plugin.name,path:'plugin://'+plugin.id}))];
+      input=[...((prompt.trim()||attachmentText)?[{type:'text',text:prompt+attachmentText+(mentions?.contextText??''),text_elements:[]}]:[]),...images.map(url=>({type:'image',url})),...plugins.map(plugin=>({type:'mention',name:plugin.name,path:'plugin://'+plugin.id}))];
       restoreMessage.context.imageAttachments=images.map((src,index)=>({id:`${commandId}:image:${index}`,src}));
     }
     if(method==='turn.send') {
@@ -378,6 +383,7 @@ export class DesktopAdapter extends EventEmitter {
       ipcMethod=approval.kind==='command'?'thread-follower-command-approval-decision':'thread-follower-file-approval-decision';version=1;
       payload={...base,requestId:request.id,decision:params.decision};
     } else throw new BridgeError('METHOD_NOT_ALLOWED','不支持的桌面操作');
+    selection?.check(); mentions?.check();
     const response=await this.client.request(ipcMethod,payload,version,{targetClientId:entry.owner.clientId,timeoutMs:15000});
     if(response.resultType!=='success') throw new BridgeError('OWNER_UNAVAILABLE','桌面聊天所有者已不可用');
     if(method==='thread.settings.update') {

@@ -31,7 +31,7 @@
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
             <plan-preview v-if="entry.role == 'assistant' && entry.kind == 'planImplementation'" :source="planSource(entry.id, entry.text)" @open="openPlan(entry.id, entry.text)" />
             <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
-            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? pluginMessageText(entry.text) : entry.text }}</text>
+            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? threadMentionMessageText(pluginMessageText(entry.text)) : entry.text }}</text>
             <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
             <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
               <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
@@ -92,6 +92,7 @@
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
       <view class="composer-panel" :class="{ 'composer-compact': !composerExpanded }" @click="dismissGoal">
         <scroll-view v-if="draftPlugins.length > 0" direction="vertical" class="draft-plugins" :style="{ height: Math.min(132, draftPlugins.length * 44) + 'px' }"><plugin-chips :plugins="draftPlugins" :disabled="!canWrite" @remove="removePlugin" /></scroll-view>
+        <scroll-view v-if="draftMentions.length > 0" direction="vertical" class="draft-plugins" :style="{ height: Math.min(132, draftMentions.length * 44) + 'px' }"><thread-mention-chips :mentions="draftMentions" :disabled="!canWrite" @remove="removeThreadMention" /></scroll-view>
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
@@ -100,14 +101,14 @@
         <view class="composer-stage" :style="{ height: composerStageHeight + 'px' }">
           <!-- 紧凑与展开共用同一编辑节点，布局切换不会重建原生输入框。 -->
           <view class="draft-editor" :class="{ 'draft-editor-compact': !composerExpanded }" :style="{ height: composerHeight + 'px' }">
-            <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @click="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly || queueEditing" class="draft" :style="{ height: composerHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
+            <textarea :focus="predictionFocus" :cursor="mentionCursor" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @click="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly || queueEditing" class="draft" :style="{ height: composerHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
             <!-- 同宽文本只测量排版；零宽字符保留末尾换行，不写入草稿。 -->
             <view class="draft-measure-box" aria-hidden="true"><text id="draft-placeholder-measure" class="draft-placeholder-measure">{{ visiblePrediction + '\u200b' }}</text></view>
           </view>
           <!-- 两端操作始终使用同一节点，展开时只增加上方的编辑空间。 -->
           <view class="composer-add"><view class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view></view>
           <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view></view>
-          <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!primaryAvailable) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!primaryAvailable" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
+          <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!primaryAvailable) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!primaryAvailable" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
         </view>
       </view>
     </view>
@@ -120,6 +121,7 @@
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
     <plan-sheet v-if="selectedPlanId.length > 0" :source="selectedPlanSource" @close="closePlan" />
     <task-notice :active="pageVisible" header-id="conversation-header" :host-id="pageHostId" :thread-id="pageThreadId" />
+    <thread-mention-picker v-if="mentionOpen && pageVisible && connection.snapshot?.supportsThreadMentions == true" :host-id="pageHostId" :thread-id="pageThreadId" :scope-id="pageThreadId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draftMentions" @confirm="selectThreadMentions" @close="closeThreadMentions" />
     <plugin-picker v-if="pluginOpen && pageVisible" :host-id="pageHostId" :thread-id="pageThreadId" project-id="" :plugins="draftPlugins" @confirm="selectPlugins" @close="pluginOpen = false" />
   </view>
 </template>
@@ -127,6 +129,10 @@
 
 <script setup lang="uts">
 import { computed, ref, watch, nextTick } from 'vue'
+import ThreadMentionPicker from '../../components/thread-mention-picker/thread-mention-picker.uvue'
+import ThreadMentionChips from '../../components/thread-mention-chips/thread-mention-chips.uvue'
+import { SelectedThreadMention, ThreadMentionTrigger, findThreadMentionTrigger, replaceThreadMentionTrigger, threadMentionMessageText } from '../../services/thread-mentions.uts'
+import { readDraftThreadMentions, saveDraftThreadMentions } from '../../services/composer.uts'
 import PluginPicker from '../../components/plugin-picker/plugin-picker.uvue'
 import PluginChips from '../../components/plugin-chips/plugin-chips.uvue'
 import type { SelectedPlugin } from '../../services/plugins.uts'
@@ -202,6 +208,11 @@ const queueEditing = computed((): boolean => isQueueEditing(pageHostId.value, pa
 const draftImages = computed((): DraftImage[] => readDraftImages(pageHostId.value, pageThreadId.value))
 const draftPlugins = computed((): SelectedPlugin[] => readDraftPlugins(pageHostId.value, pageThreadId.value))
 const pluginOpen = ref(false)
+const draftMentions = computed((): SelectedThreadMention[] => readDraftThreadMentions(pageHostId.value, pageThreadId.value))
+const mentionOpen = ref(false), mentionCursor = ref(-1), mentionTrigger = ref<ThreadMentionTrigger | null>(null)
+let mentionDraftRevision = 0, mentionSourceRevision = 0, mentionContext = '', mentionSelection = ''
+// 草稿变更即使最后恢复相同正文，也不能应用旧面板的触发位置。
+watch((): string => draft.value, () => { mentionDraftRevision++ }, { flush: 'sync' })
 const imageBusy = ref(false)
 const draftFiles = computed((): DraftFile[] => readDraftFiles(pageHostId.value, pageThreadId.value))
 const filesReady = computed((): boolean => draftFiles.value.every((file: DraftFile): boolean => file.status == 'ready'))
@@ -264,8 +275,8 @@ const goalOpenRequest = ref(0)
 const goalCloseRequest = ref(0)
 const pageVisible = ref(false)
 onShow(() => { pageVisible.value = true })
-onHide(() => { pageVisible.value = false; pluginOpen.value = false })
-watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false })
+onHide(() => { pageVisible.value = false; pluginOpen.value = false; closeThreadMentions(false) })
+watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false; closeThreadMentions(false) })
 const pendingAction = ref('')
 const activating = ref(false)
 const autoConnectPending = ref(false)
@@ -379,7 +390,7 @@ const submittedRetryKey = ref('')
 const displayFailureTurnId = computed((): string => latestFailureTurnId(displayConversation.value))
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
-const primaryAvailable = computed((): boolean => canWrite.value && !imageBusy.value && filesReady.value && (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value)))
+const primaryAvailable = computed((): boolean => canWrite.value && !imageBusy.value && filesReady.value && (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || (draftMentions.value.length == 0 && (activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value)))))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
 
 let cacheWriteTimer = 0
@@ -449,7 +460,7 @@ onLoad((options: OnLoadOptions) => {
 })
 
 // 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
-const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && draftPlugins.value.length == 0 && pendingQuestionCount.value == 0 && approvalCount.value == 0)
+const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && draftPlugins.value.length == 0 && draftMentions.value.length == 0 && !mentionOpen.value && pendingQuestionCount.value == 0 && approvalCount.value == 0)
 const visiblePrediction = computed((): string => predictionAllowed.value ? predictionText.value : '')
 function resetPrediction() { predictionRevision++; clearTimeout(predictionTimer); clearTimeout(predictionExpiryTimer); predictionText.value = ''; predictionDeadline = 0 }
 // 按完成时间串行轮询；旧页面和旧轮次的迟到回执不会写回当前输入框。
@@ -906,7 +917,35 @@ watch((): string => taskNotifications.focusRevision + ':' + pageVisible.value + 
 })
 function showApprovals() { jumpTo('approvals-anchor') }
 function showQuestions() { const groups = pendingQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
-function updateDraft(event: UniInputEvent) { saveDraft(pageHostId.value, pageThreadId.value, event.detail.value) }
+// 输入事件先保存正文，再捕获实际光标；选择器取消不改正文。
+function updateDraft(event: UniInputEvent) {
+  saveDraft(pageHostId.value, pageThreadId.value, event.detail.value)
+  mentionCursor.value = -1
+  if (!canWrite.value || connection.snapshot?.supportsThreadMentions != true || mentionOpen.value) return
+  const trigger = findThreadMentionTrigger(event.detail.value, event.detail.cursor ?? -1)
+  if (trigger == null) return
+  mentionTrigger.value = trigger; mentionSourceRevision = mentionDraftRevision
+  mentionContext = threadMentionContext(); mentionSelection = JSON.stringify(draftMentions.value)
+  closeComposerMenu(); pluginOpen.value = false; predictionFocus.value = false; uni.hideKeyboard(); mentionOpen.value = true
+}
+function threadMentionContext(): string { return [pageHostId.value, pageThreadId.value, connection.hostId, connection.configurationRevision.toString()].join(':') }
+function closeThreadMentions(restoreFocus: boolean = true) {
+  const wasOpen = mentionOpen.value, trigger = mentionTrigger.value
+  if (restoreFocus && trigger != null && draft.value == trigger.text && mentionSourceRevision == mentionDraftRevision) mentionCursor.value = trigger.end
+  mentionOpen.value = false; mentionTrigger.value = null
+  if (wasOpen && restoreFocus && pageVisible.value && mentionContext == threadMentionContext()) focusComposerInput()
+}
+// 选择期间任何异步草稿或目标变化都保留新输入，禁止按旧光标覆盖。
+function selectThreadMentions(mentions: SelectedThreadMention[]) {
+  const trigger = mentionTrigger.value
+  if (!canWrite.value || connection.snapshot?.supportsThreadMentions != true || trigger == null || mentionContext != threadMentionContext() || mentionSourceRevision != mentionDraftRevision || mentionSelection != JSON.stringify(draftMentions.value)) { closeThreadMentions(false); notify('草稿已变化，请在当前位置重新引用聊天'); return }
+  const replacement = replaceThreadMentionTrigger(draft.value, trigger)
+  if (replacement == null) { closeThreadMentions(false); notify('草稿已变化，正文已保留'); return }
+  saveDraftThreadMentions(pageHostId.value, pageThreadId.value, mentions)
+  saveDraft(pageHostId.value, pageThreadId.value, replacement.text)
+  mentionCursor.value = replacement.cursor; closeThreadMentions()
+}
+function removeThreadMention(id: string) { if (canWrite.value) saveDraftThreadMentions(pageHostId.value, pageThreadId.value, draftMentions.value.filter((mention: SelectedThreadMention): boolean => mention.id != id)) }
 // 选图完成后写回发起选择的会话，页面切换不会把图片放入其他会话。
 function chooseImages(source: string = 'album') {
   if (!canWrite.value || imageBusy.value) return
@@ -1168,7 +1207,7 @@ function onDraftLineChange(event: UniTextareaLineChangeEvent) {
   if (draft.value.length > 0) draftHeight.value = Math.max(64, Math.min(144, event.detail.height))
   updateComposerGeometry()
 }
-const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || draftPlugins.value.length > 0, attachmentBusy: imageBusy.value }))
+const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || mentionOpen.value || draftPlugins.value.length > 0 || draftMentions.value.length > 0, attachmentBusy: imageBusy.value }))
 const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
 // 高度由一行工具栏及编辑空间组成，数值过渡期间两端按钮始终贴住底边。
 const composerStageHeight = computed((): number => composerExpanded.value ? composerHeight.value + 58 : 44)
@@ -1264,6 +1303,8 @@ function send() {
   if ((text.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0) || !canWrite.value || imageBusy.value || !filesReady.value) return
   if (draftImages.value.length > 0 && !modelSupportsImages.value) { notify('当前模型不支持图片，请切换模型'); return }
   if (draftImages.value.length > 0 && connection.snapshot?.supportsImages != true) { notify('请先更新电脑连接服务以发送图片'); return }
+  if (draftMentions.value.length > 0 && connection.snapshot?.supportsThreadMentions != true) { notify('请更新电脑连接服务后引用聊天'); return }
+  closeThreadMentions(false)
   operationError.value = ''
   busy.value = true; pendingAction.value = 'send'
   const hostId = pageHostId.value
@@ -1276,6 +1317,7 @@ function send() {
   const queue = messageSendingPreferences.behavior == 'queue' && connection.snapshot?.supportsMessageQueue == true
   if (!steer && !queue && running) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
   const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id) }
+  if (draftMentions.value.length > 0) params['threadMentionIds'] = draftMentions.value.map((mention: SelectedThreadMention): string => mention.id)
   if (draftPlugins.value.length > 0) params['pluginIds'] = draftPlugins.value.map((plugin: SelectedPlugin): string => plugin.id)
   if (queue) params['queueAction'] = 'enqueue'
   if (steer) params['expectedTurnId'] = activeTurnId.value
@@ -1300,13 +1342,13 @@ function cancelQueuedMessage(id: string) { operateQueuedMessage(id, 'cancel') }
 function editQueuedMessage(id: string) {
   if (!canWrite.value || imageBusy.value || connection.snapshot?.supportsQueueEditing != true) return
   const hostId = pageHostId.value, threadId = pageThreadId.value
-  try { beginQueueEdit(hostId, threadId, draftPlugins.value.length > 0) } catch (error) { notify((error as Error).message); return }
+  try { beginQueueEdit(hostId, threadId, draftPlugins.value.length > 0 || draftMentions.value.length > 0) } catch (error) { notify((error as Error).message); return }
   busy.value = true; pendingAction.value = 'queue-edit:' + id; operationError.value = ''
   bridge.request('turn.send', { threadId, queueAction: 'edit', queueId: id }, true).then((result: UTSJSONObject) => {
     try {
       const restored = JSON.parse<QueueEditDraft>(JSON.stringify(result['draft']))
       if (result.getBoolean('edited') != true || result.getString('queueId') != id || restored == null) throw new Error('撤回结果尚未确认，请重新同步后继续编辑')
-      restoreQueuedDraft(hostId, threadId, id, restored, readDraftPlugins(hostId, threadId).length > 0, (plugins: QueueEditPlugin[]) => { saveDraftPlugins(hostId, threadId, plugins.map((plugin: QueueEditPlugin): SelectedPlugin => ({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin))) })
+      restoreQueuedDraft(hostId, threadId, id, restored, readDraftPlugins(hostId, threadId).length > 0 || readDraftThreadMentions(hostId, threadId).length > 0, (plugins: QueueEditPlugin[]) => { saveDraftPlugins(hostId, threadId, plugins.map((plugin: QueueEditPlugin): SelectedPlugin => ({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin))) }, (mentions: SelectedThreadMention[]) => { saveDraftThreadMentions(hostId, threadId, mentions) })
     } catch (error) {
       finishQueueEdit(hostId, threadId); busy.value = false; pendingAction.value = ''
       if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = (error as Error).message
@@ -1372,10 +1414,10 @@ function operateGoal(action: string, objective: string, revision: string) {
 }
 
 // 主按钮随上下文切换：有草稿发送，空草稿运行中停止。
-function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value) }
+function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (draftMentions.value.length > 0) return; else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value) }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
-onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedPlanId.value.length > 0) { closePlan(); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
+onBackPress((): boolean => { if (mentionOpen.value) { closeThreadMentions(); return true }; if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedPlanId.value.length > 0) { closePlan(); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
 </script>
 
 <style>

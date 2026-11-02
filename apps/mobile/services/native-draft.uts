@@ -5,7 +5,7 @@ import { PermissionState } from './permissions.uts'
 
 // revision 是服务端的不透明版本，原样回传，不与权限自身的版本混用。
 export type NativeDraftRevision = string | number
-export type NativeDraftSnapshot = { draftId: string, projectId: string, revision: NativeDraftRevision, status: string, settings: ExecutionSettings, models: ModelOption[], permissions: PermissionState, threadId?: string, hasDesktopText: boolean }
+export type NativeDraftSnapshot = { draftId: string, projectId: string, revision: NativeDraftRevision, status: string, settings: ExecutionSettings, models: ModelOption[], permissions: PermissionState, threadId?: string, hasDesktopText: boolean, supportsThreadMentions?: boolean }
 export type NativeDraftState = { hostId: string, projectId: string, cacheNamespace: string, draftId: string, snapshot: NativeDraftSnapshot | null, watching: boolean, busy: boolean, operations: number, needsReadback: boolean, error: string, outcomeUnknown: boolean, pendingCommandId: string, pendingAction: string, session: number, version: number }
 type NativeDraftPending = { draftId: string, commandId: string, action: string }
 const nativeDrafts = reactive<NativeDraftState[]>([])
@@ -179,6 +179,12 @@ export async function sendNativeDraft(state: NativeDraftState, message: UTSJSONO
   beginNativeOperation(state); state.error = ''
   try {
     const params: UTSJSONObject = { draftId: state.draftId, expectedRevision: state.snapshot!.revision, text: message['text'], images: message['images'], attachments: message['attachments'] }
+    // 引用能力来自当前原生草稿，不能以普通会话能力替代；不支持时保留输入。
+    const threadMentionIds = message['threadMentionIds'] as string[] | null
+    if (threadMentionIds != null && threadMentionIds.length > 0) {
+      if (state.snapshot?.supportsThreadMentions != true) throw new Error('请更新电脑连接服务后引用聊天')
+      params['threadMentionIds'] = threadMentionIds
+    }
     const result = await writeNativeDraft(state, 'send', 'thread.draft.send', params)
     const threadId = result.getString('threadId') ?? ''
     if (threadId.length == 0) { state.outcomeUnknown = true; state.error = '未取得聊天编号，请核对原发送结果，勿重复提交'; throw new Error(state.error) }

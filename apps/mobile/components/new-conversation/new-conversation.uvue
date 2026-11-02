@@ -16,10 +16,11 @@
       <view class="new-panel" :class="{ 'new-panel-compact': !props.expanded }">
       <view class="new-composer-stage" :style="{ height: editorStageHeight + 'px' }">
       <scroll-view direction="vertical" :show-scrollbar="false" :scroll-into-view="contentTarget" :aria-hidden="!props.expanded" class="editor-content" :class="{ 'editor-content-compact': !props.expanded }" :style="{ height: visibleContentHeight + 'px' }">
+      <thread-mention-chips :mentions="draft.threadMentions" :disabled="busy" @remove="removeThreadMention" />
       <plugin-chips :plugins="draft.plugins" :disabled="busy" @remove="removePlugin" />
       <view v-if="draft.images.length > 0" class="draft-images"><view v-for="image in draft.images" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
       <view v-for="file in draft.files" :key="file.id" class="draft-file"><app-icon name="file" :size="21" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'uploading' ? '正在上传 ' + file.progress + '%' : fileSize(file.size) }}</text></view><button class="file-remove" :disabled="busy" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
-      <view id="new-draft-input"><textarea :value="draft.text" :focus="focused" :disabled="busy || !props.expanded" :adjust-position="false" :maxlength="32000" class="new-input" :style="{ height: visibleInputHeight + 'px' }" placeholder="问问 Codex" @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"></textarea></view>
+      <view id="new-draft-input"><textarea :value="draft.text" :cursor="mentionCursor" :focus="focused" :disabled="busy || !props.expanded" :adjust-position="false" :maxlength="32000" class="new-input" :style="{ height: visibleInputHeight + 'px' }" placeholder="问问 Codex" @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"></textarea></view>
       </scroll-view>
       <text v-if="!props.expanded" class="new-entry-placeholder">问问 Codex</text>
       <!-- 加号共用同一节点，左右及底部边距在两种状态下保持一致。 -->
@@ -41,6 +42,7 @@
       </view>
       <view v-else class="new-options" @click.stop><composer-options :section="menu" :settings="settings" :models="models" :loading="settingsLoading" :busy="busy || native.busy" :error="settingsError" :width="menuWidth" :height="pickerHeight" :images-enabled="!imageBusy && draft.images.length + draft.files.length < 3 && modelSupportsImages" :files-enabled="!imageBusy && draft.images.length + draft.files.length < 3" :settings-enabled="nativeReady && settings != null && models.length > 0" :plan-disabled="!nativeReady" note="附件最多3个，首次发送时上传到所选电脑" @section="changeSection" @action="composerAction" @select="selectSetting" @dismiss="closeMenus" @retry="loadSettings" /></view>
     </view>
+    <thread-mention-picker v-if="mentionOpen && props.expanded && native.snapshot?.supportsThreadMentions == true" :host-id="connection.hostId" thread-id="" :scope-id="projectId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draft.threadMentions" @confirm="selectThreadMentions" @close="closeThreadMentions" />
     <plugin-picker v-if="pluginOpen && props.expanded" :host-id="connection.hostId" thread-id="" :project-id="projectId" :plugins="draft.plugins" @confirm="selectPlugins" @close="pluginOpen = false" />
   </view>
 </template>
@@ -51,6 +53,10 @@ import PermissionsControl from '../permissions-control/permissions-control.uvue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import ComposerPlus from '../composer-plus/composer-plus.uvue'
 import ComposerOptions from '../composer-options/composer-options.uvue'
+import ThreadMentionPicker from '../thread-mention-picker/thread-mention-picker.uvue'
+import ThreadMentionChips from '../thread-mention-chips/thread-mention-chips.uvue'
+import { SelectedThreadMention, ThreadMentionTrigger, findThreadMentionTrigger, replaceThreadMentionTrigger } from '../../services/thread-mentions.uts'
+import { setNewDraftThreadMentions } from '../../services/new-conversation.uts'
 import PluginPicker from '../plugin-picker/plugin-picker.uvue'
 import PluginChips from '../plugin-chips/plugin-chips.uvue'
 import type { SelectedPlugin } from '../../services/plugins.uts'
@@ -78,6 +84,8 @@ let baseWindowHeight = uni.getWindowInfo().windowHeight
 const currentWindowHeight = ref(baseWindowHeight)
 const contentTarget = ref('')
 const pluginOpen = ref(false)
+const mentionOpen = ref(false), mentionCursor = ref(-1), mentionTrigger = ref<ThreadMentionTrigger | null>(null)
+let mentionDraftRevision = 0, mentionSourceRevision = 0, mentionContext = '', mentionSelectionRevision = 0
 let projectRequest = 0, settingsRequest = 0
 let nativeOpenRequested = false
 let alive = true
@@ -97,7 +105,7 @@ const modelSupportsImages = computed((): boolean => models.value.find((model: Mo
 const modelLabel = computed((): string => settingsLoading.value ? '正在读取设置…' : settings.value == null ? '等待电脑草稿' : shortModelLabel(models.value.find((model: ModelOption): boolean => model.id == settings.value?.model)?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort))
 const canSend = computed((): boolean => props.expanded && nativeReady.value && native.value.snapshot?.hasDesktopText != true && !busy.value && !imageBusy.value && !projectsLoading.value && !settingsLoading.value && connection.connected && computerOnline.value && creationPendingId.value.length == 0 && projectId.value.length > 0 && (draft.value.text.trim().length > 0 || draft.value.images.length > 0 || draft.value.files.length > 0) && (draft.value.images.length == 0 || modelSupportsImages.value))
 const pickerHeight = computed((): number => Math.max(100, Math.min(340, currentWindowHeight.value - keyboardInset.value - 270)))
-const editorContentHeight = computed((): number => Math.min(draftHeight.value + (draft.value.images.length > 0 ? 70 : 0) + draft.value.files.length * 56 + (draft.value.plugins.length > 0 ? Math.ceil(draft.value.plugins.length / 2) * 44 : 0), Math.max(64, currentWindowHeight.value - keyboardInset.value - 300)))
+const editorContentHeight = computed((): number => Math.min(draftHeight.value + (draft.value.images.length > 0 ? 70 : 0) + draft.value.files.length * 56 + (draft.value.plugins.length > 0 ? Math.ceil(draft.value.plugins.length / 2) * 44 : 0) + (draft.value.threadMentions.length > 0 ? draft.value.threadMentions.length * 44 : 0), Math.max(64, currentWindowHeight.value - keyboardInset.value - 300)))
 // 常驻编辑节点在收起时只占一行，工具栏始终预留相同的底部高度。
 const visibleInputHeight = computed((): number => props.expanded ? draftHeight.value : 24)
 const visibleContentHeight = computed((): number => props.expanded ? editorContentHeight.value : 24)
@@ -105,7 +113,7 @@ const editorStageHeight = computed((): number => props.expanded ? visibleContent
 // 单行时整块胶囊都是新对话入口，不提前打开附件菜单或创建会话。
 function expandEditor() { if (!props.expanded) emit('expand') }
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
-function closeMenus() { picker.value = ''; menu.value = ''; pluginOpen.value = false }
+function closeMenus() { picker.value = ''; menu.value = ''; pluginOpen.value = false; closeThreadMentions(false) }
 // 点击空白区沿用首页返回逻辑，保留草稿；提交期间保持编辑区可见。
 function dismissEditor() { if (busy.value) return; closeMenus(); focused.value = false; uni.hideKeyboard(); emit('dismiss') }
 function openConnection() { closeMenus(); uni.navigateTo({ url: '/pages/connection/index' }) }
@@ -227,7 +235,36 @@ function removeImage(id: string) { if (!busy.value) draft.value.images = draft.v
 function removeFile(id: string) { if (!busy.value) draft.value.files = draft.value.files.filter((file: DraftFile): boolean => file.id != id) }
 function previewImage(src: string) { uni.previewImage({ urls: draft.value.images.map((image: DraftImage): string => image.src), current: src }) }
 function fileSize(size: number): string { return fileSizeLabel(size) }
-function updateText(event: UniInputEvent) { if (props.expanded) draft.value.text = event.detail.value }
+// 首条消息同样只消费独立 @ 片段，保留光标后的正文。
+function updateText(event: UniInputEvent) {
+  if (!props.expanded) return
+  draft.value.text = event.detail.value; mentionCursor.value = -1
+  if (busy.value || native.value.snapshot?.supportsThreadMentions != true || mentionOpen.value) return
+  const trigger = findThreadMentionTrigger(event.detail.value, event.detail.cursor ?? -1)
+  if (trigger == null) return
+  closeMenus(); mentionTrigger.value = trigger; mentionSourceRevision = mentionDraftRevision
+  mentionContext = threadMentionContext(); mentionSelectionRevision = draft.value.threadMentionRevision
+  focused.value = false; uni.hideKeyboard(); mentionOpen.value = true
+}
+function threadMentionContext(): string { return [connection.hostId, projectId.value, connection.configurationRevision.toString()].join(':') }
+function closeThreadMentions(restoreFocus: boolean = true) {
+  const wasOpen = mentionOpen.value, trigger = mentionTrigger.value
+  if (restoreFocus && trigger != null && draft.value.text == trigger.text && mentionSourceRevision == mentionDraftRevision) mentionCursor.value = trigger.end
+  mentionOpen.value = false; mentionTrigger.value = null
+  if (wasOpen && restoreFocus && props.expanded && mentionContext == threadMentionContext()) focusDraftInput()
+}
+// 不接管迟到选择；电脑、项目、草稿正文及标签版本必须仍与打开时一致。
+function selectThreadMentions(mentions: SelectedThreadMention[]) {
+  const trigger = mentionTrigger.value
+  if (busy.value || native.value.snapshot?.supportsThreadMentions != true || trigger == null || mentionContext != threadMentionContext() || mentionSourceRevision != mentionDraftRevision || mentionSelectionRevision != draft.value.threadMentionRevision) { closeThreadMentions(false); notify('草稿已变化，请在当前位置重新引用聊天'); return }
+  const replacement = replaceThreadMentionTrigger(draft.value.text, trigger)
+  if (replacement == null) { closeThreadMentions(false); notify('草稿已变化，正文已保留'); return }
+  setNewDraftThreadMentions(draft.value, mentions); draft.value.text = replacement.text
+  mentionCursor.value = replacement.cursor; closeThreadMentions()
+}
+function removeThreadMention(id: string) { if (!busy.value) setNewDraftThreadMentions(draft.value, draft.value.threadMentions.filter((mention: SelectedThreadMention): boolean => mention.id != id)) }
+watch((): string => draft.value.text, () => { mentionDraftRevision++ }, { flush: 'sync' })
+watch((): string => threadMentionContext(), () => { closeThreadMentions(false); mentionCursor.value = -1 }, { flush: 'sync' })
 // 附件和长文本在面板内滚动，键盘弹出后仍为电脑、项目和发送按钮保留位置。
 function showDraftInput() { contentTarget.value = ''; nextTick(() => { if (alive && props.expanded) contentTarget.value = 'new-draft-input' }) }
 function onDraftFocus() { if (!props.expanded) return; focused.value = true; showDraftInput() }
@@ -269,12 +306,12 @@ onUnmounted(() => { unbindImagePaste() })
 // 连接变化使旧电脑的读取失效，未配置时输入的内容留给首次连接的电脑。
 watch((): string => connection.hostId, (hostId: string, previous: string) => {
   closeNativeDraft(previous, projectId.value)
-  if (previous.length == 0 && hostId.length > 0) { const source = newDraft('', ''), target = newDraft(hostId, ''); if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.plugins.length == 0) { target.text = source.text; target.images = source.images; target.files = source.files; target.plugins = source.plugins; source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]; source.plugins = [] as SelectedPlugin[] } }
+  if (previous.length == 0 && hostId.length > 0) { const source = newDraft('', ''), target = newDraft(hostId, ''); if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.plugins.length == 0 && target.threadMentions.length == 0) { target.text = source.text; target.images = source.images; target.files = source.files; target.plugins = source.plugins; target.threadMentions = source.threadMentions; target.threadMentionRevision++; source.threadMentions = [] as SelectedThreadMention[]; source.threadMentionRevision++; source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]; source.plugins = [] as SelectedPlugin[] } }
   projectId.value = ''; projects.value = [] as NewProject[]
   projectRequest++; settingsRequest++; settingsLoading.value = false; projectsLoading.value = false; closeMenus(); loadProjects()
 })
 watch((): string => connection.connected.toString() + ':' + computerOnline.value.toString(), (_current: string, _previous: string) => { if (connection.connected && computerOnline.value) loadProjects(); else closeNativeDraft(connection.hostId, projectId.value) })
-watch((): string => draft.value.images.length.toString() + ':' + draft.value.files.length.toString() + ':' + (settings.value?.mode ?? ''), (_current: string, _previous: string) => { showDraftInput() })
+watch((): string => draft.value.images.length.toString() + ':' + draft.value.files.length.toString() + ':' + draft.value.threadMentions.length.toString() + ':' + (settings.value?.mode ?? ''), (_current: string, _previous: string) => { showDraftInput() })
 
 // 电脑先发送时只打开已提升的聊天，手机输入转为正式聊天的本地草稿。
 async function followPromotion() {

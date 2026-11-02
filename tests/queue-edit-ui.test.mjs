@@ -7,7 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 /** 执行真实草稿恢复模块；测试数据仅包含合成正文和附件。 */
 function fixture() {
-  const drafts = new Map(), images = new Map(), files = new Map(), plugins = new Map(), calls = [], pending = [], notices = [];
+  const drafts = new Map(), images = new Map(), files = new Map(), plugins = new Map(), mentions = new Map(), calls = [], pending = [], notices = [];
   const key = (host, thread) => host + ':' + thread;
   const context = vm.createContext({ reactive: x => x,
     readDraft: (h, t) => drafts.get(key(h, t)) ?? '', readDraftImages: (h, t) => images.get(key(h, t)) ?? [], readDraftFiles: (h, t) => files.get(key(h, t)) ?? [],
@@ -16,13 +16,13 @@ function fixture() {
   const code = fs.readFileSync('apps/mobile/services/queue-edit.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
   vm.runInContext(stripTypeScriptTypes(code, { mode: 'transform' }) + ';globalThis.helper={beginQueueEdit,finishQueueEdit,isQueueEditing,restoreQueuedDraft};', context);
   const ref = value => ({ value });
-  Object.assign(context, { canWrite: ref(true), imageBusy: ref(false), pageVisible: ref(true), pageHostId: ref('pc'), pageThreadId: ref('thread'), draftPlugins: ref([]), connection: { hostId: 'pc', snapshot: { supportsQueueEditing: true } }, busy: ref(false), pendingAction: ref(''), operationError: ref(''), readDraftPlugins: (h, t) => plugins.get(key(h, t)) ?? [], saveDraftPlugins: (h, t, x) => plugins.set(key(h, t), x), notify: x => notices.push(x), focusComposerInput: () => notices.push('输入框获得焦点'), bridge: { request(method, params, write) { calls.push({ method, params, write }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } }, JSON: { ...JSON, parse: JSON.parse, stringify: JSON.stringify } });
+  Object.assign(context, { canWrite: ref(true), imageBusy: ref(false), pageVisible: ref(true), pageHostId: ref('pc'), pageThreadId: ref('thread'), draftPlugins: ref([]), draftMentions: ref([]), connection: { hostId: 'pc', snapshot: { supportsQueueEditing: true } }, busy: ref(false), pendingAction: ref(''), operationError: ref(''), readDraftThreadMentions: (h, t) => mentions.get(key(h, t)) ?? [], saveDraftThreadMentions: (h, t, x) => mentions.set(key(h, t), x), readDraftPlugins: (h, t) => plugins.get(key(h, t)) ?? [], saveDraftPlugins: (h, t, x) => plugins.set(key(h, t), x), notify: x => notices.push(x), focusComposerInput: () => notices.push('输入框获得焦点'), bridge: { request(method, params, write) { calls.push({ method, params, write }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } }, JSON: { ...JSON, parse: JSON.parse, stringify: JSON.stringify } });
   context.isCurrentPage = () => context.connection.hostId === context.pageHostId.value;
   const page = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
   const start = page.indexOf('function editQueuedMessage('), end = page.indexOf('let stopPromptOpen', start);
   vm.runInContext(stripTypeScriptTypes(page.slice(start, end), { mode: 'transform' }) + ';globalThis.edit=editQueuedMessage;', context);
   const response = draft => ({ draft, getBoolean: name => name === 'edited', getString: name => name === 'queueId' ? 'queue-id' : '' });
-  return { ...context.helper, context, drafts, images, files, plugins, calls, pending, notices, edit: context.edit, response };
+  return { ...context.helper, context, drafts, images, files, plugins, mentions, calls, pending, notices, edit: context.edit, response };
 }
 
 test('撤回成功后恢复文字、图片和附件并聚焦，清理确认不会发送草稿', async () => {

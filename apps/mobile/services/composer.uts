@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import type { SelectedPlugin } from './plugins.uts'
+import type { SelectedThreadMention } from './thread-mentions.uts'
 
 type Draft = { hostId: string, threadId: string, text: string, revision: number }
 export type DraftImage = { id: string, src: string }
@@ -7,7 +8,8 @@ export type DraftFile = { id: string, name: string, size: number, source: string
 type FileDraft = { hostId: string, threadId: string, files: DraftFile[] }
 type ImageDraft = { hostId: string, threadId: string, images: DraftImage[] }
 type PluginDraft = { hostId: string, threadId: string, plugins: SelectedPlugin[], revision: number }
-export type Submission = { hostId: string, threadId: string, commandId: string, text: string, draftRevision: number, imageIds?: string[], fileIds?: string[], pluginRevision?: number }
+type MentionDraft = { hostId: string, threadId: string, mentions: SelectedThreadMention[], revision: number }
+export type Submission = { hostId: string, threadId: string, commandId: string, text: string, draftRevision: number, imageIds?: string[], fileIds?: string[], pluginRevision?: number, threadMentionRevision?: number }
 type ComposerMemory = { drafts: Draft[], submissions: Submission[], nextRevision: number }
 // 草稿只保存在应用运行期内存，按电脑和会话隔离，不写入浏览器持久存储。
 const memory = reactive<ComposerMemory>({ drafts: [] as Draft[], submissions: [] as Submission[], nextRevision: 0 })
@@ -15,9 +17,29 @@ const imageDrafts = reactive<ImageDraft[]>([])
 const fileDrafts = reactive<FileDraft[]>([])
 const pluginDrafts = reactive<PluginDraft[]>([])
 let pluginRevision = 0
+const mentionDrafts = reactive<MentionDraft[]>([])
+let mentionRevision = 0
+
+// 引用只保存在按电脑、聊天隔离的内存中；版本号保护发送后的重新选择。
+export function readDraftThreadMentions(hostId: string, threadId: string): SelectedThreadMention[] {
+  return mentionDrafts.find((entry: MentionDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.mentions ?? [] as SelectedThreadMention[]
+}
+export function saveDraftThreadMentions(hostId: string, threadId: string, mentions: SelectedThreadMention[]) {
+  const unique: SelectedThreadMention[] = []
+  for (const mention of mentions) {
+    if (typeof mention.id != 'string' || mention.id.length == 0 || typeof mention.title != 'string') throw new Error('聊天引用无效，请重新选择')
+    if (!unique.some((item: SelectedThreadMention): boolean => item.id == mention.id)) unique.push({ id: mention.id, title: mention.title } as SelectedThreadMention)
+  }
+  if (unique.length > 20) throw new Error('每条消息最多引用20个聊天')
+  const index = mentionDrafts.findIndex((entry: MentionDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  if (index >= 0) mentionDrafts.splice(index, 1)
+  mentionRevision++
+  if (unique.length > 0) mentionDrafts.push({ hostId, threadId, mentions: unique, revision: mentionRevision } as MentionDraft)
+}
 
 // 仅在原桌面确认永久删除后清理同一电脑的草稿、附件和发送记录。
 export function clearDeletedDrafts(hostId: string, threadIds: string[]) {
+  for (let index = mentionDrafts.length - 1; index >= 0; index--) if (mentionDrafts[index].hostId == hostId && threadIds.indexOf(mentionDrafts[index].threadId) >= 0) mentionDrafts.splice(index, 1)
   for (let index = memory.drafts.length - 1; index >= 0; index--) if (memory.drafts[index].hostId == hostId && threadIds.indexOf(memory.drafts[index].threadId) >= 0) memory.drafts.splice(index, 1)
   for (let index = memory.submissions.length - 1; index >= 0; index--) if (memory.submissions[index].hostId == hostId && threadIds.indexOf(memory.submissions[index].threadId) >= 0) memory.submissions.splice(index, 1)
   for (let index = imageDrafts.length - 1; index >= 0; index--) if (imageDrafts[index].hostId == hostId && threadIds.indexOf(imageDrafts[index].threadId) >= 0) imageDrafts.splice(index, 1)
@@ -75,6 +97,7 @@ export function saveDraft(hostId: string, threadId: string, text: string) {
 export function rememberSubmission(hostId: string, threadId: string, commandId: string, text: string) {
   const draft = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == threadId)
   memory.submissions.push({ hostId, threadId, commandId, text, draftRevision: draft?.revision ?? -1, imageIds: readDraftImages(hostId, threadId).map((image: DraftImage): string => image.id), fileIds: readDraftFiles(hostId, threadId).map((file: DraftFile): string => file.id), pluginRevision: pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1 } as Submission)
+  memory.submissions[memory.submissions.length - 1].threadMentionRevision = mentionDrafts.find((entry: MentionDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1
 }
 
 // 成功回执或账本核对成功才清除原草稿，发送后新输入的文字始终保留。
@@ -82,6 +105,7 @@ export function settleSubmission(hostId: string, commandId: string, success: boo
   const index = memory.submissions.findIndex((entry: Submission): boolean => entry.hostId == hostId && entry.commandId == commandId)
   if (index < 0) return
   const submitted = memory.submissions[index]
+  if (success && mentionDrafts.find((entry: MentionDraft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)?.revision == submitted.threadMentionRevision) saveDraftThreadMentions(hostId, submitted.threadId, [] as SelectedThreadMention[])
   const current = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)
   if (success && current?.revision == submitted.draftRevision && current?.text.trim() == submitted.text) saveDraft(hostId, submitted.threadId, '')
   // 只移除本次已成功发送的图片，保留提交后新选的图片；失败和未知结果继续保留。

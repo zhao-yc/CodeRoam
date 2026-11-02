@@ -20,6 +20,7 @@ READ_METHODS.add('thread.permissions.read');
 READ_METHODS.add('thread.create.permissions');
 READ_METHODS.add('thread.plugins.read');
 READ_METHODS.add('thread.create.plugins');
+READ_METHODS.add('threads.mentions');
 WRITE_METHODS.add('thread.permissions.update');
 READ_METHODS.add('thread.draft.read');
 READ_METHODS.add('thread.draft.unwatch');
@@ -50,6 +51,15 @@ export function validateRequest(message) {
   if (message.method.startsWith('thread.draft.')) {
     validateDraftRequest(message.method, message.params);
     return message;
+  }
+  if (message.method === 'threads.mentions') {
+    const p = message.params;
+    if (Object.keys(p).some(key => !['search','offset','limit','excludeThreadId'].includes(key)) || (p.search !== undefined && (typeof p.search !== 'string' || p.search.length > 100)) || (p.limit !== undefined && (!Number.isInteger(p.limit) || p.limit < 1 || p.limit > 100)) || (p.offset !== undefined && (!Number.isInteger(p.offset) || p.offset < 0 || p.offset > 10000))) throw new BridgeError('BAD_PARAMS', '引用聊天搜索参数无效');
+    if (p.excludeThreadId !== undefined) requireString(p.excludeThreadId, '排除聊天编号', 200);
+  }
+  if (message.params.threadMentionIds !== undefined) {
+    if (!['turn.send','turn.steer'].includes(message.method) || (message.params.queueAction !== undefined && message.params.queueAction !== 'enqueue') || message.params.planAction !== undefined) throw new BridgeError('BAD_PARAMS', '聊天引用只能随发送、追加或入队提交');
+    validateThreadMentionIds(message.params.threadMentionIds);
   }
   if (message.params.pluginIds !== undefined) {
     if (!['turn.send', 'turn.steer'].includes(message.method) || (message.params.queueAction !== undefined && message.params.queueAction !== 'enqueue')) throw new BridgeError('BAD_PARAMS', '插件只能随发送、追加指令或入队提交');
@@ -119,7 +129,7 @@ export function validateRequest(message) {
   // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
   if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {
     const p = message.params, enqueue = p.queueAction === 'enqueue';
-    if (message.method !== 'turn.send' || !['enqueue','steer','cancel','edit'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
+    if (message.method !== 'turn.send' || !['enqueue','steer','cancel','edit'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds','threadMentionIds'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
     if (!enqueue) requireString(p.queueId, '排队消息编号', 80);
     if (p.queueAction === 'steer') requireString(p.expectedTurnId, '当前任务编号', 200);
     if (enqueue && p.attachments?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id))) throw new BridgeError('BAD_ATTACHMENTS', '排队附件编号无效');
@@ -164,7 +174,7 @@ export function validateDraftRequest(method, params) {
     'thread.draft.read': ['draftId'],
     'thread.draft.unwatch': ['draftId'],
     'thread.draft.update': ['draftId', 'expectedRevision', 'changes', 'confirmedFullAccess'],
-    'thread.draft.send': ['draftId', 'expectedRevision', 'text', 'images', 'attachments'],
+    'thread.draft.send': ['draftId', 'expectedRevision', 'text', 'images', 'attachments', 'threadMentionIds'],
   }[method];
   if (!allowed) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的草稿接口列表中');
   if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '草稿参数包含不允许的字段');
@@ -181,6 +191,7 @@ export function validateDraftRequest(method, params) {
     return;
   }
   if (typeof params.text !== 'string' || params.text.length > 32000) throw new BridgeError('BAD_PARAMS', '消息必须是长度不超过32000的文本');
+  validateThreadMentionIds(params.threadMentionIds);
   if (params.images !== undefined && (!Array.isArray(params.images) || params.images.length > 3 || params.images.some(image => typeof image !== 'string'))) throw new BridgeError('BAD_IMAGES', '图片参数无效，每次最多3张');
   if (params.attachments !== undefined && (!Array.isArray(params.attachments) || params.attachments.length > 3 || new Set(params.attachments).size !== params.attachments.length || params.attachments.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id)))) throw new BridgeError('BAD_ATTACHMENTS', '附件编号无效，每次最多3个不同附件');
   if ((params.images?.length ?? 0) + (params.attachments?.length ?? 0) > 3) throw new BridgeError('BAD_ATTACHMENTS', '每次最多发送3个图片或文件附件');
@@ -196,9 +207,17 @@ export function validatePluginIds(ids) {
 
 /** 手机只提交消息内容和目录编号，原生输入及恢复上下文均由电脑构造。 */
 export function validateTurnInput(params) {
-  const allowed = ['threadId','text','images','attachments','expectedTurnId','planMode','resetPlanAfterSend','planId','planAction','queueAction','queueId','pluginIds'];
+  const allowed = ['threadId','text','images','attachments','expectedTurnId','planMode','resetPlanAfterSend','planId','planAction','queueAction','queueId','pluginIds','threadMentionIds'];
   if (Object.keys(params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '发送参数包含不允许的字段');
+  validateThreadMentionIds(params.threadMentionIds);
   return validatePluginIds(params.pluginIds);
+}
+
+/** 手机只指定有界的聊天编号，原生主机和链接均由电脑核验后构造。 */
+export function validateThreadMentionIds(ids) {
+  if (ids === undefined) return [];
+  if (!Array.isArray(ids) || ids.length > 20 || ids.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(id))) throw new BridgeError('BAD_PARAMS', '聊天引用编号无效，每条消息最多引用20个聊天');
+  return [...new Set(ids)];
 }
 
 /** 重试只能指定失败轮次，正文、模型和权限等设置均由原桌面会话继承。 */

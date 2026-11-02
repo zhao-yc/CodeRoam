@@ -20,6 +20,7 @@ import { prefetchConversation } from './conversation-prefetch.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
+import { ThreadMentionService } from './thread-mentions.mjs';
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
@@ -27,7 +28,8 @@ export class BridgeAgent extends EventEmitter {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
     this.newThreads=newThreads;
-    this.nativeDrafts=nativeDrafts??new NativeDraftService({controller:new NativeDraftController({adapter}),projects:newThreads,attachments:adapter.attachments});
+    adapter.threadMentions ??= new ThreadMentionService(adapter);
+    this.nativeDrafts=nativeDrafts??new NativeDraftService({controller:new NativeDraftController({adapter}),projects:newThreads,attachments:adapter.attachments,threadMentions:adapter.threadMentions});
     this.nativeDrafts.on('changed',({deviceId,snapshot})=>this.send({v:1,type:'thread.draft.changed',deviceId,snapshot}));
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     adapter.pluginCatalog ??= new PluginCatalog({ creation: newThreads.creation, verify: pluginInstanceVerifier(adapter, newThreads.creation) });
@@ -94,8 +96,10 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.create.plugins')return readProjectPlugins(this.newThreads,this.adapter.pluginCatalog,message.params.projectId,this.adapter);
         if(message.method==='thread.plugins.read')return this.adapter.readPlugins(message.params.threadId,message.deviceId);
         if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
+        if(message.method==='threads.mentions')return this.adapter.threadMentions.list(message.params);
         if(message.method==='projects.list')return {...this.newThreads.projects(),supportsNativeNewDraft:await this.nativeDrafts.controller.capabilities()};
         if(message.method.startsWith('thread.draft.')) {
+          if(['thread.draft.open','thread.draft.read'].includes(message.method))await this.adapter.threadMentions.available();
           const action=message.method.slice('thread.draft.'.length);
           if(action==='read'||action==='unwatch')return this.nativeDrafts[action](message.params,message.deviceId);
           return this.nativeDrafts[action](message.params,message.deviceId,message.requestId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
@@ -137,6 +141,7 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {
+          await this.adapter.threadMentions.available();
           const snapshot=await this.adapter.watch(message.params.threadId,message.deviceId,{activate:message.params.activate===true});
           const event=this.publish(snapshot);
           return {snapshot:event.snapshot??this.messageQueue?.decorate(snapshot)??snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
@@ -169,5 +174,5 @@ export class BridgeAgent extends EventEmitter {
     } catch(error) {response.error=errorPayload(error);}
     return response;
   }
-  async close(){this.stopped=true;this.messageQueue?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

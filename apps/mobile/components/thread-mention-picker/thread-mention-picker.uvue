@@ -1,0 +1,102 @@
+<template>
+  <view class="mention-overlay" @click="close">
+    <view class="mention-sheet" @click.stop>
+      <view class="mention-heading"><text class="mention-title">引用其他聊天</text><button class="mention-close" aria-label="取消引用聊天" @click="close">×</button></view>
+      <text class="mention-hint">搜索当前电脑的聊天，最多选择20个</text>
+      <input v-model="query" :focus="true" class="mention-search" placeholder="搜索聊天" aria-label="搜索其他聊天" :maxlength="100" />
+      <scroll-view direction="vertical" class="mention-list" :style="{ height: listHeight + 'px' }" @scrolltolower="loadMore">
+        <view v-for="thread in options" :key="thread.id" class="mention-row" :class="{ 'mention-selected': isSelected(thread.id) }">
+          <view class="mention-copy"><text class="mention-name">{{ thread.title }}</text><text v-if="thread.projectLabel.length > 0" class="mention-project">{{ thread.projectLabel }}</text></view>
+          <text class="mention-check">{{ isSelected(thread.id) ? '✓' : '' }}</text>
+          <button class="mention-hitbox" role="checkbox" :aria-checked="isSelected(thread.id)" :aria-label="(isSelected(thread.id) ? '取消选择 ' : '引用聊天 ') + thread.title" @click="toggle(thread)"></button>
+        </view>
+        <text v-if="loading" class="mention-note">正在搜索聊天…</text>
+        <view v-else-if="error.length > 0"><text class="mention-error">{{ error }}</text><button class="mention-retry" @click="retry">重新读取</button></view>
+        <text v-else-if="options.length == 0" class="mention-note">{{ query.trim().length > 0 ? '没有匹配的聊天' : '暂无可引用的聊天' }}</text>
+        <button v-else-if="hasMore" class="mention-retry" @click="loadMore">加载更多</button>
+      </scroll-view>
+      <scroll-view v-if="selected.length > 0" direction="vertical" class="mention-selected-list" :style="{ height: Math.min(88, selected.length * 44) + 'px' }"><thread-mention-chips :mentions="selected" @remove="remove" /></scroll-view>
+      <view class="mention-footer"><button class="mention-cancel" @click="close">取消</button><button class="mention-confirm" :disabled="loading || error.length > 0 || selected.length == 0" @click="confirm">确认引用 · {{ selected.length }}</button></view>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import { computed, ref, watch, onUnmounted } from 'vue'
+import ThreadMentionChips from '../thread-mention-chips/thread-mention-chips.uvue'
+import { bridge, connection } from '../../services/bridge.uts'
+import { SelectedThreadMention, ThreadMentionOption, ThreadMentionsResponse, copyThreadMentions } from '../../services/thread-mentions.uts'
+const props = defineProps<{ hostId: string, threadId: string, scopeId: string, initialQuery: string, mentions: SelectedThreadMention[] }>()
+const emit = defineEmits<{ (event: 'confirm', mentions: SelectedThreadMention[]): void; (event: 'close'): void }>()
+const query = ref(props.initialQuery), options = ref<ThreadMentionOption[]>([]), selected = ref<SelectedThreadMention[]>(copyThreadMentions(props.mentions))
+const loading = ref(false), error = ref(''), hasMore = ref(false)
+const listHeight = Math.max(100, Math.min(300, uni.getWindowInfo().windowHeight - 390))
+const context = computed((): string => [props.hostId, props.threadId, props.scopeId, connection.hostId, connection.configurationRevision.toString(), connection.connected.toString()].join(':'))
+let revision = 0, timer = 0, offset = 0, alive = true, closed = false
+
+// 搜索和分页共用请求代次；目标变化、关闭、卸载后都拒绝迟到回包。
+async function load(more: boolean = false) {
+  if (closed || !alive || (more && (loading.value || !hasMore.value))) return
+  const key = context.value, request = ++revision, search = query.value.trim(), pageOffset = more ? offset : 0
+  clearTimeout(timer); loading.value = true; error.value = ''
+  if (!more) { options.value = [] as ThreadMentionOption[]; offset = 0; hasMore.value = false }
+  try {
+    if (!connection.connected || props.hostId != connection.hostId) throw new Error('请先连接所选电脑')
+    const params: UTSJSONObject = { search, offset: pageOffset, limit: 30 }
+    if (props.threadId.length > 0) params['excludeThreadId'] = props.threadId
+    const raw = await bridge.readThreadMentions(props.hostId, params)
+    if (!alive || closed || request != revision || key != context.value) return
+    const response = JSON.parse<ThreadMentionsResponse>(JSON.stringify(raw))
+    if (response?.supportsThreadMentions != true || !Array.isArray(response.threads)) throw new Error('请更新电脑连接服务后引用聊天')
+    const next = more ? options.value.slice() : [] as ThreadMentionOption[]
+    for (const thread of response.threads) if (thread.id != props.threadId && !next.some((item: ThreadMentionOption): boolean => item.id == thread.id)) next.push(thread)
+    options.value = next; offset = pageOffset + response.threads.length; hasMore.value = response.hasMore && response.threads.length > 0
+  } catch (reason) { if (alive && !closed && request == revision && key == context.value) error.value = (reason as Error).message }
+  finally { if (alive && !closed && request == revision && key == context.value) loading.value = false }
+}
+// 输入时立即让旧请求失效，250 毫秒后只搜索最后一次关键词。
+function scheduleSearch() { revision++; clearTimeout(timer); loading.value = true; error.value = ''; options.value = [] as ThreadMentionOption[]; hasMore.value = false; timer = setTimeout(() => { load() }, 250) }
+function loadMore() { load(true) }
+function retry() { load(options.value.length > 0) }
+function isSelected(id: string): boolean { return selected.value.some((item: SelectedThreadMention): boolean => item.id == id) }
+function remove(id: string) { selected.value = selected.value.filter((item: SelectedThreadMention): boolean => item.id != id) }
+function toggle(thread: ThreadMentionOption) {
+  if (loading.value || error.value.length > 0) return
+  if (isSelected(thread.id)) { remove(thread.id); return }
+  if (selected.value.length >= 20) { uni.showToast({ title: '每条消息最多引用20个聊天', icon: 'none' }); return }
+  selected.value.push({ id: thread.id, title: thread.title } as SelectedThreadMention)
+}
+function close() { closed = true; revision++; clearTimeout(timer); emit('close') }
+function confirm() { if (!loading.value && error.value.length == 0 && selected.value.length > 0) { closed = true; revision++; clearTimeout(timer); emit('confirm', copyThreadMentions(selected.value)) } }
+watch((): string => query.value, () => { scheduleSearch() })
+watch((): string => context.value, () => { revision++; clearTimeout(timer); options.value = [] as ThreadMentionOption[]; close() })
+load()
+onUnmounted(() => { alive = false; revision++; clearTimeout(timer) })
+</script>
+<style>
+.mention-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 95; background-color: rgba(0,0,0,0.3); justify-content: flex-end; }
+.mention-sheet { width: 100%; border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #fbfcf9; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+.mention-heading { flex-direction: row; align-items: center; justify-content: space-between; }
+.mention-title { font-size: 19px; color: #26392d; font-weight: bold; }
+.mention-close { width: 44px; height: 44px; padding: 0; margin: 0; line-height: 42px; font-size: 24px; background-color: transparent; color: #657269; }
+.mention-hint { font-size: 12px; color: #74806e; margin-bottom: 12px; }
+.mention-search { height: 44px; padding: 0 12px; border-radius: 12px; background-color: #eef1e9; color: #26392d; margin-bottom: 8px; }
+.mention-row { position: relative; min-height: 64px; flex-direction: row; align-items: center; padding: 10px; border-radius: 12px; }
+.mention-selected { background-color: #e9efe3; }
+.mention-copy { flex: 1; min-width: 0; }
+.mention-name { font-size: 15px; color: #26392d; line-height: 22px; lines: 1; overflow: hidden; text-overflow: ellipsis; }
+.mention-project { color: #74806e; font-size: 12px; line-height: 18px; margin-top: 3px; }
+.mention-check { width: 24px; margin-left: 8px; color: #285c49; }
+.mention-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; padding: 0; margin: 0; border-radius: 12px; background-color: transparent; }
+.mention-note, .mention-error { text-align: center; font-size: 14px; line-height: 22px; padding: 20px 8px; color: #74806e; }
+.mention-error { color: #a13830; }
+.mention-selected-list { flex-shrink: 0; }
+.mention-footer { flex-direction: row; gap: 12px; margin-top: 12px; }
+.mention-cancel, .mention-confirm, .mention-retry { margin: 0; padding: 0 16px; line-height: 44px; border-radius: 12px; color: #536050; background-color: #eef1e9; font-size: 14px; }
+.mention-confirm { flex: 1; color: #ffffff; background-color: #536b49; }
+.mention-confirm[disabled] { opacity: 0.45; }
+/* #ifdef WEB */
+.mention-sheet { box-sizing: border-box; }
+.mention-name { white-space: nowrap; }
+.mention-hitbox::after, .mention-confirm::after, .mention-cancel::after, .mention-retry::after, .mention-close::after { border: none; }
+/* #endif */
+</style>

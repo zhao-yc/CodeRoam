@@ -1,0 +1,62 @@
+export type SelectedThreadMention = { id: string, title: string }
+export type ThreadMentionOption = { id: string, title: string, projectLabel: string, updatedAt: number }
+export type ThreadMentionsResponse = { threads: ThreadMentionOption[], hasMore: boolean, supportsThreadMentions: boolean }
+export type ThreadMentionTrigger = { text: string, start: number, end: number, query: string }
+export type ThreadMentionReplacement = { text: string, cursor: number }
+
+// 原生输入事件中的 cursor 才是编辑位置；缺少光标时不猜测为末尾。
+export function findThreadMentionTrigger(text: string, cursor: number): ThreadMentionTrigger | null {
+  if (cursor < 0 || cursor > text.length) return null
+  const prefix = text.slice(0, cursor)
+  const match = /(^|[\s（【，。！？；：])@([^\s@`~()[\]{}<>:/\\]*)$/.exec(prefix)
+  if (match == null) return null
+  const start = cursor - match[2].length - 1
+  // 逐行跟踪围栏及行内反引号，代码块和缩进代码中的 @ 不打开选择器。
+  let fence = '', inlineSize = 0
+  const lines = text.slice(0, start).split('\n')
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex]
+    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (marker != null) {
+      if (fence.length == 0) fence = marker[1]
+      else if (marker[1][0] == fence[0] && marker[1].length >= fence.length) fence = ''
+      continue
+    }
+    if (fence.length > 0) continue
+    for (let index = 0; index < line.length; index++) {
+      if (line[index] == '\\') { index++; continue }
+      if (line[index] != '`') continue
+      let size = 1
+      while (line[index + size] == '`') size++
+      if (inlineSize == 0) inlineSize = size
+      else if (inlineSize == size) inlineSize = 0
+      index += size - 1
+    }
+  }
+  if (fence.length > 0 || inlineSize > 0 || /^( {4}|\t)/.test(lines[lines.length - 1])) return null
+  // 链接目标即使含空格也不能触发；邮箱和 URL 的连续 token 已由左边界排除。
+  if (/\]\([^)]*$/.test(prefix) || /<[^>]*$/.test(prefix)) return null
+  return { text, start, end: cursor, query: match[2] } as ThreadMentionTrigger
+}
+
+// 只消费捕获的触发片段，正文发生异步变化时拒绝覆盖。
+export function replaceThreadMentionTrigger(text: string, trigger: ThreadMentionTrigger): ThreadMentionReplacement | null {
+  if (text != trigger.text || text.slice(trigger.start, trigger.end) != '@' + trigger.query) return null
+  return { text: text.slice(0, trigger.start) + text.slice(trigger.end), cursor: trigger.start } as ThreadMentionReplacement
+}
+
+// 所有入口共用去重和上限校验，不静默截掉用户选择。
+export function copyThreadMentions(mentions: SelectedThreadMention[]): SelectedThreadMention[] {
+  const result: SelectedThreadMention[] = []
+  for (const mention of mentions) {
+    if (typeof mention.id != 'string' || mention.id.length == 0 || typeof mention.title != 'string') throw new Error('聊天引用无效，请重新选择')
+    if (!result.some((entry: SelectedThreadMention): boolean => entry.id == mention.id)) result.push({ id: mention.id, title: mention.title } as SelectedThreadMention)
+  }
+  if (result.length > 20) throw new Error('每条消息最多引用20个聊天')
+  return result
+}
+
+// 只转换公开的可见引用链接，完整保留普通正文；内部上下文由服务端过滤。
+export function threadMentionMessageText(text: string): string {
+  return text.replace(/\[@((?:\\.|[^\\\]])+)\]\(thread:\/\/[a-zA-Z0-9_-]+\?hostId=local\)/g, (_match: string, label: string): string => '@' + label.replace(/\\([\\\[\]])/g, '$1'))
+}

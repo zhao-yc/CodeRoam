@@ -1,9 +1,10 @@
 import { reactive } from 'vue'
+import type { SelectedThreadMention } from './thread-mentions.uts'
 import { readDraft, readDraftImages, readDraftFiles, saveDraft, saveDraftImages, saveDraftFiles, DraftImage, DraftFile } from './composer.uts'
 
 export type QueueEditPlugin = { id: string, displayName: string }
 type QueueEditAttachment = { id: string, name: string, size: number }
-export type QueueEditDraft = { text: string, images: string[], attachments: QueueEditAttachment[], plugins?: QueueEditPlugin[] }
+export type QueueEditDraft = { text: string, images: string[], attachments: QueueEditAttachment[], plugins?: QueueEditPlugin[], threadMentions?: SelectedThreadMention[] }
 type QueueEditScope = { hostId: string, threadId: string }
 type QueueEditState = { scopes: QueueEditScope[] }
 const editing = reactive<QueueEditState>({ scopes: [] as QueueEditScope[] })
@@ -22,10 +23,16 @@ function requireEmptyDraft(hostId: string, threadId: string, hasExtraDraft: bool
 }
 
 // 先完整校验再恢复；附件复用原上传编号，不回填电脑路径，也不重复上传。
-export function restoreQueuedDraft(hostId: string, threadId: string, queueId: string, draft: QueueEditDraft, hasExtraDraft: boolean = false, restorePlugins: ((plugins: QueueEditPlugin[]) => void) | null = null) {
+export function restoreQueuedDraft(hostId: string, threadId: string, queueId: string, draft: QueueEditDraft, hasExtraDraft: boolean = false, restorePlugins: ((plugins: QueueEditPlugin[]) => void) | null = null, restoreMentions: ((mentions: SelectedThreadMention[]) => void) | null = null) {
   requireEmptyDraft(hostId, threadId, hasExtraDraft)
   if (typeof draft.text != 'string' || draft.text.length > 32000 || draft.images == null || draft.attachments == null || draft.images.length + draft.attachments.length > 3) throw new Error('撤回内容不完整，请重新同步后继续编辑')
   if ((draft.plugins?.length ?? 0) > 0 && restorePlugins == null) throw new Error('请更新手机客户端后继续编辑含插件的消息，原撤回记录仍保留')
+  const mentions: SelectedThreadMention[] = []
+  for (const mention of draft.threadMentions ?? [] as SelectedThreadMention[]) {
+    if (typeof mention.id != 'string' || mention.id.length == 0 || typeof mention.title != 'string') throw new Error('撤回聊天引用无效，原撤回记录仍保留')
+    if (!mentions.some((item: SelectedThreadMention): boolean => item.id == mention.id)) mentions.push({ id: mention.id, title: mention.title } as SelectedThreadMention)
+  }
+  if (mentions.length > 20 || (mentions.length > 0 && restoreMentions == null)) throw new Error('无法恢复聊天引用，请更新手机客户端；原撤回记录仍保留')
   const images = draft.images.map((src: string, index: number): DraftImage => {
     if (!src.startsWith('data:image/')) throw new Error('撤回图片无效，原撤回记录仍保留')
     return { id: queueId + '-image-' + index, src } as DraftImage
@@ -38,4 +45,5 @@ export function restoreQueuedDraft(hostId: string, threadId: string, queueId: st
   saveDraftImages(hostId, threadId, images)
   saveDraftFiles(hostId, threadId, files)
   if (restorePlugins != null) restorePlugins(draft.plugins ?? [] as QueueEditPlugin[])
+  if (restoreMentions != null) restoreMentions(mentions)
 }

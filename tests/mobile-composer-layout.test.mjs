@@ -12,7 +12,7 @@ function fixture(){
   const ref=value=>({value}),frames=[],timers=new Map(),watches=[],unloads=[];let timerId=0;
   const c={computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
   Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
-  Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([])});
+  Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([]),mentionOpen:ref(false),draftMentions:ref([])});
   const layout=page.slice(page.indexOf('// 占位预测使用独立测量值'),page.indexOf('// 键盘由输入区处理'));
   const blur=page.slice(page.indexOf('function onDraftBlur()'),page.indexOf('function updateMenuHeight()'));
   const focus=page.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0];
@@ -28,7 +28,7 @@ test('空白默认单行，聚焦恢复编辑面板，空白失焦延后收起�
 });
 
 test('草稿、预测、附件、工具菜单、权限菜单和选择附件期间，失焦仍保持展开',()=>{
-  for(const [key,value] of [['draft','草稿'],['visiblePrediction','预测'],['draftImages',[{}]],['draftFiles',[{}]],['draftPlugins',[{id:'sample@example',displayName:'示例插件'}]],['pluginOpen',true],['composerMenu','add'],['permissionMenuOpen',true],['imageBusy',true]]){
+  for(const [key,value] of [['draft','草稿'],['visiblePrediction','预测'],['draftImages',[{}]],['draftFiles',[{}]],['draftPlugins',[{id:'sample@example',displayName:'示例插件'}]],['pluginOpen',true],['draftMentions',[{id:'synthetic',title:'合成聊天'}]],['mentionOpen',true],['composerMenu','add'],['permissionMenuOpen',true],['imageBusy',true]]){
     const f=fixture();f.ui.onComposerFocus();f.c[key].value=value;f.ui.onDraftBlur();f.blur();assert.equal(f.ui.composerExpanded.value,true,key);
     f.c[key].value=Array.isArray(value)?[]:typeof value==='boolean'?false:'';assert.equal(f.ui.composerExpanded.value,false,key);
   }
