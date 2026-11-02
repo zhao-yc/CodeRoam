@@ -1,0 +1,22 @@
+{
+  "name": "codex-mobile-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "使用 uni-app x 连接自己 Codex 桌面会话的非官方手机客户端",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "diagnose": "node scripts/diagnose.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "relay": "node apps/relay/cli.mjs",
+    "bridge": "node apps/bridge/cli.mjs",
+    "provision": "node scripts/provision.mjs",
+    "check:privacy": "node scripts/check-public-files.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "license": "MIT"
+}

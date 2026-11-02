@@ -1,0 +1,36 @@
+{
+  "name": "掌上 Codex",
+  "appid": "",
+  "description": "连接自己的 Codex 桌面会话",
+  "versionName": "0.1.8",
+  "versionCode": "108",
+  "uni-app-x": {},
+  "uniStatistics": {
+    "enable": false
+  },
+  "app": {
+    "distribute": {
+      "android": {
+        "packagename": "org.example.codexmobile"
+      },
+      "ios": {}
+    }
+  },
+  "app-android": {
+    "distribute": {
+      "excludePermissions": [
+        "<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>",
+        "<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>",
+        "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>",
+        "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>"
+      ]
+    }
+  },
+  "web": {
+    "title": "掌上 Codex",
+    "router": {
+      "mode": "hash"
+    }
+  },
+  "vueVersion": "3"
+}

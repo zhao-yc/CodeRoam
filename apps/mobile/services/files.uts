@@ -1,0 +1,40 @@
+export const MAX_FILE_BYTES = 20 * 1024 * 1024
+export const FILE_CHUNK_BYTES = 192 * 1024
+const DOCUMENT_EXTENSIONS = 'pdf doc docx xls xlsx csv txt md json yaml yml xml log js mjs cjs ts tsx jsx uts uvue vue py java cs c cpp h hpp go rs sh ps1 sql html css scss less toml ini conf properties'.split(' ')
+
+// 文件名和大小在上传前校验；电脑仍会独立校验，文件路径不离开手机。
+export function validateFile(name: string, size: number) {
+  const extension = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+  if (DOCUMENT_EXTENSIONS.indexOf(extension) < 0) throw new Error('仅支持PDF、Word、Excel、文本和常见代码文件')
+  if (size < 1 || size > MAX_FILE_BYTES) throw new Error('文件不能为空，且每个文件不能超过20 MiB')
+}
+
+export function fileSizeLabel(size: number): string {
+  return size >= 1024 * 1024 ? (size / (1024 * 1024)).toFixed(1) + ' MiB' : Math.max(1, Math.ceil(size / 1024)).toString() + ' KiB'
+}
+
+// App 直接读取系统选择器授予的 content URI；Web 从选择结果的临时 URL 读取。
+export function readFileBase64(source: string): Promise<string> {
+  // #ifdef WEB
+  return new Promise<string>((resolve, reject) => {
+    window.fetch(source).then((response: Response): Promise<Blob> => {
+      if (!response.ok) throw new Error('无法读取所选文件')
+      return response.blob()
+    }).then((blob: Blob) => {
+      if (blob.size > MAX_FILE_BYTES) { reject(new Error('每个文件不能超过20 MiB')); return }
+      const reader = new FileReader()
+      reader.onload = () => { const result = reader.result as string; const separator = result.indexOf(','); if (separator < 0) reject(new Error('读取文件失败')); else resolve(result.slice(separator + 1)) }
+      reader.onerror = () => reject(new Error('读取文件失败，请重新选择'))
+      reader.readAsDataURL(blob)
+    }, (_: any) => { reject(new Error('读取文件失败，请重新选择')) })
+  })
+  // #endif
+  // #ifndef WEB
+  return new Promise<string>((resolve, reject) => {
+    uni.getFileSystemManager().readFile({ filePath: source, encoding: 'base64', success: (result) => {
+      const data = result.data as string
+      if (data.length > MAX_FILE_BYTES * 4 / 3) reject(new Error('每个文件不能超过20 MiB')); else resolve(data)
+    }, fail: (_) => { reject(new Error('读取文件失败，请重新选择')) } })
+  })
+  // #endif
+}

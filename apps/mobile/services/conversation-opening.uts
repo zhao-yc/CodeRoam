@@ -1,0 +1,14 @@
+// 尚未取得快照时，失败与断线必须结束“正在打开”的提示；已有历史不被后续错误替换。
+export function conversationOpeningTitle(hasSnapshot: boolean, error: string, connected: boolean): string {
+  if (hasSnapshot) return ''
+  if (error.length > 0) return '会话打开失败'
+  if (!connected) return '等待连接电脑'
+  return '正在打开会话'
+}
+
+// 有效的新名称优先，快照未提供名称时沿用列表名称，无名称入口仍显示原有加载提示。
+export function conversationDisplayTitle(listTitle: string, snapshotTitle: string, openingTitle: string): string {
+  if (snapshotTitle.trim().length > 0) return snapshotTitle == listTitle ? listTitle : snapshotTitle
+  if (listTitle.trim().length > 0) return listTitle
+  return openingTitle
+}

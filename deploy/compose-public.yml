@@ -1,0 +1,19 @@
+services:
+  relay:
+    image: codex-mobile-relay:0.1.0
+    container_name: codex-mobile-relay
+    command: ["node", "apps/relay/cli.mjs", "--config", "/run/config/relay.json", "--data", "/var/lib/codex-mobile", "--host", "0.0.0.0", "--port", "8787"]
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    ports: ["127.0.0.1:18010:8787"]
+    volumes: ["./config/relay.json:/run/config/relay.json:ro", "./data:/var/lib/codex-mobile"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

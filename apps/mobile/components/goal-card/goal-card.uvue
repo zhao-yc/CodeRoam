@@ -1,0 +1,91 @@
+<template>
+  <view v-if="goal != null || editing" class="goal-widget">
+    <view v-if="expanded || editing" class="goal-panel">
+      <view class="goal-heading"><text class="goal-title">{{ editing ? (creating ? '新建目标' : '编辑目标') : '目标' }}</text><text v-if="!editing && goal != null" class="goal-state">{{ statusLabel }}</text><button class="goal-close" aria-label="收起目标详情" :disabled="busy" @click="collapse">×</button></view>
+      <template v-if="editing">
+        <textarea class="goal-editor" :style="{ height: Math.max(72, Math.min(120, contentHeight)) + 'px' }" :value="objective" :maxlength="4000" :disabled="disabled || busy" :adjust-position="false" placeholder="描述希望完成的目标…" aria-label="目标正文" @input="updateObjective" @keyboardheightchange="keyboardChange"></textarea>
+        <text class="goal-counter">{{ objective.length }} / 4000</text>
+        <text v-if="editorRevision != revision" class="goal-note">电脑端目标已变化，请取消后重新编辑。</text>
+        <text v-else class="goal-note">保存后按电脑端规则启动或继续目标。</text>
+        <view class="goal-actions"><button class="goal-action" :disabled="busy" @click="cancelEdit">取消</button><button class="goal-action goal-primary" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save">{{ busy ? '正在同步…' : '保存目标' }}</button></view>
+      </template>
+      <template v-else-if="goal != null">
+        <scroll-view direction="vertical" class="goal-body" :style="{ maxHeight: contentHeight + 'px' }"><text class="goal-objective" selectable>{{ goal.objective }}</text></scroll-view>
+        <text class="goal-usage">{{ usageLabel }}</text>
+        <view class="goal-actions"><button class="goal-action" :disabled="disabled || busy" @click="edit">编辑</button><button v-if="goal.status == 'active'" class="goal-action" :disabled="disabled || busy" @click="operate('pause')">暂停</button><button v-else-if="canResume" class="goal-action" :disabled="disabled || busy" @click="operate('resume')">继续</button><button class="goal-action" :disabled="disabled || busy" @click="clear">清除</button></view>
+        <text v-if="unavailableReason.length > 0" class="goal-note">{{ unavailableReason }}</text>
+        <text v-else-if="busy" class="goal-note">正在同步电脑端目标…</text>
+      </template>
+    </view>
+    <view v-if="goal != null" class="goal-summary action-frame"><text class="goal-symbol">◎</text><text class="goal-summary-label">目标：{{ goal.objective.split('\n').join(' ') }}</text><text class="goal-summary-state">{{ statusLabel }}</text><button class="action-hitbox" aria-label="查看或收起目标详情" :aria-expanded="expanded || editing" @click="toggle"></button></view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref, watch } from 'vue'
+import { ThreadGoal, goalStatusLabel, goalUsageLabel, goalCanResume } from '../../services/goals.uts'
+const props = defineProps<{ goal: ThreadGoal | null, revision: string, disabled: boolean, busy: boolean, unavailableReason: string, openRequest: number, closeRequest: number, resetKey: string, contentHeight: number }>()
+const emit = defineEmits<{ operate: [action: string, objective: string, revision: string], expanded: [value: boolean], keyboard: [height: number] }>()
+const expanded = ref(false)
+const editing = ref(false)
+const creating = ref(false)
+const objective = ref('')
+const editorRevision = ref('none')
+const statusLabel = computed((): string => goalStatusLabel(props.goal?.status ?? ''))
+const usageLabel = computed((): string => props.goal != null ? goalUsageLabel(props.goal!) : '')
+const canResume = computed((): boolean => goalCanResume(props.goal?.status ?? ''))
+
+// 详情默认收起，打开或关闭不发起目标写请求。
+// 外部收起时保留新输入框的键盘，明确关闭时才隐藏。
+function closeDetails(hideKeyboard: boolean) { if (props.busy) return; expanded.value = false; editing.value = false; emit('expanded', false); if (hideKeyboard) uni.hideKeyboard() }
+// 显式关闭目标详情并结束当前目标编辑。
+function collapse() { closeDetails(true) }
+function toggle() { if (props.busy) return; if (expanded.value || editing.value) collapse(); else { expanded.value = true; emit('expanded', true) } }
+// 开始编辑时捕获正文和版本，后续同步不会覆盖未保存文字。
+function edit() { if (props.disabled || props.busy) return; creating.value = props.goal == null; objective.value = props.goal?.objective ?? ''; editorRevision.value = props.revision; editing.value = true; expanded.value = true; emit('expanded', true) }
+// 取消只影响目标表单，不改变聊天草稿或电脑目标。
+function cancelEdit() { editing.value = false; objective.value = ''; expanded.value = props.goal != null; emit('expanded', expanded.value); uni.hideKeyboard() }
+function updateObjective(event: UniInputEvent) { objective.value = event.detail.value }
+function keyboardChange(event: UniInputKeyboardHeightChangeEvent) { emit('keyboard', event.detail.height) }
+// 空正文、旧版本和待核对状态均不能提交。
+function save() { if (props.disabled || props.busy || editorRevision.value != props.revision || objective.value.trim().length == 0) return; emit('operate', creating.value ? 'create' : 'edit', objective.value.trim(), editorRevision.value) }
+function operate(action: string) { if (!props.disabled && !props.busy) emit('operate', action, '', props.revision) }
+// 清除确认绑定打开确认框时的目标版本。
+function clear() {
+  if (props.disabled || props.busy) return
+  const revision = props.revision
+  uni.showModal({ title: '清除目标', content: '确定清除此会话的目标吗？', confirmText: '清除', cancelText: '取消', success: (result) => { if (result.confirm && !props.disabled && !props.busy) emit('operate', 'clear', '', revision) } })
+}
+watch((): number => props.openRequest, (_value: number, _previous: number) => { if (props.goal == null) edit(); else { expanded.value = true; emit('expanded', true) } })
+watch((): number => props.closeRequest, (_value: number, _previous: number) => closeDetails(false))
+watch((): string => props.resetKey, (_value: string, _previous: string) => { expanded.value = false; editing.value = false; objective.value = ''; emit('expanded', false) })
+watch((): string => props.revision, (_value: string, _previous: string) => { if (!props.busy && props.goal == null && !creating.value) collapse() })
+// 已确认成功后退出编辑；失败或未知结果时保留目标正文供核对。
+watch((): boolean => props.busy, (value: boolean, previous: boolean) => { if (!value && previous) { if (editing.value && props.goal?.objective == objective.value.trim()) { editing.value = false; creating.value = false }; if (props.goal == null && !editing.value) collapse() } })
+</script>
+
+<style>
+.goal-widget { flex-shrink: 0; margin-bottom: 5px; }
+.goal-panel { background-color: #eef0e9; border-radius: 16px; margin-bottom: 5px; padding: 8px 12px; }
+.goal-heading { flex-direction: row; align-items: center; }
+.goal-title { font-size: 14px; font-weight: bold; color: #202c28; }
+.goal-state { font-size: 11px; color: #7b827a; margin-left: 8px; flex: 1; }
+.goal-close { width: 36px; height: 32px; padding: 0; margin: 0 0 0 auto; background-color: transparent; color: #7b827a; font-size: 22px; line-height: 30px; border-width: 0; }
+.goal-body { flex-shrink: 1; }
+.goal-objective { font-size: 14px; line-height: 22px; color: #39473f; }
+.goal-usage { font-size: 10px; color: #7b827a; line-height: 18px; margin-top: 4px; }
+.goal-actions { flex-direction: row; align-items: center; margin-top: 2px; }
+.goal-action { min-width: 58px; height: 42px; margin: 0 8px 0 0; padding: 0 12px; border-width: 0; background-color: transparent; color: #285c49; font-size: 14px; line-height: 42px; }
+.goal-primary { background-color: #285c49; color: #ffffff; border-radius: 12px; min-width: 110px; }
+.goal-summary { position: relative; flex-direction: row; align-items: center; height: 36px; max-height: 36px; overflow: hidden; padding: 0 10px; border-radius: 18px; background-color: #f0f1eb; }
+.goal-symbol { font-size: 19px; color: #285c49; margin-right: 5px; flex-shrink: 0; }
+.goal-summary-label { flex: 1; flex-shrink: 1; min-width: 0; height: 20px; line-height: 20px; overflow: hidden; lines: 1; text-overflow: ellipsis; font-size: 12px; color: #39473f; }
+/* #ifdef WEB */
+.goal-summary-label { white-space: nowrap; }
+/* #endif */
+.goal-summary-state { font-size: 10px; color: #7b827a; margin-left: 8px; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; }
+.goal-editor { width: 100%; font-size: 14px; line-height: 22px; padding: 6px 0; color: #202c28; }
+.goal-counter { font-size: 10px; text-align: right; color: #7b827a; }
+.goal-note { font-size: 11px; line-height: 17px; color: #7b827a; margin-top: 2px; }
+</style>

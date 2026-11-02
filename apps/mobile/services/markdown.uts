@@ -1,0 +1,761 @@
+export type MarkdownRun = { text: string, bold: boolean, italic: boolean, strike: boolean, code: boolean, href: string }
+export type MarkdownRow = { cells: MarkdownRun[][] }
+export type MarkdownBlock = { id: string, kind: string, runs: MarkdownRun[], depth: number, marker: string, level: number, language: string, code: string, rows: MarkdownRow[], src: string, alt: string }
+
+type TickSpan = { start: number, end: number, close: number }
+type InlineToken = { kind: string, runs: MarkdownRun[], src: string, alt: string, symbol: string, remaining: number, open: boolean, close: boolean, previous: number, boldStart: number, boldEnd: number, italicStart: number, italicEnd: number, strikeStart: number, strikeEnd: number }
+type InlinePiece = { run: MarkdownRun, src: string, alt: string }
+type LineInfo = { text: string, quotes: number, indent: number }
+type ListInfo = { found: boolean, marker: string, text: string, width: number }
+type ListFrame = { indent: number, content: number, quotes: number }
+type FenceInfo = { found: boolean, symbol: string, size: number, language: string, indent: number }
+
+// 所有输出字段在创建时初始化，组件可以直接按固定接口渲染。
+function newRun(text: string): MarkdownRun {
+  return { text: text, bold: false, italic: false, strike: false, code: false, href: '' }
+}
+
+function newBlock(kind: string, depth: number): MarkdownBlock {
+  return { id: '', kind: kind, runs: [], depth: depth, marker: '', level: 0, language: '', code: '', rows: [], src: '', alt: '' }
+}
+
+function isSpace(value: string): boolean {
+  return value.length == 0 || /\s/.test(value)
+}
+
+function isPunctuation(value: string): boolean {
+  return value.length > 0 && /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：、（）【】《》“”‘’]/.test(value)
+}
+
+function isEscapable(value: string): boolean {
+  return value.length > 0 && /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(value)
+}
+
+function isHex(value: string): boolean {
+  return value.length > 0 && /^[0-9a-fA-F]+$/.test(value)
+}
+
+// 不依赖浏览器 URL 或 DOM；逐项校验协议、主机、端口和完整转义。
+export function safeWebUrl(source: string): string {
+  const value = source.trim()
+  const lower = value.toLowerCase()
+  let offset = 0
+  if (lower.startsWith('https://')) offset = 8
+  else if (lower.startsWith('http://')) offset = 7
+  else return ''
+  if (value.length <= offset) return ''
+  let parentheses = 0
+  for (let index: number = 0; index < value.length; index++) {
+    const char = value.charAt(index)
+    const code = value.charCodeAt(index) ?? 0
+    if (code <= 32 || (code >= 127 && code <= 160) || /[\s\\<>"`]/.test(char) || (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e) || (code >= 0x2060 && code <= 0x206f) || code == 0xfeff) return ''
+    if (char == '%') {
+      if (index + 2 >= value.length || !isHex(value.slice(index + 1, index + 3))) return ''
+      const escaped = value.slice(index + 1, index + 3).toLowerCase()
+      if (escaped == '00' || escaped == '0a' || escaped == '0d') return ''
+      index += 2
+    } else if (char == '(') parentheses++
+    else if (char == ')') { parentheses--; if (parentheses < 0) return '' }
+  }
+  if (parentheses != 0) return ''
+  let authorityEnd = offset
+  while (authorityEnd < value.length && '/?#'.indexOf(value.charAt(authorityEnd)) < 0) authorityEnd++
+  const authority = value.slice(offset, authorityEnd)
+  if (authority.length == 0 || authority.indexOf('@') >= 0 || authority.indexOf('%') >= 0) return ''
+  let host = authority
+  let port = ''
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']')
+    if (end < 0 || !validIpv6(host.slice(1, end))) return ''
+    const tail = host.slice(end + 1)
+    if (tail.length > 0) {
+      if (!tail.startsWith(':')) return ''
+      port = tail.slice(1)
+      if (port.length == 0) return ''
+    }
+    host = host.slice(0, end + 1)
+  } else {
+    const colon = host.indexOf(':')
+    if (colon >= 0) {
+      port = host.slice(colon + 1)
+      host = host.slice(0, colon)
+      if (port.length == 0) return ''
+    }
+    if (host.endsWith('.')) host = host.slice(0, -1)
+    if (host.length == 0 || host.length > 253) return ''
+    const labels = host.split('.')
+    for (let index: number = 0; index < labels.length; index++) {
+      const label = labels[index]
+      if (label.length == 0 || label.length > 63 || label.startsWith('-') || label.endsWith('-')) return ''
+      for (let position = 0; position < label.length; position++) {
+        const char = label.charAt(position)
+        const code = label.charCodeAt(position) ?? 0
+        if (!/[a-zA-Z0-9-]/.test(char) && !(code >= 0xc0 && !isPunctuation(char) && char != '[' && char != ']' && char != ':' && char != '／')) return ''
+      }
+    }
+    if (/^[0-9.]+$/.test(host) && !validIpv4(host)) return ''
+  }
+  if (port.length > 0 && (!/^[0-9]{1,5}$/.test(port) || parseInt(port, 10) < 1 || parseInt(port, 10) > 65535)) return ''
+  return value
+}
+
+function validIpv4(host: string): boolean {
+  const parts = host.split('.')
+  if (parts.length != 4) return false
+  for (let index: number = 0; index < parts.length; index++) {
+    const part = parts[index]
+    if (!/^[0-9]{1,3}$/.test(part) || parseInt(part, 10) > 255 || (part.length > 1 && part.startsWith('0'))) return false
+  }
+  return true
+}
+
+function validIpv6(host: string): boolean {
+  const compressed = host.indexOf('::')
+  if (host.length == 0 || host.indexOf('::', compressed + 2) >= 0 || host.indexOf(':::') >= 0) return false
+  const parts = host.split(':')
+  let size = 0
+  for (let index: number = 0; index < parts.length; index++) {
+    const part = parts[index]
+    if (part.length == 0) continue
+    if (part.indexOf('.') >= 0) {
+      if (index != parts.length - 1 || !validIpv4(part)) return false
+      size += 2
+    } else {
+      if (part.length > 4 || !isHex(part)) return false
+      size++
+    }
+  }
+  if (compressed >= 0) return size < 8
+  return size == 8 && !host.startsWith(':') && !host.endsWith(':')
+}
+
+// 反向索引同长度反引号，避免大量未闭合代码标记触发反复全文搜索。
+function tickSpans(source: string): TickSpan[] {
+  const spans: TickSpan[] = []
+  let maximum = 0
+  let index: number = 0
+  while (index < source.length) {
+    // 代码正文中的反斜杠不是转义，后面的反引号仍可能关闭已开启的跨度。
+    if (source.charAt(index) == '\\' && isEscapable(source.charAt(index + 1)) && source.charAt(index + 1) != '`') { index += 2; continue }
+    if (source.charAt(index) != '`') { index++; continue }
+    const start = index
+    while (source.charAt(index) == '`') index++
+    const size = index - start
+    if (size > maximum) maximum = size
+    spans.push({ start: start, end: index, close: -1 })
+  }
+  const next: number[] = []
+  for (let position = 0; position <= maximum; position++) next.push(-1)
+  for (let position = spans.length - 1; position >= 0; position--) {
+    const span = spans[position]
+    const size = span.end - span.start
+    span.close = next[size]
+    next[size] = position
+  }
+  return spans
+}
+
+function token(kind: string): InlineToken {
+  return { kind: kind, runs: [], src: '', alt: '', symbol: '', remaining: 0, open: false, close: false, previous: -1, boldStart: 0, boldEnd: 0, italicStart: 0, italicEnd: 0, strikeStart: 0, strikeEnd: 0 }
+}
+
+function textToken(text: string): InlineToken {
+  const result = token('text')
+  result.runs.push(newRun(text))
+  return result
+}
+
+function unescapeMarkdown(source: string): string {
+  return source.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, '$1')
+}
+
+// 一次建立括号配对；代码片段中的括号不参与链接语法。
+function bracketPairs(source: string, spans: TickSpan[]): number[] {
+  const pairs: number[] = []
+  const squares: number[] = []
+  const rounds: number[] = []
+  for (let index: number = 0; index < source.length; index++) pairs.push(-1)
+  let tick: number = 0
+  let index: number = 0
+  let linkRound = -1
+  while (index < source.length) {
+    if (source.charAt(index) == '\\' && isEscapable(source.charAt(index + 1))) { index += 2; continue }
+    while (tick < spans.length && spans[tick].start < index) tick++
+    if (tick < spans.length && spans[tick].start == index) {
+      const span = spans[tick]
+      if (span.close < 0) break
+      index = spans[span.close].end
+      tick = span.close + 1
+      continue
+    }
+    const char = source.charAt(index)
+    if (linkRound >= 0 && (char == '"' || char == "'") && isSpace(source.charAt(index - 1))) {
+      // 标题引号里的括号不关闭链接，未完成的引号也不提前启用链接。
+      let end = index + 1
+      while (end < source.length) {
+        if (source.charAt(end) == '\\' && isEscapable(source.charAt(end + 1))) { end += 2; continue }
+        if (source.charAt(end) == char) break
+        end++
+      }
+      index = end + 1; continue
+    }
+    if (char == '[') squares.push(index)
+    else if (char == ']' && squares.length > 0) { const start = squares[squares.length - 1]; squares.pop(); pairs[start] = index }
+    else if (char == '(') {
+      rounds.push(index)
+      if (linkRound < 0 && source.charAt(index - 1) == ']') linkRound = index
+    } else if (char == ')' && rounds.length > 0) {
+      const start = rounds[rounds.length - 1]; rounds.pop(); pairs[start] = index
+      if (linkRound == start) linkRound = -1
+    }
+    index++
+  }
+  return pairs
+}
+
+// 可选标题只接受完整成对引号；未完成目标整体保留为不可点击文字。
+function linkDestination(source: string): string {
+  const value = source.trim()
+  let end = 0
+  let address = ''
+  if (value.startsWith('<')) {
+    end = value.indexOf('>')
+    if (end < 0) return ''
+    address = value.slice(1, end)
+    end++
+  } else {
+    while (end < value.length && !isSpace(value.charAt(end))) {
+      if (value.charAt(end) == '\\' && isEscapable(value.charAt(end + 1))) end++
+      end++
+    }
+    address = value.slice(0, end)
+  }
+  const tail = value.slice(end).trim()
+  if (tail.length > 0) {
+    const quote = tail.charAt(0)
+    if ((quote != '"' && quote != "'" && quote != '(') || tail.length < 2 || tail.charAt(tail.length - 1) != (quote == '(' ? ')' : quote)) return ''
+  }
+  return safeWebUrl(unescapeMarkdown(address))
+}
+
+function webPrefix(source: string, index: number): boolean {
+  const prefix = source.slice(index, index + 8).toLowerCase()
+  return prefix.startsWith('http://') || prefix == 'https://'
+}
+
+function escapedAt(source: string, index: number): boolean {
+  let slashes = 0
+  for (let position = index - 1; position >= 0 && source.charAt(position) == '\\'; position--) slashes++
+  return slashes % 2 == 1
+}
+
+// HTML 只作为文字；属性引号和注释中的大于号不结束当前标签。
+function angleEnd(source: string, start: number): number {
+  if (source.slice(start, start + 4) == '<!--') {
+    const closing = source.indexOf('-->', start + 4)
+    return closing < 0 ? source.length : closing + 3
+  }
+  let quote = ''
+  let index: number = start + 1
+  while (index < source.length) {
+    const char = source.charAt(index)
+    if (quote.length > 0) {
+      if (char == quote) quote = ''
+    } else if (char == '"' || char == "'") quote = char
+    else if (char == '>') return index + 1
+    else if (char == '<') return index
+    index++
+  }
+  return index
+}
+
+// 裸网址在中文标点及外层括号处停止，网址内部成对括号保留。
+function bareUrlEnd(source: string, start: number): number {
+  let index: number = start
+  let rounds = 0
+  let squares = 0
+  let braces = 0
+  while (index < source.length) {
+    const char = source.charAt(index)
+    if (isSpace(char) || /[<>"'`\\*~，。！？；：、（）【】《》“”‘’]/.test(char)) break
+    if (char == '(') rounds++
+    else if (char == ')') { if (rounds == 0) break; rounds-- }
+    else if (char == '[') squares++
+    else if (char == ']') { if (squares == 0) break; squares-- }
+    else if (char == '{') braces++
+    else if (char == '}') { if (braces == 0) break; braces-- }
+    index++
+  }
+  while (index > start && /[.,!?;:]/.test(source.charAt(index - 1))) index--
+  if (source.charAt(start - 1) == '_') {
+    while (index > start && source.charAt(index - 1) == '_') index--
+  }
+  return index
+}
+
+// 使用有界的标签递归和显式分隔符栈，正文长度不会转化为调用栈深度。
+function inlinePieces(source: string, nesting: number): InlinePiece[] {
+  const tokens: InlineToken[] = []
+  const spans = tickSpans(source)
+  const pairs = bracketPairs(source, spans)
+  let tick: number = 0
+  let index: number = 0
+  let literal = 0
+  while (index < source.length) {
+    const char = source.charAt(index)
+    let item: InlineToken | null = null
+    let end = index
+    if (char == '\\' && isEscapable(source.charAt(index + 1))) {
+      item = textToken(source.charAt(index + 1)); end = index + 2
+    } else if (char == '`') {
+      while (tick < spans.length && spans[tick].start < index) tick++
+      if (tick < spans.length && spans[tick].start == index) {
+        const span = spans[tick]
+        let text = ''
+        if (span.close >= 0) {
+          end = spans[span.close].end
+          text = source.slice(span.end, spans[span.close].start).replace(/\n/g, ' ')
+          if (text.startsWith(' ') && text.endsWith(' ') && text.trim().length > 0) text = text.slice(1, -1)
+          tick = span.close + 1
+        } else { end = source.length; text = source.slice(index) }
+        item = textToken(text); item.runs[0].code = true
+      }
+    } else if (char == '[' || (char == '!' && source.charAt(index + 1) == '[')) {
+      const image = char == '!'
+      const opening = image ? index + 1 : index
+      const closing = pairs[opening]
+      if (closing >= 0 && source.charAt(closing + 1) == '(') {
+        const destinationEnd = pairs[closing + 1]
+        if (destinationEnd < 0) { item = textToken(source.slice(index)); end = source.length }
+        else {
+          const href = linkDestination(source.slice(closing + 2, destinationEnd))
+          end = destinationEnd + 1
+          if (href.length == 0) item = textToken(source.slice(index, end))
+          else {
+            const label = source.slice(opening + 1, closing)
+            const pieces: InlinePiece[] = []
+            if (nesting < 12) {
+              const labelPieces = inlinePieces(label, nesting + 1)
+              for (let position = 0; position < labelPieces.length; position++) pieces.push(labelPieces[position])
+            } else pieces.push({ run: newRun(unescapeMarkdown(label)), src: '', alt: '' })
+            item = token(image ? 'image' : 'text')
+            item.src = image ? href : ''
+            const alt: string[] = []
+            for (let position = 0; position < pieces.length; position++) {
+              const piece = pieces[position]
+              const run = piece.run
+              if (piece.src.length > 0) run.text = piece.alt
+              alt.push(run.text)
+              // 行内代码保留代码语义，不为代码文字附加链接。
+              run.href = !image && !run.code ? href : ''
+              item.runs.push(run)
+            }
+            item.alt = alt.join('')
+          }
+        }
+      } else if (closing < 0) {
+        // 流式标签尚未结束，内部的网址也不能抢先变成裸链接。
+        item = textToken(source.slice(index)); end = source.length
+      }
+    } else if (char == '<') {
+      // HTML 仅作为文字输出；只有完整尖括号网址启用链接。
+      end = angleEnd(source, index)
+      item = textToken(source.slice(index, end))
+      if (source.charAt(end - 1) == '>') {
+        const address = source.slice(index + 1, end - 1)
+        const href = safeWebUrl(address)
+        if (href.length > 0) { item.runs[0].text = address; item.runs[0].href = href }
+      }
+    } else if (char == '*' || char == '_' || (char == '~' && source.charAt(index + 1) == '~')) {
+      end = index + 1
+      while (source.charAt(end) == char) end++
+      const before = source.charAt(index - 1)
+      const after = source.charAt(end)
+      const left = !isSpace(after) && (!isPunctuation(after) || isSpace(before) || isPunctuation(before))
+      const right = !isSpace(before) && (!isPunctuation(before) || isSpace(after) || isPunctuation(after))
+      item = token('delimiter'); item.symbol = char; item.remaining = end - index
+      item.open = left && (char != '_' || !right || isPunctuation(before))
+      item.close = right && (char != '_' || !left || isPunctuation(after))
+    } else if ((char == 'h' || char == 'H') && webPrefix(source, index)) {
+      const before = source.charAt(index - 1)
+      const lastToken = tokens.length > 0 ? tokens[tokens.length - 1] : null
+      const afterEmphasis = before == '_' && lastToken != null && lastToken.kind == 'delimiter' && lastToken.symbol == '_' && lastToken.open
+      const boundary = index == 0 || isSpace(before) || (isPunctuation(before) && '/\\:._-@%'.indexOf(before) < 0) || /[\u3400-\u9fff]/.test(before) || afterEmphasis
+      if (boundary && !escapedAt(source, index - 1)) {
+        end = bareUrlEnd(source, index)
+        const address = source.slice(index, end)
+        item = textToken(address)
+        item.runs[0].href = safeWebUrl(address)
+      }
+    }
+    if (item != null && end > index) {
+      if (literal < index) tokens.push(textToken(source.slice(literal, index)))
+      tokens.push(item); index = end; literal = end
+    } else index++
+  }
+  if (literal < source.length) tokens.push(textToken(source.slice(literal)))
+  matchDelimiters(tokens)
+  const pieces: InlinePiece[] = []
+  let bold = 0
+  let italic = 0
+  let strike = 0
+  for (let position = 0; position < tokens.length; position++) {
+    const item = tokens[position]
+    bold -= item.boldEnd; italic -= item.italicEnd; strike -= item.strikeEnd
+    if (item.kind == 'delimiter') {
+      if (item.remaining > 0) item.runs.push(newRun(item.symbol.repeat(item.remaining)))
+    }
+    if (item.kind == 'image') pieces.push({ run: newRun(''), src: item.src, alt: item.alt })
+    else {
+      for (let runIndex = 0; runIndex < item.runs.length; runIndex++) {
+        const run = item.runs[runIndex]
+        run.bold = run.bold || bold > 0; run.italic = run.italic || italic > 0; run.strike = run.strike || strike > 0
+        pieces.push({ run: run, src: '', alt: '' })
+      }
+    }
+    bold += item.boldStart; italic += item.italicStart; strike += item.strikeStart
+  }
+  return pieces
+}
+
+// 每个开放标记最多进出栈一次，不对未配对标记进行递归或全文回溯。
+function matchDelimiters(tokens: InlineToken[]): void {
+  const heads: number[] = [-1, -1, -1]
+  const stack: number[] = []
+  for (let index: number = 0; index < tokens.length; index++) {
+    const item = tokens[index]
+    if (item.kind != 'delimiter') continue
+    const group = item.symbol == '*' ? 0 : (item.symbol == '_' ? 1 : 2)
+    const minimum = group == 2 ? 2 : 1
+    while (item.close && item.remaining >= minimum && heads[group] >= 0) {
+      const openingIndex = heads[group]
+      const opening = tokens[openingIndex]
+      if (opening.remaining < minimum) break
+      // 交叉分隔符不形成交叉样式，移出的未闭合标记仍作为文字保留。
+      while (stack.length > 0 && stack[stack.length - 1] > openingIndex) {
+        const removed = tokens[stack[stack.length - 1]]
+        heads[removed.symbol == '*' ? 0 : (removed.symbol == '_' ? 1 : 2)] = removed.previous
+        stack.pop()
+      }
+      const size = item.remaining >= 2 && opening.remaining >= 2 ? 2 : 1
+      if (group == 2) { opening.strikeStart++; item.strikeEnd++ }
+      else if (size == 2) { opening.boldStart++; item.boldEnd++ }
+      else { opening.italicStart++; item.italicEnd++ }
+      opening.remaining -= size; item.remaining -= size
+      if (opening.remaining < minimum) { heads[group] = opening.previous; stack.pop() }
+    }
+    if (item.open && item.remaining >= minimum) {
+      item.previous = heads[group]; heads[group] = index; stack.push(index)
+    }
+  }
+}
+
+function appendRun(runs: MarkdownRun[], run: MarkdownRun): void {
+  if (run.text.length == 0) return
+  if (runs.length > 0) {
+    const previous = runs[runs.length - 1]
+    if (previous.bold == run.bold && previous.italic == run.italic && previous.strike == run.strike && previous.code == run.code && previous.href == run.href) { previous.text += run.text; return }
+  }
+  runs.push(run)
+}
+
+function inlineRuns(source: string): MarkdownRun[] {
+  const pieces = inlinePieces(source, 0)
+  const runs: MarkdownRun[] = []
+  for (let index: number = 0; index < pieces.length; index++) {
+    const piece = pieces[index]
+    if (piece.src.length > 0) piece.run.text = piece.alt
+    appendRun(runs, piece.run)
+  }
+  return runs
+}
+
+function pushBlock(blocks: MarkdownBlock[], block: MarkdownBlock): void {
+  block.id = 'md-' + blocks.length.toString()
+  blocks.push(block)
+}
+
+// 行内图片拆为独立图片块，前后正文及列表层级仍按原顺序保留。
+function pushContent(blocks: MarkdownBlock[], block: MarkdownBlock, source: string): void {
+  const pieces = inlinePieces(source, 0)
+  let current = block
+  let emitted = false
+  for (let index: number = 0; index < pieces.length; index++) {
+    const piece = pieces[index]
+    if (piece.src.length == 0) { appendRun(current.runs, piece.run); continue }
+    if (current.runs.length > 0) { pushBlock(blocks, current); emitted = true }
+    const image = newBlock('image', block.depth)
+    image.src = piece.src; image.alt = piece.alt
+    if (!emitted) image.marker = block.marker
+    pushBlock(blocks, image); emitted = true
+    current = newBlock(block.kind == 'list' ? 'paragraph' : block.kind, block.depth)
+    current.level = block.level
+  }
+  if (current.runs.length > 0 || !emitted) pushBlock(blocks, current)
+}
+
+function indentWidth(source: string): number {
+  let width = 0
+  for (let index: number = 0; index < source.length; index++) {
+    const char = source.charAt(index)
+    if (char == ' ') width++
+    else if (char == '\t') width += 4 - width % 4
+    else break
+  }
+  return width
+}
+
+function stripIndent(source: string, amount: number): string {
+  let width = 0
+  let index: number = 0
+  while (index < source.length && width < amount) {
+    const char = source.charAt(index)
+    if (char == ' ') width++
+    else if (char == '\t') width += 4 - width % 4
+    else break
+    index++
+  }
+  return (width > amount ? ' '.repeat(width - amount) : '') + source.slice(index)
+}
+
+// 引用只移除显式前缀，嵌套层数通过 depth 输出而非递归块树。
+function lineInfo(source: string): LineInfo {
+  let index: number = 0
+  let quotes = 0
+  let leading = 0
+  while (index < source.length) {
+    let next = index
+    while (source.charAt(next) == ' ' || source.charAt(next) == '\t') next++
+    if (source.charAt(next) != '>') break
+    leading += indentWidth(source.slice(index, next))
+    quotes++; index = next + 1
+    if (source.charAt(index) == ' ') index++
+  }
+  const text = source.slice(index)
+  return { text: text, quotes: quotes, indent: leading + indentWidth(text) }
+}
+
+function listInfo(source: string): ListInfo {
+  const value = source.trimStart()
+  let index: number = 0
+  const first = value.charAt(0)
+  if (first == '-' || first == '+' || first == '*') index = 1
+  else {
+    while (index < value.length && index < 9 && /[0-9]/.test(value.charAt(index))) index++
+    if (index == 0 || (value.charAt(index) != '.' && value.charAt(index) != ')')) return { found: false, marker: '', text: '', width: 0 }
+    index++
+  }
+  if (index < value.length && value.charAt(index) != ' ' && value.charAt(index) != '\t') return { found: false, marker: '', text: '', width: 0 }
+  const marker = value.slice(0, index)
+  const start = index
+  while (value.charAt(index) == ' ' || value.charAt(index) == '\t') index++
+  const width = index == start ? marker.length + 1 : indentWidth(' '.repeat(marker.length) + value.slice(start, index))
+  return { found: true, marker: marker, text: value.slice(index), width: width }
+}
+
+function fenceInfo(source: string): FenceInfo {
+  const indent = indentWidth(source)
+  const value = source.trimStart()
+  const symbol = value.charAt(0)
+  const empty: FenceInfo = { found: false, symbol: '', size: 0, language: '', indent: 0 }
+  if (indent > 3 || (symbol != '`' && symbol != '~')) return empty
+  let end = 0
+  while (value.charAt(end) == symbol) end++
+  if (end < 3) return empty
+  const tail = value.slice(end).trim()
+  if (symbol == '`' && tail.indexOf('`') >= 0) return empty
+  const words = tail.split(/\s+/)
+  return { found: true, symbol: symbol, size: end, language: words[0], indent: indent }
+}
+
+function closesFence(source: string, fence: FenceInfo): boolean {
+  if (indentWidth(source) > 3) return false
+  const value = source.trimStart()
+  let end = 0
+  while (value.charAt(end) == fence.symbol) end++
+  return end >= fence.size && value.slice(end).trim().length == 0
+}
+
+function isRule(source: string): boolean {
+  if (indentWidth(source) > 3) return false
+  const value = source.replace(/[ \t]/g, '')
+  if (value.length < 3 || '-*_'.indexOf(value.charAt(0)) < 0) return false
+  for (let index: number = 1; index < value.length; index++) if (value.charAt(index) != value.charAt(0)) return false
+  return true
+}
+
+function headingLevel(source: string): number {
+  if (indentWidth(source) > 3) return 0
+  const value = source.trimStart()
+  let end = 0
+  while (value.charAt(end) == '#') end++
+  return end > 0 && end <= 6 && (end == value.length || isSpace(value.charAt(end))) ? end : 0
+}
+
+// 分割表格时跳过转义管道和完整代码跨度，外侧管道不产生空列。
+function tableCells(source: string): string[] {
+  const value = source.trim()
+  const cells: string[] = []
+  const spans = tickSpans(value)
+  let tick: number = 0
+  let start: number = value.startsWith('|') ? 1 : 0
+  let index: number = start
+  let found = start == 1
+  while (index < value.length) {
+    if (value.charAt(index) == '\\' && isEscapable(value.charAt(index + 1))) { index += 2; continue }
+    while (tick < spans.length && spans[tick].start < index) tick++
+    if (tick < spans.length && spans[tick].start == index && spans[tick].close >= 0) { index = spans[spans[tick].close].end; tick = spans[tick].close + 1; continue }
+    if (value.charAt(index) == '|') { cells.push(value.slice(start, index).trim()); start = index + 1; found = true }
+    index++
+  }
+  if (!found) return []
+  if (start < value.length || !value.endsWith('|')) cells.push(value.slice(start).trim())
+  return cells
+}
+
+function tableDivider(cells: string[], size: number): boolean {
+  if (cells.length != size || size == 0) return false
+  for (let index: number = 0; index < cells.length; index++) if (!/^:?-{3,}:?$/.test(cells[index])) return false
+  return true
+}
+
+function tableRow(cells: string[], size: number): MarkdownRow {
+  const result: MarkdownRow = { cells: [] }
+  for (let index: number = 0; index < size; index++) result.cells.push(inlineRuns(index < cells.length ? cells[index] : ''))
+  return result
+}
+
+// 围栏正文仅去除所属容器前缀，代码中的引用、列表、链接均不再次解析。
+function containerText(source: string, quotes: number, indent: number): string {
+  let index: number = 0
+  for (let level = 0; level < quotes; level++) {
+    while (source.charAt(index) == ' ' || source.charAt(index) == '\t') index++
+    if (source.charAt(index) != '>') return source
+    index++
+    if (source.charAt(index) == ' ') index++
+  }
+  return stripIndent(source.slice(index), indent)
+}
+
+// 单次扫描块结构；没有全局缓存，流式输入每次都从当前正文生成完整结果。
+// CRLF 和单独 CR 统一为 LF；围栏正文保留实际存在的末尾换行，便于原样复制。
+export function parseMarkdown(source: string): MarkdownBlock[] {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n')
+  const blocks: MarkdownBlock[] = []
+  const lists: ListFrame[] = []
+  let pending: MarkdownBlock | null = null
+  let pendingLines: string[] = []
+  let pendingQuotes = 0
+  let blank = false
+  let index: number = 0
+  while (index < lines.length) {
+    const info = lineInfo(lines[index])
+    if (info.text.trim().length == 0) {
+      if (pending != null) { pushContent(blocks, pending, pendingLines.join('\n')); pending = null; pendingLines = [] }
+      blank = true; index++; continue
+    }
+    while (lists.length > 0) {
+      const frame = lists[lists.length - 1]
+      if (frame.quotes > info.quotes || (frame.quotes < info.quotes && info.indent < frame.content)) lists.pop()
+      else break
+    }
+    const list = listInfo(info.text)
+    let content = info.text
+    let containerIndent = 0
+    let depth = (info.quotes > 0 ? info.quotes - 1 : 0) + lists.length
+    if (lists.length > 0 && !list.found) {
+      if (blank || pending == null || info.quotes != pendingQuotes || headingLevel(content) > 0 || isRule(content) || fenceInfo(content).found) {
+        while (lists.length > 0 && info.indent < lists[lists.length - 1].content) lists.pop()
+      }
+      depth = (info.quotes > 0 ? info.quotes - 1 : 0) + lists.length
+      if (lists.length > 0 && info.indent >= lists[lists.length - 1].content) {
+        const frame = lists[lists.length - 1]
+        containerIndent = Math.max(0, frame.content - (info.indent - indentWidth(info.text)))
+        content = stripIndent(info.text, containerIndent)
+      }
+    }
+    const level = headingLevel(content)
+    let fence = fenceInfo(content)
+    const rule = isRule(content)
+    const listFence = list.found && !rule ? fenceInfo(list.text) : fenceInfo('')
+    if (listFence.found) fence = listFence
+    const header = tableCells(content)
+    let divider: string[] = []
+    if (index + 1 < lines.length) {
+      const next = lineInfo(lines[index + 1])
+      if (next.quotes == info.quotes) divider = tableCells(stripIndent(next.text, containerIndent))
+    }
+    const table = tableDivider(divider, header.length)
+    const setext = !blank && pending != null && (pending.kind == 'paragraph' || pending.kind == 'quote') && pendingQuotes == info.quotes && indentWidth(content) <= 3 && (/^=+\s*$/.test(content.trimStart()) || /^-+\s*$/.test(content.trimStart()))
+    if (setext && pending != null) {
+      pending.kind = 'heading'; pending.level = content.trimStart().startsWith('=') ? 1 : 2
+      pushContent(blocks, pending, pendingLines.join('\n')); pending = null; pendingLines = []; index++; blank = false; continue
+    }
+    const startsBlock = list.found || level > 0 || fence.found || rule || table || info.quotes != pendingQuotes || indentWidth(content) >= 4
+    if (pending != null && (!startsBlock && !blank)) { pendingLines.push(content); index++; continue }
+    if (pending != null) { pushContent(blocks, pending, pendingLines.join('\n')); pending = null; pendingLines = [] }
+    blank = false
+    if (fence.found) {
+      if (listFence.found) {
+        while (lists.length > 0 && info.indent <= lists[lists.length - 1].indent) lists.pop()
+        depth = info.quotes + lists.length
+        const width = info.indent + list.width
+        lists.push({ indent: info.indent, content: width, quotes: info.quotes })
+        containerIndent = Math.max(0, width - (info.indent - indentWidth(info.text)))
+      }
+      const block = newBlock('code', depth)
+      if (listFence.found) block.marker = list.marker
+      block.language = fence.language
+      const code: string[] = []
+      index++
+      while (index < lines.length) {
+        if (info.quotes > 0 && lineInfo(lines[index]).quotes < info.quotes && lines[index].trim().length > 0) break
+        const value = containerText(lines[index], info.quotes, containerIndent)
+        if (closesFence(value, fence)) { index++; break }
+        code.push(stripIndent(value, fence.indent) + (index < lines.length - 1 ? '\n' : '')); index++
+      }
+      block.code = code.join(''); pushBlock(blocks, block); continue
+    }
+    if (level > 0) {
+      const block = newBlock('heading', depth); block.level = level
+      const text = content.trimStart().slice(level).trim().replace(/[ \t]+#+[ \t]*$/, '')
+      pushContent(blocks, block, text); index++; continue
+    }
+    if (rule) { pushBlock(blocks, newBlock('rule', depth)); index++; continue }
+    if (table) {
+      const block = newBlock('table', depth)
+      block.rows.push(tableRow(header, header.length)); index += 2
+      while (index < lines.length) {
+        const rowInfo = lineInfo(lines[index])
+        if (rowInfo.quotes != info.quotes || rowInfo.text.trim().length == 0) break
+        const cells = tableCells(stripIndent(rowInfo.text, containerIndent))
+        if (cells.length == 0) break
+        block.rows.push(tableRow(cells, header.length)); index++
+      }
+      pushBlock(blocks, block); continue
+    }
+    if (list.found) {
+      while (lists.length > 0 && info.indent <= lists[lists.length - 1].indent) lists.pop()
+      depth = info.quotes + lists.length
+      lists.push({ indent: info.indent, content: info.indent + list.width, quotes: info.quotes })
+      pending = newBlock('list', depth); pending.marker = list.marker
+      pendingLines = [list.text]; pendingQuotes = info.quotes; index++; continue
+    }
+    if (indentWidth(content) >= 4) {
+      const block = newBlock('code', depth)
+      const code: string[] = [stripIndent(content, 4)]
+      index++
+      while (index < lines.length) {
+        const next = lineInfo(lines[index])
+        if (next.quotes != info.quotes || (next.text.trim().length > 0 && indentWidth(next.text) < containerIndent + 4)) break
+        code.push(stripIndent(next.text, containerIndent + 4)); index++
+      }
+      while (code.length > 0 && code[code.length - 1].length == 0) code.pop()
+      block.code = code.join('\n'); pushBlock(blocks, block); continue
+    }
+    pending = newBlock(info.quotes > 0 ? 'quote' : 'paragraph', depth)
+    pendingLines = [content.trim()]; pendingQuotes = info.quotes; index++
+  }
+  if (pending != null) pushContent(blocks, pending, pendingLines.join('\n'))
+  return blocks
+}

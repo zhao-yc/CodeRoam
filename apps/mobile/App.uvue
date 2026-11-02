@@ -1,0 +1,25 @@
+<script lang="uts">
+import { bridge } from './services/bridge.uts'
+export default {
+  onLaunch() { bridge.restore() },
+  onShow() { bridge.resume() },
+  onHide() { bridge.background() }
+}
+</script>
+
+<style>
+.page { background-color: #f8f8f3; }
+.button-primary, .button-secondary, .button-danger { font-size: 15px; border-radius: 14px; }
+.button-primary { background-color: #285c49; color: #ffffff; }
+.button-secondary { background-color: #e8eee6; color: #202c28; }
+.button-danger { background-color: #fff0ee; color: #a13830; }
+.button-primary, .button-secondary, .button-danger { align-items: center; justify-content: center; }
+/* #ifdef WEB */
+/* Web 显式使用系统无衬线字体，避免中文回落到浏览器的宋体默认值。 */
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+button { display: flex; }
+button::after { border: none; }
+/* 禁用态仍由外层表达，透明点击层不能盖住底下的图标。 */
+.page .action-hitbox[disabled] { background-color: transparent; }
+/* #endif */
+</style>

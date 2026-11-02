@@ -1,0 +1,131 @@
+import { ChatMessage, Conversation, ConversationTurn, Approval, QuestionGroup } from './bridge.uts'
+
+export type TimelineEntry = { id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string }
+
+// 只有同一轮的完成状态、报告和过程阶段都明确时，才允许默认隐藏过程。
+export function reportTurnIds(snapshot: Conversation | null): string[] {
+  if (snapshot == null) return [] as string[]
+  const result = [] as string[]
+  const messages = snapshot.messages
+  const turns = snapshot.turns ?? [] as ConversationTurn[]
+  turns.forEach((turn: ConversationTurn) => {
+    if (turn.turnId.length == 0 || turn.status != 'completed' || snapshot.activeTurnId == turn.turnId) return
+    if (snapshot.approvals.some((approval: Approval): boolean => (approval.turnId ?? '').length == 0 || approval.turnId == turn.turnId)) return
+    if (snapshot.questionGroups.some((group: QuestionGroup): boolean => group.state == 'pending' && ((group.turnId ?? '').length == 0 || group.turnId == turn.turnId))) return
+    const group = messages.filter((message: ChatMessage): boolean => message.turnId == turn.turnId)
+    if (group.length == 0) return
+    // 分离的同编号片段不能重排合并；缺少阶段的旧回复继续完整展示。
+    const first = messages.findIndex((message: ChatMessage): boolean => message.turnId == turn.turnId)
+    if (messages.slice(first, first + group.length).some((message: ChatMessage): boolean => message.turnId != turn.turnId)) return
+    if (group.some((message: ChatMessage): boolean => message.role == 'assistant' && message.phase != 'commentary' && message.phase != 'final_answer')) return
+    let start = 0
+    while (start < group.length && group[start].role == 'user' && group[start].kind != 'userInputResponse' && group[start].kind != 'steeringUserMessage') start++
+    const finalIndex = group.findIndex((message: ChatMessage): boolean => message.role == 'assistant' && message.phase == 'final_answer')
+    if (finalIndex > start) result.push(turn.turnId)
+  })
+  return result
+}
+
+// 耗时只使用桌面明确提供的毫秒值，不以手机接收或打开页面的时间估算。
+export function reportProcessLabel(durationMs: number | null, expanded: boolean): string {
+  let duration = ''
+  if (durationMs != null && durationMs >= 0 && durationMs <= Number.MAX_SAFE_INTEGER) {
+    const seconds = Math.floor(durationMs / 1000)
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const remaining = seconds % 60
+    duration = seconds == 0 ? '不足1秒' : (hours > 0 ? hours + '小时' : '') + (minutes > 0 ? minutes + '分钟' : '') + (remaining > 0 ? remaining + '秒' : '')
+  }
+  return (duration.length > 0 ? '用时 ' + duration + ' · ' : '') + (expanded ? '收起执行过程' : '查看执行过程')
+}
+
+// 扁平化显示容器复用现有正文和命令详情，展开后严格保持原消息顺序。
+export function reportTimeline(snapshot: Conversation | null, expandedTurns: string[]): TimelineEntry[] {
+  if (snapshot == null) return [] as TimelineEntry[]
+  const collapsible = reportTurnIds(snapshot)
+  const entries = [] as TimelineEntry[]
+  const messages = snapshot.messages
+  let cursor = 0
+  while (cursor < messages.length) {
+    let end = cursor + 1
+    const turnId = messages[cursor].turnId
+    while (end < messages.length && messages[end].turnId == turnId) end++
+    const group = messages.slice(cursor, end)
+    if (collapsible.indexOf(turnId) < 0) {
+      entries.push(...executionTimeline(group))
+    } else {
+      let start = 0
+      while (start < group.length && group[start].role == 'user' && group[start].kind != 'userInputResponse' && group[start].kind != 'steeringUserMessage') start++
+      const finalIndex = group.findIndex((message: ChatMessage): boolean => message.role == 'assistant' && message.phase == 'final_answer')
+      const expanded = expandedTurns.indexOf(turnId) >= 0
+      const turn = (snapshot.turns ?? [] as ConversationTurn[]).find((item: ConversationTurn): boolean => item.turnId == turnId)
+      entries.push(...executionTimeline(group.slice(0, start)))
+      entries.push({ id: 'process:' + turnId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(turn?.durationMs ?? null, expanded) })
+      if (expanded) entries.push(...executionTimeline(group.slice(start, finalIndex)))
+      entries.push(...executionTimeline(group.slice(finalIndex)))
+    }
+    cursor = end
+  }
+  return entries
+}
+
+// 仅合并同轮次的相邻操作，正文始终保留原来的时间线位置。
+export function executionTimeline(messages: ChatMessage[]): TimelineEntry[] {
+  const entries = [] as TimelineEntry[]
+  messages.forEach((message: ChatMessage) => {
+    if (message.role == 'user' || message.role == 'assistant') {
+      entries.push({ id: message.id, role: message.role, text: message.text, imageCount: message.imageCount ?? 0, turnId: message.turnId, executions: [] as ChatMessage[], label: '' })
+      return
+    }
+    const previous = entries.length > 0 ? entries[entries.length - 1] : null
+    if (previous != null && previous.role == 'execution' && previous.turnId == message.turnId) {
+      previous.executions.push(message)
+      previous.label = executionGroupLabel(previous.executions)
+    } else {
+      const executions = [message] as ChatMessage[]
+      entries.push({ id: 'execution:' + message.id, role: 'execution', text: '', turnId: message.turnId, executions, label: executionGroupLabel(executions) })
+    }
+  })
+  return entries
+}
+
+// 摘要只描述记录类型，不把整轮状态当作单条命令的执行结果。
+export function executionGroupLabel(messages: ChatMessage[]): string {
+  const files = messages.some((message: ChatMessage): boolean => message.kind == 'fileChange')
+  const commands = messages.some((message: ChatMessage): boolean => message.kind == 'commandExecution')
+  if (files && commands) return '编辑了文件运行了命令'
+  if (files) return '编辑了文件'
+  if (commands) return '运行了命令'
+  return '执行记录'
+}
+
+// 旧快照缺少摘要时只显示类型，避免将截断日志的第一行误认成命令。
+export function executionTitle(message: ChatMessage): string {
+  const summary = (message.summary ?? '').trim()
+  if (message.kind == 'fileChange') {
+    const parts = summary.split('\\').join('/').split('/')
+    return summary.length > 0 ? parts[parts.length - 1] : '文件更改'
+  }
+  if (message.kind == 'commandExecution') return summary.length > 0 ? summary : '命令执行'
+  return '执行记录'
+}
+
+// 保存组内全部记录编号，使历史窗口移除组首后，剩余记录仍保持展开。
+export function executionGroupExpanded(entry: TimelineEntry, expandedIds: string[]): boolean {
+  return entry.executions.some((message: ChatMessage): boolean => expandedIds.indexOf(message.id) >= 0)
+}
+
+// 同步后补齐已展开组的新记录，并清理已离开历史窗口的编号。
+export function retainExpandedExecutions(entries: TimelineEntry[], expandedIds: string[]): string[] {
+  const retained = [] as string[]
+  entries.forEach((entry: TimelineEntry) => {
+    if (executionGroupExpanded(entry, expandedIds)) entry.executions.forEach((message: ChatMessage) => { retained.push(message.id) })
+  })
+  return retained
+}
+
+// 每组独立开关；收起只移除本组编号，不影响其他已展开的列表。
+export function toggleExecutionGroup(entry: TimelineEntry, expandedIds: string[]): string[] {
+  if (executionGroupExpanded(entry, expandedIds)) return expandedIds.filter((id: string): boolean => !entry.executions.some((message: ChatMessage): boolean => message.id == id))
+  return expandedIds.concat(entry.executions.map((message: ChatMessage): string => message.id))
+}

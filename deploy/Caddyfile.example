@@ -1,0 +1,17 @@
+# 替换示例域名和目录；本示例不会提供他人的部署配置。
+relay.example.com {
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+    }
+    @transport path /ws /session /healthz
+    handle @transport {
+        reverse_proxy 127.0.0.1:18010
+    }
+    handle {
+        root * /srv/codex-mobile/mobile-web
+        try_files {path} /index.html
+        file_server
+    }
+}

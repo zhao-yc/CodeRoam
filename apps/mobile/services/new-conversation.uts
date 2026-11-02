@@ -1,0 +1,181 @@
+import { reactive } from 'vue'
+import { bridge, connection } from './bridge.uts'
+import { ExecutionSettings } from './execution-settings.uts'
+import { DraftImage, DraftFile, saveDraft, saveDraftImages, saveDraftFiles, rememberSubmission, settleSubmission } from './composer.uts'
+import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
+
+export type NewProject = { id: string, label: string, cwd: string }
+export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], settings: ExecutionSettings | null, settingsChanged: boolean, settingsApplied: boolean, threadId: string, pendingAction: string, pendingCommandId: string }
+type CreationReceipt = { threadId: string, pendingAction: string, pendingCommandId: string }
+const drafts = reactive<NewDraft[]>([])
+const submitting = new Set<string>()
+
+// 只持久化项目、会话和待核对操作编号，文字与附件正文始终留在运行期内存。
+function receiptKey(hostId: string, projectId: string): string { return 'codex-mobile-new-' + hostId + '-' + projectId }
+export function saveCreationReceipt(draft: NewDraft) {
+  uni.setStorageSync(receiptKey(draft.hostId, draft.projectId), JSON.stringify({ threadId: draft.threadId, pendingAction: draft.pendingAction, pendingCommandId: draft.pendingCommandId }))
+}
+
+export function newDraft(hostId: string, projectId: string): NewDraft {
+  const found = drafts.find((draft: NewDraft): boolean => draft.hostId == hostId && draft.projectId == projectId)
+  if (found != null) return found
+  let receipt: CreationReceipt | null = null
+  try { const saved = uni.getStorageSync(receiptKey(hostId, projectId)); if (typeof saved == 'string' && saved.length > 0) receipt = JSON.parse<CreationReceipt>(saved) } catch (_) {}
+  if (receipt != null && (typeof receipt.threadId != 'string' || typeof receipt.pendingAction != 'string' || typeof receipt.pendingCommandId != 'string')) receipt = null
+  // 重新进入页面只恢复待核对操作；普通历史编号不能成为新对话的发送目标。
+  if (receipt != null && receipt.pendingCommandId.length == 0) receipt = null
+  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], settings: null, settingsChanged: false, settingsApplied: false, threadId: receipt?.threadId ?? '', pendingAction: receipt?.pendingAction ?? '', pendingCommandId: receipt?.pendingCommandId ?? '' }
+  drafts.push(draft)
+  return drafts[drafts.length - 1]
+}
+
+// 解除执行目标时保留输入与设置；附件需要重新上传到下一条新会话。
+function detachCreatedThread(draft: NewDraft) {
+  draft.threadId = ''; draft.pendingAction = ''; draft.settingsApplied = false
+  for (const file of draft.files) { file.status = 'local'; file.progress = 0; file.error = '' }
+}
+
+// 每次打开新建编辑区开始独立流程，尚未确认的写请求必须先核对，不能丢弃或重放。
+export function beginNewConversation() {
+  for (const draft of drafts) {
+    if (draft.pendingCommandId.length > 0 || submitting.has(draft.hostId + ':' + draft.projectId)) continue
+    detachCreatedThread(draft)
+    try { uni.removeStorageSync(receiptKey(draft.hostId, draft.projectId)) } catch (_) { /* 首次发送前仍会验证存储可写，旧的普通编号也不会被恢复。 */ }
+  }
+}
+
+// 连接或首次项目读取完成时接住未分配草稿，显式切换项目则保留各自草稿。
+export function assignUnselectedDraft(hostId: string, projectId: string) {
+  const source = newDraft(hostId, '')
+  const target = newDraft(hostId, projectId)
+  if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.threadId.length == 0) {
+    target.text = source.text; target.images = source.images; target.files = source.files
+    source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]
+  }
+}
+
+function assertDestination(draft: NewDraft) {
+  if (connection.hostId != draft.hostId || !connection.connected || !connection.computers.some((computer): boolean => computer.id == draft.hostId && computer.online)) throw new Error('电脑连接已变化，请重新连接后发送')
+}
+
+// 每一步写入绑定本流程的会话与账本；未知结果只能核对，不能自动重放。
+async function writeStep(draft: NewDraft, action: string, method: string, params: UTSJSONObject): Promise<UTSJSONObject> {
+  assertDestination(draft)
+  const request = bridge.request(method, params, true)
+  draft.pendingAction = action; draft.pendingCommandId = bridge.pendingCommand(draft.hostId, action == 'create' ? '' : draft.threadId); saveCreationReceipt(draft)
+  try {
+    const result = await request
+    if (action == 'create') draft.threadId = result.getString('threadId') ?? ''
+    if (action == 'settings') draft.settingsApplied = true
+    draft.pendingAction = ''; draft.pendingCommandId = ''; saveCreationReceipt(draft)
+    return result
+  } catch (error) {
+    if (bridge.pendingCommand(draft.hostId, action == 'create' ? '' : draft.threadId).length == 0) { draft.pendingAction = ''; draft.pendingCommandId = ''; saveCreationReceipt(draft) }
+    throw error
+  }
+}
+
+// 文件在创建真实会话后才上传，选择附件和编辑不会提前创建电脑会话。
+async function uploadNewFiles(draft: NewDraft) {
+  for (const file of draft.files) {
+    if (file.status == 'ready') continue
+    assertDestination(draft)
+    if (connection.snapshot?.supportsAttachments != true) throw new Error('请更新电脑连接服务后发送文件附件')
+    if (file.data.length == 0) file.data = await readFileBase64(file.source)
+    file.status = 'uploading'; file.error = ''
+    try {
+      const started = await bridge.request('attachment.begin', { threadId: draft.threadId, uploadId: file.id, name: file.name, size: file.size })
+      let index = started.getNumber('nextChunk') ?? 0
+      const length = FILE_CHUNK_BYTES * 4 / 3
+      while (index * length < file.data.length) {
+        assertDestination(draft)
+        const result = await bridge.request('attachment.chunk', { threadId: draft.threadId, uploadId: file.id, index, data: file.data.slice(index * length, (index + 1) * length) })
+        index = result.getNumber('nextChunk') ?? index + 1
+        file.progress = Math.min(99, Math.floor((result.getNumber('received') ?? 0) * 100 / file.size))
+      }
+      assertDestination(draft)
+      await bridge.request('attachment.finish', { threadId: draft.threadId, uploadId: file.id })
+      file.status = 'ready'; file.progress = 100
+    } catch (error) { file.status = 'paused'; file.error = (error as Error).message; throw error }
+  }
+}
+
+// 确认首条消息后再清空新建草稿，已创建编号在失败重试时继续使用。
+export function finishNewDraft(draft: NewDraft) {
+  draft.text = ''; draft.images = [] as DraftImage[]; draft.files = [] as DraftFile[]
+  draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''; draft.settingsApplied = false
+  uni.removeStorageSync(receiptKey(draft.hostId, draft.projectId))
+}
+
+export async function sendNewConversation(draft: NewDraft, progress: (message: string) => void): Promise<string> {
+  const key = draft.hostId + ':' + draft.projectId
+  if (submitting.has(key)) throw new Error('正在提交，请勿重复发送')
+  submitting.add(key)
+  try { return await submitNewConversation(draft, progress) }
+  finally { submitting.delete(key) }
+}
+
+// 创建、接管、设置、上传和首条发送顺序执行，任一步失败都保留可继续的草稿。
+async function submitNewConversation(draft: NewDraft, progress: (message: string) => void): Promise<string> {
+  assertDestination(draft)
+  if (draft.pendingCommandId.length > 0 || bridge.pendingCommand(draft.hostId, draft.threadId).length > 0) throw new Error('请先核对上次操作结果')
+  const text = draft.text.trim()
+  if (text.length == 0 && draft.images.length == 0 && draft.files.length == 0) throw new Error('请先输入内容或添加附件')
+  if (draft.projectId.length == 0) throw new Error('请先选择项目')
+  // 先确认设备能保存核对编号，避免浏览器禁用存储时先执行创建。
+  try { saveCreationReceipt(draft) } catch (_) { throw new Error('无法保存新对话状态，请检查当前设备存储权限') }
+  if (draft.threadId.length == 0) {
+    progress('正在创建会话…')
+    const title = text.split('\n')[0].slice(0, 60)
+    await writeStep(draft, 'create', 'thread.create', { projectId: draft.projectId, title: title.length > 0 ? title : '新对话' })
+    if (draft.threadId.length == 0) throw new Error('未取得会话编号，请先核对创建结果')
+  }
+  progress('正在连接电脑会话…')
+  assertDestination(draft)
+  await bridge.openCreatedThread(draft.threadId)
+  assertDestination(draft)
+  // 同一编辑流程的失败重试也不能向已被电脑端使用的会话发送新消息。
+  const snapshot = connection.snapshot
+  if (snapshot != null && snapshot.threadId == draft.threadId && (snapshot.messages.length > 0 || snapshot.activeTurnId.length > 0 || snapshot.status == 'active')) {
+    detachCreatedThread(draft); saveCreationReceipt(draft)
+    throw new Error('原会话已被使用，已解除关联；请再次发送以创建新对话')
+  }
+  if (draft.settingsChanged && !draft.settingsApplied && draft.settings != null) {
+    if (connection.snapshot?.supportsExecutionSettings != true) throw new Error('请更新电脑连接服务后使用所选模型或计划模式')
+    progress('正在应用执行设置…')
+    await writeStep(draft, 'settings', 'thread.settings.update', { threadId: draft.threadId, changes: { model: draft.settings!.model, effort: draft.settings!.effort, serviceTier: draft.settings!.serviceTier, mode: draft.settings!.mode } })
+  }
+  if (draft.images.length > 0 && connection.snapshot?.supportsImages != true) throw new Error('请更新电脑连接服务后发送图片')
+  progress('正在准备附件…')
+  await uploadNewFiles(draft)
+  const threadId = draft.threadId
+  saveDraft(draft.hostId, threadId, text); saveDraftImages(draft.hostId, threadId, draft.images.slice()); saveDraftFiles(draft.hostId, threadId, draft.files.slice())
+  progress('正在发送…')
+  const request = writeStep(draft, 'send', 'turn.send', { threadId, text, images: draft.images.map((image: DraftImage): string => image.src), attachments: draft.files.map((file: DraftFile): string => file.id), expectedTurnId: '' })
+  const commandId = draft.pendingCommandId
+  rememberSubmission(draft.hostId, threadId, commandId, text)
+  try { await request; settleSubmission(draft.hostId, commandId, true); finishNewDraft(draft); return threadId }
+  catch (error) { if (bridge.pendingCommand(draft.hostId, threadId) != commandId) settleSubmission(draft.hostId, commandId, false); throw error }
+}
+
+// 核对可恢复创建编号和发送结果；不会顺带执行后续步骤。
+export async function checkNewConversation(draft: NewDraft): Promise<string> {
+  const action = draft.pendingAction, commandId = draft.pendingCommandId
+  const threadId = action == 'create' ? '' : draft.threadId
+  if (commandId.length == 0 || commandId != bridge.pendingCommand(draft.hostId, threadId)) throw new Error('上次操作属于其他会话，请回到原会话核对')
+  const result = await bridge.checkPending(threadId)
+  const state = result.getString('state') ?? ''
+  const receipt = result['result'] as UTSJSONObject | null
+  const failure = result['error'] as UTSJSONObject | null
+  if (action == 'create' && receipt != null) draft.threadId = receipt.getString('threadId') ?? draft.threadId
+  if (state != 'done' && state != 'not_found') { saveCreationReceipt(draft); throw new Error('结果仍待确认，请查看电脑端会话') }
+  draft.pendingAction = ''; draft.pendingCommandId = ''
+  if (state == 'done' && failure == null && action == 'settings') draft.settingsApplied = true
+  saveCreationReceipt(draft)
+  if (action == 'send') {
+    settleSubmission(draft.hostId, commandId, state == 'done' && failure == null)
+    if (state == 'done' && failure == null) { const threadId = draft.threadId; finishNewDraft(draft); return threadId }
+  }
+  if (failure != null) throw new Error(failure.getString('message') ?? '操作未成功，草稿已保留')
+  return ''
+}

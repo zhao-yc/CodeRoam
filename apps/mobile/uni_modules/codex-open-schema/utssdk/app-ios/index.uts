@@ -1,0 +1,13 @@
+import { UIApplication } from 'UIKit'
+import { URL } from 'Foundation'
+import { OpenSchema } from '../interface.uts'
+
+// 通过系统浏览器打开网页，不改变客户端页面路由。
+export const openSchema: OpenSchema = function (url: string): boolean {
+  const lower = url.toLowerCase()
+  if (!lower.startsWith('https://') && !lower.startsWith('http://')) return false
+  const uri = new URL(string = url)
+  if (uri == null || !UIApplication.shared.canOpenURL(uri!)) return false
+  UIApplication.shared.open(uri!)
+  return true
+}

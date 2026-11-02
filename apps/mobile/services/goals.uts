@@ -1,0 +1,21 @@
+export type ThreadGoal = { objective: string, status: string, tokenBudget: number | null, tokensUsed: number, timeUsedSeconds: number, createdAt: number, updatedAt: number }
+
+// 目标状态独立于当前轮次，不能用任务是否运行来猜测目标是否完成。
+export function goalStatusLabel(status: string): string {
+  if (status == 'active') return '进行中'
+  if (status == 'paused') return '已暂停'
+  if (status == 'blocked') return '阻塞待继续'
+  if (status == 'usageLimited') return '用量受限'
+  if (status == 'budgetLimited') return '预算受限'
+  if (status == 'complete') return '已完成'
+  return '状态未知'
+}
+
+export function goalCanResume(status: string): boolean { return status == 'paused' || status == 'blocked' || status == 'usageLimited' || status == 'budgetLimited' }
+
+// 用量来自电脑快照；不在手机本地累加或重置统计。
+export function goalUsageLabel(goal: ThreadGoal): string {
+  const minutes = Math.floor(goal.timeUsedSeconds / 60)
+  const time = minutes >= 60 ? Math.floor(minutes / 60) + '小时' + (minutes % 60) + '分钟' : minutes + '分钟'
+  return '已用 ' + goal.tokensUsed + (goal.tokenBudget != null ? ' / ' + goal.tokenBudget : '') + ' Token · ' + time
+}

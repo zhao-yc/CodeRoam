@@ -1,0 +1,10 @@
+{
+  "id": "codex-open-schema",
+  "displayName": "系统浏览器打开网页",
+  "version": "1.0.0",
+  "description": "以 UTS openSchema 方式打开消息中的 HTTP 和 HTTPS 网页",
+  "keywords": ["UTS", "浏览器"],
+  "engines": { "HBuilderX": "^5.34.0" },
+  "dcloudext": { "type": "uts" },
+  "uni_modules": { "dependencies": [], "encrypt": [], "platforms": { "client": { "App": { "app-android": "y", "app-ios": "y" } } } }
+}

@@ -1,0 +1,113 @@
+import { reactive, watch } from 'vue'
+import { bridge, connection, liveThreadLists, ThreadListUpdate, Computer, ThreadSummary } from './bridge.uts'
+
+export type ComputerThreads = { hostId: string, label: string, online: boolean, threads: ThreadSummary[], loading: boolean, loaded: boolean, error: string, revision: number, subscribed?: boolean }
+export type ComputerThread = { key: string, hostId: string, hostLabel: string, online: boolean, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number }
+type ListQueueEntry = { hostId: string, configuration: number, revision: number }
+type ThreadListState = { configuration: number, computers: ComputerThreads[] }
+export const threadList = reactive<ThreadListState>({ configuration: -1, computers: [] as ComputerThreads[] })
+const queue = [] as ListQueueEntry[]
+let activeReads = 0
+
+// 原生归档成功后移除缓存，并使归档前发出的列表回执失效，防止会话重新出现。
+export function removeArchivedThread(hostId: string, threadId: string) {
+  const computers = threadList.computers as ComputerThreads[]
+  const entry = computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
+  if (entry == null) return
+  entry.revision++; entry.loading = false; entry.subscribed = false
+  entry.threads = entry.threads.filter((thread: ThreadSummary): boolean => thread.id != threadId)
+}
+
+// 配对变化与授权撤回立即清除旧数据；临时离线保留当前运行期内的列表缓存。
+export function syncThreadComputers() {
+  if (!connection.configured || threadList.configuration != connection.configurationRevision) {
+    threadList.configuration = connection.configurationRevision
+    threadList.computers = [] as ComputerThreads[]
+    queue.splice(0, queue.length)
+  }
+  if (!connection.configured) return
+  threadList.computers = connection.computers.map((computer: Computer): ComputerThreads => {
+    const existing = threadList.computers.find((entry: ComputerThreads): boolean => entry.hostId == computer.id)
+    if (existing == null) return { hostId: computer.id, label: computer.label, online: computer.online, threads: [] as ThreadSummary[], loading: false, loaded: false, error: '', revision: 0 } as ComputerThreads
+    if (existing.online && !computer.online) { existing.revision++; existing.loading = false; existing.subscribed = false }
+    existing.label = computer.label; existing.online = computer.online
+    return existing
+  })
+}
+
+// 汇总记录携带电脑归属，同号会话不会合并；搜索仍限定在当前读取的最近会话中。
+export function visibleComputerThreads(hostId: string, search: string): ComputerThread[] {
+  const query = search.trim().toLowerCase()
+  const result = [] as ComputerThread[]
+  threadList.computers.forEach((computer: ComputerThreads) => {
+    if (hostId.length > 0 && computer.hostId != hostId) return
+    computer.threads.forEach((thread: ThreadSummary) => {
+      if (query.length > 0 && thread.title.toLowerCase().indexOf(query) < 0 && thread.cwd.toLowerCase().indexOf(query) < 0) return
+      result.push({ key: computer.hostId + ':' + thread.id, hostId: computer.hostId, hostLabel: computer.label, online: connection.connected && computer.online, id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt, hasUnreadTurn: thread.hasUnreadTurn, activeFlags: thread.activeFlags, status: thread.status, activeTurnId: thread.activeTurnId, approvalCount: thread.approvalCount, pendingQuestionCount: thread.pendingQuestionCount } as ComputerThread)
+    })
+  })
+  return result.sort((left: ComputerThread, right: ComputerThread): number => {
+    const difference = right.updatedAt - left.updatedAt
+    return difference != 0 ? difference : left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+  })
+}
+
+// 只在没有可展示结果且仍有首次读取时显示主加载态，后台刷新保留缓存。
+export function computerThreadsLoading(hostId: string): boolean {
+  if (!connection.configured) return false
+  const entries = threadList.computers.filter((entry: ComputerThreads): boolean => hostId.length == 0 || entry.hostId == hostId)
+  if (entries.some((entry: ComputerThreads): boolean => entry.threads.length > 0)) return false
+  if (connection.error.length == 0 && !entries.some((entry: ComputerThreads): boolean => entry.loaded) && (connection.status == '正在连接' || connection.status == '正在重新连接')) return true
+  if (entries.some((entry: ComputerThreads): boolean => entry.online && !entry.loaded && entry.loading)) return true
+  return entries.length == 0 && connection.error.length == 0 && (connection.status == '正在连接' || connection.status == '正在重新连接')
+}
+
+// 队列全局最多四个请求；每台电脑只保留一个在途读取，不占用写操作归属。
+function drainThreadQueue() {
+  while (activeReads < 4 && queue.length > 0) {
+    const next = queue.shift()!
+    const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == next.hostId)
+    if (entry == null || !entry.online || next.configuration != threadList.configuration || next.revision != entry.revision || !connection.connected) continue
+    const revision = entry.revision
+    const pushedRevision = liveThreadLists.updates.find((item: ThreadListUpdate): boolean => item.hostId == entry.hostId)?.revision ?? -1
+    activeReads++
+    bridge.readComputerThreads(entry.hostId).then((result: UTSJSONObject) => {
+      if (next.configuration == threadList.configuration && threadList.computers.some((item: ComputerThreads): boolean => item === entry) && entry.revision == revision) {
+        const pushed = liveThreadLists.updates.find((item: ThreadListUpdate): boolean => item.hostId == entry.hostId)
+        entry.threads = pushed != null && pushed.revision > pushedRevision ? pushed.threads : JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[]
+        entry.subscribed = true
+        entry.loaded = true; entry.loading = false; entry.error = ''
+      }
+      activeReads--; drainThreadQueue()
+    }, (reason: Error) => {
+      if (next.configuration == threadList.configuration && threadList.computers.some((item: ComputerThreads): boolean => item === entry) && entry.revision == revision) { entry.loading = false; entry.error = reason.message }
+      activeReads--; drainThreadQueue()
+    })
+  }
+}
+
+export function refreshComputerThreads(hostId: string = '') {
+  syncThreadComputers()
+  if (!connection.connected) return
+  threadList.computers.forEach((entry: ComputerThreads) => {
+    if ((hostId.length == 0 || entry.hostId == hostId) && entry.online && !entry.loading && entry.subscribed != true) {
+      entry.loading = true; entry.error = ''; entry.revision++
+      queue.push({ hostId: entry.hostId, configuration: threadList.configuration, revision: entry.revision } as ListQueueEntry)
+    }
+  })
+  drainThreadQueue()
+}
+
+// 断线使旧回执失效，保留内容；恢复连接后重新订阅并取得全量快照。
+export function disconnectThreadLists() {
+  queue.splice(0, queue.length)
+  threadList.computers.forEach((entry: ComputerThreads) => { entry.revision++; entry.loading = false; entry.subscribed = false })
+}
+
+// 即使列表页隐藏也消费推送，返回时直接显示内存中的最新状态。
+watch((): string => liveThreadLists.updates.map((item: ThreadListUpdate): string => item.hostId + ':' + item.revision).join('|'), () => {
+  liveThreadLists.updates.forEach((update: ThreadListUpdate) => {
+    const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == update.hostId)
+    if (entry != null) { entry.threads = update.threads; entry.loaded = true; entry.error = '' }
+  })
+})

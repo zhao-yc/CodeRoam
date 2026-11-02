@@ -1,0 +1,11 @@
+**
+!package.json
+!package-lock.json
+!packages/
+!packages/protocol/
+!packages/protocol/**
+!apps/
+!apps/relay/
+!apps/relay/**
+!deploy/
+!deploy/Dockerfile

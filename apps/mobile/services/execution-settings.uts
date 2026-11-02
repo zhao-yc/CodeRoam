@@ -1,0 +1,22 @@
+export type ExecutionSettings = { model: string, effort: string, serviceTier: string, mode: string }
+export type SpeedOption = { id: string, label: string, description: string }
+export type ModelOption = { id: string, label: string, defaultEffort: string, efforts: string[], speeds: SpeedOption[], supportsImages: boolean }
+export type SettingsResponse = { settings: ExecutionSettings, models: ModelOption[] }
+
+// 仅翻译名称，实际可选档位与排序始终来自当前电脑的模型目录。
+export function effortLabel(effort: string): string {
+  if (effort == 'none') return '无'
+  if (effort == 'minimal') return '最小'
+  if (effort == 'low') return '低'
+  if (effort == 'medium') return '中'
+  if (effort == 'high') return '高'
+  if (effort == 'xhigh') return '极高'
+  if (effort == 'max') return 'Max'
+  if (effort == 'ultra') return 'Ultra'
+  if (effort == 'persistent') return '持续'
+  return effort
+}
+
+export function shortModelLabel(model: string): string {
+  return model.startsWith('GPT-') ? model.slice(4) : model.startsWith('gpt-') ? model.slice(4) : model
+}

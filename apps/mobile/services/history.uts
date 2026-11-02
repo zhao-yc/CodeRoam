@@ -1,0 +1,32 @@
+import { ChatMessage, Conversation, ConversationTurn } from './bridge.uts'
+
+export type HistoryPage = { messages: ChatMessage[], turns: ConversationTurn[], cursor: string, hasMore: boolean }
+
+// 以共同消息编号对齐两份时间线；实时值覆盖旧值，新消息插到下一个已知锚点之前。
+export function mergeHistoryMessages(older: ChatMessage[], newer: ChatMessage[]): ChatMessage[] {
+  const result = older.slice()
+  newer.forEach((message: ChatMessage, index: number) => {
+    const existing = result.findIndex((entry: ChatMessage): boolean => entry.id == message.id)
+    if (existing >= 0) { result.splice(existing, 1, message); return }
+    let insertion = result.length
+    for (let next = index + 1; next < newer.length; next++) {
+      const anchor = result.findIndex((entry: ChatMessage): boolean => entry.id == newer[next].id)
+      if (anchor >= 0) { insertion = anchor; break }
+    }
+    result.splice(insertion, 0, message)
+  })
+  return result
+}
+
+// 历史仅补充消息与轮次；当前执行、审批、只读和能力标记始终采用最新实时快照。
+export function conversationWithHistory(snapshot: Conversation | null, page: HistoryPage | null): Conversation | null {
+  if (snapshot == null || page == null) return snapshot
+  const turns = page.turns.slice()
+  const currentTurns = snapshot.turns ?? [] as ConversationTurn[]
+  currentTurns.forEach((turn: ConversationTurn) => {
+    const index = turns.findIndex((entry: ConversationTurn): boolean => entry.turnId == turn.turnId)
+    if (index >= 0) turns.splice(index, 1, turn)
+    else turns.push(turn)
+  })
+  return { threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, status: snapshot.status, activeTurnId: snapshot.activeTurnId, hasUnreadTurn: snapshot.hasUnreadTurn, activeFlags: snapshot.activeFlags, activity: snapshot.activity, messages: mergeHistoryMessages(page.messages, snapshot.messages), turns, approvals: snapshot.approvals, questionGroups: snapshot.questionGroups, updatedAt: snapshot.updatedAt, readOnly: snapshot.readOnly, supportsImages: snapshot.supportsImages, supportsPlanReset: snapshot.supportsPlanReset, supportsHistoryPages: snapshot.supportsHistoryPages } as Conversation
+}

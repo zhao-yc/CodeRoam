@@ -1,0 +1,49 @@
+export const MAX_COMPOSER_IMAGES = 3
+const MAX_IMAGE_BYTES = 320 * 1024
+
+// Web 使用浏览器解码与画布压缩；App 沿用系统选图、压缩和沙盒文件读取接口。
+export function prepareImage(source: string): Promise<string> {
+  // #ifdef WEB
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        let width = image.naturalWidth
+        let height = image.naturalHeight
+        const ratio = Math.min(1, 1600 / Math.max(width, height))
+        width = Math.max(1, Math.round(width * ratio)); height = Math.max(1, Math.round(height * ratio))
+        for (let attempt = 0; attempt < 5; attempt++) {
+          canvas.width = width; canvas.height = height
+          const context = canvas.getContext('2d')
+          if (context == null) { reject(new Error('当前浏览器无法处理图片')); return }
+          context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height)
+          context.drawImage(image, 0, 0, width, height)
+          const result = canvas.toDataURL('image/jpeg', Math.max(0.45, 0.85 - attempt * 0.1))
+          if (result.length <= MAX_IMAGE_BYTES * 4 / 3) { resolve(result); return }
+          width = Math.max(1, Math.round(width * 0.8)); height = Math.max(1, Math.round(height * 0.8))
+        }
+        reject(new Error('图片仍然过大，请裁剪后重试'))
+      } catch (_) { reject(new Error('图片处理失败，请换一张图片')) }
+    }
+    image.onerror = () => reject(new Error('无法读取图片，请选择JPEG或PNG图片'))
+    image.src = source
+  })
+  // #endif
+  // #ifndef WEB
+  return new Promise<string>((resolve, reject) => {
+    uni.getImageInfo({ src: source, success: (info) => {
+      const ratio = Math.min(1, 1600 / Math.max(info.width, info.height))
+      uni.compressImage({ src: source, quality: 75, compressedWidth: Math.max(1, Math.round(info.width * ratio)), compressedHeight: Math.max(1, Math.round(info.height * ratio)), success: (compressed) => {
+        uni.getFileSystemManager().readFile({ filePath: compressed.tempFilePath, encoding: 'base64', success: (result) => {
+          const data = result.data as string
+          if (data.length > MAX_IMAGE_BYTES * 4 / 3) { reject(new Error('图片仍然过大，请裁剪后重试')); return }
+          const mime = data.startsWith('/9j/') ? 'jpeg' : data.startsWith('iVBORw0KGgo') ? 'png' : ''
+          if (mime.length == 0) { reject(new Error('请选择JPEG或PNG图片')); return }
+          resolve('data:image/' + mime + ';base64,' + data)
+        }, fail: (_) => reject(new Error('读取图片失败，请重新选择')) })
+      }, fail: (_) => reject(new Error('压缩图片失败，请重新选择')) })
+    }, fail: (_) => reject(new Error('无法读取图片，请重新选择')) })
+  })
+  // #endif
+}

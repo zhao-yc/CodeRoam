@@ -1,0 +1,66 @@
+import { reactive } from 'vue'
+
+type Draft = { hostId: string, threadId: string, text: string, revision: number }
+export type DraftImage = { id: string, src: string }
+export type DraftFile = { id: string, name: string, size: number, source: string, data: string, status: string, progress: number, error: string }
+type FileDraft = { hostId: string, threadId: string, files: DraftFile[] }
+type ImageDraft = { hostId: string, threadId: string, images: DraftImage[] }
+export type Submission = { hostId: string, threadId: string, commandId: string, text: string, draftRevision: number, imageIds?: string[], fileIds?: string[] }
+type ComposerMemory = { drafts: Draft[], submissions: Submission[], nextRevision: number }
+// 草稿只保存在应用运行期内存，按电脑和会话隔离，不写入浏览器持久存储。
+const memory = reactive<ComposerMemory>({ drafts: [] as Draft[], submissions: [] as Submission[], nextRevision: 0 })
+const imageDrafts = reactive<ImageDraft[]>([])
+const fileDrafts = reactive<FileDraft[]>([])
+
+// 文件和图片一样按电脑与会话隔离，仅在运行期保留，上传正文不写持久化配置。
+export function readDraftFiles(hostId: string, threadId: string): DraftFile[] {
+  return fileDrafts.find((entry: FileDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.files ?? [] as DraftFile[]
+}
+
+export function saveDraftFiles(hostId: string, threadId: string, files: DraftFile[]) {
+  const index = fileDrafts.findIndex((entry: FileDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  if (index >= 0) fileDrafts.splice(index, 1)
+  if (files.length > 0) fileDrafts.push({ hostId, threadId, files } as FileDraft)
+}
+
+// 图片只保存在按电脑和会话隔离的运行期草稿中，不写入浏览器持久存储。
+export function readDraftImages(hostId: string, threadId: string): DraftImage[] {
+  return imageDrafts.find((entry: ImageDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.images ?? [] as DraftImage[]
+}
+
+export function saveDraftImages(hostId: string, threadId: string, images: DraftImage[]) {
+  const index = imageDrafts.findIndex((entry: ImageDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  if (index >= 0) imageDrafts.splice(index, 1)
+  if (images.length > 0) imageDrafts.push({ hostId, threadId, images } as ImageDraft)
+}
+
+export function readDraft(hostId: string, threadId: string): string {
+  const draft = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  return draft?.text ?? ''
+}
+
+// 使用同一份响应式草稿，返回后重新进入会话仍能读到尚未发送的文字。
+export function saveDraft(hostId: string, threadId: string, text: string) {
+  const index = memory.drafts.findIndex((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  if (index >= 0) memory.drafts.splice(index, 1)
+  memory.nextRevision++
+  if (text.length > 0) memory.drafts.push({ hostId, threadId, text, revision: memory.nextRevision } as Draft)
+}
+
+export function rememberSubmission(hostId: string, threadId: string, commandId: string, text: string) {
+  const draft = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  memory.submissions.push({ hostId, threadId, commandId, text, draftRevision: draft?.revision ?? -1, imageIds: readDraftImages(hostId, threadId).map((image: DraftImage): string => image.id), fileIds: readDraftFiles(hostId, threadId).map((file: DraftFile): string => file.id) } as Submission)
+}
+
+// 成功回执或账本核对成功才清除原草稿，发送后新输入的文字始终保留。
+export function settleSubmission(hostId: string, commandId: string, success: boolean) {
+  const index = memory.submissions.findIndex((entry: Submission): boolean => entry.hostId == hostId && entry.commandId == commandId)
+  if (index < 0) return
+  const submitted = memory.submissions[index]
+  const current = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)
+  if (success && current?.revision == submitted.draftRevision && current?.text.trim() == submitted.text) saveDraft(hostId, submitted.threadId, '')
+  // 只移除本次已成功发送的图片，保留提交后新选的图片；失败和未知结果继续保留。
+  if (success) saveDraftImages(hostId, submitted.threadId, readDraftImages(hostId, submitted.threadId).filter((image: DraftImage): boolean => (submitted.imageIds ?? [] as string[]).indexOf(image.id) < 0))
+  if (success) saveDraftFiles(hostId, submitted.threadId, readDraftFiles(hostId, submitted.threadId).filter((file: DraftFile): boolean => (submitted.fileIds ?? [] as string[]).indexOf(file.id) < 0))
+  memory.submissions.splice(index, 1)
+}

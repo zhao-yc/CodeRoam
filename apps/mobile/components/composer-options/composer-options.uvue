@@ -1,0 +1,71 @@
+<template>
+  <view class="options-panel" :style="{ width: width + 'px' }" @click.stop>
+    <view v-if="section != 'add'" class="options-heading">
+      <view v-if="section == 'models' || section == 'speeds'" class="back-action"><app-icon name="back" :size="18" /><button class="option-hitbox" aria-label="返回推理设置" @click="emit('section', 'settings')"></button></view>
+      <text class="options-title">{{ section == 'models' ? '模型' : section == 'speeds' ? '速度' : '推理强度' }}</text>
+      <view class="close-action"><app-icon name="close" :size="18" tone="muted" /><button class="option-hitbox" aria-label="关闭输入选项" @click="emit('dismiss')"></button></view>
+    </view>
+    <scroll-view direction="vertical" class="options-scroll" :style="{ height: height + 'px' }">
+      <template v-if="section == 'add'">
+        <view class="option-row"><app-icon name="camera" :size="21" /><text class="option-label">拍照</text><button class="option-hitbox" :disabled="!imagesEnabled" aria-label="拍照" @click="emit('action', 'camera')"></button></view>
+        <view class="option-row"><app-icon name="photo" :size="21" /><text class="option-label">上传照片</text><button class="option-hitbox" :disabled="!imagesEnabled" aria-label="上传照片" @click="emit('action', 'album')"></button></view>
+        <view class="option-row"><app-icon name="file" :size="21" /><text class="option-label">上传文件</text><button class="option-hitbox" :disabled="!filesEnabled" aria-label="上传文件" @click="emit('action', 'file')"></button></view>
+        <view class="option-separator"></view>
+        <view class="option-row"><app-icon name="plan" :size="21" /><text class="option-label">计划模式</text><app-icon v-if="settings?.mode == 'plan'" name="check" :size="20" /><button class="option-hitbox" :disabled="!settingsEnabled || busy" aria-label="切换计划模式" @click="emit('action', 'plan')"></button></view>
+        <text v-if="!filesEnabled || !settingsEnabled" class="option-note">{{ note }}</text>
+      </template>
+      <template v-else-if="loading"><text class="option-note">正在读取电脑端设置…</text></template>
+      <template v-else-if="error.length > 0"><text class="option-error">{{ error }}</text><button class="retry-option" @click="emit('retry')">重新读取</button></template>
+      <template v-else-if="section == 'models'">
+        <view v-for="model in models" :key="model.id" class="option-row model-row"><text class="model-label">{{ model.label }}</text><app-icon v-if="model.id == settings?.model" name="check" :size="20" /><button class="option-hitbox" :disabled="busy" :aria-label="'选择模型 ' + model.label" @click="emit('select', 'model', model.id)"></button></view>
+      </template>
+      <template v-else-if="section == 'speeds'">
+        <view v-for="speed in selectedModel?.speeds ?? []" :key="speed.id" class="option-row speed-row"><view class="option-copy"><text class="speed-label">{{ speed.label }}</text><text v-if="speed.description.length > 0" class="option-detail">{{ speed.description }}</text></view><app-icon v-if="speed.id == settings?.serviceTier" name="check" :size="20" /><button class="option-hitbox" :disabled="busy" :aria-label="'选择速度 ' + speed.label" @click="emit('select', 'serviceTier', speed.id)"></button></view>
+      </template>
+      <template v-else>
+        <view v-for="effort in selectedModel?.efforts ?? []" :key="effort" class="option-row effort-row"><text class="model-label">{{ labelForEffort(effort) }}</text><app-icon v-if="effort == settings?.effort" name="check" :size="20" /><button class="option-hitbox" :disabled="busy" :aria-label="'选择推理强度 ' + labelForEffort(effort)" @click="emit('select', 'effort', effort)"></button></view>
+        <view class="option-separator"></view>
+        <view class="option-row speed-row"><view class="option-copy"><text class="speed-label">模型</text><text class="option-detail">{{ selectedModel?.label ?? settings?.model ?? '跟随电脑端' }}</text></view><app-icon name="chevron-right" :size="18" /><button class="option-hitbox" :disabled="busy" aria-label="选择模型" @click="emit('section', 'models')"></button></view>
+        <view class="option-row speed-row"><view class="option-copy"><text class="speed-label">速度</text><text class="option-detail">{{ currentSpeed }}</text></view><app-icon name="chevron-right" :size="18" /><button class="option-hitbox" :disabled="busy" aria-label="选择速度" @click="emit('section', 'speeds')"></button></view>
+      </template>
+      <text v-if="busy" class="option-note">正在同步电脑端…</text>
+    </scroll-view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
+import { ExecutionSettings, ModelOption, SpeedOption, effortLabel } from '../../services/execution-settings.uts'
+const props = defineProps<{ section: string, settings: ExecutionSettings | null, models: ModelOption[], loading: boolean, busy: boolean, error: string, width: number, height: number, imagesEnabled: boolean, filesEnabled: boolean, settingsEnabled: boolean, note: string }>()
+const emit = defineEmits<{ section: [value: string], action: [value: string], select: [key: string, value: string], dismiss: [], retry: [] }>()
+const selectedModel = computed((): ModelOption | null => props.models.find((model: ModelOption): boolean => model.id == props.settings?.model) ?? null)
+const currentSpeed = computed((): string => selectedModel.value?.speeds.find((speed: SpeedOption): boolean => speed.id == props.settings?.serviceTier)?.label ?? (props.settings?.serviceTier == '' ? '常速' : props.settings?.serviceTier ?? '常速'))
+// 模板使用页面方法转发，兼容原生端对导入函数的引用限制。
+function labelForEffort(effort: string): string { return effortLabel(effort) }
+</script>
+
+<style>
+.options-panel { border-radius: 22px; padding: 8px 10px; background-color: #f8f8f3; border-width: 1px; border-style: solid; border-color: #e3e5dc; overflow: hidden; }
+.options-heading { flex-direction: row; align-items: center; height: 38px; padding-left: 12px; }
+.options-title { flex: 1; color: #7b827a; font-size: 13px; }
+.options-scroll { flex-shrink: 1; }
+.back-action, .close-action { position: relative; width: 34px; height: 34px; align-items: center; justify-content: center; }
+.option-row { position: relative; min-height: 46px; flex-direction: row; align-items: center; padding: 8px 14px; }
+.option-hitbox { position: absolute; left: 0; right: 0; top: 0; bottom: 0; padding: 0; margin: 0; border-radius: 12px; background-color: transparent; }
+.option-label { flex: 1; margin-left: 14px; font-size: 16px; color: #202c28; }
+.option-separator { height: 1px; background-color: #e3e5dc; margin: 8px 14px; }
+.model-label { flex: 1; min-width: 0; lines: 1; text-overflow: ellipsis; font-size: 16px; color: #202c28; margin-right: 8px; }
+.model-row { min-height: 48px; }
+.option-copy { flex: 1; min-width: 0; }
+.speed-row { min-height: 62px; }
+.speed-label { font-size: 16px; color: #202c28; line-height: 24px; }
+.option-detail { font-size: 12px; color: #7b827a; line-height: 20px; lines: 2; text-overflow: ellipsis; }
+.option-note { padding: 10px 14px; font-size: 12px; line-height: 20px; color: #7b827a; }
+.option-error { padding: 12px 14px; font-size: 13px; line-height: 21px; color: #9b493a; }
+.retry-option { font-size: 14px; color: #285c49; background-color: #e8eee6; margin: 4px 14px 10px; }
+/* #ifdef WEB */
+.option-hitbox::after { border: 0; }
+.model-label { white-space: nowrap; overflow: hidden; }
+/* #endif */
+</style>

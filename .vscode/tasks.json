@@ -1,0 +1,10 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "启动全部", "type": "shell", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/dev.ps1", "-Action", "all"], "options": { "cwd": "${workspaceFolder}" }, "problemMatcher": [] },
+    { "label": "启动电脑连接", "type": "shell", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/dev.ps1", "-Action", "bridge"], "options": { "cwd": "${workspaceFolder}" }, "problemMatcher": [] },
+    { "label": "运行手机预览", "type": "shell", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/dev.ps1", "-Action", "mobile"], "options": { "cwd": "${workspaceFolder}" }, "problemMatcher": [] },
+    { "label": "停止电脑连接", "type": "shell", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/dev.ps1", "-Action", "stop"], "options": { "cwd": "${workspaceFolder}" }, "problemMatcher": [] },
+    { "label": "查看连接日志", "type": "shell", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/dev.ps1", "-Action", "logs"], "options": { "cwd": "${workspaceFolder}" }, "problemMatcher": [] }
+  ]
+}

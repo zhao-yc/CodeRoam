@@ -1,0 +1,21 @@
+<template>
+  <text class="inline-text" :style="{ fontSize: level > 0 ? (level <= 2 ? 22 : 18) + 'px' : '16px', lineHeight: level > 0 ? (level <= 2 ? 31 : 27) + 'px' : '25px', fontWeight: level > 0 || strong ? 'bold' : 'normal' }" selectable><text v-for="(run, index) in runs" :key="index" :class="{ 'run-bold': run.bold, 'run-italic': run.italic, 'run-strike': run.strike, 'run-code': run.code, 'run-link': run.href.length > 0 }" :aria-label="run.href.length > 0 ? run.text + '，打开网页' : ''" @click.stop="activate(run)">{{ run.text }}</text></text>
+</template>
+<script setup lang="uts">
+import { MarkdownRun } from '../../services/markdown.uts'
+import { openMessageLink } from '../../services/external-link.uts'
+withDefaults(defineProps<{ runs: MarkdownRun[], level?: number, strong?: boolean }>(), { level: 0, strong: false })
+// 普通文本不导航，代码中的网址由解析层保持为纯文本。
+function activate(run: MarkdownRun) { if (run.href.length > 0) openMessageLink(run.href) }
+</script>
+<style>
+.inline-text { font-size: 16px; line-height: 25px; color: #202c28; }
+.run-bold { font-weight: bold; }
+.run-italic { font-style: italic; }
+.run-strike { text-decoration-line: line-through; }
+.run-code { font-family: monospace; background-color: #e9ece5; }
+.run-link { color: #285eb0; text-decoration-line: underline; }
+/* #ifdef WEB */
+.inline-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* #endif */
+</style>

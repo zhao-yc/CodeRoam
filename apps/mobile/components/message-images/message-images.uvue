@@ -1,0 +1,50 @@
+<template>
+  <view class="message-images">
+    <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFill" class="thumbnail" :aria-label="'预览第' + (index + 1) + '张图片'" @click="preview(source)" /></view>
+    <view v-else class="placeholder"><text class="hint">{{ error.length > 0 ? error : connected ? '正在加载图片…' : '等待连接后加载图片' }}</text><button v-if="error.length > 0 && connected" class="retry" @click="loadImages">重新加载</button></view>
+  </view>
+</template>
+<script setup lang="uts">
+import { ref, watch, onUnmounted } from 'vue'
+import { bridge } from '../../services/bridge.uts'
+const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean }>()
+const sources = ref<string[]>([])
+const error = ref('')
+let loading = false
+let requestVersion = 0
+let alive = true
+// 每条消息独立保留图片，进入会话自动加载，不弹出大图或中断滚动。
+function loadImages() {
+  if (!alive || loading || !props.connected || props.threadId.length == 0) return
+  loading = true; error.value = ''
+  const version = ++requestVersion
+  bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId }).then((result: UTSJSONObject) => {
+    if (!alive || version != requestVersion) return
+    loading = false
+    sources.value = JSON.parse<string[]>(JSON.stringify(result['images'])) ?? [] as string[]
+    if (sources.value.length == 0) error.value = '这条记录未保留图片'
+  }, (_failure: Error) => {
+    if (!alive || version != requestVersion) return
+    loading = false; error.value = '图片加载失败'
+  })
+}
+// 仅点击缩略图时打开当前消息的图片组。
+function preview(source: string) { uni.previewImage({ urls: sources.value, current: source }) }
+// 消息归属变化及卸载后使旧请求失效，避免图片串入其他会话。
+watch((): string => props.hostId + ':' + props.threadId + ':' + props.messageId, () => {
+  requestVersion++; loading = false; sources.value = [] as string[]; error.value = ''; loadImages()
+}, { immediate: true })
+watch((): boolean => props.connected, (connected: boolean) => {
+  requestVersion++; loading = false
+  if (connected && sources.value.length == 0) loadImages()
+})
+onUnmounted(() => { alive = false; requestVersion++ })
+</script>
+<style>
+.message-images { margin-top: 8px; }
+.thumbnails { flex-direction: row; flex-wrap: wrap; }
+.thumbnail { width: 96px; height: 96px; margin: 0 6px 6px 0; border-radius: 8px; }
+.placeholder { min-width: 96px; min-height: 96px; padding: 8px; border-radius: 8px; background-color: #e0e7df; align-items: center; justify-content: center; }
+.hint { font-size: 12px; color: #7b827a; }
+.retry { margin-top: 6px; font-size: 12px; color: #285c49; background-color: transparent; }
+</style>

@@ -1,0 +1,31 @@
+import { safeWebUrl } from './markdown.uts'
+// #ifdef APP-ANDROID || APP-IOS
+import { openSchema } from '../uni_modules/codex-open-schema'
+// #endif
+
+// 打开失败时只提示并提供复制，不在原会话页强制跳转。
+function offerCopy(url: string) {
+  uni.showModal({ title: '未能打开链接', content: '可以复制链接后在浏览器中打开。', confirmText: '复制链接', success: (result) => {
+    if (result.confirm) uni.setClipboardData({ data: url })
+  } })
+}
+
+// 必须由用户点击同步调用，避免 Web 弹窗拦截；不会附加配对令牌或其他会话数据。
+export function openMessageLink(source: string) {
+  const url = safeWebUrl(source)
+  if (url.length == 0) { uni.showToast({ title: '此链接不支持打开', icon: 'none' }); return }
+  // #ifdef WEB
+  const tab = window.open('about:blank', '_blank')
+  if (tab == null) { offerCopy(url); return }
+  tab.opener = null
+  tab.location.href = url
+  return
+  // #endif
+  // #ifdef APP-ANDROID || APP-IOS
+  if (!openSchema(url)) offerCopy(url)
+  return
+  // #endif
+  // #ifndef WEB || APP-ANDROID || APP-IOS
+  offerCopy(url)
+  // #endif
+}

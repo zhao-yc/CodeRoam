@@ -1,0 +1,62 @@
+<template>
+  <view class="markdown-body">
+    <view v-for="block in blocks" :key="block.id" :class="['md-block', 'md-' + block.kind]" :style="{ marginLeft: Math.min(block.depth, 6) * 12 + 'px' }">
+      <view v-if="block.kind == 'rule'" class="md-rule-line"></view>
+      <template v-else-if="block.kind == 'code'">
+        <view class="code-header"><text class="code-language">{{ block.language.length > 0 ? block.language : '代码' }}</text><button class="code-copy" aria-label="复制代码" @click.stop="copyCode(block.code)">复制</button></view>
+        <scroll-view direction="horizontal" class="code-scroll" @touchstart.stop="beginReading" @touchend.stop="endReading" @touchcancel.stop="endReading"><text class="code-text" selectable>{{ block.code }}</text></scroll-view>
+      </template>
+      <scroll-view v-else-if="block.kind == 'table'" direction="horizontal" class="table-scroll" @touchstart.stop="beginReading" @touchend.stop="endReading" @touchcancel.stop="endReading"><view class="table-content"><view v-for="(row, rowIndex) in block.rows" :key="rowIndex" :class="['table-row', rowIndex == 0 ? 'table-heading' : '']"><view v-for="(cell, cellIndex) in row.cells" :key="cellIndex" class="table-cell"><markdown-inline :runs="cell" :strong="rowIndex == 0" /></view></view></view></scroll-view>
+      <view v-else-if="block.kind == 'image'" class="image-frame"><image v-if="failedImages.indexOf(block.src) < 0" :src="block.src" mode="aspectFit" class="md-image" :aria-label="block.alt.length > 0 ? block.alt : '预览图片'" @load="imageLayout" @error="imageFailed(block.src)" @click.stop="previewImage(block.src)" /><text v-else class="image-error" @click.stop="retryImage(block.src)">{{ block.alt.length > 0 ? block.alt + ' · ' : '' }}图片加载失败，点击重试</text></view>
+      <view v-else-if="block.kind == 'list'" class="list-line"><text class="list-marker">{{ block.marker == '-' || block.marker == '+' || block.marker == '*' ? '•' : block.marker }}</text><markdown-inline class="list-content" :runs="block.runs" /></view>
+      <view v-else :class="['text-block', block.kind == 'heading' ? 'heading-' + block.level : '']"><markdown-inline :runs="block.runs" :level="block.kind == 'heading' ? block.level : 0" /></view>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import { computed, ref, watch, nextTick } from 'vue'
+import { parseMarkdown, MarkdownBlock } from '../../services/markdown.uts'
+import MarkdownInline from '../markdown-inline/markdown-inline.uvue'
+const props = defineProps<{ source: string }>()
+const emit = defineEmits<{ (event: 'beforelayout'): void, (event: 'layout'): void, (event: 'reading', active: boolean): void }>()
+// 每个消息实例只缓存当前正文；其他快照变化不会重新解析，不设全局历史缓存。
+const blocks = computed((): MarkdownBlock[] => parseMarkdown(props.source))
+const failedImages = ref<string[]>([])
+watch((): string => props.source, () => { emit('beforelayout'); nextTick(() => { emit('layout') }) }, { immediate: true, flush: 'pre' })
+// 图片异步尺寸变化通知时间线；阅读位置由会话页面统一维护。
+function imageLayout() { nextTick(() => { emit('layout') }) }
+function imageFailed(id: string) { emit('beforelayout'); if (failedImages.value.indexOf(id) < 0) failedImages.value.push(id); imageLayout() }
+function retryImage(id: string) { emit('beforelayout'); failedImages.value = failedImages.value.filter((value: string): boolean => value != id); imageLayout() }
+function previewImage(src: string) { uni.previewImage({ urls: blocks.value.filter((block: MarkdownBlock): boolean => block.kind == 'image').map((block: MarkdownBlock): string => block.src), current: src }) }
+// 复制解析器保留的原始代码，横向阅读不触发时间线跟随。
+function copyCode(code: string) { uni.setClipboardData({ data: code }) }
+function beginReading() { emit('reading', true) }
+function endReading() { emit('reading', false) }
+</script>
+<style>
+.markdown-body { width: 100%; min-width: 0; }
+.md-block { margin-bottom: 10px; min-width: 0; }
+.md-paragraph, .md-heading, .md-quote, .md-list { flex-shrink: 0; }
+.md-quote { border-left-width: 3px; border-left-style: solid; border-left-color: #b8c7b7; padding-left: 10px; }
+.md-rule-line { height: 1px; background-color: #dce2d6; margin: 6px 0; }
+.list-line { flex-direction: row; align-items: flex-start; }
+.list-marker { min-width: 22px; font-size: 16px; line-height: 25px; color: #202c28; padding-right: 5px; }
+.list-content { flex: 1; min-width: 0; }
+.md-code { border-radius: 8px; background-color: #edf0e9; overflow: hidden; }
+.code-header { flex-direction: row; align-items: center; justify-content: space-between; padding-left: 10px; }
+.code-language { font-size: 12px; color: #7b827a; }
+.code-copy { margin: 0; height: 36px; line-height: 36px; padding: 0 12px; background-color: transparent; color: #285c49; font-size: 12px; border-width: 0; }
+.code-scroll { width: 100%; }
+.code-text { font-family: monospace; font-size: 13px; line-height: 21px; padding: 0 10px 10px; color: #202c28; white-space: pre; }
+.table-scroll { width: 100%; }
+.table-content { align-self: flex-start; }
+.table-row { flex-direction: row; }
+.table-heading { background-color: #e8eee6; }
+.table-cell { width: 144px; flex-shrink: 0; padding: 7px 9px; border-width: 1px; border-style: solid; border-color: #dce2d6; }
+.image-frame { width: 100%; }
+.md-image { width: 100%; height: 180px; border-radius: 8px; }
+.image-error { font-size: 13px; color: #7b827a; padding: 10px 0; }
+/* #ifdef WEB */
+.code-text { display: block; width: max-content; min-width: 100%; }
+/* #endif */
+</style>

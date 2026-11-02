@@ -1,0 +1,934 @@
+<template>
+  <view id="conversation-page" class="page" :style="{ paddingBottom: keyboardInset + 'px' }">
+    <view class="status-spacer"></view>
+    <view class="conversation-header" @click="dismissGoal">
+      <view class="icon-button round-button action-frame"><app-icon name="back" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view>
+      <view class="thread-capsule" @click="showConversationInfo">
+        <!-- 状态紧跟标题，长标题省略时仍为状态保留完整宽度。 -->
+        <view class="thread-heading"><text class="thread-title">{{ displayTitle }}</text><view v-if="connection.snapshot != null" class="title-status"><task-status :hide-running-label="true" :state="currentTaskState" :visible="pageVisible" /></view></view>
+        <view class="thread-meta"><app-icon name="folder" :size="14" tone="muted" /><text class="meta-project">{{ projectName }}</text><template v-if="connection.computers.length > 1"><view :class="['connection-dot', connection.connected ? 'online' : 'offline']"></view><text class="meta-host">{{ hostName }}</text></template></view>
+      </view>
+      <view class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="会话菜单" @click="showActions"></button></view>
+    </view>
+    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
+    <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
+    <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
+    <view v-if="isCurrentPage() && connection.pendingCommandId.length > 0 && !busy" class="notice pending-notice"><text class="notice-text">本会话上次操作结果待确认</text><button class="check button-secondary" :disabled="checking || !connection.connected" @click="checkPending">{{ checking ? '正在核对…' : '核对结果' }}</button></view>
+    <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
+    <view class="timeline-region" @click="dismissGoal">
+      <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch">
+        <view v-if="connection.snapshot?.supportsHistoryPages == true && (loadingHistory || historyError.length > 0 || historyPage?.hasMore == false)" class="history-controls"><view v-if="loadingHistory" class="history-loading"><loading class="history-spinner" :paused="!pageVisible" /><text class="history-note">正在读取更早的对话…</text></view><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的对话，请再次下拉重试</text><text v-else class="history-note">已显示全部对话</text></view>
+        <!-- 首次同步复用列表页的原生加载样式，断线或失败后显示对应提示。 -->
+        <view v-if="connection.snapshot == null && connection.connected && detailError.length == 0" class="opening-loading" aria-label="正在加载对话"><loading class="opening-spinner" :paused="!pageVisible" /><text class="opening-loading-text">正在加载对话…</text></view>
+        <view v-else-if="connection.snapshot == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得会话内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步会话。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
+        <view v-for="entry in timeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
+          <template v-if="entry.role == 'user' || entry.role == 'assistant'">
+            <markdown-body v-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
+            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.text }}</text>
+            <message-images v-if="(entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" />
+          </template>
+          <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
+          <template v-else>
+            <view class="execution-toggle action-frame"><app-icon name="edit" :size="19" tone="muted" /><text class="execution-summary">{{ entry.label }}</text><app-icon :name="isExecutionExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="(isExecutionExpanded(entry) ? '收起' : '展开') + entry.label" @click="toggleExecutions(entry)"></button></view>
+            <scroll-view v-if="isExecutionExpanded(entry)" direction="vertical" class="execution-list" :style="{ height: Math.min(240, entry.executions.length * 44) + 'px' }" @touchstart.stop="beginExecutionTouch" @touchend.stop="endExecutionTouch" @touchcancel.stop="endExecutionTouch">
+              <view v-for="message in entry.executions" :key="message.id" class="execution-row action-frame"><app-icon :name="message.kind == 'fileChange' ? 'edit' : 'terminal'" :size="18" tone="muted" /><text class="execution-label">{{ executionTitle(message) }}</text><button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看详情：' + executionTitle(message)" @click="toggleExecution(message.id)"></button></view>
+            </scroll-view>
+          </template>
+        </view>
+        <view id="questions-anchor"></view>
+        <view v-for="group in pendingQuestionGroups" :key="group.id" class="question-section"><view class="question-entry" @click="toggleQuestion(group.id)"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><app-icon name="chevron-down" :size="18" tone="muted" /></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
+        <view id="approvals-anchor"></view>
+        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
+        <view v-if="activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
+        <view id="timeline-bottom" class="bottom-space"></view>
+      </scroll-view>
+      <view v-if="!atTimelineBottom" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing"></button></view>
+    </view>
+    <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
+    <view id="composer-dock" class="composer-dock" :class="{ 'keyboard-open': keyboardInset > 0, 'composer-menu-open': composerMenu.length > 0 }">
+      <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
+      <view class="composer-panel" @click="dismissGoal" :class="{ 'composer-compact': !composerExpanded }">
+        <view v-if="planEnabled" class="plan-chip action-frame"><app-icon name="plan" :size="17" /><text class="plan-label">计划</text><app-icon name="close" :size="13" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || settingsBusy" aria-label="关闭计划模式" @click="togglePlan"></button></view>
+        <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><button class="remove-image" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)">×</button></view></view>
+        <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
+        <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
+        <view class="draft-line"><button v-if="!composerExpanded" class="compact-add" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><view v-if="visiblePrediction.length > 0" class="prediction-ghost" role="button" aria-label="将电脑预测填入草稿" @click="acceptPrediction"><text class="prediction-text">{{ visiblePrediction }}</text></view><textarea v-else :focus="predictionFocus" :value="draft" @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :class="{ 'compact-draft': !composerExpanded }" :style="{ height: (composerExpanded ? Math.max(48, draftHeight) : 24) + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : '继续说说你的想法…'" :maxlength="32000"></textarea><view v-if="!composerExpanded" class="primary-action action-frame" :style="{ opacity: !canWrite || activeTurnId.length == 0 ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || activeTurnId.length == 0" :aria-label="activeTurnId.length > 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
+        <view v-if="composerExpanded" class="composer-actions"><button class="add-image" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
+        <text v-if="composerExpanded && connection.snapshot?.supportsExecutionSettings != true" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
+        <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
+        <text v-if="composerExpanded && activeTurnId.length > 0 && settings != null" class="composer-caption">模型、推理强度和计划模式应用于下一轮</text>
+      </view>
+    </view>
+      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :note="readOnly ? '历史浏览模式，请先继续此会话' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
+    <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
+    <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
+    <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">会话操作</text><view class="menu-item action-frame"><text class="menu-label">{{ connection.snapshot?.goal != null ? '查看目标' : '新建目标' }}</text><button class="action-hitbox" aria-label="查看或新建目标" @click="showGoal"></button></view><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">会话信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="会话信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档会话"></button></view><view class="menu-item action-frame"><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+  </view>
+</template>
+
+
+<script setup lang="uts">
+import { computed, ref, watch, nextTick } from 'vue'
+import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
+import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
+import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, conversationTaskState } from '../../services/bridge.uts'
+import { removeArchivedThread } from '../../services/thread-list.uts'
+import { conversationOpeningTitle, conversationDisplayTitle } from '../../services/conversation-opening.uts'
+import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
+import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
+import QuestionCard from '../../components/question-card/question-card.uvue'
+import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
+import MessageImages from '../../components/message-images/message-images.uvue'
+import AppIcon from '../../components/app-icon/app-icon.uvue'
+import TaskStatus from '../../components/task-status/task-status.uvue'
+import GoalCard from '../../components/goal-card/goal-card.uvue'
+import { ThreadGoal } from '../../services/goals.uts'
+import ComposerOptions from '../../components/composer-options/composer-options.uvue'
+import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
+import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '../../services/files.uts'
+// 操作错误仅属于当前页面，公共连接和会话读取错误分别展示。
+const operationError = ref('')
+const detailError = computed((): string => operationError.value.length > 0 ? operationError.value : connection.conversationError.length > 0 ? connection.conversationError : connection.error)
+const pageHostId = ref('')
+const pageThreadId = ref('')
+const listTitle = ref('')
+const predictionText = ref('')
+const predictionFocus = ref(false)
+let predictionTimer = 0
+let predictionExpiryTimer = 0
+let predictionRevision = 0
+let predictionDeadline = 0
+const draft = computed((): string => readDraft(pageHostId.value, pageThreadId.value))
+const draftImages = computed((): DraftImage[] => readDraftImages(pageHostId.value, pageThreadId.value))
+const imageBusy = ref(false)
+const draftFiles = computed((): DraftFile[] => readDraftFiles(pageHostId.value, pageThreadId.value))
+const filesReady = computed((): boolean => draftFiles.value.every((file: DraftFile): boolean => file.status == 'ready'))
+const inputFocused = ref(false)
+let draftBlurTimer = 0
+const composerMenu = ref('')
+const settings = ref<ExecutionSettings | null>(null)
+const models = ref<ModelOption[]>([])
+const settingsLoading = ref(false)
+const settingsBusy = ref(false)
+const settingsError = ref('')
+const menuHeight = ref(280)
+const menuBottom = ref(134)
+const menuWidth = ref(Math.min(330, uni.getWindowInfo().windowWidth - 28))
+let settingsRequest = 0
+// 设置快照每次变化都推进代次，读写回执不能覆盖较新的桌面模式。
+let settingsSnapshotRevision = 0
+const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
+const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
+const composerExpanded = computed((): boolean => predictionText.value.length > 0 || inputFocused.value || composerMenu.value.length > 0 || draft.value.length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || planEnabled.value)
+const modelLabel = computed((): string => {
+  if (settingsBusy.value) return '正在同步…'
+  if (connection.snapshot?.readOnly == true) return '历史浏览'
+  if (!connection.connected) return '等待连接'
+  if (settings.value == null) return '跟随电脑端'
+  const model = models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)
+  return shortModelLabel(model?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort)
+})
+const modelSupportsImages = computed((): boolean => models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)?.supportsImages != false)
+const busy = ref(false)
+const goalBusy = ref(false)
+const goalExpanded = ref(false)
+const goalOpenRequest = ref(0)
+const goalCloseRequest = ref(0)
+const pageVisible = ref(false)
+onShow(() => { pageVisible.value = true })
+onHide(() => { pageVisible.value = false })
+const pendingAction = ref('')
+const checking = ref(false)
+const activating = ref(false)
+const autoConnectPending = ref(false)
+let activationRequest = 0
+const actionsVisible = ref(false)
+const following = ref(true)
+const atTimelineBottom = ref(true)
+const scrollTarget = ref('')
+const selectedExecutionId = ref('')
+const historyPage = ref<HistoryPage | null>(null)
+const loadingHistory = ref(false)
+const historyError = ref('')
+const historyScrollTop = ref(0)
+let initialHistoryChecked = false
+let historyRequest = 0
+let historyGesture = 0
+let lastHistoryGesture = -1
+let historyTopTimer = 0
+let historyFollowRevision = 0
+const displayConversation = computed(() => conversationWithHistory(connection.snapshot, historyPage.value))
+const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
+const expandedTurnIds = ref<string[]>([])
+const timeline = computed((): TimelineEntry[] => reportTimeline(displayConversation.value, expandedTurnIds.value))
+const expandedExecutionIds = ref<string[]>([])
+const expandedQuestionIds = ref<string[]>([])
+const handledApprovalIds = ref<string[]>([])
+const submittedGroupIds = ref<string[]>([])
+const draftHeight = ref(24)
+const keyboardInset = ref(0)
+const goalViewportHeight = ref(uni.getWindowInfo().windowHeight)
+// 用户气泡保留左侧层级留白，正文使用两侧各 16px 以内的宽度。
+const userBubbleWidth = Math.max(120, uni.getWindowInfo().windowWidth - 80)
+let baseWindowHeight = 0
+let lastScrollTop = 0
+let layoutUntil = 0
+let touchingTimeline = false
+let pageAlive = true
+const activeTurnId = computed((): string => connection.snapshot?.activeTurnId ?? '')
+const approvalCount = computed((): number => connection.snapshot?.approvals.length ?? 0)
+// 末尾只保留可回答题组；已回答记录沿原聊天时间线展示，不再追加重复卡片。
+const pendingQuestionGroups = computed((): QuestionGroup[] => connection.snapshot?.questionGroups.filter((group: QuestionGroup): boolean => group.state == 'pending') ?? [])
+const pendingQuestionCount = computed((): number => pendingQuestionGroups.value.length)
+const currentTaskState = computed((): string => conversationTaskState(connection.snapshot, connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)))
+const hostName = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == pageHostId.value)?.label ?? '电脑')
+const projectName = computed((): string => { const parts = (connection.snapshot?.cwd ?? '').split('\\').join('/').split('/'); const name = parts[parts.length - 1]; return name.length > 0 ? name : '会话' })
+// 后台历史只用于浏览，写操作须有原桌面的实时所有者和快照。
+const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
+const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
+const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - (composerExpanded.value ? 360 : 280))))
+const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '请先核对上次操作结果。' : '')
+const conversationConnectionHint = computed((): string => {
+  if (activating.value) return '正在连接会话…'
+  if (connection.pendingCommandId.length > 0) return autoConnectPending.value ? '请先核对上次操作，核对完成后将自动连接此会话。' : '请先核对上次操作结果，再重新连接。'
+  if (!connection.connected) return autoConnectPending.value ? '连接恢复后将自动连接此会话。' : '连接恢复后可重新连接此会话。'
+  return autoConnectPending.value ? '正在等待电脑连接此会话…' : '会话连接未完成，历史内容和草稿已保留。'
+})
+const openingTitle = computed((): string => conversationOpeningTitle(connection.snapshot != null, detailError.value, connection.connected))
+// 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
+const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : '', openingTitle.value))
+const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && !checking.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
+
+onLoad((options: OnLoadOptions) => {
+  // 已保存的配对在应用启动时恢复；未配置时先返回首页。
+  // #ifdef WEB
+  if (!connection.configured) { uni.reLaunch({ url: '/pages/index/index' }); return }
+  // #endif
+  baseWindowHeight = uni.getWindowInfo().windowHeight
+  pageHostId.value = connection.hostId
+  const id = options['threadId'] ?? ''; pageThreadId.value = id
+  listTitle.value = decodeURIComponent(options['title'] ?? '') ?? ''
+  if (id.length > 0) bridge.watch(id)
+})
+
+// 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
+const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && pendingQuestionCount.value == 0 && approvalCount.value == 0)
+const visiblePrediction = computed((): string => predictionAllowed.value ? predictionText.value : '')
+function resetPrediction() { predictionRevision++; clearTimeout(predictionTimer); clearTimeout(predictionExpiryTimer); predictionText.value = ''; predictionDeadline = 0 }
+// 按完成时间串行轮询；旧页面和旧轮次的迟到回执不会写回当前输入框。
+function pollPrediction(revision: number) {
+  if (!pageAlive || !predictionAllowed.value || revision != predictionRevision) return
+  const threadId = pageThreadId.value
+  const turnId = connection.snapshot?.predictionTurnId ?? ''
+  bridge.request('thread.prediction.read', { threadId }).then((result: UTSJSONObject) => {
+    if (!pageAlive || revision != predictionRevision || !predictionAllowed.value) return
+    const prediction = result['prediction'] as UTSJSONObject | null
+    predictionText.value = prediction?.getString('threadId') == threadId && prediction?.getString('sourceTurnId') == turnId ? prediction?.getString('text') ?? '' : ''
+    predictionDeadline = Date.now() + 5000
+    clearTimeout(predictionExpiryTimer)
+    predictionExpiryTimer = setTimeout(() => { if (revision == predictionRevision) predictionText.value = '' }, 5000)
+    predictionTimer = setTimeout(() => { if (revision == predictionRevision) pollPrediction(revision) }, 2500)
+  }, (_: Error) => {
+    if (!pageAlive || revision != predictionRevision) return
+    predictionText.value = ''
+    predictionTimer = setTimeout(() => { pollPrediction(revision) }, 5000)
+  })
+}
+watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.epoch + ':' + connection.subscriptionRevision + ':' + (connection.snapshot?.predictionTurnId ?? '') + ':' + predictionAllowed.value, () => { resetPrediction(); if (predictionAllowed.value) pollPrediction(predictionRevision) }, { flush: 'sync' })
+// 点击仅写入本地草稿，沿用既有手动发送入口。
+function acceptPrediction() {
+  if (!predictionAllowed.value || visiblePrediction.value.length == 0 || Date.now() > predictionDeadline) { resetPrediction(); return }
+  const text = visiblePrediction.value
+  resetPrediction()
+  saveDraft(pageHostId.value, pageThreadId.value, text)
+  inputFocused.value = true
+  nextTick(() => { predictionFocus.value = true })
+}
+onUnload(() => { resetPrediction() })
+
+function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
+// 原页面卸载后仍结算提交记录，但异步回执不再修改首页提示或重新同步。
+onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; settingsRequest++; bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
+function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
+// 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
+function closeComposerMenu() { composerMenu.value = '' }
+function goBack() { if (composerMenu.value.length > 0) { closeComposerMenu(); return }; uni.hideKeyboard(); if (selectedExecutionId.value.length > 0) { selectedExecutionId.value = ''; return }; if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+function closeActions() { actionsVisible.value = false }
+function showActions() { closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
+function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
+// 重试仅恢复电脑导航，草稿不会被发送。
+function retryDesktopOpen() { if (!isCurrentPage() || activating.value) return; activating.value = true; bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => { if (isCurrentPage()) activating.value = false }, (_: Error) => { if (isCurrentPage()) activating.value = false }) }
+function refreshFromMenu() { closeActions(); refresh(); notify('正在同步会话') }
+// 打开只读会话即表示请求加载；仅取得真实快照，不发送草稿或其他任务指令。
+function continueConversation() {
+  if (!isCurrentPage() || !pageVisible.value || !readOnly.value || connection.snapshot?.threadId != pageThreadId.value || activating.value || !connection.connected || connection.pendingCommandId.length > 0) return
+  if (!connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)) return
+  autoConnectPending.value = false
+  activating.value = true
+  operationError.value = ''
+  const request = ++activationRequest
+  bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => {
+    if (request != activationRequest || !isCurrentPage()) return
+    activating.value = false
+  }, (error: Error) => {
+    if (request != activationRequest || !isCurrentPage()) return
+    activating.value = false; operationError.value = error.message
+  })
+}
+// 每次进入页面只自动尝试一次；实时会话取消意图，后台恢复和失败不循环导航电脑。
+function tryAutoConnectConversation() {
+  if (!autoConnectPending.value || !pageVisible.value || !isCurrentPage() || connection.snapshot?.threadId != pageThreadId.value) return
+  if (bridge.syncingThread == pageThreadId.value) return
+  if (!readOnly.value) { autoConnectPending.value = false; return }
+  continueConversation()
+}
+// 在方法声明后注册监听，兼容 Android UTS；离线或待核对时保留本次打开意图。
+watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
+function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
+function copyLatestReply() { closeActions(); const messages = connection.snapshot?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(messages[index].text); return } }; notify('还没有可复制的回复') }
+function showConversationInfo() { closeActions(); uni.showModal({ title: '会话信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (connection.snapshot?.cwd ?? '') + '\n连接：' + connection.status, showCancel: false, confirmText: '知道了' }) }
+
+// 归档只在原生回执确认后移除列表项；草稿继续按原会话编号保留。
+function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, commandId: string = ''): boolean {
+  if (receipt?.getBoolean('archived') != true || receipt?.getString('threadId') != pageThreadId.value || connection.hostId != hostId) return false
+  const threadId = pageThreadId.value
+  const returnToList = isCurrentPage() && pageVisible.value
+  if (commandId.length > 0) bridge.clearCommand(commandId, hostId)
+  removeArchivedThread(hostId, threadId)
+  connection.threads = connection.threads.filter((thread: ThreadSummary): boolean => thread.id != threadId)
+  if (connection.activeThreadId == threadId) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0 }
+  operationError.value = ''
+  if (returnToList) { notify('归档成功'); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+  return true
+}
+let archivePromptOpen = false
+let archiveLoading = false
+// 仅关闭本页发起的归档加载框，避免迟到回执关闭其他页面的提示。
+function hideArchiveLoading() { if (!archiveLoading) return; archiveLoading = false; uni.hideLoading() }
+// 确认框返回时重新核对页面和连接，避免切换会话后误归档。
+function archiveFromMenu() {
+  closeActions()
+  if (!canWrite.value || archivePromptOpen) return
+  if (connection.snapshot?.status != 'idle' || activeTurnId.value.length > 0 || approvalCount.value > 0) { notify('请先完成或停止当前任务，再归档会话'); return }
+  const hostId = pageHostId.value
+  const threadId = pageThreadId.value
+  archivePromptOpen = true
+  uni.showModal({ title: '归档会话', content: '归档后将从会话列表移除，可在电脑端的归档记录中找回。', confirmText: '归档', confirmColor: '#bb3f44', cancelText: '取消', success: (choice) => {
+    archivePromptOpen = false
+    if (!choice.confirm || !isCurrentPage() || !pageVisible.value || connection.hostId != hostId || pageThreadId.value != threadId || !canWrite.value) return
+    busy.value = true; pendingAction.value = 'archive'; operationError.value = ''
+    archiveLoading = true; uni.showLoading({ title: '正在归档…', mask: true })
+    bridge.request('thread.archive', { threadId }, true).then((result: UTSJSONObject) => {
+      hideArchiveLoading(); busy.value = false; pendingAction.value = ''
+      if (pageThreadId.value == threadId) acceptArchiveReceipt(hostId, result)
+    }, (error: Error) => { hideArchiveLoading(); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { operationError.value = error.message; notify(error.message) } })
+  }, fail: (_) => { archivePromptOpen = false } })
+}
+onUnload(() => { hideArchiveLoading() })
+
+// 自动跟随只在靠近底部时保持；手指阅读期间不抢占滚动位置。
+function scrollLatest() { if (touchingTimeline) return; scrollTarget.value = ''; nextTick(() => { if (following.value && !touchingTimeline) scrollTarget.value = 'timeline-bottom' }) }
+function resumeFollowing() { historyFollowRevision++; following.value = true; scrollLatest() }
+function pauseFollowing() { following.value = false; scrollTarget.value = '' }
+function beginTimelineTouch() { historyGesture++; touchingTimeline = true; pauseFollowing() }
+// 按底部锚点的实际位置控制按钮；触摸暂停跟随不代表离开底部。
+function updateTimelinePosition() {
+  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+  const bottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect()
+  if (viewport == null || bottom == null || viewport.height <= 0) return
+  atTimelineBottom.value = bottom.bottom <= viewport.bottom + 36
+  if (atTimelineBottom.value && !touchingTimeline && !loadingHistory.value && Date.now() > layoutUntil) following.value = true
+}
+function entryAnchor(entry: TimelineEntry): string { return 'message-' + entry.id.split(':').join('-') }
+// 正文重排前记录首个可见消息；阅读历史时恢复锚点，不抢占用户的新手势。
+let markdownAnchor = ''
+let markdownAnchorTop = 0
+let markdownGesture = 0
+let markdownLayoutPending = false
+function beforeMarkdownLayout() {
+  if (following.value || touchingTimeline || loadingHistory.value || markdownLayoutPending) return
+  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+  if (viewport == null) return
+  const visible = timeline.value.find((entry: TimelineEntry): boolean => (uni.getElementById(entryAnchor(entry))?.getBoundingClientRect().bottom ?? 0) > viewport.top)
+  if (visible == null) return
+  markdownAnchor = entryAnchor(visible); markdownAnchorTop = uni.getElementById(markdownAnchor)?.getBoundingClientRect().top ?? viewport.top
+  markdownGesture = historyGesture; markdownLayoutPending = true
+}
+function afterMarkdownLayout() {
+  nextTick(() => {
+    if (!isCurrentPage()) return
+    if (following.value) { markdownLayoutPending = false; scrollLatest(); return }
+    if (!markdownLayoutPending) { updateTimelinePosition(); return }
+    markdownLayoutPending = false
+    if (touchingTimeline || loadingHistory.value || markdownGesture != historyGesture) return
+    const current = uni.getElementById(markdownAnchor)?.getBoundingClientRect()
+    if (current == null) return
+    const target = Math.max(0, lastScrollTop + current.top - markdownAnchorTop)
+    if (Math.abs(target - lastScrollTop) < 1) return
+    layoutUntil = Date.now() + 350; historyScrollTop.value = -1
+    nextTick(() => { if (isCurrentPage() && !touchingTimeline && markdownGesture == historyGesture) historyScrollTop.value = target })
+  })
+}
+// 代码和表格横向阅读期间暂停纵向跟随，结束后保留阅读位置。
+function markdownReading(active: boolean) { if (active) { historyGesture++; pauseFollowing() }; touchingTimeline = active }
+// 历史只补充正文；响应时合并最新内容，不把请求期间的实时消息覆盖回旧快照。
+function readOlderPage(request: number, preserveFollowing: boolean, remaining: number) {
+  const base = displayConversation.value
+  if (base == null || !isCurrentPage()) { loadingHistory.value = false; return }
+  const followRevision = historyFollowRevision
+  const cursor = historyPage.value?.cursor ?? ''
+  const firstId = base.messages.length > 0 ? base.messages[0].id : ''
+  bridge.request('thread.history', { threadId: pageThreadId.value, page: true, before: cursor, beforeMessageId: cursor.length == 0 ? firstId : '' }).then((result: UTSJSONObject) => {
+    if (request != historyRequest || !isCurrentPage()) return
+    const page = JSON.parse<HistoryPage>(JSON.stringify(result))
+    if (page == null || page.messages == null || page.turns == null || (page.hasMore && (page.cursor.length == 0 || page.cursor == cursor))) { historyError.value = '历史游标未推进'; loadingHistory.value = false; return }
+    const current = displayConversation.value ?? base
+    const added = page.messages.some((message: ChatMessage): boolean => !current.messages.some((item: ChatMessage): boolean => item.id == message.id))
+    const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+    let anchor = timeline.value.length > 0 ? entryAnchor(timeline.value[0]) : ''
+    if (viewport != null) {
+      const visible = timeline.value.find((entry: TimelineEntry): boolean => (uni.getElementById(entryAnchor(entry))?.getBoundingClientRect().bottom ?? 0) > viewport.top)
+      if (visible != null) anchor = entryAnchor(visible)
+    }
+    const before = anchor.length > 0 ? uni.getElementById(anchor)?.getBoundingClientRect() : null
+    const merged = conversationWithHistory(current, page)!
+    historyPage.value = { messages: merged.messages, turns: merged.turns ?? [], cursor: page.cursor, hasMore: page.hasMore } as HistoryPage
+    if (!added && page.hasMore) {
+      if (remaining > 1) { readOlderPage(request, preserveFollowing, remaining - 1); return }
+      historyError.value = '本次历史读取已达上限'; loadingHistory.value = false; return
+    }
+    loadingHistory.value = false; layoutUntil = Date.now() + 350
+    nextTick(() => {
+      if (request != historyRequest || !isCurrentPage()) return
+      if ((preserveFollowing && following.value) || followRevision != historyFollowRevision) { scrollLatest(); return }
+      if (!added || anchor.length == 0) return
+      following.value = false; scrollTarget.value = ''
+      const after = uni.getElementById(anchor)?.getBoundingClientRect()
+      if (before != null && after != null) {
+        const targetTop = Math.max(0, lastScrollTop + after.top - before.top)
+        // 用户滚回顶部后，下一页可能需要相同偏移；先改变属性，确保原生和 Web 都执行恢复。
+        historyScrollTop.value = -1
+        nextTick(() => { if (request == historyRequest && isCurrentPage()) historyScrollTop.value = targetTop })
+      }
+      else scrollTarget.value = anchor
+    })
+  }, (error: Error) => { if (request == historyRequest && isCurrentPage()) { loadingHistory.value = false; historyError.value = error.message } })
+}
+
+// 一个触顶手势只发起一个读取链；空块最多连续推进八页，失败后等新手势重试。
+function loadOlder(preserveFollowing: boolean = false) {
+  if (loadingHistory.value || !isCurrentPage() || !connection.connected || connection.snapshot?.supportsHistoryPages != true || historyPage.value?.hasMore == false || displayConversation.value == null) return
+  if (!preserveFollowing) pauseFollowing()
+  loadingHistory.value = true; historyError.value = ''
+  readOlderPage(++historyRequest, preserveFollowing, 8)
+}
+function onHistoryTop() {
+  if (lastHistoryGesture == historyGesture || (!touchingTimeline && following.value)) return
+  const delay = layoutUntil - Date.now()
+  if (delay > 0) { clearTimeout(historyTopTimer); historyTopTimer = setTimeout(() => { if (isCurrentPage() && pageVisible.value) onHistoryTop() }, delay + 16); return }
+  lastHistoryGesture = historyGesture; loadOlder()
+}
+// 短会话没有可滚动距离，首个稳定布局自动检查一次，不关闭跟随最新消息。
+function checkShortHistory() {
+  if (initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
+  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+  const bottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect()
+  if (viewport == null || bottom == null || viewport.height <= 0) return
+  initialHistoryChecked = true
+  if (bottom.bottom <= viewport.bottom + 1) { lastHistoryGesture = historyGesture; loadOlder(true) }
+}
+function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); updateTimelinePosition(); if (following.value) scrollLatest() }
+// 内层列表结束触摸不恢复自动跟随，避免新输出打断阅读。
+function beginExecutionTouch() { pauseFollowing(); touchingTimeline = true }
+function endExecutionTouch() { touchingTimeline = false }
+function onTimelineScroll(event: UniScrollEvent) {
+  const top = event.detail.scrollTop
+  const element = uni.getElementById('conversation-timeline')
+  const height = element?.getBoundingClientRect().height ?? 0
+  updateTimelinePosition()
+  if (height > 0 && Date.now() > layoutUntil) {
+    const nearBottom = event.detail.scrollHeight - top - height <= 36
+    if (nearBottom && !touchingTimeline) { following.value = true }
+    else if (top < lastScrollTop - 6 || touchingTimeline) pauseFollowing()
+  }
+  if (!touchingTimeline && lastScrollTop > 60 && top <= 60) historyGesture++
+  lastScrollTop = top
+  if (top <= 60 && !following.value) onHistoryTop()
+}
+// 新输出后重新测量，短会话无滚动事件时也能隐藏按钮。
+watch((): string => (connection.snapshot?.messages ?? []).map((message: ChatMessage): string => message.id + ':' + message.text).join('\n'), (_current: string, _previous: string) => { if (following.value) scrollLatest(); nextTick(() => { updateTimelinePosition(); checkShortHistory() }) })
+watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { selectedExecutionId.value = ''; expandedTurnIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
+// 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
+watch(timeline, (entries: TimelineEntry[]) => {
+  nextTick(() => { updateTimelinePosition() })
+  if (connection.snapshot == null) return
+  // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
+  expandedExecutionIds.value = retainExpandedExecutions(executionTimeline(displayConversation.value?.messages ?? []), expandedExecutionIds.value)
+  const retainedTurns = expandedTurnIds.value.filter((id: string): boolean => (displayConversation.value?.messages ?? []).some((message: ChatMessage): boolean => message.turnId == id))
+  if (retainedTurns.length != expandedTurnIds.value.length) expandedTurnIds.value = retainedTurns
+  if (selectedExecutionId.value.length > 0 && selectedExecution.value == null) selectedExecutionId.value = ''
+})
+// 桌面确认回答或题组失效后，清理对应的展开与提交状态，其他待答题的选择继续保留。
+watch(pendingQuestionGroups, (groups: QuestionGroup[]) => {
+  expandedQuestionIds.value = expandedQuestionIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
+  submittedGroupIds.value = submittedGroupIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
+})
+// 模板通过页面方法调用模块，兼容 Android 对导入函数引用的编译限制。
+function isExecutionExpanded(entry: TimelineEntry): boolean { return executionGroupExpanded(entry, expandedExecutionIds.value) }
+function isProcessExpanded(entry: TimelineEntry): boolean { return expandedTurnIds.value.indexOf(entry.turnId) >= 0 }
+// 主动展开或收起时暂停跟随；后续同步不覆盖本轮的阅读选择。
+function toggleProcess(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyboard(); layoutUntil = Date.now() + 350; const index = expandedTurnIds.value.indexOf(entry.turnId); if (index >= 0) expandedTurnIds.value.splice(index, 1); else expandedTurnIds.value.push(entry.turnId) }
+function executionTitle(message: ChatMessage): string { return executionRecordTitle(message) }
+// 展开列表前暂停跟随并收起键盘；布局变化不触发自动回到底部。
+function toggleExecutions(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyboard(); layoutUntil = Date.now() + 350; expandedExecutionIds.value = toggleExecutionGroup(entry, expandedExecutionIds.value) }
+// 现有消息状态沿用所属轮次，不用于推断单条执行结果；辅助行仅说明详情入口。
+// 详情独立于主时间线滚动，关闭面板不改变当前阅读位置。
+function toggleExecution(id: string) { pauseFollowing(); uni.hideKeyboard(); selectedExecutionId.value = id }
+function closeExecution() { selectedExecutionId.value = '' }
+function toggleQuestion(id: string) { pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
+function jumpTo(anchor: string) { closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''; nextTick(() => { scrollTarget.value = anchor }) }
+function showApprovals() { jumpTo('approvals-anchor') }
+function showQuestions() { const groups = pendingQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
+function updateDraft(event: UniInputEvent) { saveDraft(pageHostId.value, pageThreadId.value, event.detail.value) }
+// 选图完成后写回发起选择的会话，页面切换不会把图片放入其他会话。
+function chooseImages(source: string = 'album') {
+  if (!canWrite.value || imageBusy.value) return
+  if (connection.snapshot?.supportsImages != true) { notify('请先更新电脑连接服务以发送图片'); return }
+  const hostId = pageHostId.value; const threadId = pageThreadId.value
+  const remaining = MAX_COMPOSER_IMAGES - readDraftImages(hostId, threadId).length - readDraftFiles(hostId, threadId).length
+  if (remaining <= 0) { notify('每次最多发送3张图片'); return }
+  imageBusy.value = true
+  uni.chooseImage({ count: remaining, albumMode: 'system', sizeType: ['compressed'], sourceType: [source], success: (result) => {
+    Promise.all(result.tempFilePaths.slice(0, remaining).map((path: string): Promise<string> => prepareImage(path))).then((sources: string[]) => {
+      const images = readDraftImages(hostId, threadId).slice()
+      sources.forEach((src: string, index: number) => { images.push({ id: Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + index, src } as DraftImage) })
+      saveDraftImages(hostId, threadId, images.slice(0, MAX_COMPOSER_IMAGES - readDraftFiles(hostId, threadId).length)); imageBusy.value = false
+    }, (error: Error) => { imageBusy.value = false; if (isCurrentPage()) notify(error.message) })
+  }, fail: (error) => { imageBusy.value = false; if (error.errCode != 1101001 && !error.errMsg.toLowerCase().includes('cancel')) notify('未能选择图片，请重试') } })
+}
+function removeImage(id: string) { if (busy.value || imageBusy.value || connection.pendingCommandId.length > 0) return; saveDraftImages(pageHostId.value, pageThreadId.value, draftImages.value.filter((image: DraftImage): boolean => image.id != id)) }
+function previewImage(src: string) { uni.previewImage({ urls: draftImages.value.map((image: DraftImage): string => image.src), current: src }) }
+// 聚焦状态与键盘高度分开记录，系统缩小窗口时仍能正确展开输入区。
+function onDraftFocus() { clearTimeout(draftBlurTimer); inputFocused.value = true }
+// 给工具栏点击事件留出派发时间，避免失焦先收起输入区而吞掉模型菜单点击。
+function onDraftBlur() { predictionFocus.value = false; clearTimeout(draftBlurTimer); draftBlurTimer = setTimeout(() => { if (pageAlive) inputFocused.value = false }, 150) }
+function updateMenuHeight() {
+  const windowHeight = uni.getWindowInfo().windowHeight
+  const pageBottom = uni.getElementById('conversation-page')?.getBoundingClientRect().bottom ?? windowHeight
+  menuWidth.value = Math.min(330, uni.getWindowInfo().windowWidth - 28)
+  const measuredTop = uni.getElementById('composer-dock')?.getBoundingClientRect().top ?? windowHeight - keyboardInset.value - 134
+  const dockTop = Math.max(210, measuredTop)
+  menuBottom.value = Math.max(0, pageBottom - dockTop)
+  const available = dockTop - 110
+  const model = models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)
+  const desired = composerMenu.value == 'add' ? 232 : composerMenu.value == 'models' ? models.value.length * 48 : composerMenu.value == 'speeds' ? (model?.speeds.length ?? 1) * 66 : (model?.efforts.length ?? 0) * 46 + 145
+  menuHeight.value = Math.max(100, Math.min(desired, 470, available))
+}
+function changeComposerSection(section: string) { composerMenu.value = section; nextTick(() => { updateMenuHeight() }) }
+// 电脑快照是当前设置的来源；切换电脑、会话或断线后使迟到响应失效。
+function loadSettings() {
+  if (!isCurrentPage() || !connection.connected || readOnly.value || connection.snapshot?.supportsExecutionSettings != true || settingsBusy.value) return
+  const request = ++settingsRequest
+  const snapshotRevision = settingsSnapshotRevision
+  settingsLoading.value = true; settingsError.value = ''
+  bridge.request('thread.settings.read', { threadId: pageThreadId.value }).then((result: UTSJSONObject) => {
+    if (request != settingsRequest || !isCurrentPage()) return
+    const response = JSON.parse<SettingsResponse>(JSON.stringify(result))
+    settingsLoading.value = false
+    if (response == null || response.settings == null || response.models == null) { settingsError.value = '电脑端设置暂不可用，请更新连接服务后重试'; return }
+    if (snapshotRevision == settingsSnapshotRevision) settings.value = response.settings
+    models.value = response.models
+    if (composerMenu.value.length > 0) updateMenuHeight()
+  }, (error: Error) => { if (request == settingsRequest && isCurrentPage()) { settingsLoading.value = false; settingsError.value = error.message } })
+}
+
+function openComposerMenu(section: string) {
+  if (!canWrite.value) return
+  actionsVisible.value = false
+  if (composerMenu.value == section) { closeComposerMenu(); return }
+  changeComposerSection(section)
+  if (settings.value == null && connection.snapshot?.supportsExecutionSettings == true) loadSettings()
+}
+
+// 设置选中即同步原桌面的下一轮配置，失败和未知结果均保留最后确认值。
+function selectSetting(key: string, value: string) {
+  if (!canWrite.value || settings.value == null || settingsBusy.value) return
+  const changes: UTSJSONObject = {}
+  changes[key] = value
+  const request = ++settingsRequest
+  const snapshotRevision = settingsSnapshotRevision
+  settingsBusy.value = true; busy.value = true; settingsLoading.value = false; settingsError.value = ''
+  bridge.request('thread.settings.update', { threadId: pageThreadId.value, changes }, true).then((result: UTSJSONObject) => {
+    busy.value = false; settingsBusy.value = false
+    if (request != settingsRequest || !isCurrentPage()) return
+    const response = JSON.parse<SettingsResponse>(JSON.stringify(result))
+    if (response == null || response.settings == null) { settingsError.value = '请刷新并核对电脑端设置'; return }
+    if (snapshotRevision == settingsSnapshotRevision) settings.value = response.settings
+    models.value = response.models
+    closeComposerMenu()
+    refresh()
+  }, (error: Error) => {
+    busy.value = false; settingsBusy.value = false
+    if (request != settingsRequest || !isCurrentPage()) return
+    settingsError.value = error.message
+    // 结果未知仍由全局待核对锁保护，不自动再次提交设置。
+    // 保留失败原因，用户点击重新读取后再核对桌面设置。
+  })
+}
+function togglePlan() { selectSetting('mode', planEnabled.value ? 'default' : 'plan') }
+// 附件变更始终写回原电脑和会话，不将系统选择器的迟到结果放进其他草稿。
+function updateFile(hostId: string, threadId: string, file: DraftFile) {
+  const files = readDraftFiles(hostId, threadId).slice()
+  const index = files.findIndex((item: DraftFile): boolean => item.id == file.id)
+  if (index < 0) return
+  files.splice(index, 1, file); saveDraftFiles(hostId, threadId, files)
+}
+function fileStillPresent(hostId: string, threadId: string, id: string): boolean {
+  return readDraftFiles(hostId, threadId).some((file: DraftFile): boolean => file.id == id)
+}
+// 同一上传编号可恢复缺失分片；断线只暂停，不重放发送指令。
+async function uploadFile(hostId: string, threadId: string, file: DraftFile) {
+  try {
+    if (file.data.length == 0) file.data = await readFileBase64(file.source)
+    if (!fileStillPresent(hostId, threadId, file.id)) return
+    file.status = 'uploading'; file.error = ''; updateFile(hostId, threadId, file)
+    if (connection.hostId != hostId || connection.activeThreadId != threadId || !connection.connected) throw new Error('会话或连接已变化，上传已暂停')
+    const started = await bridge.request('attachment.begin', { threadId, uploadId: file.id, name: file.name, size: file.size })
+    let index = started.getNumber('nextChunk') ?? 0
+    const chunkLength = FILE_CHUNK_BYTES * 4 / 3
+    while (index * chunkLength < file.data.length) {
+      if (!fileStillPresent(hostId, threadId, file.id)) return
+      if (connection.hostId != hostId || connection.activeThreadId != threadId || !connection.connected) throw new Error('会话或连接已变化，上传已暂停')
+      const result = await bridge.request('attachment.chunk', { threadId, uploadId: file.id, index, data: file.data.slice(index * chunkLength, (index + 1) * chunkLength) })
+      index = result.getNumber('nextChunk') ?? index + 1
+      file.progress = Math.min(99, Math.floor((result.getNumber('received') ?? 0) * 100 / file.size))
+      updateFile(hostId, threadId, file)
+    }
+    if (!fileStillPresent(hostId, threadId, file.id)) return
+    if (connection.hostId != hostId || connection.activeThreadId != threadId || !connection.connected) throw new Error('会话或连接已变化，上传已暂停')
+    await bridge.request('attachment.finish', { threadId, uploadId: file.id })
+    file.status = 'ready'; file.progress = 100; updateFile(hostId, threadId, file)
+  } catch (error) {
+    file.status = connection.connected && connection.hostId == hostId && connection.activeThreadId == threadId ? 'error' : 'paused'
+    file.error = (error as Error).message; updateFile(hostId, threadId, file)
+  }
+}
+// 图片继续走压缩后的视觉输入，文档走独立的有界分片上传。
+async function acceptFiles(hostId: string, threadId: string, selected: ChooseFileTempFile[]) {
+  imageBusy.value = true
+  for (const picked of selected) {
+    if (readDraftImages(hostId, threadId).length + readDraftFiles(hostId, threadId).length >= 3) break
+    try {
+      const extension = picked.name.slice(picked.name.lastIndexOf('.') + 1).toLowerCase()
+      if (extension == 'png' || extension == 'jpg' || extension == 'jpeg') {
+        if (!modelSupportsImages.value) throw new Error('当前模型不支持图片，请切换模型')
+        const src = await prepareImage(picked.path)
+        const images = readDraftImages(hostId, threadId).slice()
+        images.push({ id: Date.now().toString() + '-' + Math.random().toString(36).slice(2), src } as DraftImage)
+        saveDraftImages(hostId, threadId, images)
+      } else {
+        validateFile(picked.name, picked.size)
+        const file: DraftFile = { id: Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2), name: picked.name, size: picked.size, source: picked.path, data: '', status: 'uploading', progress: 0, error: '' }
+        const files = readDraftFiles(hostId, threadId).slice(); files.push(file); saveDraftFiles(hostId, threadId, files)
+        uploadFile(hostId, threadId, file)
+      }
+    } catch (error) { if (isCurrentPage()) notify((error as Error).message) }
+  }
+  imageBusy.value = false
+}
+
+function chooseFiles() {
+  if (!canWrite.value || imageBusy.value || connection.snapshot?.supportsAttachments != true) return
+  const remaining = 3 - draftImages.value.length - draftFiles.value.length
+  if (remaining <= 0) { notify('每次最多发送3个附件'); return }
+  const hostId = pageHostId.value; const threadId = pageThreadId.value
+  uni.chooseFile({ count: remaining, type: 'all', success: (result) => { acceptFiles(hostId, threadId, result.tempFiles.slice(0, remaining)) }, fail: (error) => { if (error.errCode != 1101001 && !error.errMsg.toLowerCase().includes('cancel')) notify('未能选择文件，请重试') } })
+}
+
+function retryFile(id: string) {
+  if (!canWrite.value) return
+  const file = draftFiles.value.find((item: DraftFile): boolean => item.id == id)
+  if (file == null || file.status == 'uploading') return
+  file.status = 'uploading'; file.error = ''; updateFile(pageHostId.value, pageThreadId.value, file)
+  uploadFile(pageHostId.value, pageThreadId.value, file)
+}
+function removeFile(id: string) {
+  if (busy.value || connection.pendingCommandId.length > 0) return
+  saveDraftFiles(pageHostId.value, pageThreadId.value, draftFiles.value.filter((file: DraftFile): boolean => file.id != id))
+  if (isCurrentPage() && connection.connected) bridge.request('attachment.abort', { threadId: pageThreadId.value, uploadId: id }).then((_: UTSJSONObject) => {}, (_: Error) => {})
+}
+function composerAction(action: string) {
+  if (!canWrite.value) return
+  if (action == 'plan') { togglePlan(); return }
+  closeComposerMenu()
+  if (action == 'camera' || action == 'album') {
+    if (modelSupportsImages.value) chooseImages(action); else notify('当前模型不支持图片，请切换模型')
+  } else if (action == 'file') chooseFiles()
+}
+function sizeLabel(size: number): string { return fileSizeLabel(size) }
+
+
+// 桥接重启后，即使模型能力字段相同，也要在新快照到达后重新读取设置，清除抢先请求的错误。
+watch((): string => connection.hostId + ':' + connection.activeThreadId + ':' + connection.subscriptionRevision.toString() + ':' + connection.connected.toString() + ':' + (connection.snapshot?.supportsExecutionSettings == true).toString() + ':' + (connection.snapshot?.readOnly == true).toString(), (_current: string, _previous: string) => {
+  settingsRequest++; settingsLoading.value = false; closeComposerMenu()
+  if (!isCurrentPage() || !connection.connected || readOnly.value) { settings.value = null; models.value = [] as ModelOption[]; return }
+  if (connection.snapshot?.supportsExecutionSettings == true) loadSettings()
+})
+watch((): string => JSON.stringify(connection.snapshot?.executionSettings ?? null), (_current: string, _previous: string) => {
+  if (isCurrentPage() && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.executionSettings != null) { settingsSnapshotRevision++; settings.value = connection.snapshot!.executionSettings! }
+})
+
+
+function onDraftLineChange(event: UniTextareaLineChangeEvent) { draftHeight.value = Math.max(24, Math.min(144, event.detail.height)); if (following.value) scrollLatest() }
+// 键盘由输入区处理，扣除系统已缩小的窗口高度，避免自定义顶栏被整体上推或重复留白。
+function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
+  const height = event.detail.height
+  goalViewportHeight.value = uni.getWindowInfo().windowHeight
+  const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight)
+  keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0
+  if (composerMenu.value.length > 0) updateMenuHeight()
+  if (following.value) scrollLatest()
+}
+
+// 成功响应先锁定本组，防止桌面状态尚未广播时再次点击；失败保留组件草稿。
+function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[]) {
+  if (!canWrite.value || submittedGroupIds.value.indexOf(questionGroupId) >= 0) return
+  const threadId = pageThreadId.value
+  busy.value = true
+  bridge.request('question.reply', { threadId, questionGroupId, turnId, answers }, true).then((_: UTSJSONObject) => {
+    busy.value = false
+    if (isCurrentPage()) { submittedGroupIds.value.push(questionGroupId); refresh() }
+  }, (error: Error) => { busy.value = false; if (isCurrentPage()) operationError.value = error.message })
+}
+// 仅在明确收到成功响应后清空草稿，未知结果保留并要求先核对。
+function send() {
+  const text = draft.value.trim()
+  if ((text.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0) || !canWrite.value || imageBusy.value || !filesReady.value) return
+  if (draftImages.value.length > 0 && !modelSupportsImages.value) { notify('当前模型不支持图片，请切换模型'); return }
+  if (draftImages.value.length > 0 && connection.snapshot?.supportsImages != true) { notify('请先更新电脑连接服务以发送图片'); return }
+  operationError.value = ''
+  busy.value = true; pendingAction.value = 'send'
+  const hostId = pageHostId.value
+  const threadId = pageThreadId.value
+  const method = activeTurnId.value.length > 0 ? 'turn.steer' : 'turn.send'
+  const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id), expectedTurnId: activeTurnId.value }
+  const request = bridge.request(method, params, true)
+  const commandId = connection.pendingCommandId
+  rememberSubmission(hostId, threadId, commandId, text)
+  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(method == 'turn.steer' ? '已追加到当前任务' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+}
+function stop() {
+  if (!canWrite.value || activeTurnId.value.length == 0) return
+  busy.value = true; pendingAction.value = 'stop'
+  bridge.request('turn.stop', { threadId: pageThreadId.value, expectedTurnId: activeTurnId.value }, true).then((_: UTSJSONObject) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify('停止请求已提交'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+}
+function reply(id: string, turnId: string, decision: string) {
+  if (!canWrite.value || handledApprovalIds.value.indexOf(id) >= 0) return
+  busy.value = true; pendingAction.value = 'approval:' + id
+  bridge.request('approval.reply', { threadId: pageThreadId.value, approvalId: id, turnId, decision }, true).then((_: UTSJSONObject) => { handledApprovalIds.value.push(id); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify(decision == 'accept' ? '已允许本次操作' : '已拒绝本次操作'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+}
+function checkPending() {
+  if (checking.value || !connection.connected || connection.pendingCommandId.length == 0) return
+  checking.value = true
+  const hostId = connection.hostId
+  const commandId = connection.pendingCommandId
+  bridge.checkPending(pageThreadId.value).then((result: UTSJSONObject) => {
+    checking.value = false
+    const state = result.getString('state') ?? ''
+    const error = result['error'] as UTSJSONObject | null
+    const receipt = result['result'] as UTSJSONObject | null
+    if ((state == 'done' || state == 'unknown') && receipt?.getBoolean('archived') == true && acceptArchiveReceipt(hostId, receipt, commandId)) return
+    // 兼容旧桥接的已接收检查点，只核对原会话，不再消费或重置计划。
+    const accepted = receipt != null && (state == 'done' || state == 'unknown') && receipt!.getBoolean('messageAccepted') == true && receipt!.getString('threadId') == pageThreadId.value
+    if (accepted) settleSubmission(hostId, commandId, true)
+    else if (state == 'done') settleSubmission(hostId, commandId, error == null)
+    else if (state == 'not_found') settleSubmission(hostId, commandId, false)
+    if (!isCurrentPage()) return
+    if (accepted) { operationError.value = ''; notify('消息已发送'); refresh(); return }
+    if (state == 'done') operationError.value = error == null ? '' : error.getString('message') ?? '操作未成功，草稿已保留'
+    else if (state == 'not_found') operationError.value = ''
+    uni.showToast({ title: state == 'done' ? (error == null ? '操作已完成' : '操作未成功，草稿已保留') : state == 'not_found' ? '电脑未收到操作，可以重新提交' : '结果仍待确认，请查看电脑会话', icon: 'none' }); if (error == null) refresh()
+  }, (error: Error) => { checking.value = false; if (isCurrentPage()) operationError.value = error.message })
+}
+
+
+// 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
+function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
+function dismissGoal() { if (!goalBusy.value && goalExpanded.value) { goalCloseRequest.value++; goalExpanded.value = false } }
+function onComposerFocus() { dismissGoal(); onDraftFocus() }
+function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
+function showGoal() {
+  closeActions(); closeComposerMenu()
+  if (connection.snapshot?.supportsGoals != true) { notify('请更新电脑端与连接服务以使用目标'); return }
+  if (connection.snapshot?.goal == null && (!canWrite.value || !goalHostOnline.value || connection.snapshot?.supportsGoalControl != true)) { notify(goalUnavailableReason.value.length > 0 ? goalUnavailableReason.value : '当前暂不能新建目标'); return }
+  uni.hideKeyboard(); goalOpenRequest.value++
+}
+function operateGoal(action: string, objective: string, revision: string) {
+  if (!canWrite.value || !goalHostOnline.value || goalBusy.value || connection.snapshot?.supportsGoalControl != true) return
+  busy.value = true; goalBusy.value = true; operationError.value = ''
+  const hostId = pageHostId.value
+  const threadId = pageThreadId.value
+  const params: UTSJSONObject = { threadId, action, expectedRevision: revision }
+  if (action == 'create' || action == 'edit') params['objective'] = objective
+  bridge.request('thread.goal.update', params, true).then((result: UTSJSONObject) => {
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && connection.snapshot != null) {
+      connection.snapshot!.goal = result['goal'] == null ? null : JSON.parse<ThreadGoal>(JSON.stringify(result['goal']))
+      connection.snapshot!.goalRevision = result.getString('goalRevision') ?? 'none'
+    }
+    busy.value = false; goalBusy.value = false
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { notify(action == 'clear' ? '目标已清除' : '目标已同步'); refresh() }
+  }, (error: Error) => { busy.value = false; goalBusy.value = false; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+}
+
+// 主按钮随上下文切换：有草稿发送，空草稿运行中停止；追加时仍保留独立停止入口。
+function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop() }
+function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
+// 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
+onBackPress((): boolean => { if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
+</script>
+
+<style>
+/* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
+.sheet-grip { width: 42px; height: 4px; border-radius: 2px; background-color: #c7cbc1; align-self: center; margin-top: 8px; flex-shrink: 0; }
+.sheet-caption { margin: 0 16px; padding: 8px 12px; color: #b8cec0; font-size: 12px; line-height: 18px; background-color: #202c28; border-top-left-radius: 12px; border-top-right-radius: 12px; flex-shrink: 0; }
+.sheet-note { color: #7b827a; font-size: 12px; line-height: 20px; margin: 6px 16px 0; flex-shrink: 0; }
+/* 原生button仅接收文字；同级透明点击层保留禁用、键盘和无障碍行为。 */
+.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
+.page { flex: 1; height: 100%; overflow: hidden; background-color: #f8f8f3; }
+.status-spacer { height: var(--status-bar-height); flex-shrink: 0; }
+.conversation-header { flex-direction: row; align-items: center; padding: 4px 8px; flex-shrink: 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.icon-button { width: 44px; height: 44px; padding: 0; margin: 0; align-items: center; justify-content: center; border-radius: 14px; background-color: transparent; border-width: 0; }
+.round-button { background-color: transparent; }
+.thread-capsule { flex: 1; min-width: 0; min-height: 44px; margin: 0 2px; padding: 0 6px; justify-content: center; }
+.thread-heading { flex-direction: row; align-items: center; }
+.thread-title { color: #202c28; font-size: 17px; line-height: 25px; font-weight: bold; flex-shrink: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
+.title-status { margin-left: 10px; flex-shrink: 0; }
+.thread-meta { flex-direction: row; align-items: center; margin-top: 3px; }
+.meta-project { color: #7b827a; font-size: 11px; lines: 1; text-overflow: ellipsis; max-width: 140px; margin: 0 8px 0 5px; }
+.meta-host { color: #7b827a; font-size: 11px; lines: 1; text-overflow: ellipsis; flex: 1; }
+.connection-dot { width: 5px; height: 5px; border-radius: 3px; margin: 0 4px; flex-shrink: 0; }
+.online { background-color: #285c49; }
+.offline { background-color: #94998f; }
+.connection-notice { flex-direction: row; align-items: center; padding: 4px 18px; flex-shrink: 0; }
+.connection-note { font-size: 12px; color: #7b827a; flex: 1; }
+.text-button { font-size: 12px; padding: 0 8px; margin: 0; height: 44px; line-height: 44px; background-color: transparent; color: #285c49; }
+.notice { padding: 8px 18px; background-color: #fff3e8; flex-shrink: 0; }
+.notice-text { color: #785338; font-size: 12px; line-height: 18px; flex: 1; }
+.continue-button { height: 36px; line-height: 36px; margin: 8px 0 0; padding: 0 14px; font-size: 13px; align-self: flex-start; }
+.pending-notice { flex-direction: row; align-items: center; }
+.check { font-size: 12px; height: 34px; line-height: 34px; margin: 0 0 0 8px; padding: 0 12px; }
+.history-controls { padding: 8px 16px; align-items: center; flex-shrink: 0; }
+.history-loading { flex-direction: row; align-items: center; }
+.history-spinner { width: 16px; height: 16px; border-color: #285c49; margin-right: 8px; }
+.history-note { font-size: 12px; color: #7b827a; }
+.timeline-region { flex: 1; min-height: 0; position: relative; }
+.timeline { flex: 1; min-height: 0; }
+.empty { padding: 90px 26px; }
+.opening-loading { padding: 50px 0 28px; align-items: center; }
+.opening-spinner { width: 28px; height: 28px; border-color: #285c49; }
+.opening-loading-text { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 14px; }
+.empty-title { color: #202c28; font-size: 20px; }
+.empty-detail { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 12px; }
+.retry-opening { align-self: flex-start; margin: 18px 0 0; padding: 0 18px; font-size: 14px; }
+/* 收紧阅读留白，现有操作按钮和底部安全区保留原尺寸。 */
+.message { margin: 0 16px; }
+.message-agent { padding: 8px 0 10px; }
+.message-user { margin: 12px 16px 8px 64px; padding: 8px 12px; border-radius: 12px; background-color: #e8eee6; align-self: flex-end; }
+.message-text { color: #202c28; font-size: 16px; line-height: 25px; }
+.message-execution { margin-bottom: 4px; }
+.process-toggle { flex-direction: row; align-items: center; min-height: 44px; align-self: flex-start; border-bottom: 1px solid #e0e5da; }
+.process-label { color: #7b827a; font-size: 14px; line-height: 22px; margin-right: 8px; flex-shrink: 1; }
+.execution-toggle { flex-direction: row; align-items: center; height: 44px; align-self: flex-start; }
+.execution-summary { color: #7b827a; font-size: 14px; line-height: 22px; margin: 0 8px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
+.execution-list { max-height: 240px; flex-shrink: 0; }
+.execution-row { flex-direction: row; align-items: center; height: 44px; }
+.execution-label { color: #7b827a; font-size: 14px; line-height: 22px; margin-left: 8px; flex: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
+.execution-text { color: #e8eee6; font-size: 13px; line-height: 22px; }
+.execution-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(20, 32, 26, 0.32); justify-content: flex-end; z-index: 40; }
+.execution-sheet { height: 78%; border-top-left-radius: 20px; border-top-right-radius: 20px; background-color: #f8f8f3; overflow: hidden; }
+.sheet-header { flex-direction: row; align-items: center; padding: 4px 8px 6px 16px; flex-shrink: 0; }
+.sheet-title { color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; flex: 1; }
+.sheet-output { flex: 1; height: 0; min-height: 0; margin: 0 16px; padding: 12px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; background-color: #202c28; }
+.sheet-actions { padding: 8px 16px 10px; flex-shrink: 0; }
+.sheet-copy { height: 46px; margin: 0; border-radius: 12px; border-style: solid; border-width: 1px; border-color: #285c49; flex-direction: row; align-items: center; justify-content: center; }
+.sheet-copy-label { font-size: 14px; color: #202c28; margin-left: 10px; }
+.question-section { margin: 10px 0; }
+.question-entry { flex-direction: row; align-items: center; padding: 2px 16px; min-height: 44px; }
+.question-label { color: #202c28; font-size: 16px; font-weight: bold; flex: 1; }
+.question-state { color: #888888; font-size: 12px; margin-right: 8px; }
+.approval { margin: 10px 16px; padding: 12px; background-color: #e8eee6; border-radius: 14px; }
+.approval-title { color: #202c28; font-size: 16px; font-weight: bold; }
+.approval-detail { color: #444444; font-size: 13px; line-height: 21px; margin-top: 8px; }
+.approval-cwd { color: #888888; font-size: 11px; margin-top: 8px; }
+.approval-actions { flex-direction: row; margin-top: 10px; }
+.approval-button { flex: 1; height: 44px; line-height: 44px; padding: 0 12px; margin: 0 4px; font-size: 14px; }
+.approval-feedback { color: #777777; font-size: 13px; margin-top: 12px; }
+.working { flex-direction: row; align-items: center; padding: 6px 16px; }
+.working-text { color: #929292; font-size: 13px; margin-left: 6px; }
+.bottom-space { height: 12px; }
+/* 浮钮独立定位，不能叠加会将原生position覆盖为relative的通用点击容器。 */
+.jump-latest { position: absolute; bottom: 8px; right: 16px; width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 22px; background-color: #f8f8f3; border-style: solid; border-width: 1px; border-color: #e3e5dc; align-items: center; justify-content: center; overflow: hidden; }
+.composer-dock { padding: 6px 10px; flex-shrink: 0; border-style: solid; border-width: 0; border-top-width: 1px; border-top-color: #e3e5dc; }
+.bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
+.keyboard-open { padding-bottom: 6px; }
+.draft-images { flex-direction: row; margin-bottom: 10px; }
+.draft-image { width: 64px; height: 64px; margin-right: 10px; position: relative; }
+.draft-thumbnail { width: 64px; height: 64px; border-radius: 8px; }
+.remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; line-height: 22px; padding: 0; margin: 0; border-radius: 12px; font-size: 18px; color: #ffffff; background-color: #285c49; }
+.add-image { width: 36px; height: 36px; line-height: 32px; padding: 0; margin: 0 8px 0 0; border-radius: 10px; font-size: 25px; color: #285c49; background-color: #e8eee6; }
+.image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
+.composer-panel { border-radius: 14px; background-color: #f8f8f3; padding: 8px 12px 6px; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
+.draft { width: 100%; min-height: 24px; color: #202c28; font-size: 15px; line-height: 24px; padding: 0; background-color: transparent; }
+.composer-actions { flex-direction: row; align-items: center; justify-content: space-between; margin-top: 4px; }
+.composer-context { flex-direction: row; align-items: center; flex: 1; }
+.composer-hint { color: #7b827a; font-size: 12px; margin-left: 8px; }
+.primary-actions { flex-direction: row; align-items: center; }
+.primary-action { width: 44px; height: 44px; border-radius: 22px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
+.primary-disabled { background-color: #96a89b; }
+.stop-secondary { margin-right: 10px; width: 44px; height: 44px; background-color: #e8eee6; }
+.menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(0,0,0,0.12); z-index: 30; }
+.menu-top-space { height: 54px; }
+.menu-panel { width: 245px; align-self: flex-end; margin-right: 14px; padding: 10px 0; border-radius: 14px; background-color: #f8f8f3; }
+.menu-caption { color: #929292; font-size: 12px; padding: 8px 20px; }
+.menu-item { flex-direction: row; align-items: center; margin: 0; padding: 0 20px; height: 46px; background-color: transparent; border-radius: 0; }
+.archive-icon { position: relative; width: 17px; height: 14px; margin-left: 1px; margin-right: 1px; margin-top: 3px; border: 2px solid #bb3f44; border-radius: 3px; flex-shrink: 0; }
+.archive-lid { position: absolute; top: -5px; left: -3px; width: 19px; height: 5px; border: 2px solid #bb3f44; border-radius: 2px; background-color: #f8f8f3; }
+.archive-slot { width: 7px; height: 2px; margin-top: 4px; align-self: center; background-color: #bb3f44; }
+.menu-label { color: #202c28; font-size: 14px; line-height: 20px; margin-left: 10px; flex: 1; }
+.archive-label { color: #bb3f44; }
+/* #ifdef WEB */
+.execution-text, .message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.thread-title, .meta-project, .meta-host { display: block; white-space: nowrap; overflow: hidden; }
+.execution-label, .execution-summary { display: block; white-space: nowrap; overflow: hidden; }
+.menu-item { justify-content: flex-start; }
+/* #endif */
+.composer-dock { position: relative; z-index: 10; border-top-width: 0; padding: 8px 12px; }
+.composer-menu-open { z-index: 40; }
+.composer-dismiss { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 35; background-color: rgba(32, 44, 40, 0.08); }
+.composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
+.composer-panel { border-radius: 23px; padding: 12px 12px 8px; }
+.composer-compact { border-radius: 30px; padding: 5px 6px; }
+.prediction-ghost { flex: 1; min-width: 0; min-height: 48px; padding-top: 4px; padding-bottom: 4px; }
+.prediction-text { color: #8b9690; font-size: 15px; line-height: 24px; lines: 3; text-overflow: ellipsis; }
+.draft-line { flex-direction: row; align-items: center; }
+.draft { flex: 1; width: 0; min-width: 0; }
+.compact-draft { margin: 0 8px; }
+.compact-add { width: 38px; height: 42px; line-height: 40px; margin: 0; padding: 0; background-color: transparent; color: #285c49; font-size: 29px; }
+.settings-trigger { flex: 1; min-width: 0; height: 42px; flex-direction: row; justify-content: flex-end; align-items: center; margin: 0 10px 0 2px; padding: 0 3px; }
+.settings-trigger-label { min-width: 0; flex-shrink: 1; lines: 1; text-overflow: ellipsis; font-size: 13px; color: #202c28; margin-right: 4px; }
+.plan-chip { align-self: flex-start; height: 30px; padding: 0 10px; margin-bottom: 10px; border-radius: 15px; flex-direction: row; align-items: center; background-color: #e8eee6; }
+.plan-label { color: #285c49; font-size: 13px; margin: 0 6px; }
+.draft-file { flex-direction: row; align-items: center; padding: 9px; margin-bottom: 8px; background-color: #e8eee6; border-radius: 12px; }
+.file-copy { flex: 1; min-width: 0; margin-left: 9px; }
+.file-name { font-size: 13px; color: #202c28; lines: 1; text-overflow: ellipsis; }
+.file-status { font-size: 11px; line-height: 17px; color: #7b827a; lines: 2; text-overflow: ellipsis; }
+.file-retry { font-size: 12px; color: #285c49; background-color: transparent; padding: 0 7px; margin: 0; }
+.file-remove { font-size: 22px; color: #7b827a; background-color: transparent; padding: 0; margin: 0; width: 30px; line-height: 32px; height: 32px; }
+.composer-caption { font-size: 11px; color: #7b827a; line-height: 16px; margin: 5px 2px 0; }
+/* #ifdef WEB */
+.settings-trigger-label, .file-name { display: block; white-space: nowrap; overflow: hidden; }
+/* #endif */
+
+</style>

@@ -1,0 +1,114 @@
+<template>
+  <view class="page">
+    <view class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回会话列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
+    <scroll-view direction="vertical" class="content">
+      <view class="body">
+        <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的会话会自动同步到首页。</text>
+        <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的会话' : '恢复连接后会自动同步会话' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><app-icon name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" aria-label="重新连接" @click="reconnect"></button></view></view></view>
+        <view class="section"><text class="section-title">接入配置</text><text class="description">粘贴电脑生成的连接配置。</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands" /><text class="privacy-note">配置仅用于连接你的电脑，请勿分享给他人。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands" @click="importConfig">导入并连接</button><text class="hint">更换连接前，请先确认当前操作已完成。</text></view>
+        <view v-if="connection.computers.length > 0" class="section"><text class="section-title">已授权的电脑</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame" ><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', computer.online ? 'online' : 'offline']"></view><text class="state">{{ computer.online ? '在线' : '离线' }}</text><view class="selected-mark"><app-icon v-if="computer.id == connection.hostId" name="check" :size="20" /></view><button class="action-hitbox" hover-class="action-pressed"  :aria-label="'切换到' + computer.label" @click="selectComputer(computer.id)"></button></view></view>
+        <view v-if="pendingCommands.length > 0" class="section"><text class="section-title">待核对操作</text><view v-for="command in pendingCommands" :key="command.id" class="pending-entry"><text class="pending-note">{{ command.threadId == '@new' ? '新对话创建结果待确认' : '原会话操作结果待确认' }}</text><button class="button-secondary" @click="openPending(command)">{{ command.threadId == '@new' ? '核对结果' : '查看原会话' }}</button></view></view>
+        <view v-if="connection.legacyPendingCommandId.length > 0" class="section"><text class="pending-note">旧版操作未保存所属会话，请在此核对；其他会话可以正常使用。</text><button class="button-secondary" :disabled="checkingLegacy || !connection.connected" @click="checkLegacy">{{ checkingLegacy ? '正在核对…' : '核对旧版操作' }}</button></view>
+        <text v-if="connection.error.length > 0" class="pending-note">{{ connection.error }}</text>
+        <text class="hint closing-note">连接配置会保存在当前设备，刷新后自动连接，请勿在公共设备上保存。</text>
+        <button v-if="connection.configured" class="forget-button button-secondary" :disabled="hasPendingCommands" @click="forgetConfiguration">清除本地连接</button>
+      </view>
+    </scroll-view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref } from 'vue'
+import { bridge, connection, Computer, computerIcon, PendingCommand } from '../../services/bridge.uts'
+import AppIcon from '../../components/app-icon/app-icon.uvue'
+const configuration = ref('')
+const currentComputerIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId) ?? null))
+function iconForComputer(computer: Computer): string { return computerIcon(computer) }
+function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
+const checkingLegacy = ref(false)
+const hasPendingCommands = computed((): boolean => bridge.hasPendingCommands())
+const pendingCommands = computed((): PendingCommand[] => connection.pendingCommands.filter((entry: PendingCommand): boolean => entry.hostId == connection.hostId))
+// 旧版无会话身份的记录留在设置页核对，不绑定到当前打开的聊天。
+function checkLegacy() {
+  if (checkingLegacy.value || !connection.connected) return
+  checkingLegacy.value = true
+  bridge.checkLegacyPending().then((result: UTSJSONObject) => { checkingLegacy.value = false; notify(result.getString('state') == 'unknown' ? '结果仍待确认，请查看原电脑会话' : '旧版操作已核对') }, (error: Error) => { checkingLegacy.value = false; notify(error.message) })
+}
+// 会话操作回到原会话核对；新建尚无会话编号时只查询原账本。
+function openPending(command: PendingCommand) {
+  if (command.threadId == '@new') { bridge.checkPending('').then((result: UTSJSONObject) => { notify(result.getString('state') == 'unknown' ? '结果仍待确认，请查看电脑' : '已核对，请回到新对话继续') }, (error: Error) => { notify(error.message) }); return }
+  uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(command.threadId) })
+}
+const currentComputerLabel = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)?.label ?? '我的电脑')
+const currentComputerOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online))
+// 接入错误使用简短提示，不把含凭据的原始异常展示出来。
+// 返回时先收起键盘，直接打开本页时仍能回到会话首页。
+function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+// 重连沿用现有配置，不重新导入或重放请求。
+function reconnect() { bridge.resume() }
+// 页面离开后不保留含凭据的输入草稿；持久化统一由连接服务管理。
+onUnload(() => { configuration.value = '' })
+
+// 未核对的写操作会阻止更换配置，成功导入后立即清空输入并返回会话列表。
+function importConfig() {
+  if (hasPendingCommands.value) { notify('请先回到原会话或本页核对上次操作结果'); return }
+  try { bridge.configure(configuration.value); configuration.value = ''; goBack() }
+  catch (error) { notify(error instanceof Error && error.message == '无法保存连接配置，请检查浏览器存储权限' ? error.message : '配置无效，请核对电脑生成的内容') }
+}
+
+// 清除后立即断开并留在配置页，不删除待核对编号或其他浏览器数据。
+function forgetConfiguration() {
+  if (hasPendingCommands.value) { notify('请先回到原会话或本页核对上次操作结果'); return }
+  try { bridge.forgetConfiguration(); configuration.value = ''; notify('已清除本地连接') }
+  catch (_) { notify('无法清除本地连接，请检查浏览器存储权限') }
+}
+
+// 沿用原设备切换的订阅清理与待核对编号恢复，不重放任何写操作。
+function selectComputer(id: string) {
+  if (connection.hostId == id) return
+  try { bridge.selectComputer(id); notify('已切换电脑') }
+  catch (error) { notify((error as Error).message) }
+}
+</script>
+
+<style>
+.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
+.page { flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f8f8f3; }
+.header { height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
+.back { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
+.header-title { font-size: 17px; line-height: 26px; font-weight: bold; color: #202c28; margin-left: 8px; }
+.content { flex: 1; height: 0; min-height: 0; }
+.body { padding: 22px 24px 30px; margin-bottom: var(--uni-safe-area-inset-bottom); }
+.page-title { color: #202c28; font-size: 28px; line-height: 38px; font-weight: bold; }
+.description { color: #7b827a; font-size: 14px; line-height: 23px; margin-top: 8px; }
+.section { padding: 24px 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.pending-entry { margin-top: 12px; }
+.current-section { padding-top: 34px; }
+.section-title { color: #202c28; font-size: 16px; line-height: 24px; font-weight: bold; }
+.current-computer { flex-direction: row; align-items: center; margin-top: 18px; }
+.computer-content { flex: 1; min-width: 0; margin-left: 16px; }
+.computer-heading { flex-direction: row; align-items: center; }
+.computer-name { color: #202c28; font-size: 15px; line-height: 23px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
+.dot { width: 6px; height: 6px; border-radius: 3px; margin: 0 8px 0 14px; flex-shrink: 0; }
+.online { background-color: #285c49; }
+.offline { background-color: #94998f; }
+.state { color: #7b827a; font-size: 12px; line-height: 20px; flex-shrink: 1; }
+.computer-note { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 3px; }
+.retry { width: 44px; height: 44px; align-items: center; justify-content: center; }
+/* 原生 textarea 显式占满宽度，避免默认宽度与主按钮不齐。 */
+.config-input { width: 100%; height: 110px; margin-top: 14px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; padding: 14px; color: #202c28; font-size: 13px; line-height: 22px; background-color: transparent; }
+.privacy-note { color: #7b827a; font-size: 11px; line-height: 18px; margin-top: 8px; }
+.connect-button { width: 100%; height: 46px; line-height: 46px; padding: 0 18px; margin: 14px 0 0; border-radius: 12px; font-size: 15px; }
+.hint { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 10px; }
+.computer-option { min-height: 58px; padding: 14px 0; flex-direction: row; align-items: center; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.option-name { flex: 1; min-width: 0; color: #202c28; font-size: 15px; line-height: 22px; margin-left: 16px; lines: 1; text-overflow: ellipsis; }
+.selected-mark { width: 28px; align-items: flex-end; margin-left: 14px; }
+.pending-note { color: #8d4d2b; font-size: 12px; line-height: 20px; margin-top: 18px; }
+.closing-note { margin-top: 22px; }
+.forget-button { width: 100%; height: 44px; line-height: 44px; margin: 14px 0 0; font-size: 14px; border-radius: 12px; }
+/* #ifdef WEB */
+.computer-name, .option-name { display: block; white-space: nowrap; overflow: hidden; }
+/* #endif */
+</style>

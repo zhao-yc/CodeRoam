@@ -1,0 +1,73 @@
+<template>
+  <view class="question-card">
+    <text class="card-title">{{ group.state == 'answered' ? '已回答' : group.state == 'expired' ? '问题已失效' : submitted ? '回答已提交，等待同步' : '需要你的回答' }}</text>
+    <view v-for="item in drafts" :key="item.question.id" class="question">
+      <text v-if="item.question.header.length > 0" class="header">{{ item.question.header }}</text>
+      <text class="title">{{ item.question.title }}</text>
+      <text v-if="item.question.answer.length > 0" class="answer">{{ item.question.isSecret ? '已填写' : item.question.answer }}</text>
+      <template v-else-if="group.state == 'pending'">
+        <view v-for="option in item.question.options" :key="option.label" :class="['option', !item.custom && item.text == option.label ? 'selected' : '']" @click="choose(item.question.id, option.label)">
+          <view class="option-indicator"><AppIcon v-if="!item.custom && item.text == option.label" name="check" :size="18" tone="dark" /></view>
+          <view class="option-content">
+            <text class="option-label">{{ option.label }}</text>
+            <text v-if="option.description.length > 0" class="description">{{ option.description }}</text>
+          </view>
+        </view>
+        <view v-if="item.question.isOther && item.question.options.length > 0" :class="['option', item.custom ? 'selected' : '']" @click="chooseOther(item.question.id)">
+          <view class="option-indicator"><AppIcon v-if="item.custom" name="check" :size="18" tone="dark" /></view>
+          <view class="option-content"><text class="option-label">其他答案</text></view>
+        </view>
+        <input v-if="item.question.isSecret && (item.custom || item.question.options.length == 0)" v-model="item.text" class="custom-input secret-input" password :maxlength="32000" :disabled="locked" placeholder="请输入答案" />
+        <textarea v-else-if="item.custom || item.question.options.length == 0" v-model="item.text" class="custom-input" :maxlength="32000" :disabled="locked" placeholder="填写你的答案…"></textarea>
+      </template>
+    </view>
+    <button v-if="group.state == 'pending'" :class="['submit', locked || !complete ? 'submit-disabled' : '']" :disabled="locked || !complete" @click="submit">{{ busy ? '提交中…' : submitted ? '已提交' : '提交回答' }}</button>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref, watch } from 'vue'
+import { QuestionGroup, QuestionAnswer, Question } from '../../services/bridge.uts'
+import AppIcon from '../app-icon/app-icon.uvue'
+type AnswerDraft = { question: Question, text: string, custom: boolean }
+const props = defineProps<{ group: QuestionGroup, busy: boolean, disabled: boolean, submitted: boolean }>()
+const emit = defineEmits(['submit'])
+const drafts = ref<AnswerDraft[]>([])
+const locked = computed((): boolean => props.busy || props.disabled || props.submitted)
+const complete = computed((): boolean => drafts.value.length == props.group.questions.length && drafts.value.every((draft: AnswerDraft): boolean => draft.text.trim().length > 0))
+// 快照与增量更新保留当前草稿，仅以桌面已确认的答案覆盖对应子题。
+watch((): QuestionGroup => props.group, (group: QuestionGroup) => {
+  drafts.value = group.questions.map((question): AnswerDraft => {
+    const previous = drafts.value.find((draft: AnswerDraft): boolean => draft.question.id == question.id)
+    return { question, text: question.answer.length > 0 ? question.answer : previous?.text ?? '', custom: previous?.custom ?? (question.options.length == 0) } as AnswerDraft
+  })
+}, { immediate: true })
+function choose(id: string, label: string) { if (locked.value) return; const draft = drafts.value.find((item: AnswerDraft): boolean => item.question.id == id); if (draft != null) { draft.text = label; draft.custom = false } }
+function chooseOther(id: string) { if (locked.value) return; const draft = drafts.value.find((item: AnswerDraft): boolean => item.question.id == id); if (draft != null && !draft.custom) { draft.text = ''; draft.custom = true } }
+// 多题作为一个写操作提交，按钮点击本身不会自动代选默认答案。
+function submit() {
+  if (locked.value || !complete.value) return
+  const answers = drafts.value.map((draft: AnswerDraft): QuestionAnswer => ({ questionId: draft.question.id, text: draft.text.trim() } as QuestionAnswer))
+  emit('submit', props.group.id, props.group.turnId, answers)
+}
+</script>
+
+<style>
+/* 对齐正文的紧凑留白，选项和提交按钮保留触控高度。 */
+.question-card { margin: 0px 16px 10px; padding: 8px 0px; background-color: #f8f8f3; }
+.card-title { color: #6b6b6b; font-size: 13px; line-height: 20px; }
+.question { margin-top: 12px; }
+.header { color: #7b827a; font-size: 12px; line-height: 18px; margin-bottom: 5px; }
+.title { color: #202c28; font-size: 16px; line-height: 25px; margin-bottom: 6px; font-weight: bold; }
+.option { flex-direction: row; align-items: flex-start; min-height: 44px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; background-color: #f8f8f3; padding: 10px; margin-top: 6px; }
+.selected { border-color: #285c49; }
+.option-indicator { width: 18px; height: 22px; flex-shrink: 0; align-items: center; justify-content: center; margin-right: 10px; }
+.option-content { flex: 1; }
+.option-label { color: #202c28; font-size: 14px; line-height: 22px; }
+.description { color: #7b827a; font-size: 12px; line-height: 19px; margin-top: 3px; }
+.custom-input { height: 88px; margin-top: 10px; padding: 12px; border-radius: 12px; background-color: #eeefe8; color: #202c28; font-size: 14px; }
+.secret-input { height: 46px; }
+.answer { color: #404040; font-size: 14px; line-height: 24px; }
+.submit { margin-top: 12px; height: 44px; line-height: 44px; padding: 0px 18px; border-radius: 12px; background-color: #285c49; color: #f8f8f3; font-size: 14px; font-weight: bold; }
+.submit-disabled { background-color: #e9e9e9; color: #999999; }
+</style>

@@ -1,0 +1,17 @@
+import Intent from 'android.content.Intent'
+import Uri from 'android.net.Uri'
+import { OpenSchema } from '../interface.uts'
+
+// 使用 DCloud openSchema 示例的系统 Intent 方式；没有处理程序时交由页面提供复制入口。
+export const openSchema: OpenSchema = function (url: string): boolean {
+  const lower = url.toLowerCase()
+  if (!lower.startsWith('https://') && !lower.startsWith('http://')) return false
+  const activity = UTSAndroid.getUniActivity()
+  if (activity == null) return false
+  try {
+    const intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    activity.startActivity(intent)
+    return true
+  } catch (_failure) { return false }
+}

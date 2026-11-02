@@ -1,0 +1,2 @@
+buildscript { dependencies { classpath(files('plugins/uts-kotlin-compiler-plugin-0.0.1.jar')); classpath(files('plugins/uts-kotlin-gradle-plugin-0.0.1.jar')) } }
+plugins { id 'com.android.application' version '8.12.0' apply false; id 'org.jetbrains.kotlin.android' version '2.2.0' apply false }
