@@ -56,6 +56,7 @@
 import { computed, ref, nextTick, watch, onUnmounted } from 'vue'
 import { bridge, connection, Computer, computerIcon, taskState, conversationTaskState, threadIndicator } from '../../services/bridge.uts'
 import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, refreshComputerThreads } from '../../services/thread-list.uts'
+import { readConversationCache } from '../../services/conversation-cache.uts'
 import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
@@ -254,7 +255,8 @@ function onConversationCreated(id: string) { editingNewConversation.value = fals
 function refreshThreads() { connection.error = ''; if (connection.connected) refreshComputerThreads(selectedComputerId.value); else bridge.resume() }
 // 跨电脑打开时仍先通过已有的授权检查和待核对锁。
 // 跳转时携带列表标题和项目名，让详情页在快照返回前即可显示相同名称。
-function openThread(thread: ComputerThread) { if (!thread.online) { uni.showToast({ title: '电脑离线，恢复连接后可打开聊天', icon: 'none' }); return }; try { bridge.selectComputer(thread.hostId); bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_reason: Error) => {}); uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目'), success: () => { recentThreads.value = rememberRecentThread(recentThreads.value, thread.key, Date.now()); try { uni.setStorageSync('codex-mobile-list-recent', JSON.stringify(recentThreads.value)) } catch (_) {} } }) } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) } }
+// 离线时允许查看对应配对和电脑的缓存，不触发桌面导航。
+function openThread(thread: ComputerThread) { if ((!connection.connected || !thread.online) && readConversationCache(connection.cacheNamespace, thread.hostId, thread.id) == null) { uni.showToast({ title: '此聊天暂无本地缓存，请恢复连接后查看', icon: 'none' }); return }; try { bridge.selectComputer(thread.hostId); if (connection.connected && thread.online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_reason: Error) => {}); uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目'), success: () => { recentThreads.value = rememberRecentThread(recentThreads.value, thread.key, Date.now()); try { uni.setStorageSync('codex-mobile-list-recent', JSON.stringify(recentThreads.value)) } catch (_) {} } }) } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) } }
 function resetThreadScroll() { savedThreadScrollTop = 0; threadScrollTop.value = -1; nextTick(() => { threadScrollTop.value = 0 }) }
 function openSearch() { searchVisible.value = true; nextTick(() => { searchFocused.value = true }) }
 function closeSearch() { search.value = ''; searchFocused.value = false; searchVisible.value = false; uni.hideKeyboard() }
