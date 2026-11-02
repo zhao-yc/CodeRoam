@@ -12,7 +12,7 @@
         <view class="option-row"><app-icon name="file" :size="21" /><text class="option-label">上传文件</text><button class="option-hitbox" :disabled="!filesEnabled" aria-label="上传文件" @click="emit('action', 'file')"></button></view>
         <view class="option-separator"></view>
         <view class="option-row"><app-icon name="plugin" :size="21" /><text class="option-label">插件</text><button class="option-hitbox" :disabled="busy" aria-label="插件" @click="emit('action', 'plugin')"></button></view>
-        <view class="option-row"><app-icon name="plan" :size="21" /><text class="option-label">计划模式</text><app-icon v-if="settings?.mode == 'plan'" name="check" :size="20" /><button class="option-hitbox" :disabled="!settingsEnabled || busy" aria-label="切换计划模式" @click="emit('action', 'plan')"></button></view>
+        <view class="option-row" :class="{ 'option-disabled': planDisabled || !settingsEnabled || busy }"><app-icon name="plan" :size="21" /><text class="option-label">计划模式</text><app-icon v-if="settings?.mode == 'plan'" name="check" :size="20" /><button class="option-hitbox" :disabled="planDisabled || !settingsEnabled || busy" aria-label="切换计划模式" @click="emit('action', 'plan')"></button></view>
         <view class="option-row"><app-icon name="target" :size="21" /><text class="option-label">追求目标</text><button class="option-hitbox" :disabled="busy" aria-label="追求目标" @click="emit('action', 'goal')"></button></view>
         <text v-if="!filesEnabled || !settingsEnabled" class="option-note">{{ note }}</text>
       </template>
@@ -39,7 +39,7 @@
 import { computed } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { ExecutionSettings, ModelOption, SpeedOption, effortLabel } from '../../services/execution-settings.uts'
-const props = defineProps<{ section: string, settings: ExecutionSettings | null, models: ModelOption[], loading: boolean, busy: boolean, error: string, width: number, height: number, imagesEnabled: boolean, filesEnabled: boolean, settingsEnabled: boolean, note: string }>()
+const props = defineProps<{ section: string, settings: ExecutionSettings | null, models: ModelOption[], loading: boolean, busy: boolean, error: string, width: number, height: number, imagesEnabled: boolean, filesEnabled: boolean, settingsEnabled: boolean, planDisabled: boolean, note: string }>()
 const emit = defineEmits<{ section: [value: string], action: [value: string], select: [key: string, value: string], dismiss: [], retry: [] }>()
 // 新建与已有会话共用紧凑附件菜单，仅为实际显示的说明和同步提示预留高度；小屏继续滚动。
 const scrollHeight = computed((): number => props.section == 'add' ? Math.min(props.height, 6 * 46 + 17 + ((!props.filesEnabled || !props.settingsEnabled) ? 60 : 0) + (props.busy ? 40 : 0)) : props.height)
@@ -56,6 +56,8 @@ function labelForEffort(effort: string): string { return effortLabel(effort) }
 .options-scroll { flex-shrink: 1; }
 .back-action, .close-action { position: relative; width: 34px; height: 34px; align-items: center; justify-content: center; }
 .option-row { position: relative; min-height: 46px; flex-direction: row; align-items: center; padding: 8px 14px; }
+/* 禁用态作用于整行，原生按钮负责阻止触发，图标和文字一起变灰。 */
+.option-disabled { opacity: 0.4; }
 .option-hitbox { position: absolute; left: 0; right: 0; top: 0; bottom: 0; padding: 0; margin: 0; border-radius: 12px; background-color: transparent; }
 .option-label { flex: 1; margin-left: 14px; font-size: 16px; color: #202c28; }
 .option-separator { height: 1px; background-color: #e3e5dc; margin: 8px 14px; }

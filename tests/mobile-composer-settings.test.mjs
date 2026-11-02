@@ -26,6 +26,31 @@ function fixture() {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('菜单打开后任务启动也不能切换计划模式，任务结束后恢复选择', async () => {
+  for (const mode of ['plan', 'default']) {
+    for (const running of [{ activeTurnId: 'active', status: 'idle' }, { activeTurnId: '', status: 'active' }]) {
+      const f = fixture();
+      f.context.composerMenu.value = 'add';
+      f.context.settings.value.mode = mode === 'plan' ? 'default' : 'plan';
+      Object.assign(f.context.connection.snapshot, running);
+      f.context.selectedMode = mode;
+      vm.runInContext("selectSetting('mode', selectedMode)", f.context);
+      assert.equal(f.calls.length, 0);
+      assert.equal(f.context.settingsBusy.value, false);
+      assert.equal(f.context.composerMenu.value, 'add');
+      assert.equal(f.context.settings.value.mode, mode === 'plan' ? 'default' : 'plan');
+      Object.assign(f.context.connection.snapshot, { activeTurnId: '', status: 'idle' });
+      vm.runInContext("selectSetting('mode', selectedMode)", f.context);
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.calls[0].method, 'thread.settings.update');
+      assert.equal(f.calls[0].params.changes.mode, mode);
+      f.pending.shift().resolve({ settings: { ...f.context.settings.value, mode }, models: [] });
+      await tick();
+      assert.equal(f.context.settings.value.mode, mode);
+    }
+  }
+});
+
 test('任务运行中选择模型或推理强度即同步电脑，无需发送消息', async () => {
   for (const [key, value] of [['model', 'model-b'], ['effort', 'max']]) {
     const f = fixture();
