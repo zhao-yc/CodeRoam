@@ -23,10 +23,10 @@ test('明确完成轮次默认仅保留提问、过程入口和最终报告，�
   const f=fixture(),state=snapshot();
   Object.freeze(state.messages);Object.freeze(state);
   const collapsed=f.reportTimeline(state,[]);
-  assert.deepEqual(plain(collapsed.map(entry=>entry.id)),['u','process:turn','final']);
+  assert.deepEqual(plain(collapsed.map(entry=>entry.id)),['u','process:turn:final','final']);
   assert.equal(collapsed[1].label,'用时 2分钟50秒 · 查看执行过程');
-  assert.deepEqual(plain(f.reportTimeline(state,['turn']).map(entry=>entry.id)),['u','process:turn','progress','execution:c','more','answer','final']);
-  assert.match(f.reportTimeline(state,['turn'])[1].label,/收起执行过程/);
+  assert.deepEqual(plain(f.reportTimeline(state,['process:turn:final']).map(entry=>entry.id)),['u','process:turn:final','progress','execution:c','more','answer','final']);
+  assert.match(f.reportTimeline(state,['process:turn:final'])[1].label,/收起执行过程/);
 });
 
 test('运行、失败、停止、待操作、无报告和旧阶段数据均保持展开，不用末条回复猜报告',()=>{
@@ -51,7 +51,7 @@ test('纯报告不生成空过程入口，多轮独立且不吞并后续报告�
   const f=fixture(),first=snapshot(),second=snapshot();
   second.messages.forEach(message=>{message.id='next-'+message.id;message.turnId='next';});second.turns[0].turnId='next';
   first.messages.push(...second.messages);first.turns.push(...second.turns);
-  let entries=f.reportTimeline(first,['turn']);
+  let entries=f.reportTimeline(first,['process:turn:final']);
   assert.equal(entries.filter(entry=>entry.role==='process').length,2);
   assert.ok(entries.some(entry=>entry.id==='progress'));assert.equal(entries.some(entry=>entry.id==='next-progress'),false);
   first.turns[1].status='inProgress';first.activeTurnId='next';
@@ -80,19 +80,40 @@ test('页面完成后收起一次，手动展开与命令选择跨同步保留�
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   // 页面展示依赖真实注释解析器，避免新展示字段影响过程折叠回归。
   vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/annotations.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={timeline,expandedTurnIds,expandedExecutionIds,following,scrollTarget,toggleProcess,toggleExecutions,copyLatestReply};',context);
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={timeline,expandedReportIds,expandedExecutionIds,following,scrollTarget,toggleProcess,toggleExecutions,copyLatestReply};',context);
   const page=context.subject,sync=watches.find(watch=>watch.source===page.timeline).callback;
   page.toggleExecutions(page.timeline.value.find(entry=>entry.role==='execution'));
   assert.equal(page.following.value,false);assert.deepEqual(plain(page.expandedExecutionIds.value),['c']);
   connection.snapshot=snapshot();sync(page.timeline.value);
-  assert.deepEqual(plain(page.timeline.value.map(entry=>entry.id)),['u','process:turn','final']);
+  assert.deepEqual(plain(page.timeline.value.map(entry=>entry.id)),['u','process:turn:final','final']);
   assert.equal(page.scrollTarget.value,'');assert.equal(page.following.value,false);
   page.toggleProcess(page.timeline.value[1]);sync(page.timeline.value);
   assert.ok(page.timeline.value.some(entry=>entry.id==='progress'));assert.deepEqual(plain(page.expandedExecutionIds.value),['c']);
   connection.snapshot=structuredClone(connection.snapshot);sync(page.timeline.value);
-  assert.ok(page.timeline.value.some(entry=>entry.id==='progress'));assert.deepEqual(plain(page.expandedTurnIds.value),['turn']);
+  assert.ok(page.timeline.value.some(entry=>entry.id==='progress'));assert.deepEqual(plain(page.expandedReportIds.value),['process:turn:final']);
   page.copyLatestReply();assert.equal(calls[0],'final');
   page.toggleProcess(page.timeline.value[1]);sync(page.timeline.value);assert.deepEqual(plain(page.expandedExecutionIds.value),['c']);
   const switchThread=watches.find(watch=>typeof watch.source==='function'&&watch.source()===connection.activeThreadId).callback;
-  switchThread('other','thread');assert.deepEqual(plain(page.expandedTurnIds.value),[]);assert.deepEqual(plain(page.expandedExecutionIds.value),[]);
+  switchThread('other','thread');assert.deepEqual(plain(page.expandedReportIds.value),[]);assert.deepEqual(plain(page.expandedExecutionIds.value),[]);
+});
+
+/** 回归同一底层轮次包含早期总结、后续提问和第二份总结的情况。 */
+function multipleReports(){return normalizeConversation({id:'thread',turns:[{turnId:'turn',status:'completed',durationMs:170000,items:[user('u'),agent('early','final_answer'),user('followup'),agent('progress'),{id:'c',type:'commandExecution',command:'node --test'},agent('final','final_answer')]}],requests:[]});}
+test('首份总结没有过程也不会阻止后续报告收起，提问与两份总结均保留',()=>{
+ const f=fixture(),state=multipleReports(),entries=f.reportTimeline(state,[]);
+ assert.deepEqual(plain(entries.map(e=>e.id)),['u','early','followup','process:turn:final','final']);
+ assert.equal(entries[3].label,'查看执行过程');
+ assert.deepEqual(plain(f.reportTimeline(state,['process:turn:final']).filter(e=>e.role!=='process').map(e=>e.id)),['u','early','followup','progress','execution:c','final']);
+ assert.deepEqual(plain(f.reportTurnIds(state)),['turn']);
+});
+test('同轮多份报告过程独立开关，前插历史不会改变已展开段的编号',()=>{
+ const f=fixture(),state=multipleReports();state.messages.splice(1,0,{id:'old-progress',role:'assistant',phase:'commentary',text:'早期过程',turnId:'turn',status:'completed'});
+ const collapsed=f.reportTimeline(state,[]);assert.deepEqual(plain(collapsed.filter(e=>e.role==='process').map(e=>e.id)),['process:turn:early','process:turn:final']);
+ let entries=f.reportTimeline(state,['process:turn:final']);assert.equal(entries.some(e=>e.id==='old-progress'),false);assert.equal(entries.some(e=>e.id==='progress'),true);
+ entries=f.reportTimeline(state,['process:turn:early']);assert.equal(entries.some(e=>e.id==='old-progress'),true);assert.equal(entries.some(e=>e.id==='progress'),false);
+ state.messages.shift();entries=f.reportTimeline(state,['process:turn:final']);assert.equal(entries.some(e=>e.id==='progress'),true);
+});
+test('最后一份总结后的消息继续展示，运行中的多总结轮次不提前折叠',()=>{
+ const f=fixture(),state=multipleReports();state.messages.push({id:'tail',role:'assistant',phase:'commentary',text:'后续过程',turnId:'turn',status:'completed'});assert.equal(f.reportTimeline(state,[]).at(-1).id,'tail');
+ state.turns[0].status='inProgress';state.activeTurnId='turn';assert.equal(f.reportTimeline(state,[]).some(e=>e.role==='process'),false);
 });

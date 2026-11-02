@@ -3,6 +3,20 @@ import type { MessageAnnotation } from './annotations.uts'
 
 export type TimelineEntry = { id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[] }
 
+// 返回每段明确最终回复前的正文起点，保留段首提问，段中追加仍属于过程。
+function reportPromptEnd(messages: ChatMessage[], start: number, end: number): number {
+  let index = start
+  while (index < end && messages[index].role == 'user' && messages[index].kind != 'userInputResponse' && messages[index].kind != 'steeringUserMessage') index++
+  return index
+}
+
+// 同一底层轮次可能有多次最终回复；只用明确阶段划分报告，不猜测末条正文。
+function reportFinalIndexes(messages: ChatMessage[]): number[] {
+  const indexes = [] as number[]
+  messages.forEach((message: ChatMessage, index: number) => { if (message.role == 'assistant' && message.phase == 'final_answer') indexes.push(index) })
+  return indexes
+}
+
 // 只有同一轮的完成状态、报告和过程阶段都明确时，才允许默认隐藏过程。
 export function reportTurnIds(snapshot: Conversation | null): string[] {
   if (snapshot == null) return [] as string[]
@@ -20,9 +34,12 @@ export function reportTurnIds(snapshot: Conversation | null): string[] {
     if (messages.slice(first, first + group.length).some((message: ChatMessage): boolean => message.turnId != turn.turnId)) return
     if (group.some((message: ChatMessage): boolean => message.role == 'assistant' && message.phase != 'commentary' && message.phase != 'final_answer')) return
     let start = 0
-    while (start < group.length && group[start].role == 'user' && group[start].kind != 'userInputResponse' && group[start].kind != 'steeringUserMessage') start++
-    const finalIndex = group.findIndex((message: ChatMessage): boolean => message.role == 'assistant' && message.phase == 'final_answer')
-    if (finalIndex > start) result.push(turn.turnId)
+    const hasProcess = reportFinalIndexes(group).some((finalIndex: number): boolean => {
+      const promptEnd = reportPromptEnd(group, start, finalIndex)
+      start = finalIndex + 1
+      return finalIndex > promptEnd
+    })
+    if (hasProcess) result.push(turn.turnId)
   })
   return result
 }
@@ -41,7 +58,7 @@ export function reportProcessLabel(durationMs: number | null, expanded: boolean)
 }
 
 // 扁平化显示容器复用现有正文和命令详情，展开后严格保持原消息顺序。
-export function reportTimeline(snapshot: Conversation | null, expandedTurns: string[]): TimelineEntry[] {
+export function reportTimeline(snapshot: Conversation | null, expandedReports: string[]): TimelineEntry[] {
   if (snapshot == null) return [] as TimelineEntry[]
   const collapsible = reportTurnIds(snapshot)
   const entries = [] as TimelineEntry[]
@@ -55,15 +72,26 @@ export function reportTimeline(snapshot: Conversation | null, expandedTurns: str
     if (collapsible.indexOf(turnId) < 0) {
       entries.push(...executionTimeline(group))
     } else {
-      let start = 0
-      while (start < group.length && group[start].role == 'user' && group[start].kind != 'userInputResponse' && group[start].kind != 'steeringUserMessage') start++
-      const finalIndex = group.findIndex((message: ChatMessage): boolean => message.role == 'assistant' && message.phase == 'final_answer')
-      const expanded = expandedTurns.indexOf(turnId) >= 0
+      const finals = reportFinalIndexes(group)
       const turn = (snapshot.turns ?? [] as ConversationTurn[]).find((item: ConversationTurn): boolean => item.turnId == turnId)
-      entries.push(...executionTimeline(group.slice(0, start)))
-      entries.push({ id: 'process:' + turnId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(turn?.durationMs ?? null, expanded) })
-      if (expanded) entries.push(...executionTimeline(group.slice(start, finalIndex)))
-      entries.push(...executionTimeline(group.slice(finalIndex)))
+      let start = 0
+      finals.forEach((finalIndex: number) => {
+        const promptEnd = reportPromptEnd(group, start, finalIndex)
+        entries.push(...executionTimeline(group.slice(start, promptEnd)))
+        if (finalIndex > promptEnd) {
+          // 以最终消息编号标识过程段，前插历史后仍能保留各段独立的阅读选择。
+          const processId = 'process:' + turnId + ':' + group[finalIndex].id
+          const expanded = expandedReports.indexOf(processId) >= 0
+          // 多份报告共享底层轮次总耗时，不能将总耗时冒充每段耗时。
+          const duration = finals.length == 1 ? turn?.durationMs ?? null : null
+          entries.push({ id: processId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(duration, expanded) })
+          if (expanded) entries.push(...executionTimeline(group.slice(promptEnd, finalIndex)))
+        }
+        entries.push(...executionTimeline(group.slice(finalIndex, finalIndex + 1)))
+        start = finalIndex + 1
+      })
+      // 最终回复之后的新消息尚不属于已完成报告，必须继续完整显示。
+      entries.push(...executionTimeline(group.slice(start)))
     }
     cursor = end
   }

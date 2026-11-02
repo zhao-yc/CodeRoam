@@ -211,12 +211,12 @@ let historyTopTimer = 0
 let historyFollowRevision = 0
 const displayConversation = computed(() => conversationWithHistory(connection.snapshot, historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
-const expandedTurnIds = ref<string[]>([])
+const expandedReportIds = ref<string[]>([])
 const messagePresentations = computed((): MessagePresentation[] => presentAnnotatedMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
 const selectedAnnotations = computed((): MessageAnnotation[] => messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 // 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
 const timeline = computed((): TimelineEntry[] => {
-  const entries = reportTimeline(displayConversation.value, expandedTurnIds.value)
+  const entries = reportTimeline(displayConversation.value, expandedReportIds.value)
   entries.forEach((entry: TimelineEntry) => {
     const presentation = messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == entry.id)
     if (presentation != null) { entry.text = presentation.text; entry.annotations = presentation.annotations }
@@ -557,15 +557,15 @@ function onTimelineScroll(event: UniScrollEvent) {
 }
 // 新输出后重新测量，短会话无滚动事件时也能隐藏按钮。
 watch((): string => (connection.snapshot?.messages ?? []).map((message: ChatMessage): string => message.id + ':' + message.text).join('\n'), (_current: string, _previous: string) => { if (following.value) scrollLatest(); nextTick(() => { updateTimelinePosition(); checkShortHistory() }) })
-watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { selectedExecutionId.value = ''; expandedTurnIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
+watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
   nextTick(() => { updateTimelinePosition() })
   if (connection.snapshot == null) return
   // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
   expandedExecutionIds.value = retainExpandedExecutions(executionTimeline(displayConversation.value?.messages ?? []), expandedExecutionIds.value)
-  const retainedTurns = expandedTurnIds.value.filter((id: string): boolean => (displayConversation.value?.messages ?? []).some((message: ChatMessage): boolean => message.turnId == id))
-  if (retainedTurns.length != expandedTurnIds.value.length) expandedTurnIds.value = retainedTurns
+  const retainedReports = expandedReportIds.value.filter((id: string): boolean => entries.some((entry: TimelineEntry): boolean => entry.role == 'process' && entry.id == id))
+  if (retainedReports.length != expandedReportIds.value.length) expandedReportIds.value = retainedReports
   if (selectedExecutionId.value.length > 0 && selectedExecution.value == null) selectedExecutionId.value = ''
 })
 // 新问题自动展开；同步已有问题时保留手动收起，回答或失效后清理对应状态。
@@ -579,9 +579,9 @@ watch(pendingQuestionGroups, (groups: QuestionGroup[], previousGroups: QuestionG
 }, { immediate: true })
 // 模板通过页面方法调用模块，兼容 Android 对导入函数引用的编译限制。
 function isExecutionExpanded(entry: TimelineEntry): boolean { return executionGroupExpanded(entry, expandedExecutionIds.value) }
-function isProcessExpanded(entry: TimelineEntry): boolean { return expandedTurnIds.value.indexOf(entry.turnId) >= 0 }
+function isProcessExpanded(entry: TimelineEntry): boolean { return expandedReportIds.value.indexOf(entry.id) >= 0 }
 // 主动展开或收起时暂停跟随；后续同步不覆盖本轮的阅读选择。
-function toggleProcess(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyboard(); layoutUntil = Date.now() + 350; const index = expandedTurnIds.value.indexOf(entry.turnId); if (index >= 0) expandedTurnIds.value.splice(index, 1); else expandedTurnIds.value.push(entry.turnId) }
+function toggleProcess(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyboard(); layoutUntil = Date.now() + 350; const index = expandedReportIds.value.indexOf(entry.id); if (index >= 0) expandedReportIds.value.splice(index, 1); else expandedReportIds.value.push(entry.id) }
 function executionTitle(message: ChatMessage): string { return executionRecordTitle(message) }
 // 展开列表前暂停跟随并收起键盘；布局变化不触发自动回到底部。
 function toggleExecutions(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyboard(); layoutUntil = Date.now() + 350; expandedExecutionIds.value = toggleExecutionGroup(entry, expandedExecutionIds.value) }
