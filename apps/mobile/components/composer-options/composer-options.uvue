@@ -72,6 +72,8 @@ function labelForEffort(effort: string): string { return effortLabel(effort) }
 .retry-option { font-size: 14px; color: #285c49; background-color: #e8eee6; margin: 4px 14px 10px; }
 /* #ifdef WEB */
 .option-hitbox::after { border: 0; }
+/* Web 默认禁用底色会遮住底层图标和文字，灰态由整行统一表达。 */
+.option-hitbox[disabled] { background-color: transparent; }
 .model-label { white-space: nowrap; overflow: hidden; }
 /* #endif */
 </style>
