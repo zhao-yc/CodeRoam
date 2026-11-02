@@ -45,10 +45,11 @@ test('列表跳转携带完整标题和项目名，中文和查询分隔符不�
   const openThread=list.match(/^function openThread\(thread: ComputerThread\).*$/m)[0];
   const projectName=list.match(/^function projectName\(cwd: string\): string \{[\s\S]*?\n\}/m)[0];
   vm.runInContext(stripTypeScriptTypes(projectName+'\n'+openThread,{mode:'transform'})+';globalThis.open=openThread;',navigation);
-  const title='中文会话 & 标题=100% + # ? / 😀';
-  const project='中文项目 & 名称=100% + # ? 😀';
+  const title='中文会话 & 标题=100% + # ? / 😀 %2F';
+  const project='中文项目 & 名称=100% + # ? 😀 %20';
   navigation.open({id:'thread',hostId:'pc',online:true,title,cwd:'/workspace/'+project+'/'});
-  const options=Object.fromEntries(url.split('?')[1].split('&').map(pair=>pair.split('=')));
+  // 与 uni-app 页面生命周期一致，进入 onLoad 前框架已解码导航参数。
+  const options=Object.fromEntries(url.split('?')[1].split('&').map(pair=>pair.split('=').map(decodeURIComponent)));
   const page={connection:{configured:true,hostId:'pc'},pageHostId:{value:''},pageThreadId:{value:''},listTitle:{value:''},listProjectName:{value:''},uni:{getWindowInfo:()=>({windowHeight:800})},bridge:{watch(){}},decodeURIComponent};
   const loading=vm.createContext({...page,onLoad:callback=>callback(options)});
   const onLoad=detail.match(/onLoad\(\(options: OnLoadOptions\) => \{[\s\S]*?\n\}\)/)[0];

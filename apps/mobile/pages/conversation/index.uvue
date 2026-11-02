@@ -284,8 +284,9 @@ onLoad((options: OnLoadOptions) => {
   baseWindowHeight = uni.getWindowInfo().windowHeight
   pageHostId.value = connection.hostId
   const id = options['threadId'] ?? ''; pageThreadId.value = id
-  listTitle.value = decodeURIComponent(options['title'] ?? '') ?? ''
-  listProjectName.value = decodeURIComponent(options['projectName'] ?? '') ?? ''
+  // 页面参数已由框架解码，直接保留百分号及形似转义序列的原始名称。
+  listTitle.value = options['title'] ?? ''
+  listProjectName.value = options['projectName'] ?? ''
   if (id.length > 0) bridge.watch(id)
 })
 
