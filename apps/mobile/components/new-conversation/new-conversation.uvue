@@ -10,7 +10,7 @@
       <view v-for="file in draft.files" :key="file.id" class="draft-file"><app-icon name="file" :size="21" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'uploading' ? '正在上传 ' + file.progress + '%' : fileSize(file.size) }}</text></view><button class="file-remove" :disabled="busy" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
       <view id="new-draft-input"><textarea :value="draft.text" :focus="focused" :disabled="busy" :adjust-position="false" :maxlength="32000" class="new-input" :style="{ height: draftHeight + 'px' }" placeholder="问问 Codex" @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"></textarea></view>
       </scroll-view>
-      <view class="new-actions"><button class="add-action" :disabled="busy || imageBusy" aria-label="添加附件或计划模式" @click="openOptions('add')">＋</button><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新对话" @click="send"></button></view></view>
+      <view class="new-actions"><button class="add-action" :disabled="busy || imageBusy" aria-label="添加附件或计划模式" @click="openOptions('add')">＋</button><permissions-control :project-id="projectId" :selected-mode="draft.permissionMode" :disabled="busy || creationPendingId.length > 0" @select="selectPermission" /><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新对话" @click="send"></button></view></view>
     </view>
       <!-- 状态提示独立占行，连接进度与错误都在输入框外自然换行。 -->
       <view v-if="busy || error.length > 0 || connection.error.length > 0" class="editor-feedback"><text v-if="busy" class="editor-note">{{ progress }}</text><text v-else class="editor-error">{{ error.length > 0 ? error : connection.error }}</text></view>
@@ -33,6 +33,7 @@
 
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import PermissionsControl from '../permissions-control/permissions-control.uvue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import ComposerOptions from '../composer-options/composer-options.uvue'
 import { bridge, connection, computerIcon, Computer } from '../../services/bridge.uts'
@@ -136,6 +137,8 @@ function selectSetting(key: string, value: string) {
   draft.value.settingsChanged = true; draft.value.settingsApplied = false; closeMenus()
 }
 function imageId(): string { return Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2) }
+// 权限选择仅存于当前电脑和项目草稿，首次发送前由原桌面确认。
+function selectPermission(mode: string, confirmed: boolean) { draft.value.permissionMode = mode; draft.value.permissionConfirmed = confirmed; draft.value.permissionsApplied = false }
 function remaining(): number { return Math.max(0, 3 - draft.value.images.length - draft.value.files.length) }
 async function acceptImages(target: NewDraft, paths: string[]) {
   imageBusy.value = true

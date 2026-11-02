@@ -59,7 +59,7 @@
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
         <view class="draft-line"><button v-if="!composerExpanded" class="compact-add" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><view v-if="visiblePrediction.length > 0" class="prediction-ghost" role="button" aria-label="将电脑预测填入草稿" @click="acceptPrediction"><text class="prediction-text">{{ visiblePrediction }}</text></view><textarea v-else :focus="predictionFocus" :value="draft" @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :class="{ 'compact-draft': !composerExpanded }" :style="{ height: (composerExpanded ? Math.max(48, draftHeight) : 24) + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : '继续说说你的想法…'" :maxlength="32000"></textarea><view v-if="!composerExpanded" class="primary-action action-frame" :style="{ opacity: !canWrite || activeTurnId.length == 0 ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || activeTurnId.length == 0" :aria-label="activeTurnId.length > 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
-        <view v-if="composerExpanded" class="composer-actions"><button class="add-image" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
+        <view v-if="composerExpanded" class="composer-actions"><button class="add-image" :disabled="!canWrite" aria-label="添加附件或计划模式" @click="openComposerMenu('add')">＋</button><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.45 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
         <text v-if="composerExpanded && connection.snapshot?.supportsExecutionSettings != true" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
         <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
         <text v-if="composerExpanded && activeTurnId.length > 0 && settings != null" class="composer-caption">模型、推理强度和计划模式应用于下一轮</text>
@@ -89,6 +89,7 @@ import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.
 import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
 import MessageImages from '../../components/message-images/message-images.uvue'
+import PermissionsControl from '../../components/permissions-control/permissions-control.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
 import GoalCard from '../../components/goal-card/goal-card.uvue'
@@ -116,6 +117,7 @@ const filesReady = computed((): boolean => draftFiles.value.every((file: DraftFi
 const inputFocused = ref(false)
 let draftBlurTimer = 0
 const composerMenu = ref('')
+const permissionMenuVisible = ref(false)
 const settings = ref<ExecutionSettings | null>(null)
 const models = ref<ModelOption[]>([])
 const settingsLoading = ref(false)
@@ -129,7 +131,7 @@ let settingsRequest = 0
 let settingsSnapshotRevision = 0
 const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
 const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
-const composerExpanded = computed((): boolean => predictionText.value.length > 0 || inputFocused.value || composerMenu.value.length > 0 || draft.value.length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || planEnabled.value)
+const composerExpanded = computed((): boolean => predictionText.value.length > 0 || inputFocused.value || permissionMenuVisible.value || composerMenu.value.length > 0 || draft.value.length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || planEnabled.value)
 const modelLabel = computed((): string => {
   if (settingsBusy.value) return '正在同步…'
   if (connection.snapshot?.readOnly == true) return '历史浏览'
@@ -616,6 +618,10 @@ function selectSetting(key: string, value: string) {
     // 保留失败原因，用户点击重新读取后再核对桌面设置。
   })
 }
+// 权限写入期间沿用详情页操作锁，防止首条消息抢在设置确认之前发送。
+// 原生组件事件显式声明布尔类型，避免模板把载荷推断为 Any。
+function onPermissionVisibility(value: boolean) { permissionMenuVisible.value = value }
+function onPermissionBusy(value: boolean) { busy.value = value }
 function togglePlan() { selectSetting('mode', planEnabled.value ? 'default' : 'plan') }
 // 附件变更始终写回原电脑和会话，不将系统选择器的迟到结果放进其他草稿。
 function updateFile(hostId: string, threadId: string, file: DraftFile) {

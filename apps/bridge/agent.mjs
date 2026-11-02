@@ -1,4 +1,5 @@
 import { goalCommandStatus } from './goal-command-status.mjs';
+import { PermissionCatalog, permissionCommandStatus } from './permissions.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
@@ -17,6 +18,7 @@ export class BridgeAgent extends EventEmitter {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
     this.newThreads=newThreads;
+    adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
     adapter.on('conversation',snapshot=>{if(!adapter.conversations||[...adapter.conversations.get(snapshot.threadId)?.watchers??[]].some(id=>id!=='list-status'))this.publish(snapshot);});
@@ -56,6 +58,8 @@ export class BridgeAgent extends EventEmitter {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
       const execute=async()=>{
+        if(message.method==='thread.create.permissions')return this.adapter.permissionCatalog.read(this.newThreads.project(message.params.projectId).cwd);
+        if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
         if(message.method==='projects.list')return this.newThreads.projects();
         if(message.method==='thread.create.settings')return this.newThreads.settings(message.params.projectId);
         if(message.method==='thread.create')return this.newThreads.create(message.params.projectId,message.params.title,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
@@ -78,7 +82,7 @@ export class BridgeAgent extends EventEmitter {
           return {snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
         }
         if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!this.adapter.conversations.has(message.params.threadId))this.published.delete(message.params.threadId);return result;}
-        if(message.method==='command.status')return goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);
+        if(message.method==='command.status') { const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
         if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
         throw new BridgeError('METHOD_NOT_ALLOWED','此接口不支持通过电脑执行');
       };

@@ -1,0 +1,105 @@
+<template>
+  <view class="permission-control">
+    <view :id="triggerId" class="permission-trigger"><text class="trigger-symbol">{{ symbol(mode) }}</text><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
+    <view v-if="opened" class="permission-overlay" @click="closeMenu">
+      <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
+        <view class="permission-heading"><text class="permission-title">{{ label }}</text><button class="permission-close" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu">×</button></view>
+        <scroll-view direction="vertical" :style="{ height: panelHeight + 'px' }">
+          <text v-if="loading" class="permission-note">正在读取电脑权限…</text>
+          <template v-else><view v-for="option in state?.options ?? []" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }"><text :class="['permission-symbol', option.id == 'full-access' ? 'warning-symbol' : '']">{{ symbol(option.id) }}</text><view class="permission-copy"><text class="permission-name">{{ option.label }}</text><text class="permission-description">{{ option.enabled ? option.description : option.disabledReason }}</text></view><text v-if="mode == option.id" class="permission-check">✓</text><button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="'选择' + option.label" @click="choose(option.id)"></button></view></template>
+          <text v-if="threadId.length > 0 && activeTurn" class="permission-note">沙箱权限用于下一轮；当前轮次审批方式按电脑能力同步。</text>
+          <text v-if="busy" class="permission-note">正在同步电脑权限…</text>
+          <text v-if="error.length > 0" class="permission-error">{{ error }}</text><button v-if="error.length > 0" class="permission-retry" :disabled="busy || loading" @click="load">重新读取</button>
+        </scroll-view>
+      </view>
+    </view>
+  </view>
+</template>
+<script setup lang="uts">
+import { ref, computed, watch, onUnmounted } from 'vue'
+import { bridge, connection } from '../../services/bridge.uts'
+import { PermissionState, permissionLabel } from '../../services/permissions.uts'
+const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false })
+const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean] }>()
+const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
+const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
+let alive = true, request = 0
+const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + connection.subscriptionRevision.toString() + ':' + connection.connected.toString())
+const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : 'new'))
+const available = computed((): boolean => connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
+const mode = computed((): string => props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
+const label = computed((): string => permissionLabel(mode.value))
+const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0)
+function symbol(value: string): string { if (value == 'auto-review') return '🛡'; if (value == 'read-only') return '🔒'; if (value == 'full-access') return '⚠'; return '✋' }
+// 所有异步响应绑定电脑、项目或会话；切换目标后立即作废。
+function current(key: string, id: number): boolean { return alive && context.value == key && request == id }
+async function load() {
+  if (!available.value || busy.value) return
+  const key = context.value, id = ++request
+  loading.value = true; error.value = ''; state.value = null
+  try {
+    const result = await bridge.request(props.threadId.length > 0 ? 'thread.permissions.read' : 'thread.create.permissions', props.threadId.length > 0 ? { threadId: props.threadId } : { projectId: props.projectId })
+    if (!current(key, id)) return
+    const value = JSON.parse<PermissionState>(JSON.stringify(result))
+    if (value == null || value.options == null) throw new Error('电脑权限暂不可用，请更新连接服务')
+    state.value = value
+  } catch (reason) { if (current(key, id)) error.value = (reason as Error).message }
+  finally { if (current(key, id)) loading.value = false }
+}
+function openMenu() {
+  if (props.disabled || !available.value) return
+  const info = uni.getWindowInfo(), rect = uni.getElementById(triggerId.value)?.getBoundingClientRect()
+  panelWidth.value = Math.min(340, info.windowWidth - 28)
+  panelLeft.value = Math.max(14, Math.min(rect?.left ?? 14, info.windowWidth - panelWidth.value - 14))
+  panelBottom.value = Math.max(12, info.windowHeight - (rect?.top ?? info.windowHeight - 110) + 8)
+  panelHeight.value = Math.max(100, Math.min(390, info.windowHeight - panelBottom.value - 100))
+  opened.value = true; load()
+}
+function closeMenu() { if (!busy.value) opened.value = false }
+// 每次切入完整访问都先确认；确认弹窗返回后再次检查目标和权限版本。
+async function choose(value: string) {
+  if (props.disabled || busy.value || loading.value || state.value == null || !available.value || !state.value!.options!.some((option): boolean => option.id == value && option.enabled)) return
+  if (value == mode.value) { closeMenu(); return }
+  const key = context.value, id = request, revision = state.value!.revision
+  if (value == 'full-access') {
+    const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完整访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此会话启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
+    if (!confirmed || !current(key, id) || props.disabled || !available.value) return
+  }
+  if (props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }
+  busy.value = true; emit('busy', true); error.value = ''
+  try {
+    const result = await bridge.request('thread.permissions.update', { threadId: props.threadId, mode: value, expectedRevision: revision, confirmedFullAccess: value == 'full-access' }, true)
+    if (current(key, id)) { state.value = JSON.parse<PermissionState>(JSON.stringify(result)); opened.value = false }
+  } catch (reason) { if (current(key, id)) error.value = (reason as Error).message }
+  finally { if (current(key, id)) { busy.value = false; emit('busy', false) } }
+}
+// 菜单打开时保持父级输入区展开，避免键盘失焦卸载菜单。
+watch(opened, (value: boolean) => { emit('visibility', value) })
+watch(context, () => { request++; state.value = null; opened.value = false; loading.value = false; if (busy.value) emit('busy', false); busy.value = false })
+onUnmounted(() => { emit('visibility', false); alive = false; request++; if (busy.value) emit('busy', false) })
+</script>
+<style>
+.permission-control { width: 38px; height: 42px; flex-shrink: 0; }
+.permission-trigger { position: relative; width: 38px; height: 42px; padding: 0; margin: 0; background-color: transparent; align-items: center; justify-content: center; }
+.permission-trigger-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
+.trigger-symbol { font-size: 21px; color: #68766d; }
+.permission-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 250; background-color: rgba(0,0,0,0.12); }
+.permission-panel { position: absolute; border-radius: 22px; padding: 8px; background-color: #f8f8f3; border-width: 1px; border-color: #e3e5dc; }
+.permission-heading { height: 42px; flex-direction: row; align-items: center; padding-left: 12px; }
+.permission-title { flex: 1; font-size: 14px; color: #68766d; }
+.permission-close { width: 38px; height: 38px; padding: 0; margin: 0; background-color: transparent; font-size: 24px; }
+.permission-row { position: relative; min-height: 76px; flex-direction: row; align-items: center; padding: 10px 8px; }
+.permission-symbol { width: 36px; font-size: 23px; }
+.warning-symbol { color: #b78324; }
+.permission-copy { flex: 1; }
+.permission-name { font-size: 17px; color: #202c28; line-height: 26px; }
+.permission-description { font-size: 13px; line-height: 21px; color: #7b827a; }
+.permission-check { width: 24px; font-size: 23px; color: #285c49; }
+.permission-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
+.permission-note, .permission-error { padding: 10px 12px; font-size: 12px; line-height: 20px; color: #7b827a; }
+.permission-error { color: #9b493a; }
+.permission-retry { margin: 4px 12px; font-size: 14px; color: #285c49; background-color: #e8eee6; }
+/* #ifdef WEB */
+.permission-trigger-hit::after, .permission-hit::after, .permission-close::after { border: 0; }
+/* #endif */
+</style>

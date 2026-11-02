@@ -17,13 +17,14 @@ function codeRanges(source: string): CodeRange[] {
   const lines = source.split('\n')
   lines.forEach((line: string) => {
     const marker = /^(?: {0,3}>[ \t]?)* {0,3}(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?(`{3,}|~{3,})(.*)$/.exec(line)
+    // Android 正则捕获组类型可空，使用空串兜底后再读取标记。
     if (fenceSymbol.length > 0) {
-      if (marker != null && marker[1].charAt(0) == fenceSymbol && marker[1].length >= fenceSize && marker[2].trim().length == 0) {
+      if (marker != null && (marker[1] ?? '').charAt(0) == fenceSymbol && (marker[1] ?? '').length >= fenceSize && (marker[2] ?? '').trim().length == 0) {
         ranges.push({ start: fenceStart, end: offset + line.length + 1 })
         fenceSymbol = ''
       }
     } else if (marker != null) {
-      fenceSymbol = marker[1].charAt(0); fenceSize = marker[1].length; fenceStart = offset
+      fenceSymbol = (marker[1] ?? '').charAt(0); fenceSize = (marker[1] ?? '').length; fenceStart = offset
     } else if (/^(?: {4}|\t)/.test(line)) ranges.push({ start: offset, end: offset + line.length + 1 })
     offset += line.length + 1
   })
@@ -60,11 +61,11 @@ export function parseUserAnnotations(source: string): MessagePresentation {
   if (header == null) return original
   const start = header.index
   if (codeRanges(source).some((range: CodeRange): boolean => range.start <= start && start < range.end)) return original
-  const tail = source.slice(start + header[0].length)
+  const tail = source.slice(start + (header[0] ?? '').length)
   const wrapper = /\n<response-annotations>[ \t]*\r?\n([\s\S]*?)\r?\n<\/response-annotations>[ \t]*\r?\n[ \t\r\n]*## My request:[ \t]*(?:\r?\n|$)/.exec(tail)
   if (wrapper == null) return original
   let items: AnnotationInput[] | null = null
-  try { items = JSON.parse<AnnotationInput[]>(wrapper[1]) } catch (_) { return original }
+  try { items = JSON.parse<AnnotationInput[]>(wrapper[1] ?? '') } catch (_) { return original }
   if (items == null || !Array.isArray(items) || items.length == 0) return original
   const annotations = [] as MessageAnnotation[]
   for (let index = 0; index < items.length; index++) {
@@ -73,7 +74,7 @@ export function parseUserAnnotations(source: string): MessagePresentation {
     annotations.push({ index: index + 1, text: item.text!, comment: item.annotation ?? '', available: true })
   }
   const prefix = source.slice(0, start).trimEnd()
-  const request = tail.slice(wrapper.index + wrapper[0].length).trim()
+  const request = tail.slice(wrapper.index + (wrapper[0] ?? '').length).trim()
   return { messageId: '', text: prefix + (prefix.length > 0 && request.length > 0 ? '\n\n' : '') + request, annotations, referenceIndices: [] as number[] }
 }
 
@@ -96,10 +97,10 @@ export function parseAnnotationReferences(source: string, streaming: boolean = f
       const rest = source.slice(cursor)
       const match = /^:codex-annotation\{index="([1-9][0-9]*)"\}/.exec(rest)
       if (match != null) {
-        const index = Number(match[1])
+        const index = parseInt(match[1] ?? '', 10)
         if (Number.isSafeInteger(index)) {
           if (indices.indexOf(index) < 0) indices.push(index)
-          cursor += match[0].length
+          cursor += (match[0] ?? '').length
           if (cursor == source.length) text = text.trimEnd()
           continue
         }

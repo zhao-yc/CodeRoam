@@ -1,3 +1,4 @@
+import { PermissionState } from './permissions.uts'
 import { reactive } from 'vue'
 import { bridge, connection } from './bridge.uts'
 import { ExecutionSettings } from './execution-settings.uts'
@@ -5,7 +6,7 @@ import { DraftImage, DraftFile, saveDraft, saveDraftImages, saveDraftFiles, reme
 import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
 
 export type NewProject = { id: string, label: string, cwd: string }
-export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], settings: ExecutionSettings | null, settingsChanged: boolean, settingsApplied: boolean, threadId: string, pendingAction: string, pendingCommandId: string }
+export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], settings: ExecutionSettings | null, settingsChanged: boolean, settingsApplied: boolean, permissionMode: string, permissionConfirmed: boolean, permissionsApplied: boolean, threadId: string, pendingAction: string, pendingCommandId: string }
 type CreationReceipt = { threadId: string, pendingAction: string, pendingCommandId: string }
 const drafts = reactive<NewDraft[]>([])
 const submitting = new Set<string>()
@@ -24,14 +25,14 @@ export function newDraft(hostId: string, projectId: string): NewDraft {
   if (receipt != null && (typeof receipt.threadId != 'string' || typeof receipt.pendingAction != 'string' || typeof receipt.pendingCommandId != 'string')) receipt = null
   // 重新进入页面只恢复待核对操作；普通历史编号不能成为新对话的发送目标。
   if (receipt != null && receipt.pendingCommandId.length == 0) receipt = null
-  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], settings: null, settingsChanged: false, settingsApplied: false, threadId: receipt?.threadId ?? '', pendingAction: receipt?.pendingAction ?? '', pendingCommandId: receipt?.pendingCommandId ?? '' }
+  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], settings: null, settingsChanged: false, settingsApplied: false, permissionMode: '', permissionConfirmed: false, permissionsApplied: false, threadId: receipt?.threadId ?? '', pendingAction: receipt?.pendingAction ?? '', pendingCommandId: receipt?.pendingCommandId ?? '' }
   drafts.push(draft)
   return drafts[drafts.length - 1]
 }
 
 // 解除执行目标时保留输入与设置；附件需要重新上传到下一条新会话。
 function detachCreatedThread(draft: NewDraft) {
-  draft.threadId = ''; draft.pendingAction = ''; draft.settingsApplied = false
+  draft.threadId = ''; draft.pendingAction = ''; draft.settingsApplied = false; draft.permissionsApplied = false
   for (const file of draft.files) { file.status = 'local'; file.progress = 0; file.error = '' }
 }
 
@@ -67,6 +68,7 @@ async function writeStep(draft: NewDraft, action: string, method: string, params
     const result = await request
     if (action == 'create') draft.threadId = result.getString('threadId') ?? ''
     if (action == 'settings') draft.settingsApplied = true
+    if (action == 'permissions') draft.permissionsApplied = true
     draft.pendingAction = ''; draft.pendingCommandId = ''; saveCreationReceipt(draft)
     return result
   } catch (error) {
@@ -102,8 +104,9 @@ async function uploadNewFiles(draft: NewDraft) {
 
 // 确认首条消息后再清空新建草稿，已创建编号在失败重试时继续使用。
 export function finishNewDraft(draft: NewDraft) {
+  draft.permissionMode = ''; draft.permissionConfirmed = false
   draft.text = ''; draft.images = [] as DraftImage[]; draft.files = [] as DraftFile[]
-  draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''; draft.settingsApplied = false
+  draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''; draft.settingsApplied = false; draft.permissionsApplied = false
   uni.removeStorageSync(receiptKey(draft.hostId, draft.projectId))
 }
 
@@ -145,6 +148,14 @@ async function submitNewConversation(draft: NewDraft, progress: (message: string
     progress('正在应用执行设置…')
     await writeStep(draft, 'settings', 'thread.settings.update', { threadId: draft.threadId, changes: { model: draft.settings!.model, effort: draft.settings!.effort, serviceTier: draft.settings!.serviceTier, mode: draft.settings!.mode } })
   }
+  if (draft.permissionMode.length > 0 && !draft.permissionsApplied) {
+    if (connection.snapshot?.supportsPermissionSettings != true) throw new Error('请更新电脑连接服务后应用所选权限')
+    progress('正在应用会话权限…')
+    const current = JSON.parse<PermissionState>(JSON.stringify(await bridge.request('thread.permissions.read', { threadId: draft.threadId })))
+    assertDestination(draft)
+    if (current == null || current.revision.length == 0) throw new Error('无法核对电脑权限，草稿已保留')
+    await writeStep(draft, 'permissions', 'thread.permissions.update', { threadId: draft.threadId, mode: draft.permissionMode, expectedRevision: current.revision, confirmedFullAccess: draft.permissionConfirmed })
+  }
   if (draft.images.length > 0 && connection.snapshot?.supportsImages != true) throw new Error('请更新电脑连接服务后发送图片')
   progress('正在准备附件…')
   await uploadNewFiles(draft)
@@ -171,6 +182,7 @@ export async function checkNewConversation(draft: NewDraft): Promise<string> {
   if (state != 'done' && state != 'not_found') { saveCreationReceipt(draft); throw new Error('结果仍待确认，请查看电脑端会话') }
   draft.pendingAction = ''; draft.pendingCommandId = ''
   if (state == 'done' && failure == null && action == 'settings') draft.settingsApplied = true
+  if (state == 'done' && failure == null && action == 'permissions') draft.permissionsApplied = true
   saveCreationReceipt(draft)
   if (action == 'send') {
     settleSubmission(draft.hostId, commandId, state == 'done' && failure == null)

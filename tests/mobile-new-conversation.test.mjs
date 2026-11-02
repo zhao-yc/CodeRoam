@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 
 /** 执行实际 UTS 编排，模拟明确失败、未知结果、恢复连接与多次点击。 */
 function fixture(storage = new Map()) {
-  const calls = [], connection = { hostId: 'pc', connected: true, computers: [{ id: 'pc', online: true }], pendingCommandId: '', snapshot: { supportsImages: true, supportsAttachments: true, supportsExecutionSettings: true } };
+  const calls = [], connection = { hostId: 'pc', connected: true, computers: [{ id: 'pc', online: true }], pendingCommandId: '', snapshot: { supportsImages: true, supportsAttachments: true, supportsExecutionSettings: true, supportsPermissionSettings: true } };
   const json = value => Object.assign(value, { getString(key) { return this[key] ?? null; }, getNumber(key) { return this[key] ?? null; } });
   let serial = 0, created = 0, failure = '', ledger, storageFailure = false, openedSnapshot = {};
   const bridge = {
@@ -18,10 +18,12 @@ function fixture(storage = new Map()) {
       if (failure === 'unknown' && method === 'turn.send') throw new Error('结果未知');
       if (failure === 'unknown-create' && method === 'thread.create') throw new Error('创建结果未知');
       if (write) connection.pendingCommandId = '';
+      if (method === 'thread.permissions.read') return json({ mode: 'default', revision: 'a'.repeat(64) });
+      if (failure === 'unknown-permissions' && method === 'thread.permissions.update') throw new Error('权限结果未知');
       if (method === 'thread.create') { created++; return json({ threadId: created === 1 ? 'created-thread' : 'created-thread-' + created }); }
       return json({});
     },
-    async openCreatedThread(threadId) { calls.push({ method: 'open', params: { threadId } }); connection.snapshot = { supportsImages: true, supportsAttachments: true, supportsExecutionSettings: true, threadId, status: 'idle', activeTurnId: '', messages: [], ...openedSnapshot }; },
+    async openCreatedThread(threadId) { calls.push({ method: 'open', params: { threadId } }); connection.snapshot = { supportsImages: true, supportsAttachments: true, supportsExecutionSettings: true, supportsPermissionSettings: true, threadId, status: 'idle', activeTurnId: '', messages: [], ...openedSnapshot }; },
     async checkPending() { const result = ledger; if (result.state === 'done' || result.state === 'not_found') connection.pendingCommandId = ''; return json(result); },
   };
   // 模拟真实 request 在 Promise 返回前同步登记写请求编号。
@@ -140,3 +142,6 @@ test('新建组件每次打开都在读取草稿前开始独立创建流程', ()
   const source = fs.readFileSync('apps/mobile/components/new-conversation/new-conversation.uvue', 'utf8');
   assert.ok(source.indexOf('beginNewConversation()') < source.indexOf('const draft = computed('));
 });
+
+test('新建权限草稿隔离，权限失败不发送且重试复用空会话',async()=>{const f=fixture(),d=f.newDraft('pc','project');d.text='消息';d.permissionMode='read-only';assert.equal(f.newDraft('pc','other').permissionMode,'');f.fail('thread.permissions.update');await assert.rejects(f.sendNewConversation(d,()=>{}),/明确失败/);assert.equal(d.threadId,'created-thread');assert.equal(d.text,'消息');assert.equal(f.calls.some(c=>c.method==='turn.send'),false);f.fail('');await f.sendNewConversation(d,()=>{});assert.equal(f.calls.filter(c=>c.method==='thread.create').length,1);assert.ok(f.calls.findIndex(c=>c.method==='thread.permissions.update')<f.calls.findIndex(c=>c.method==='turn.send'));});
+test('权限结果未知必须先核对，恢复后不自动发送',async()=>{const f=fixture(),d=f.newDraft('pc','project');d.text='消息';d.permissionMode='full-access';d.permissionConfirmed=true;f.fail('unknown-permissions');await assert.rejects(f.sendNewConversation(d,()=>{}),/权限结果未知/);assert.equal(d.pendingAction,'permissions');await assert.rejects(f.sendNewConversation(d,()=>{}),/核对上次操作/);f.ledger({state:'done',result:{ok:true}});assert.equal(await f.checkNewConversation(d),'');assert.equal(d.permissionsApplied,true);assert.equal(f.calls.some(c=>c.method==='turn.send'),false);});

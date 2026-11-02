@@ -54,6 +54,16 @@ export class Journal {
     return this.status(deviceId, commandId);
   }
 
+  /** 权限核对只收口原指纹对应的最终状态，不重放权限切换。 */
+  confirmObservedPermission(deviceId, commandId, fingerprint, result) {
+    const row = this.db.prepare("SELECT payload FROM commands WHERE device_id=? AND command_id=? AND fingerprint=? AND state='unknown'").get(deviceId, commandId, fingerprint);
+    if (!row) return this.status(deviceId, commandId);
+    const previous = row.payload ? JSON.parse(row.payload) : {};
+    const payload = { result, resolution: { source: 'desktop-permission-state', confirmedAt: Date.now(), previousError: previous.error ?? null } };
+    this.db.prepare("UPDATE commands SET state='done',payload=? WHERE device_id=? AND command_id=? AND fingerprint=? AND state='unknown'").run(JSON.stringify(payload), deviceId, commandId, fingerprint);
+    return this.status(deviceId, commandId);
+  }
+
   /** 创建得到编号后立即存入自有账本，后续持久化失败仍能核对已创建的目标。 */
   checkpoint(deviceId, commandId, result) {
     this.db.prepare("UPDATE commands SET payload=? WHERE device_id=? AND command_id=? AND state='pending'").run(JSON.stringify({ result }), deviceId, commandId);

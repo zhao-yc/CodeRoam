@@ -15,6 +15,9 @@ READ_METHODS.add('thread.goal.read');
 READ_METHODS.add('thread.prediction.read');
 WRITE_METHODS.add('thread.goal.update');
 WRITE_METHODS.add('thread.archive');
+READ_METHODS.add('thread.permissions.read');
+READ_METHODS.add('thread.create.permissions');
+WRITE_METHODS.add('thread.permissions.update');
 export const METHODS = new Set([...READ_METHODS, ...WRITE_METHODS, ...UPLOAD_METHODS, ...RELAY_METHODS]);
 export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 
@@ -52,12 +55,17 @@ export function validateRequest(message) {
   if(message.params.images!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!Array.isArray(message.params.images)||message.params.images.length>3))throw new BridgeError('BAD_PARAMS','图片只能随发送或追加指令提交，每次最多3张');
   if (UPLOAD_METHODS.has(message.method)) requireString(message.params.threadId, '会话编号', 200);
   if (message.params.attachments !== undefined && (!['turn.send', 'turn.steer'].includes(message.method) || !Array.isArray(message.params.attachments) || message.params.attachments.length > 3)) throw new BridgeError('BAD_ATTACHMENTS', '附件只能随发送或追加指令提交，每次最多3个');
-  if (message.method === 'thread.create' || message.method === 'thread.create.settings') {
+  if (message.method === 'thread.create' || message.method === 'thread.create.settings' || message.method === 'thread.create.permissions') {
     requireString(message.params.projectId, '项目编号', 200);
     const allowed = message.method === 'thread.create' ? ['projectId', 'title'] : ['projectId'];
     if (Object.keys(message.params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '创建会话仅接受电脑端项目编号与标题');
     if (message.params.title !== undefined) requireString(message.params.title, '会话标题', 80);
   } else if (message.method.startsWith('thread.') || message.method.startsWith('turn.') || message.method === 'approval.reply' || message.method === 'question.reply') requireString(message.params.threadId, '会话编号', 200);
+  if (message.method === 'thread.permissions.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '权限读取仅接受会话编号');
+  if (message.method === 'thread.permissions.update') {
+    const p = message.params;
+    if (Object.keys(p).some(key => !['threadId','mode','expectedRevision','confirmedFullAccess'].includes(key)) || !['default','auto-review','read-only','full-access'].includes(p.mode) || typeof p.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(p.expectedRevision) || (p.confirmedFullAccess !== undefined && typeof p.confirmedFullAccess !== 'boolean') || (p.mode === 'full-access' && p.confirmedFullAccess !== true)) throw new BridgeError('BAD_PERMISSIONS', '权限参数无效或尚未确认完整访问');
+  }
   if (message.method === 'question.reply') requireString(message.params.questionGroupId, '题组编号', 1000);
   if (message.method === 'thread.images') requireString(message.params.messageId, '消息编号', 200);
   if (message.method === 'thread.prediction.read' && Object.keys(message.params).some(key => key !== 'threadId')) throw new BridgeError('BAD_PARAMS', '读取预测仅接受会话编号');

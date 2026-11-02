@@ -1,3 +1,4 @@
+import { readPermissions, updatePermissions } from './permissions.mjs';
 import { EventEmitter } from 'node:events';
 import { predictionTurnId } from './prediction-turn.mjs';
 import { randomUUID } from 'node:crypto';
@@ -18,11 +19,11 @@ import { readGoal, updateGoal } from './goals.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
-  constructor({ client = new IpcClient(), index, hosts = ['local','durable'], snapshotTimeoutMs = 8000, activateThread=openDesktopThread, loadTimeoutMs=10000, modelCatalog=new ModelCatalog(), attachments=new AttachmentStore(), goalController=new DesktopGoalController() } = {}) {
+  constructor({ client = new IpcClient(), index, hosts = ['local','durable'], snapshotTimeoutMs = 8000, activateThread=openDesktopThread, loadTimeoutMs=10000, modelCatalog=new ModelCatalog(), attachments=new AttachmentStore(), goalController=new DesktopGoalController(), permissionCatalog=null } = {}) {
     super();
     this.client=client; this.index=index; this.hosts=hosts; this.snapshotTimeoutMs=snapshotTimeoutMs;
     this.modelCatalog=modelCatalog;this.attachments=attachments;
-    this.goalController=goalController;
+    this.goalController=goalController;this.permissionCatalog=permissionCatalog;
     this.conversations=new Map(); this.connecting=null; this.reconnectTimer=null; this.stopped=false;
     this.native=client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null}):null;
     this.native?.on('changed',ids=>{if(this.stopped)return;for(const id of ids){const entry=this.conversations.get(id);if(entry?.state)this.emit('conversation',this.snapshot(entry.state));else this.emit('readState',{threadId:id,hasUnreadTurn:this.native.unread.get(id)});}});
@@ -208,6 +209,8 @@ export class DesktopAdapter extends EventEmitter {
     return entry;
   }
 
+  readPermissions(threadId,deviceId) { return readPermissions(this,threadId,deviceId); }
+
   async readSettings(threadId,deviceId) {
     const entry=this.subscribed(threadId,deviceId),owner=entry.owner;
     const response=await this.client.request('thread-follower-read-model-settings',{conversationId:threadId},1,{targetClientId:owner.clientId,timeoutMs:5000});
@@ -248,6 +251,7 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   async operate(method,params,commandId,deviceId,checkpoint=()=>{}) {
+    if(method==='thread.permissions.update')return updatePermissions(this,params,commandId,deviceId,checkpoint);
     if(method==='thread.goal.update')return updateGoal(this,params,commandId,deviceId);
     // 问答在回传前读取所有者最新快照，避免使用手机停留期间的旧问题。
     await this.watch(params.threadId,deviceId,{fresh:method==='question.reply'||(method==='turn.send'&&params.resetPlanAfterSend===true),history:false});
