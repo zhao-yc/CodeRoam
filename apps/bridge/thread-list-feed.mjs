@@ -66,7 +66,7 @@ export class ThreadListFeed {
     try{await this.running;}finally{this.running=null;}
   }
   summary(row,snapshot) {
-    return {...row,notificationState:snapshot.notificationState,title:snapshot.title||row.title,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,...questionCounts(snapshot)};
+    return {...row,latestTurn:snapshot.latestTurn ? {turnId:snapshot.latestTurn.turnId,status:snapshot.latestTurn.status} : undefined,notificationState:snapshot.notificationState,title:snapshot.title||row.title,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,...questionCounts(snapshot)};
   }
   /** 只发布列表摘要，正文流式变化不制造重复列表事件。 */
   update(snapshot) {

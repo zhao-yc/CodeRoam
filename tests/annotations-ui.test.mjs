@@ -49,6 +49,7 @@ test('实际页面时间线只展示一处已有注释入口，折叠来源时�
     function reportTimeline(){return visibleIds.map(id=>({id}));}
   `,context);
   const timeline=page.slice(page.indexOf('const timeline = computed('),page.indexOf('const expandedExecutionIds ='));
+  vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/turn-failure.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
   vm.runInContext(stripTypeScriptTypes(timeline,{mode:'transform'}),context);
   assert.equal(vm.runInContext('timeline.value.filter(entry=>entry.annotations.length>0).length',context),1);
   assert.equal(vm.runInContext('timeline.value[1].text',context),'已完成');

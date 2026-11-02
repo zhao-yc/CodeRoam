@@ -7,6 +7,7 @@ import { readMessageImages } from './message-images.mjs';
 import { currentActivity } from './activity.mjs';
 import { normalizeGoal, goalRevision } from './goals.mjs';
 import { taskNotificationState } from './task-notifications.mjs';
+import { latestTurnSummary, boundedTurnMetadata, turnStatus } from './turn-failure.mjs';
 
 /** 对本地快照应用 Immer 路径补丁，拒绝原型链路径和非法数组索引。 */
 export function applyPatches(state, patches) {
@@ -97,16 +98,17 @@ export function normalizeConversation(state, { imageMessageId, maxMessages = 80,
     const params = request.params ?? {};
     return [{ id:String(request.id), kind, turnId:params.turnId ?? active?.turnId ?? '', title:kind==='command'?'执行命令审批':'修改文件审批', detail:String(params.command ?? params.reason ?? '请核对桌面会话后选择是否允许').slice(0,6000), cwd:params.cwd ?? '' }];
   });
-  // 仅携带当前消息窗口涉及的轮次，不增加正文的保留数量与大小。
+  // 仅保留消息窗口、最新轮次和跨度内的空失败，旧失败由历史分页补齐。
   const selectedTurnIds = new Set(selected.map(message => message.turnId).filter(Boolean));
-  const turnInfo = new Map();
-  for (const turn of turns) {
-    if (!selectedTurnIds.has(turn.turnId)) continue;
-    turnInfo.set(turn.turnId, {turnId:turn.turnId, status:turn.error ? 'failed' : turn.status ?? '', ...(Number.isFinite(turn.durationMs) && turn.durationMs >= 0 ? {durationMs:turn.durationMs} : {})});
-  }
+  const latestTurn = latestTurnSummary(state, turns);
+  const messageTurnIds = new Set(messages.map(message => message.turnId));
+  const windowIndexes = turns.flatMap((turn,index) => selectedTurnIds.has(turn.turnId) || turn.turnId === latestTurn?.turnId ? [index] : []);
+  const firstTurn = windowIndexes[0] ?? -1, lastTurn = windowIndexes.at(-1) ?? -1;
+  const relevantTurns = turns.filter((turn,index) => selectedTurnIds.has(turn.turnId) || turn.turnId === latestTurn?.turnId || (index >= firstTurn && index <= lastTurn && !messageTurnIds.has(turn.turnId) && turnStatus(turn) === 'failed'));
+  const turnInfo = new Map(boundedTurnMetadata(relevantTurns,latestTurn?.turnId,selectedTurnIds).map(turn => [turn.turnId,turn]));
   // 只展示桌面明确等待确认的计划，不从普通回复猜测。
   const candidate=[...turns].reverse().flatMap(turn=>(turn.items??[]).filter(item=>item.type==='planImplementation').reverse().map(item=>({item,turn})))[0];
   const pendingPlan=candidate&&candidate.item.isCompleted===false&&!active&&typeof candidate.item.planContent==='string'?{id:String(candidate.item.id),turnId:candidate.item.turnId??candidate.turn.turnId??'',text:candidate.item.planContent}:null;
-  const notificationState=taskNotificationState(turns,normalizeQuestions(state,turns),approvals,pendingPlan);
-  return { supportsFileReports:process.platform==='win32', notificationState, pendingPlan, supportsPlanImplementation:true, ...(typeof state.hasUnreadTurn === 'boolean' ? {hasUnreadTurn:state.hasUnreadTurn} : {}), ...(Array.isArray(state.threadRuntimeStatus?.activeFlags) ? {activeFlags:state.threadRuntimeStatus.activeFlags.filter(flag=>['waitingOnUserInput','waitingOnApproval'].includes(flag))} : {}), goal:normalizeGoal(state), goalRevision:goalRevision(normalizeGoal(state)), supportsGoals:Object.hasOwn(state,'threadGoal'), activity:currentActivity(active), supportsPlanReset:true, supportsPermissionSettings:true, permissionSettings:permissionState(state), supportsExecutionSettings:true, supportsAttachments:true, executionSettings:executionSettings(state), supportsImages:true, supportsHistoryPages:true, threadId:state.id, title:state.title ?? state.fallbackSearchTitle ?? '未命名会话', cwd:state.cwd ?? '', status:state.threadRuntimeStatus?.type ?? (active?'active':'idle'), activeTurnId:active?.turnId ?? '', messages:selected, turns:[...turnInfo.values()], approvals, questionGroups:normalizeQuestions(state,turns), updatedAt:Date.now() };
+  const notificationState=taskNotificationState(latestTurn ? [turns.at(-1)] : [],normalizeQuestions(state,turns),approvals,pendingPlan);
+  return { supportsTurnRetry:true, ...(latestTurn ? {latestTurn} : {}), supportsFileReports:process.platform==='win32', notificationState, pendingPlan, supportsPlanImplementation:true, ...(typeof state.hasUnreadTurn === 'boolean' ? {hasUnreadTurn:state.hasUnreadTurn} : {}), ...(Array.isArray(state.threadRuntimeStatus?.activeFlags) ? {activeFlags:state.threadRuntimeStatus.activeFlags.filter(flag=>['waitingOnUserInput','waitingOnApproval'].includes(flag))} : {}), goal:normalizeGoal(state), goalRevision:goalRevision(normalizeGoal(state)), supportsGoals:Object.hasOwn(state,'threadGoal'), activity:currentActivity(active), supportsPlanReset:true, supportsPermissionSettings:true, permissionSettings:permissionState(state), supportsExecutionSettings:true, supportsAttachments:true, executionSettings:executionSettings(state), supportsImages:true, supportsHistoryPages:true, threadId:state.id, title:state.title ?? state.fallbackSearchTitle ?? '未命名会话', cwd:state.cwd ?? '', status:state.threadRuntimeStatus?.type ?? (active?'active':'idle'), activeTurnId:active?.turnId ?? '', messages:selected, turns:[...turnInfo.values()], approvals, questionGroups:normalizeQuestions(state,turns), updatedAt:Date.now() };
 }

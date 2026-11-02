@@ -12,10 +12,12 @@ export function historicalSnapshot(row, records, options = {}) {
     const event=record.payload??{};
     if(event.thread_id&&event.thread_id!==row.id) continue;
     if(event.turn_id) turnId=event.turn_id;
+    // 截断块开头的匿名旧轮次也按首次出现登记，不能在已知最新轮次后补入旧组。
+    if(!turnInfo.has(turnId))turnInfo.set(turnId,{});
     // 只相信明确的任务事件；最终回复标记本身不代表任务已经结束。
     if(turnId && ['task_started','task_complete','turn_aborted','task_failed'].includes(event.type)) {
       const status=event.type==='task_complete'?'completed':event.type==='task_started'?'inProgress':event.type==='turn_aborted'?'interrupted':'failed';
-      turnInfo.set(turnId,{status,...(Number.isFinite(event.duration_ms)&&event.duration_ms>=0?{durationMs:event.duration_ms}:{})});
+      turnInfo.set(turnId,{status,...(event.type==='task_failed'?{error:event.error??event.message}:{}),...(Number.isFinite(event.duration_ms)&&event.duration_ms>=0?{durationMs:event.duration_ms}:{})});
     }
     const item=event.item;
     if(event.type==='item_completed'&&item&&typeof item.id==='string') {
@@ -35,7 +37,7 @@ export function historicalSnapshot(row, records, options = {}) {
     }
   }
   // 按真实轮次合并项目，保持首次出现顺序和同编号项目的最终版本。
-  const grouped=new Map();
+  const grouped=new Map([...turnInfo].map(([turnId,info])=>[turnId,{turnId,...info,items:[]}]));
   for(const entry of canonical.size?canonical.values():legacy) {
     let turn=grouped.get(entry.turnId);
     if(!turn) {turn={turnId:entry.turnId,...turnInfo.get(entry.turnId),items:[]};grouped.set(entry.turnId,turn);}

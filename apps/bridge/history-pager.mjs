@@ -23,12 +23,14 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
     const start=Math.max(0,end-maximumBytes),buffer=Buffer.alloc(end-start);fs.readSync(fd,buffer,0,buffer.length,start);
     let position=start>0?buffer.indexOf(10)+1:0;
     if(start>0&&position===0)position=buffer.length;
-    const alignedStart=start+position,records=[],offsets=new Map();let anchor=-1;
+    const alignedStart=start+position,records=[],offsets=new Map(),turnOffsets=new Map();let anchor=-1,currentTurn='';
     while(position<buffer.length){
       const newline=buffer.indexOf(10,position);if(newline<0)break;
       const offset=start+position;let record;try{record=JSON.parse(buffer.subarray(position,newline).toString('utf8'));}catch{position=newline+1;continue;}
       position=newline+1;record.ordinal=offset;records.push(record);
       const event=record.payload??{};if(record.type!=='event_msg'||(event.thread_id&&event.thread_id!==row.id))continue;
+      if(event.turn_id)currentTurn=event.turn_id;
+      if(currentTurn){const bounds=turnOffsets.get(currentTurn)??{first:offset,last:offset};bounds.last=offset;turnOffsets.set(currentTurn,bounds);}
       const id=event.type==='item_completed'&&typeof event.item?.id==='string'?event.item.id:['user_message','agent_message'].includes(event.type)?'history-'+offset:'';
       if(id){offsets.set(id,offset);if(id===seek)anchor=offset;}
     }
@@ -46,7 +48,11 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
     if(next>=end)next=start;
     const hasMore=next>0;
     const turnIds=new Set(messages.map(message=>message.turnId));
-    return {messages,turns:snapshot.turns.filter(turn=>turnIds.has(turn.turnId)),hasMore,cursor:hasMore?encodeCursor(row.id,next,''):''};
+    // 无消息失败按本页字节范围保留，但绝不把本页最后一轮标为整个会话的最新轮次。
+    return {messages,turns:snapshot.turns.filter(turn=>{
+      const bounds=turnOffsets.get(turn.turnId);
+      return turnIds.has(turn.turnId)||(turn.status==='failed'&&bounds&&bounds.last>=next&&bounds.first<(anchor>=0?anchor:end));
+    }),hasMore,cursor:hasMore?encodeCursor(row.id,next,''):''};
   }catch(error){
     if(error instanceof BridgeError)throw error;
     throw new BridgeError('HISTORY_UNAVAILABLE','读取早期记录失败，请稍后重试');

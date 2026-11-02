@@ -18,7 +18,7 @@ export function rememberRecentThread(entries: RecentThread[], key: string, now: 
 // 待用户处理优先于运行和未读，离线状态不冒充正在运行。
 function priority(thread: ComputerThread): number {
   if (thread.online && (thread.unansweredQuestionCount ?? 0) > 0) return 0
-  const state = threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? []), thread.hasUnreadTurn ?? null)
+  const state = threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? [], thread.latestTurn?.status ?? ''), thread.hasUnreadTurn ?? null)
   return state == 'question' || state == 'approval' ? 0 : state == 'running' ? 1 : state == 'unread' ? 2 : 3
 }
 

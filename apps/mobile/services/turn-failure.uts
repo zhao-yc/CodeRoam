@@ -1,0 +1,37 @@
+import type { Conversation, ConversationTurn, QuestionGroup } from './bridge.uts'
+import type { TimelineEntry } from './executions.uts'
+
+// 只使用桌面明确标记的最新轮次；历史窗口中最后一条消息不能证明当前状态。
+export function latestFailureTurnId(snapshot: Conversation | null): string {
+  if (snapshot == null) return ''
+  const latest = snapshot.latestTurn
+  if (latest != null) return latest.status == 'failed' ? latest.turnId : ''
+  const notification = snapshot.notificationState
+  return notification?.latestTurnStatus == 'failed' ? notification.latestTurnId : ''
+}
+
+// 在每轮最后一项后插入失败卡片；没有消息的失败也按轮次顺序独立显示。
+export function failureTimeline(snapshot: Conversation | null, entries: TimelineEntry[]): TimelineEntry[] {
+  if (snapshot == null) return entries
+  const result = entries.slice()
+  const turns = snapshot.turns ?? [] as ConversationTurn[]
+  turns.forEach((turn: ConversationTurn, turnIndex: number) => {
+    if (turn.status != 'failed' || turn.turnId.length == 0) return
+    let insertion = -1
+    result.forEach((entry: TimelineEntry, index: number) => { if (entry.turnId == turn.turnId) insertion = index + 1 })
+    if (insertion < 0) {
+      insertion = result.findIndex((entry: TimelineEntry): boolean => turns.slice(turnIndex + 1).some((next: ConversationTurn): boolean => next.turnId == entry.turnId))
+      if (insertion < 0) insertion = result.length
+    }
+    result.splice(insertion, 0, { id: 'failure:' + turn.turnId, role: 'failure', text: (turn.errorMessage ?? '').trim().length > 0 ? turn.errorMessage! : '任务执行失败，未提供具体原因', turnId: turn.turnId, executions: [], label: '任务失败' } as TimelineEntry)
+  })
+  return result
+}
+
+// 可重试性与草稿独立；历史、缓存和待交互状态都不能启动空轮次。
+export function retryTarget(snapshot: Conversation | null): string {
+  if (snapshot == null || snapshot.readOnly == true || snapshot.status == 'active' || snapshot.activeTurnId.length > 0) return ''
+  if (snapshot.approvals.length > 0 || snapshot.questionGroups.some((group: QuestionGroup): boolean => group.state == 'pending') || snapshot.pendingPlan != null) return ''
+  if ((snapshot.activeFlags ?? []).length > 0) return ''
+  return latestFailureTurnId(snapshot)
+}

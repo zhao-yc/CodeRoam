@@ -4,7 +4,7 @@ import { predictionTurnId } from './prediction-turn.mjs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { IpcClient } from '../../packages/protocol/ipc-client.mjs';
-import { BridgeError } from '../../packages/protocol/contracts.mjs';
+import { BridgeError, validateTurnRetry } from '../../packages/protocol/contracts.mjs';
 import { applyPatches, normalizeConversation } from './conversation.mjs';
 import { formatQuestionReply, validateQuestionAnswers, questionCounts } from './questions.mjs';
 import { DesktopNavigation } from './desktop-navigation.mjs';
@@ -60,7 +60,7 @@ export class DesktopAdapter extends EventEmitter {
         try {
           const snapshot=await this.watch(row.id,watcher,{snapshotTimeoutMs:1000,ownerTimeoutMs:500,history:false});
           // 异步问题不改变运行状态，但列表仍同步全部待回答数量。
-          result[position]={...row,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,...questionCounts(snapshot)};
+          result[position]={...row,latestTurn:snapshot.latestTurn ? {turnId:snapshot.latestTurn.turnId,status:snapshot.latestTurn.status} : undefined,hasUnreadTurn:snapshot.hasUnreadTurn,activeFlags:snapshot.activeFlags,status:snapshot.status,activeTurnId:snapshot.activeTurnId,approvalCount:snapshot.approvals.length,...questionCounts(snapshot)};
         } catch { result[position]={...row,hasUnreadTurn:this.native?.unread.get(row.id),status:'unknown',activeTurnId:'',approvalCount:0,pendingQuestionCount:0}; }
         finally { this.unwatch(row.id,watcher); }
       }
@@ -252,7 +252,30 @@ export class DesktopAdapter extends EventEmitter {
     return this.attachments[method.slice('attachment.'.length)](deviceId,params.threadId,params);
   }
 
+  /** 每次重试都回读原所有者；拒绝时立即同步状态，让手机撤下过期入口。 */
+  async retryTurn(params,commandId,deviceId) {
+    validateTurnRetry(params);
+    await this.watch(params.threadId,deviceId,{fresh:true,history:false});
+    const entry=this.subscribed(params.threadId,deviceId),snapshot=this.snapshot(entry.state);
+    const reject=(code,message)=>{this.emit('conversation',snapshot);throw new BridgeError(code,message);};
+    if(snapshot.readOnly||snapshot.activeTurnId||snapshot.status==='active')reject('TURN_ACTIVE','任务状态已变化，请核对最新会话后操作');
+    if(snapshot.latestTurn?.turnId!==params.expectedTurnId||snapshot.latestTurn.status!=='failed')reject('STALE_TURN','失败任务已变化，请核对最新会话后操作');
+    const pendingRequest=(entry.state.requests??[]).some(entry=>{
+      const request=entry.request??entry;
+      return request.completed!==true&&(request.method?.endsWith('/requestApproval')||request.method==='item/tool/requestUserInput');
+    });
+    if(pendingRequest||snapshot.approvals.length||snapshot.questionGroups.some(group=>group.state==='pending')||snapshot.pendingPlan||snapshot.activeFlags?.length)reject('TURN_RETRY_BLOCKED','请先处理当前审批、问题或计划后再重试');
+    // 与桌面手动重试一致：空输入继续上下文，不创建或恢复用户消息，不重发上次正文。
+    const response=await this.client.request('thread-follower-start-turn',{
+      conversationId:params.threadId,
+      turnStart:{request:{threadId:params.threadId,input:[],turnTrigger:'capacity_retry_manual'},context:{inheritThreadSettings:true}}
+    },2,{targetClientId:entry.owner.clientId,timeoutMs:15000});
+    if(response.resultType!=='success')throw new BridgeError('OWNER_UNAVAILABLE','桌面会话所有者已不可用');
+    return {ok:true,commandId,threadId:params.threadId,expectedTurnId:params.expectedTurnId,result:response.result};
+  }
+
   async operate(method,params,commandId,deviceId,checkpoint=()=>{}) {
+    if(method==='turn.retry')return this.retryTurn(params,commandId,deviceId);
     // 正文由最新桌面计划提供，手机只能选择计划编号。
     if(method==='turn.send'&&params.planAction!==undefined) {
       await this.watch(params.threadId,deviceId,{fresh:true,history:false});

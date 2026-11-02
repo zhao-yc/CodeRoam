@@ -14,6 +14,7 @@
     <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
     <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
+    <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><button class="check button-secondary" :disabled="!connection.connected || busy" @click="checkRetryOutcome">核对重试结果</button></view>
     <view v-if="pendingDeleteCommand.length > 0 && pendingAction != 'delete'" class="notice pending-notice"><text class="notice-text">删除结果尚未确认，请核对原操作，勿重复提交。</text><button class="check button-secondary" :disabled="!connection.connected || busy" @click="checkDeleteOutcome">核对删除结果</button></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
     <view class="timeline-region" @click="dismissGoal">
@@ -35,6 +36,11 @@
             </view>
             <file-change-summary v-if="(entry.reportId ?? '').length > 0 && connection.snapshot?.supportsFileReports == true" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
           </template>
+          <view v-else-if="entry.role == 'failure'" class="turn-failure-card" aria-label="任务失败">
+            <app-icon class="turn-failure-icon" name="alert-circle" :size="16" tone="warning" />
+            <view class="turn-failure-copy"><text class="turn-failure-text" selectable>{{ entry.text }}</text><text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingCachedContent" class="turn-failure-hint">更新电脑连接服务后可重试</text></view>
+            <button v-if="entry.turnId == displayFailureTurnId" class="turn-retry" :disabled="!canRetryTurn(entry.turnId)" aria-label="重试失败任务" @click="retryTurn(entry.turnId)">{{ retrySubmitting(entry.turnId) ? '重试中…' : '重试' }}</button>
+          </view>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
           <template v-else>
             <view class="execution-toggle action-frame"><app-icon name="edit" :size="19" tone="muted" /><text class="execution-summary">{{ entry.label }}</text><app-icon :name="isExecutionExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="(isExecutionExpanded(entry) ? '收起' : '展开') + entry.label" @click="toggleExecutions(entry)"></button></view>
@@ -82,7 +88,7 @@
           <!-- 两端操作始终使用同一节点，展开时只增加上方的编辑空间。 -->
           <view class="composer-add"><view class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view></view>
           <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view></view>
-          <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
+          <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!primaryAvailable) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!primaryAvailable" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
         </view>
       </view>
     </view>
@@ -114,6 +120,7 @@ import { clearDeletedDrafts } from '../../services/composer.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
+import { failureTimeline, retryTarget, latestFailureTurnId } from '../../services/turn-failure.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
 import type { Conversation } from '../../services/bridge.uts'
 import { CachedConversation, readConversationCache, saveConversationCache, cachedConversationSnapshot, clearConversationCache } from '../../services/conversation-cache.uts'
@@ -257,7 +264,7 @@ const messagePresentations = computed((): MessagePresentation[] => presentConver
 const selectedAnnotations = computed((): MessageAnnotation[] => timeline.value.find((entry: TimelineEntry): boolean => entry.id == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 // 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
 const timeline = computed((): TimelineEntry[] => {
-  const entries = reportTimeline(displayConversation.value, expandedReportIds.value)
+  const entries = failureTimeline(displayConversation.value, reportTimeline(displayConversation.value, expandedReportIds.value))
   const presentations = annotationPresentationsForTimeline(messagePresentations.value, entries.map((entry: TimelineEntry): string => entry.id))
   entries.forEach((entry: TimelineEntry) => {
     const presentation = presentations.find((message: MessagePresentation): boolean => message.messageId == entry.id)
@@ -306,6 +313,11 @@ const conversationConnectionHint = computed((): string => {
 const openingTitle = computed((): string => conversationOpeningTitle(connection.snapshot != null, detailError.value, connection.connected))
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
 const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : cachedDetail.value?.title ?? '', openingTitle.value))
+const submittedRetryKey = ref('')
+const displayFailureTurnId = computed((): string => latestFailureTurnId(displayConversation.value))
+const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
+const retryTurnId = computed((): string => retryTarget(liveConversation.value))
+const primaryAvailable = computed((): boolean => canWrite.value && !imageBusy.value && filesReady.value && (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value)))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
 
 let cacheWriteTimer = 0
@@ -730,6 +742,7 @@ watch((): string => (displayConversation.value?.messages ?? []).map((message: Ch
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
+  if (following.value) scrollLatest()
   nextTick(() => { updateTimelinePosition() })
   if (connection.snapshot == null) return
   // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
@@ -1101,6 +1114,36 @@ function submitAnswers(questionGroupId: string, turnId: string, answers: Questio
     if (isCurrentPage()) { submittedGroupIds.value.push(questionGroupId); refresh() }
   }, (error: Error) => { busy.value = false; if (isCurrentPage()) operationError.value = error.message })
 }
+// 两个重试入口共享轮次占位，成功回执到新轮次广播之间也不能重复点击。
+function retrySubmitting(turnId: string): boolean { return submittedRetryKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
+function canRetryTurn(turnId: string): boolean { return turnId.length > 0 && retryTurnId.value == turnId && canWrite.value && goalHostOnline.value && liveConversation.value?.supportsTurnRetry == true && !retrySubmitting(turnId) }
+function retryTurn(turnId: string) {
+  if (!canRetryTurn(turnId)) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value, key = hostId + ':' + threadId + ':' + turnId
+  submittedRetryKey.value = key; operationError.value = ''; busy.value = true; pendingAction.value = 'retry'
+  bridge.request('turn.retry', { threadId, expectedTurnId: turnId }, true).then((_: UTSJSONObject) => {
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { resumeFollowing(); refresh() }
+  }, (error: Error) => {
+    if (bridge.pendingCommand(hostId, threadId).length == 0 && submittedRetryKey.value == key) submittedRetryKey.value = ''
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { operationError.value = error.message; bridge.watch(threadId) }
+  })
+}
+// 未知结果只核对原命令，不重新发送；接受后保留占位直到新状态到达。
+function checkRetryOutcome() {
+  if (!connection.connected || busy.value || pendingRetryCommand.value.length == 0) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value, commandId = pendingRetryCommand.value
+  busy.value = true
+  bridge.request('command.status', { commandId }).then((status: UTSJSONObject) => {
+    busy.value = false
+    const error = status['error'] as UTSJSONObject | null
+    const done = status.getString('state') == 'done' && error?.getBoolean('outcomeUnknown') != true
+    if (done) { bridge.clearCommand(commandId, hostId); if (error != null) submittedRetryKey.value = '' }
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { operationError.value = done ? error?.getString('message') ?? '' : '重试结果仍待核对，请勿重复提交'; bridge.watch(threadId) }
+  }, (error: Error) => { busy.value = false; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+}
+
 // 仅在明确收到成功响应后清空草稿，未知结果保留并要求先核对。
 function send() {
   const text = draft.value.trim()
@@ -1183,13 +1226,22 @@ function operateGoal(action: string, objective: string, revision: string) {
 }
 
 // 主按钮随上下文切换：有草稿发送，空草稿运行中停止；追加时仍保留独立停止入口。
-function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop() }
+function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value) }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
 onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
 </script>
 
 <style>
+.turn-failure-card { flex-direction: row; align-items: flex-start; border-width: 1px; border-style: solid; border-color: #e4d8d4; border-radius: 12px; padding: 10px 12px; background-color: #fffaf8; }
+.turn-failure-icon { margin-top: 3px; flex-shrink: 0; }
+.turn-failure-copy { flex: 1; min-width: 0; margin-left: 9px; }
+.turn-failure-text { font-size: 13px; line-height: 22px; color: #795c57; }
+.turn-failure-hint { font-size: 11px; line-height: 18px; color: #8c7972; margin-top: 4px; }
+.turn-retry { flex-shrink: 0; margin-left: 8px; min-width: 48px; min-height: 44px; padding: 0 8px; font-size: 12px; line-height: 44px; color: #68534c; background-color: transparent; }
+/* #ifdef WEB */
+.turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* #endif */
 .queue-compose-hint { color: #69766b; font-size: 12px; line-height: 18px; margin: 0 4px 8px; }
 /* 缓存同步提示保持轻量，避免错误提示重复挤占聊天区域。 */
 .cache-notice { flex-direction: row; align-items: center; padding: 8px 16px; background-color: #eef2eb; }

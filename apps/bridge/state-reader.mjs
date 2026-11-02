@@ -66,7 +66,7 @@ export class StateReader {
       let page;const current={...options};
       for(let attempt=0;attempt<8;attempt++) {
         page=readHistoricalPage(row,path.join(path.dirname(this.filePath),'sessions'),current);
-        if(page.messages.length||!page.hasMore)break;
+        if(page.messages.length||page.turns?.length||!page.hasMore)break;
         current.before=page.cursor;current.beforeMessageId='';
       }
       return page;

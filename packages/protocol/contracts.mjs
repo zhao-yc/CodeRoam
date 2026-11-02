@@ -3,7 +3,7 @@ import { validateGoalUpdate } from './goals.mjs';
 
 export const PROTOCOL_VERSION = 1;
 export const READ_METHODS = new Set(['ping', 'threads.list', 'threads.watch', 'threads.unwatch', 'thread.watch', 'thread.unwatch', 'thread.history', 'thread.images', 'thread.settings.read', 'command.status']);
-export const WRITE_METHODS = new Set(['turn.send', 'turn.steer', 'turn.stop', 'approval.reply', 'question.reply', 'thread.settings.update']);
+export const WRITE_METHODS = new Set(['turn.send', 'turn.retry', 'turn.steer', 'turn.stop', 'approval.reply', 'question.reply', 'thread.settings.update']);
 // 分片使用独立幂等存储，正文不进入操作账本。
 export const UPLOAD_METHODS = new Set(['attachment.begin', 'attachment.chunk', 'attachment.finish', 'attachment.abort']);
 // 中转内的显示偏好更新不属于需要桌面核对的会话写操作。
@@ -39,6 +39,7 @@ export function validateRequest(message) {
   if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(message.requestId)) throw new BridgeError('BAD_REQUEST_ID', '请求编号不合法');
   if (!METHODS.has(message.method)) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的接口列表中');
   if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new BridgeError('BAD_PARAMS', '请求参数必须是对象');
+  if (message.method === 'turn.retry') validateTurnRetry(message.params);
   if (message.method === 'threads.list') {
     const p=message.params;
     if(Object.keys(p).some(key=>!['limit','offset','search','archived','includeUsage'].includes(key)) || (p.archived!==undefined&&typeof p.archived!=='boolean') || (p.includeUsage!==undefined&&typeof p.includeUsage!=='boolean') || (p.limit!==undefined&&(!Number.isInteger(p.limit)||p.limit<1||p.limit>100)) || (p.offset!==undefined&&(!Number.isInteger(p.offset)||p.offset<0||p.offset>10000)) || (p.search!==undefined&&(typeof p.search!=='string'||p.search.length>100)))throw new BridgeError('BAD_PARAMS','会话列表参数无效');
@@ -107,6 +108,13 @@ export function validateRequest(message) {
 export function requireString(value, label, maximum = 32000) {
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum) throw new BridgeError('BAD_PARAMS', `${label}为空或超出允许长度`);
   return value;
+}
+
+/** 重试只能指定失败轮次，正文、模型和权限等设置均由原桌面会话继承。 */
+export function validateTurnRetry(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !['threadId', 'expectedTurnId'].includes(key))) throw new BridgeError('BAD_PARAMS', '重试仅接受会话编号和失败轮次编号');
+  requireString(params.threadId, '会话编号', 200);
+  requireString(params.expectedTurnId, '失败轮次编号', 200);
 }
 
 export function errorPayload(error) {

@@ -1,7 +1,7 @@
-import type { ChatMessage, Conversation, ConversationTurn } from './bridge.uts'
+import type { ChatMessage, Conversation, ConversationTurn, LatestTurn } from './bridge.uts'
 import type { HistoryPage } from './history.uts'
 
-export type CachedConversation = { hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
+export type CachedConversation = { latestTurn?: LatestTurn, hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
 type CacheStore = { version: number, namespace: string, entries: CachedConversation[] }
 const CACHE_KEY = 'codex-mobile-conversation-cache-v1'
 const ENTRY_BYTES = 512 * 1024
@@ -17,7 +17,7 @@ function validMessages(messages: ChatMessage[]): boolean {
 }
 
 function validEntry(entry: CachedConversation): boolean {
-  return entry != null && typeof entry.hostId == 'string' && typeof entry.threadId == 'string' && typeof entry.title == 'string' && typeof entry.cwd == 'string' && typeof entry.savedAt == 'number' && typeof entry.accessedAt == 'number' && validMessages(entry.messages) && validMessages(entry.olderMessages) && Array.isArray(entry.turns) && Array.isArray(entry.olderTurns) && entry.turns.concat(entry.olderTurns).every((turn: ConversationTurn): boolean => turn != null && typeof turn.turnId == 'string' && typeof turn.status == 'string')
+  return entry != null && typeof entry.hostId == 'string' && typeof entry.threadId == 'string' && typeof entry.title == 'string' && typeof entry.cwd == 'string' && typeof entry.savedAt == 'number' && typeof entry.accessedAt == 'number' && validMessages(entry.messages) && validMessages(entry.olderMessages) && Array.isArray(entry.turns) && Array.isArray(entry.olderTurns) && entry.turns.concat(entry.olderTurns).every((turn: ConversationTurn): boolean => turn != null && typeof turn.turnId == 'string' && typeof turn.status == 'string' && (turn.errorMessage == null || typeof turn.errorMessage == 'string')) && (entry.latestTurn == null || (typeof entry.latestTurn!.turnId == 'string' && typeof entry.latestTurn!.status == 'string'))
 }
 
 // 所有存储异常均静默降级；不把包含会话内容的异常写入日志或错误提示。
@@ -52,16 +52,16 @@ export function saveConversationCache(namespace: string, hostId: string, snapsho
   if (namespace.length == 0 || hostId.length == 0 || snapshot.threadId.length == 0) return false
   const now = Date.now()
   const messages = cacheMessages(snapshot.messages)
-  const turns = (snapshot.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs }))
+  const turns = (snapshot.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage }))
   const olderMessages = cacheMessages((history?.messages ?? [] as ChatMessage[]).filter((message: ChatMessage): boolean => !messages.some((current: ChatMessage): boolean => current.id == message.id)))
-  const entry = { hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: (history?.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs })), savedAt: now, accessedAt: now } as CachedConversation
+  const entry = { latestTurn: snapshot.latestTurn, hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: (history?.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage })), savedAt: now, accessedAt: now } as CachedConversation
   // 剔除最早完整消息和无引用轮次，不截断正文，不影响当前页面的完整内容。
   while (JSON.stringify(entry).length * 2 > ENTRY_BYTES) {
     if (entry.olderMessages.length > 0) entry.olderMessages.shift()
     else if (entry.messages.length > 0) entry.messages.shift()
     else return false
     entry.olderTurns = entry.olderTurns.filter((turn: ConversationTurn): boolean => entry.olderMessages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
-    entry.turns = entry.turns.filter((turn: ConversationTurn): boolean => entry.messages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
+    entry.turns = entry.turns.filter((turn: ConversationTurn): boolean => (turn.status == 'failed' && turn.turnId == entry.latestTurn?.turnId) || entry.messages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
   }
   const store = loadStore(namespace)
   store.entries = store.entries.filter((item: CachedConversation): boolean => item.hostId != hostId || item.threadId != snapshot.threadId)
@@ -75,7 +75,7 @@ export function saveConversationCache(namespace: string, hostId: string, snapsho
 
 // 将缓存转换为纯展示快照；永远不能写入 connection.snapshot。
 export function cachedConversationSnapshot(entry: CachedConversation): Conversation {
-  return { threadId: entry.threadId, title: entry.title, cwd: entry.cwd, messages: entry.messages, turns: entry.turns, updatedAt: entry.savedAt, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], readOnly: true } as Conversation
+  return { latestTurn: entry.latestTurn, threadId: entry.threadId, title: entry.title, cwd: entry.cwd, messages: entry.messages, turns: entry.turns, updatedAt: entry.savedAt, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], readOnly: true } as Conversation
 }
 
 // 清理只触及本应用的会话缓存；失败时旧命名空间也不能被新配对读取。

@@ -1,8 +1,8 @@
 import { reactive, watch } from 'vue'
-import { bridge, connection, liveThreadLists, ThreadListUpdate, Computer, ThreadSummary } from './bridge.uts'
+import { bridge, connection, liveThreadLists, ThreadListUpdate, Computer, ThreadSummary, LatestTurn } from './bridge.uts'
 
 export type ComputerThreads = { hostId: string, label: string, online: boolean, threads: ThreadSummary[], loading: boolean, loaded: boolean, error: string, revision: number, subscribed?: boolean, instanceGeneration?: string }
-export type ComputerThread = { key: string, hostId: string, hostLabel: string, online: boolean, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
+export type ComputerThread = { latestTurn?: LatestTurn, key: string, hostId: string, hostLabel: string, online: boolean, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
 type ListQueueEntry = { hostId: string, configuration: number, revision: number }
 type ThreadListState = { configuration: number, computers: ComputerThreads[] }
 export const threadList = reactive<ThreadListState>({ configuration: -1, computers: [] as ComputerThreads[] })
@@ -56,7 +56,7 @@ export function visibleComputerThreads(hostId: string, search: string): Computer
     if (hostId.length > 0 && computer.hostId != hostId) return
     computer.threads.forEach((thread: ThreadSummary) => {
       if (query.length > 0 && thread.title.toLowerCase().indexOf(query) < 0 && thread.cwd.toLowerCase().indexOf(query) < 0) return
-      result.push({ key: computer.hostId + ':' + thread.id, hostId: computer.hostId, hostLabel: computer.label, online: connection.connected && computer.online, id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt, hasUnreadTurn: thread.hasUnreadTurn, activeFlags: thread.activeFlags, status: thread.status, activeTurnId: thread.activeTurnId, approvalCount: thread.approvalCount, pendingQuestionCount: thread.pendingQuestionCount, unansweredQuestionCount: thread.unansweredQuestionCount } as ComputerThread)
+      result.push({ key: computer.hostId + ':' + thread.id, hostId: computer.hostId, hostLabel: computer.label, online: connection.connected && computer.online, id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt, hasUnreadTurn: thread.hasUnreadTurn, activeFlags: thread.activeFlags, latestTurn: thread.latestTurn, status: thread.status, activeTurnId: thread.activeTurnId, approvalCount: thread.approvalCount, pendingQuestionCount: thread.pendingQuestionCount, unansweredQuestionCount: thread.unansweredQuestionCount } as ComputerThread)
     })
   })
   return result.sort((left: ComputerThread, right: ComputerThread): number => {

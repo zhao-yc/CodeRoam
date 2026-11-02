@@ -78,7 +78,7 @@ function pageFixture() {
   f.uni.getWindowInfo=()=>({windowWidth:390,windowHeight:800});
   f.uni.getElementById=id=>id==='conversation-timeline'?{getBoundingClientRect:()=>({top:0,bottom:500,height:500})}:id==='message-older'?{getBoundingClientRect:()=>({top:geometry.top,bottom:geometry.top+40})}:null;
   const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,refresh};',f.c);
+  vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,refresh};',f.c);
   const p=f.c.page;loads.forEach(fn=>fn({threadId:'thread',title:'列表标题'}));
   return {...f,p,geometry,connection,calls,watchers,timers,hides,unloads,live:()=>watchers.find(w=>w.source===p.liveConversation).callback()};
 }

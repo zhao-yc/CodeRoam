@@ -1,12 +1,14 @@
 <template>
   <view v-if="state != 'idle' && state != 'unknown'" :class="['task-status', showDetail ? 'with-detail' : '', waiting ? 'waiting-badge' : '']" :aria-label="label">
-    <loading v-if="state == 'running'" class="spinner" :paused="!visible" />
+    <app-icon v-if="state == 'failed'" name="alert-circle" :size="16" tone="warning" />
+    <loading v-else-if="state == 'running'" class="spinner" :paused="!visible" />
     <view v-else-if="state == 'unread'" class="unread-dot"></view>
-    <text v-if="state != 'unread' && !(state == 'running' && hideRunningLabel)" :class="['label', showDetail ? 'activity-label' : '', waiting ? 'waiting-label' : '']">{{ label }}</text>
+    <text v-if="state != 'failed' && state != 'unread' && !(state == 'running' && hideRunningLabel)" :class="['label', showDetail ? 'activity-label' : '', waiting ? 'waiting-label' : '']">{{ label }}</text>
   </view>
 </template>
 <script setup lang="uts">
 import { computed } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
 const props = withDefaults(defineProps<{ state: string, visible?: boolean, hideRunningLabel?: boolean, detail?: string }>(), { visible: true, hideRunningLabel: false, detail: '' })
 // 等待需要真实用户操作，进入会话本身不能将其清成空闲。
 const waiting = computed((): boolean => props.state == 'question' || props.state == 'approval')
@@ -14,7 +16,7 @@ const waiting = computed((): boolean => props.state == 'question' || props.state
 const showDetail = computed((): boolean => props.state == 'running' && props.detail.trim().length > 0)
 // 紧凑入口隐藏运行文字，仍通过无障碍标签提供状态。
 // 原生 loading 在渲染线程旋转，任务结束或断连后直接移除，避免后台空转。
-const label = computed((): string => props.state == 'running' ? (showDetail.value ? props.detail.trim() : '进行中') : props.state == 'question' ? '需要用户输入' : props.state == 'approval' ? '需要审批' : props.state == 'unread' ? '有未读结果' : props.state == 'offline' ? '状态未同步' : props.state == 'idle' ? '已空闲' : '状态未知')
+const label = computed((): string => props.state == 'running' ? (showDetail.value ? props.detail.trim() : '进行中') : props.state == 'question' ? '需要用户输入' : props.state == 'approval' ? '需要审批' : props.state == 'failed' ? '任务失败' : props.state == 'unread' ? '有未读结果' : props.state == 'offline' ? '状态未同步' : props.state == 'idle' ? '已空闲' : '状态未知')
 </script>
 <style>
 .task-status { flex-direction: row; align-items: center; flex-shrink: 0; }

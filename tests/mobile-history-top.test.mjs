@@ -12,7 +12,7 @@ function fixture(){
  const helpers=fs.readFileSync('apps/mobile/services/history.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
  // 加载实际展示依赖，保留历史布局和异步回执的完整验收路径。
- for (const module of ['annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
+ for (const module of ['turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
  vm.runInContext(stripTypeScriptTypes(helpers+'\n'+page,{mode:'transform'})+';globalThis.subject={checkShortHistory,loadOlder,onHistoryTop,beginTimelineTouch,historyPage,loadingHistory,historyError,historyScrollTop,displayConversation,pageHostId,pageThreadId,pageVisible,following,scrollTarget};',context);
  const p=context.subject;p.pageHostId.value='pc';p.pageThreadId.value='thread';p.pageVisible.value=true;
  return {p,requests,connection,geometry,unloads};

@@ -3,6 +3,7 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {BridgeError} from '../../packages/protocol/contracts.mjs';
 import {normalizeConversation} from './conversation.mjs';
+import {projectedTurnMetadata} from './turn-failure.mjs';
 
 const visibleTypes=['userMessage','steeringUserMessage','userInputResponse','agentMessage','assistantMessage','commandExecution','fileChange'];
 
@@ -91,6 +92,7 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId=''}={
     // 在同一个只读事务中定位消息和翻页，避免并发投影更新使边界前后不一致。
     db.exec('BEGIN');
     const sources=historySources(row,home);
+    const turnColumns=new Set(db.prepare('PRAGMA table_info(thread_turns)').all().map(column=>column.name));
     let sourceIndex=sources.length-1,ordinal=Number.MAX_SAFE_INTEGER,itemId='';
     if(continuing) {
       const cursor=JSON.parse(Buffer.from(before,'base64url').toString('utf8'));
@@ -105,31 +107,47 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId=''}={
         if(anchor){sourceIndex=i;ordinal=anchor.rollout_ordinal;itemId=anchor.item_id;break;}
       }
       if(!anchor)return null;
-    }else if(!sources.some(source=>db.prepare('SELECT 1 FROM thread_items WHERE thread_id=? AND rollout_ordinal<? LIMIT 1').get(source.id,source.limit)))return null;
+    }else if(!sources.some(source=>db.prepare('SELECT 1 FROM thread_items WHERE thread_id=? AND rollout_ordinal<? LIMIT 1').get(source.id,source.limit)||db.prepare(`SELECT 1 FROM thread_turns WHERE thread_id=? AND ${turnColumns.has('rollout_ordinal')?'rollout_ordinal':'rollout_end_ordinal'}<? LIMIT 1`).get(source.id,source.limit)))return null;
     const query=db.prepare(`SELECT turn_id,item_id,rollout_ordinal,item_json FROM thread_items WHERE thread_id=? AND rollout_ordinal<? AND updated_at_ordinal<? AND (rollout_ordinal<? OR (rollout_ordinal=? AND item_id<?)) AND item_type IN (${visibleTypes.map(()=>'?').join(',')}) ORDER BY rollout_ordinal DESC,item_id DESC LIMIT 81`);
-    const turns=db.prepare('SELECT status,error_json,duration_ms,rollout_end_ordinal FROM thread_turns WHERE thread_id=? AND turn_id=?');
-    const messages=[],turnInfo=new Map();let characters=0,cursor='',hasMore=false;
+    const turns=db.prepare('SELECT * FROM thread_turns WHERE thread_id=? AND turn_id=?');
+    // 新版有起始位置；旧版按项目位置或结束位置定位没有消息的失败轮次。
+    const turnPosition=`COALESCE(${turnColumns.has('rollout_ordinal')?'t.rollout_ordinal,':''}(SELECT MIN(i.rollout_ordinal) FROM thread_items i WHERE i.thread_id=t.thread_id AND i.turn_id=t.turn_id),t.rollout_end_ordinal)`;
+    const failureQuery=db.prepare(`SELECT t.*,${turnPosition} AS position FROM thread_turns t WHERE t.thread_id=? AND ${turnPosition}>=? AND ${turnPosition}<? AND ${turnPosition}<? ORDER BY position`);
+    const messages=[],turnInfo=new Map(),turnPositions=new Map();let characters=0,cursor='',hasMore=false;
+    if(!before&&!beforeMessageId){
+      const latestQuery=db.prepare(`SELECT t.*,${turnPosition} AS position FROM thread_turns t WHERE t.thread_id=? AND ${turnPosition}<? ORDER BY ${turnPosition} DESC,t.turn_id DESC LIMIT 1`);
+      for(const source of [...sources].reverse()){
+        const latest=latestQuery.get(source.id,source.limit);
+        if(latest){turnInfo.set(latest.turn_id,projectedTurnMetadata(latest,latest.turn_id,source.limit));turnPositions.set(latest.turn_id,[sources.indexOf(source),latest.position]);break;}
+      }
+    }
     // 限制每次查询和页面正文大小；隐藏项目也推进位置，不能卡在不可见记录上。
     for(let scanned=0;sourceIndex>=0&&scanned<16;scanned++) {
-      const source=sources[sourceIndex],rows=query.all(source.id,source.limit,source.limit,ordinal,ordinal,itemId,...visibleTypes);
+      const source=sources[sourceIndex],upper=ordinal,rows=query.all(source.id,source.limit,source.limit,ordinal,ordinal,itemId,...visibleTypes);
       for(const saved of rows) {
         const item=JSON.parse(saved.item_json);
-        const turn=turns.get(source.id,saved.turn_id),complete=turn&&Number.isSafeInteger(turn.rollout_end_ordinal)&&turn.rollout_end_ordinal<source.limit;
-        const status=complete?(turn.error_json?'failed':turn.status):'';
+        const savedTurn=turns.get(source.id,saved.turn_id),metadata=projectedTurnMetadata(savedTurn,saved.turn_id,source.limit);
+        const status=metadata.status;
         // 仅转换明确的可见项目，禁止把推理、内部提示或未知结构当正文。
         const normalized=item.id===saved.item_id&&visibleTypes.includes(item.type)&&item.phase!=='analysis'&&item.channel!=='analysis'
           ?normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,status,items:[item]}]},{preserveDialogue:false}).messages[0]:null;
         if(normalized&&(messages.length>=80||characters+normalized.text.length>120000)){hasMore=true;break;}
         ordinal=saved.rollout_ordinal;itemId=saved.item_id;
         cursor=Buffer.from(JSON.stringify({storage:'projection',threadId:row.id,source:source.id,ordinal,itemId})).toString('base64url');
-        if(normalized){messages.unshift(normalized);characters+=normalized.text.length;turnInfo.set(saved.turn_id,{turnId:saved.turn_id,status,...(complete&&Number.isFinite(turn.duration_ms)&&turn.duration_ms>=0?{durationMs:turn.duration_ms}:{})});}
+        if(normalized){messages.unshift(normalized);characters+=normalized.text.length;turnInfo.set(saved.turn_id,metadata);turnPositions.set(saved.turn_id,[sourceIndex,savedTurn?.rollout_ordinal??saved.rollout_ordinal]);}
+      }
+      // 只附带当前翻页范围内的失败，不能把游标之后的轮次混进早期历史。
+      for(const saved of failureQuery.all(source.id,rows.length===81||hasMore?ordinal:0,upper,source.limit)){
+        const metadata=projectedTurnMetadata(saved,saved.turn_id,source.limit);
+        if(metadata.status==='failed'){turnInfo.set(saved.turn_id,metadata);turnPositions.set(saved.turn_id,[sourceIndex,saved.position]);}
       }
       if(hasMore)break;
       if(rows.length===81)continue;
       sourceIndex--;ordinal=Number.MAX_SAFE_INTEGER;itemId='';
     }
     if(sourceIndex>=0)hasMore=true;
-    return {messages,turns:[...turnInfo.values()].reverse(),hasMore,cursor:hasMore?cursor:''};
+    const orderedTurns=[...turnInfo.values()].sort((left,right)=>{const a=turnPositions.get(left.turnId),b=turnPositions.get(right.turnId);return a[0]-b[0]||a[1]-b[1];});
+    return {messages,turns:orderedTurns,hasMore,cursor:hasMore?cursor:''};
   }catch(error){
     if(error instanceof BridgeError)throw error;
     const failure=new BridgeError('HISTORY_UNAVAILABLE','读取早期记录失败，请稍后重试');failure.cause=error;throw failure;
