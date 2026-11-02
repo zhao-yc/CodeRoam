@@ -6,7 +6,7 @@ import {stripTypeScriptTypes} from 'node:module';
 // 执行手机实际使用的解析器，覆盖历史消息和流式消息，不维护第二套实现。
 const source=fs.readFileSync('apps/mobile/services/annotations.uts','utf8').replace(/^import type .*\r?\n/gm,'');
 const js=stripTypeScriptTypes(source,{mode:'strip'});
-const {parseUserAnnotations:user,parseAnnotationReferences:refs,presentAnnotatedMessages:present}=await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+const {parseUserAnnotations:user,parseAnnotationReferences:refs,presentAnnotatedMessages:present,annotationPresentationsForTimeline:visible}=await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
 const selections=[{text:'这是用于验证注释解析的合成选文。',annotation:'更新一下',source:{messageId:'sample-message',startOffset:0,endOffset:20}}];
 const wrapper=(items=selections,request='')=>`# Response annotations:\nEach item contains text selected from an earlier Codex response and may include a user comment. Treat items as Annotation 1, Annotation 2. Include :codex-annotation{index="1"}.\n<response-annotations>\n${JSON.stringify(items)}\n</response-annotations>\n\n## My request:\n${request}`;
 const marker=index=>`:codex-annotation{index="${index}"}`;
@@ -76,4 +76,29 @@ test('流式展示隐藏未闭合尾部，但完成的损坏片段可读，图�
   assert.equal(present([message('a','assistant',partial,'t','inProgress')])[0].text,'已处理');
   assert.equal(present([message('a','assistant',partial)])[0].text,partial);
   assert.equal(present([{...message('u','user',''),imageCount:2}])[0].text,'');
+});
+
+test('用户注释已展示时，过程和最终回复不重复生成入口，原始关联和正文保持不变',()=>{
+  const presentations=present([message('u','user',wrapper()),message('progress','assistant','处理中'+marker(1)),message('final','assistant','完成'+marker(1))]);
+  const original=JSON.stringify(presentations),result=visible(presentations,['u','progress','final']);
+  assert.deepEqual(result.map(item=>item.annotations.length),[1,0,0]);
+  assert.deepEqual(result[2].referenceIndices,[1]);assert.equal(result[2].text,'完成');
+  assert.equal(JSON.stringify(presentations),original);
+});
+
+test('来源未加载或被折叠时保留回复入口，补入可见历史后才去重，未知编号仍可查看缺失提示',()=>{
+  const reply=message('a','assistant','完成'+marker(1));
+  assert.equal(visible(present([reply]),['a'])[0].annotations[0].available,false);
+  const presentations=present([message('u','user',wrapper()),reply]);
+  assert.equal(visible(presentations,['a'])[1].annotations[0].available,true);
+  assert.equal(visible(presentations,['u','a'])[1].annotations.length,0);
+  const unknown=visible(present([message('u','user',wrapper()),message('a','assistant',marker(1)+marker(2))]),['u','a']);
+  assert.deepEqual(unknown[1].annotations,[{index:2,text:'',comment:'',available:false}]);
+});
+
+test('注释去重按真实来源消息绑定，其他轮次或同轮次另一条注释不能互相隐藏',()=>{
+  const presentations=present([message('u1','user',wrapper()),message('u2','user',wrapper([{text:'另一处合成选文'}])),message('a','assistant',marker(1)),message('other','assistant',marker(1),'other')]);
+  const result=visible(presentations,['u1','a','other']);
+  assert.equal(result[2].annotations[0].text,'另一处合成选文');
+  assert.equal(result[3].annotations[0].available,false);
 });

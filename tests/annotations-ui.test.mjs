@@ -34,3 +34,24 @@ test('复制回复通过展示解析器清理标记，引用与评论按纯文�
   const sheet=fs.readFileSync('apps/mobile/components/annotation-sheet/annotation-sheet.uvue','utf8');
   assert.match(sheet,/class="annotation-text" selectable>\{\{ item.text \}\}/);assert.match(sheet,/annotation-comment" selectable>\{\{ item.comment \}\}/);assert.doesNotMatch(sheet,/v-html|rich-text|markdown-body/);
 });
+
+test('实际页面时间线只展示一处已有注释入口，折叠来源时保留可打开的回复入口',()=>{
+  const source=fs.readFileSync('apps/mobile/services/annotations.uts','utf8').replace(/^import type .*\r?\n/gm,'').replace(/\bexport /g,'');
+  const context=vm.createContext({computed:fn=>({get value(){return fn();}}),displayConversation:{value:null},expandedReportIds:{value:[]}});
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'}),context);
+  vm.runInContext(`
+    const input = '# Response annotations:\\n说明\\n<response-annotations>\\n[{"text":"合成选文","annotation":"修改这里"}]\\n</response-annotations>\\n\\n## My request:\\n';
+    const messagePresentations = {value: presentAnnotatedMessages([
+      {id:'u',role:'user',turnId:'turn',status:'completed',text:input},
+      {id:'a',role:'assistant',turnId:'turn',status:'completed',text:'已完成 :codex-annotation{index="1"}'}
+    ])};
+    let visibleIds = ['u','a'];
+    function reportTimeline(){return visibleIds.map(id=>({id}));}
+  `,context);
+  const timeline=page.slice(page.indexOf('const timeline = computed('),page.indexOf('const expandedExecutionIds ='));
+  vm.runInContext(stripTypeScriptTypes(timeline,{mode:'transform'}),context);
+  assert.equal(vm.runInContext('timeline.value.filter(entry=>entry.annotations.length>0).length',context),1);
+  assert.equal(vm.runInContext('timeline.value[1].text',context),'已完成');
+  vm.runInContext("visibleIds = ['a'];",context);
+  assert.equal(vm.runInContext('timeline.value[0].annotations[0].comment',context),'修改这里');
+});

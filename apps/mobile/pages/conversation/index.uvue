@@ -107,7 +107,7 @@ import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
-import { MessageAnnotation, MessagePresentation, parseAnnotationReferences } from '../../services/annotations.uts'
+import { MessageAnnotation, MessagePresentation, parseAnnotationReferences, annotationPresentationsForTimeline } from '../../services/annotations.uts'
 import { presentConversationMessages } from '../../services/message-presentations.uts'
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
@@ -232,8 +232,9 @@ const selectedAnnotations = computed((): MessageAnnotation[] => messagePresentat
 // 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
 const timeline = computed((): TimelineEntry[] => {
   const entries = reportTimeline(displayConversation.value, expandedReportIds.value)
+  const presentations = annotationPresentationsForTimeline(messagePresentations.value, entries.map((entry: TimelineEntry): string => entry.id))
   entries.forEach((entry: TimelineEntry) => {
-    const presentation = messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == entry.id)
+    const presentation = presentations.find((message: MessagePresentation): boolean => message.messageId == entry.id)
     if (presentation != null) { entry.text = presentation.text; entry.annotations = presentation.annotations; entry.attachments = presentation.attachments }
   })
   return entries
