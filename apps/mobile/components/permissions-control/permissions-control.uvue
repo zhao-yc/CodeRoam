@@ -1,7 +1,7 @@
 <template>
   <view class="permission-control">
     <!-- 常规权限入口与加号、清空图标共用深色，完全访问保留警示色。 -->
-    <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || !available || busy ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'dark'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
+    <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || !available || busy || loading ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'dark'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
     <view v-if="opened" class="permission-overlay" @click="closeMenu">
       <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
         <view class="permission-heading"><text class="permission-title">{{ label }}</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
@@ -21,23 +21,25 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
-const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false })
+const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true })
 const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean] }>()
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
 const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
 let alive = true, request = 0
-const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + connection.subscriptionRevision.toString() + ':' + connection.connected.toString())
+// 新建权限不依赖已有会话订阅；展开、联网及电脑在线状态均参与请求失效判断。
+const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + (props.threadId.length > 0 ? connection.subscriptionRevision.toString() : '') + ':' + connection.connected.toString() + ':' + props.active.toString() + ':' + available.value.toString())
 const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : 'new'))
-const available = computed((): boolean => connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
+const available = computed((): boolean => props.active && connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
 const mode = computed((): string => props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
-const label = computed((): string => permissionLabel(mode.value))
+const label = computed((): string => loading.value ? '正在读取电脑权限…' : permissionLabel(mode.value))
 const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0)
 // 权限图标统一使用随包线性 PNG，不依赖系统字体或表情渲染。
 function permissionIcon(value: string): string { if (value == 'auto-review') return 'shield-check'; if (value == 'read-only') return 'lock'; if (value == 'full-access') return 'alert-triangle'; return 'hand-stop' }
 // 所有异步响应绑定电脑、项目或会话；切换目标后立即作废。
-function current(key: string, id: number): boolean { return alive && context.value == key && request == id }
+function current(key: string, id: number): boolean { return alive && available.value && context.value == key && request == id }
+// 同一目标只允许一次在途读取；默认值只用于展示，不作为用户的权限选择写入草稿。
 async function load() {
-  if (!available.value || busy.value) return
+  if (!available.value || busy.value || loading.value) return
   const key = context.value, id = ++request
   loading.value = true; error.value = ''; state.value = null
   try {
@@ -56,7 +58,9 @@ function openMenu() {
   panelLeft.value = Math.max(14, Math.min(rect?.left ?? 14, info.windowWidth - panelWidth.value - 14))
   panelBottom.value = Math.max(12, info.windowHeight - (rect?.top ?? info.windowHeight - 110) + 8)
   panelHeight.value = Math.max(100, Math.min(390, info.windowHeight - panelBottom.value - 100))
-  opened.value = true; load()
+  opened.value = true
+  // 新建菜单复用自动加载的结果；已有会话仍在打开菜单时刷新权限版本。
+  if (props.threadId.length > 0 || (state.value == null && error.value.length == 0)) load()
 }
 function closeMenu() { if (!busy.value) opened.value = false }
 // 每次切入完整访问都先确认；确认弹窗返回后再次检查目标和权限版本。
@@ -78,7 +82,13 @@ async function choose(value: string) {
 }
 // 菜单打开时保持父级输入区展开，避免键盘失焦卸载菜单。
 watch(opened, (value: boolean) => { emit('visibility', value) })
-watch(context, () => { request++; state.value = null; opened.value = false; loading.value = false; if (busy.value) emit('busy', false); busy.value = false })
+// 同步失效旧请求，避免快速收起再展开或切回原目标后，旧结果重新变为有效。
+watch(context, () => {
+  request++; state.value = null; error.value = ''; opened.value = false; loading.value = false
+  if (busy.value) emit('busy', false)
+  busy.value = false
+  if (props.threadId.length == 0 && available.value) load()
+}, { immediate: true, flush: 'sync' })
 onUnmounted(() => { emit('visibility', false); alive = false; request++; if (busy.value) emit('busy', false) })
 </script>
 <style>
