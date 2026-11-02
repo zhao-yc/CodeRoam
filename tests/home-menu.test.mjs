@@ -39,3 +39,12 @@ test('归档只读索引，不订阅或激活任何桌面会话',async()=>{
   const adapter={index:{list(params){assert.equal(params.archived,true);listed++;return [{id:'archived'}];}},refreshReadState(){throw Error('归档不能读取运行状态');},watch(){throw Error('归档不能被激活');}};
   assert.deepEqual(await DesktopAdapter.prototype.list.call(adapter,{archived:true}),[{id:'archived'}]);assert.equal(listed,1);
 });
+
+// 旧服务与临时失败分别提示，避免把能力缺失当作没有剩余额度。
+test('额度响应缺失时提示更新连接服务，接口失败允许稍后重试',async()=>{
+  const old=fixture();old.requests[0].resolve({threads:[]});await settle();
+  assert.equal(old.entries.value[0].usageNote,'请更新电脑连接服务');
+  const failed=fixture();failed.requests[0].reject(Error('合成错误'));await settle();
+  assert.equal(failed.entries.value[0].usageLoading,false);
+  assert.match(failed.entries.value[0].usageNote,/稍后重试/);
+});
