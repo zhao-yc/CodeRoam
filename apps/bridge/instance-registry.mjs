@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 
 /** 配置目录只留在本机，公网编号随机生成，不用目录散列或 PID 暴露本机信息。 */
 export class InstanceRegistry {
-  constructor({ file, hostId, defaultHome, label, backupDirectory = null }) {
+  constructor({ file, hostId, defaultHome, label, backupDirectory = null, platform = process.platform }) {
+    this.platform = platform;
     this.file = file; this.hostId = hostId; this.defaultHome = this.canonical(defaultHome); this.label = label;
     const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { version: 1, entries: [] };
     if (saved.version !== 1 || !Array.isArray(saved.entries)) throw new Error('本机实例登记无效');
@@ -16,7 +17,13 @@ export class InstanceRegistry {
     this.entries = saved.entries;
     this.backupDirectory = backupDirectory;
   }
-  canonical(value) { return path.resolve(value).replace(/[\\/]+$/, '').toLowerCase(); }
+  /** Windows 保持既有大小写归一化；Mac 保留路径大小写，兼容区分大小写的卷。 */
+  canonical(value) {
+    let resolved = path.resolve(value);
+    if (this.platform === 'darwin') { try { resolved = fs.realpathSync.native(resolved); } catch { /* 尚未创建的目录仍按原绝对路径登记。 */ } }
+    const normalized = resolved.replace(/[\\/]+$/, '') || path.parse(resolved).root;
+    return this.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
   /** 默认配置复用原电脑身份；同目录多开按独立桌面用户目录区分。 */
   identify(instance) {
     const home = this.canonical(instance.codexHome), userData = instance.userData ? this.canonical(instance.userData) : 'default';

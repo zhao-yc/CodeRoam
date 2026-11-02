@@ -11,6 +11,8 @@ import { DesktopArchiveController } from './desktop-archive.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
+import { MacInstanceIpcClient, navigateMacInstance } from './macos-instance-client.mjs';
+import { withDesktopUi } from './desktop-ui-coordinator.mjs';
 
 /** 固定到本次已核验进程和随机管道；管道丢失后不能选择另一个桌面代替。 */
 class InstanceNativeDesktop extends NativeDesktop {
@@ -39,9 +41,10 @@ class InstanceGoalController extends DesktopGoalController {
 export class InstanceRuntime {
   constructor({ instance, config, dataPath, send, bind = bindInstanceClients }) {
     this.instance = instance; this.bind = bind; this.closed = false; this.bindings = null;
-    this.client = new InstanceIpcClient({ instance, socketPath: config.ipcSocketPath });
+    this.isMac = instance.platform === 'darwin';
+    this.client = this.isMac ? new MacInstanceIpcClient({ instance, verify: () => instance.verify() }) : new InstanceIpcClient({ instance, socketPath: config.ipcSocketPath });
     this.native = new InstanceNativeDesktop(instance, this.client, { stateDirectory: instance.codexHome });
-    this.adapter = new DesktopAdapter({ client: this.client, native: this.native, index: new StateReader(instance.codexHome), modelCatalog: new ModelCatalog({ codexHome: instance.codexHome }), attachments: new AttachmentStore({ root: path.join(dataPath, 'attachments') }), goalController: new InstanceGoalController(instance, this.client, { diagnosticPath: path.join(dataPath, 'goal-ui-diagnostics.jsonl') }) });
+    this.adapter = new DesktopAdapter({ client: this.client, native: this.native, index: new StateReader(instance.codexHome), modelCatalog: new ModelCatalog({ codexHome: instance.codexHome }), attachments: new AttachmentStore({ root: path.join(dataPath, 'attachments') }), goalController: new InstanceGoalController(instance, this.client, { diagnosticPath: path.join(dataPath, 'goal-ui-diagnostics.jsonl') }), activateThread: this.isMac ? (id, options) => withDesktopUi(() => navigateMacInstance(instance, id, { ...options, verify: () => instance.verify() })) : undefined });
     const activate = this.adapter.activateThread;
     this.adapter.activateThread = async (id, options) => {
       const own = await this.adapter.discoverOwner(id, 400);
@@ -54,13 +57,14 @@ export class InstanceRuntime {
     this.agent.send = message => instance.alive && instance.ready && send({ ...message, hostId: instance.id, generation: instance.generation });
     this.client.on('disconnected', () => { instance.ready = false; });
   }
-  /** 初次连接与 IPC 重连都重新核对页面来源，不复用已失效的客户端编号。 */
+  /** Windows 重新核对页面来源；Mac 重新核对独占 IPC，不复用失效的客户端编号。 */
   async ready() {
     if (this.closed || !this.instance.alive) return false;
-    if (this.instance.ready && this.client.allowedClients.size) return true;
+    if (this.instance.ready && (this.isMac || this.client.allowedClients.size)) return true;
     if (!this.bindings) this.bindings = (async () => {
+      if (this.isMac) await this.instance.verify();
       await this.client.connect();
-      const ids = await this.bind(this.client, this.instance);
+      const ids = this.isMac ? new Set() : await this.bind(this.client, this.instance);
       if (this.closed || !this.instance.alive) return false;
       this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
       await this.agent.predictions.start(); return true;
@@ -69,8 +73,10 @@ export class InstanceRuntime {
   }
   async request(message) {
     if (message.generation !== this.instance.generation || !this.instance.alive) throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
+    if (this.isMac) await this.instance.verify();
     this.client.assertCurrent();
     return this.agent.handleRequest(message);
   }
-  async close() { this.closed = true; this.instance.alive = false; this.instance.ready = false; await this.agent.close(); }
+  /** 先断开传输，停止时不再向已撤销身份的客户端发送退订，也不会遗留账本和连接。 */
+  async close() { this.closed = true; this.instance.alive = false; this.instance.ready = false; this.client.close(); await this.agent.close(); }
 }

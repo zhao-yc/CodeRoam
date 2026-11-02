@@ -19,7 +19,7 @@ try {
   releaseBridgeLock=await acquireBridgeLock(values.config);
   const config=JSON.parse(fs.readFileSync(values.config,'utf8'));
   const dataPath=path.resolve(config.dataPath??'.local/bridge');fs.mkdirSync(dataPath,{recursive:true});
-  if(process.platform==='win32' && config.multiInstance!==false) {
+  if(['win32','darwin'].includes(process.platform) && config.multiInstance!==false) {
     const hub=new InstanceHub({config,dataPath});
     const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});

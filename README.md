@@ -15,6 +15,7 @@
 ## 环境
 
 - Node.js 24，以及已经登录并正在运行的 Codex Windows 或 Mac 桌面客户端。
+- Windows 与 Mac 可自动发现多个桌面实例，详见[多实例连接说明](docs/multi-instance.md)；Mac 需要独立配置目录及本机 Python 3。
 - HBuilderX 5.34 或兼容的 uni-app x 工具链。手机端不是普通 Vue 项目。
 - 自己控制的中转服务器、HTTPS 域名及安全的凭据备份位置。
 

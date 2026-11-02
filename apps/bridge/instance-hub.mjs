@@ -78,12 +78,14 @@ export class InstanceHub extends EventEmitter {
         if (runtime && (runtime.instance.pid !== row.pid || runtime.instance.startedAt !== row.startedAt || runtime.instance.nativePipe !== row.nativePipe || runtime.instance.port !== row.port)) { await runtime.close(); this.runtimes.delete(identity.id); runtime = null; }
         if (!runtime) {
           const instance = { ...row, id: identity.id, label: identity.label, generation: randomUUID(), alive: true, ready: false, refreshOwners: () => this.refreshOwners() };
+          instance.verify = () => this.verifyMacInstance(instance);
           const directory = identity.id === this.config.hostId ? this.dataPath : path.join(this.dataPath, 'instances', identity.id.slice(this.config.hostId.length + 1));
           fs.mkdirSync(directory, { recursive: true });
           runtime = this.createRuntime({ instance, config: this.config, dataPath: directory, send: message => this.send(message) });
           runtime.agent.on('warning', warning => this.emit('warning', warning));
           this.runtimes.set(identity.id, runtime);
         }
+        if (row.platform === 'darwin' && rows.filter(other => other.ipcSocketPath === row.ipcSocketPath).length !== 1) { runtime.instance.ready = false; this.emit('warning', { code: 'INSTANCE_DIRECTORY_SHARED', message: '多个 Mac 实例共用配置目录，请为每个实例使用独立目录后重连' }); continue; }
         try { await runtime.ready(); } catch { runtime.instance.ready = false; this.emit('warning', { code: 'INSTANCE_BINDING_FAILED', message: '实例连接尚未就绪，未选择其他桌面代替' }); }
       }
       for (const [id, runtime] of this.runtimes) if (!seen.has(id)) { await runtime.close(); this.runtimes.delete(id); }
@@ -100,7 +102,18 @@ export class InstanceHub extends EventEmitter {
       return { ...response, hostId: message.hostId, generation: message.generation };
     } catch (error) { return { v: 1, type: 'response', transportId: message.transportId, hostId: message.hostId, generation: message.generation, error: errorPayload(error) }; }
   }
+  /** Mac 不借用全局调试页面；操作前复核专属 IPC，目录共用或 PID 换代立即暂停。 */
+  async verifyMacInstance(instance) {
+    try {
+      if (this.stopped || !instance.alive) throw new Error();
+      // 同一轮并发请求共享系统快照，完成后即丢弃，不缓存过期进程身份。
+      const rows = await (this.macVerification ??= this.discover().finally(() => { this.macVerification = null; }));
+      const matches = rows.filter(row => row.ipcSocketPath === instance.ipcSocketPath);
+      const current = matches[0];
+      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
+    } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Mac 实例身份已变化或配置目录被共用，请在电脑核对后重连'); }
+  }
   /** 导航与后台发现共用一次身份复核，不能并发重写客户端集合。 */
-  refreshOwners() { return this.ownerScan ??= Promise.resolve().then(() => this.bindOwners([...this.runtimes.values()])).finally(() => { this.ownerScan = null; }); }
+  refreshOwners() { return this.ownerScan ??= Promise.resolve().then(() => { const runtimes = [...this.runtimes.values()].filter(runtime => runtime.instance.platform !== 'darwin'); return runtimes.length ? this.bindOwners(runtimes) : undefined; }).finally(() => { this.ownerScan = null; }); }
   async close() { this.stopped = true; clearInterval(this.timer); clearTimeout(this.reconnect); this.socket?.terminate(); if (this.scan) await this.scan.catch(() => {}); await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.close())); this.runtimes.clear(); }
 }
