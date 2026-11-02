@@ -8,7 +8,7 @@ import { stripTypeScriptTypes } from 'node:module';
 function fixture(storage = new Map()) {
   const calls = [], connection = { hostId: 'pc', connected: true, computers: [{ id: 'pc', online: true }], pendingCommandId: '', snapshot: { supportsImages: true, supportsAttachments: true, supportsExecutionSettings: true, supportsPermissionSettings: true } };
   const json = value => Object.assign(value, { getString(key) { return this[key] ?? null; }, getNumber(key) { return this[key] ?? null; } });
-  let serial = 0, created = 0, failure = '', ledger, storageFailure = false, openedSnapshot = {};
+  let serial = 0, created = 0, failure = '', storageFailure = false, openedSnapshot = {};
   const bridge = {
     pendingCommand() { return connection.pendingCommandId; },
     async request(method, params, write) {
@@ -24,20 +24,19 @@ function fixture(storage = new Map()) {
       return json({});
     },
     async openCreatedThread(threadId) { calls.push({ method: 'open', params: { threadId } }); connection.snapshot = { supportsImages: true, supportsAttachments: true, supportsExecutionSettings: true, supportsPermissionSettings: true, threadId, status: 'idle', activeTurnId: '', messages: [], ...openedSnapshot }; },
-    async checkPending() { const result = ledger; if (result.state === 'done' || result.state === 'not_found') connection.pendingCommandId = ''; return json(result); },
   };
   // 模拟真实 request 在 Promise 返回前同步登记写请求编号。
   const originalRequest = bridge.request.bind(bridge);
   bridge.request = (method, params, write) => {
     const result = originalRequest(method, params, write);
     if (write && connection.pendingCommandId.length === 0) connection.pendingCommandId = 'command-' + serial;
-    return result.then(value => { if (write) connection.pendingCommandId = ''; return value; }, error => { if (!failure.startsWith('unknown')) connection.pendingCommandId = ''; throw error; });
+    return result.then(value => { if (write) connection.pendingCommandId = ''; return value; }, error => { if (write) connection.pendingCommandId = ''; throw error; });
   };
   const context = vm.createContext({ reactive: value => value, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => { if (storageFailure) throw new Error('存储不可用'); storage.set(key, value); }, removeStorageSync: key => storage.delete(key) }, connection, bridge, saveDraft() {}, saveDraftImages() {}, saveDraftFiles() {}, rememberSubmission() {}, settleSubmission() {}, readFileBase64: async () => 'YWJj', FILE_CHUNK_BYTES: 3 });
   let source = fs.readFileSync('apps/mobile/services/new-conversation.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
   source = stripTypeScriptTypes(source, { mode: 'transform' });
-  vm.runInContext(source + '\nglobalThis.subject={newDraft,beginNewConversation,assignUnselectedDraft,sendNewConversation,checkNewConversation};', context);
-  return { ...context.subject, storage, calls, connection, denyStorage: () => { storageFailure = true; }, fail: method => { failure = method; }, ledger: value => { ledger = value; }, openedSnapshot: value => { openedSnapshot = value; } };
+  vm.runInContext(source + '\nglobalThis.subject={newDraft,beginNewConversation,assignUnselectedDraft,sendNewConversation};', context);
+  return { ...context.subject, storage, calls, connection, denyStorage: () => { storageFailure = true; }, fail: method => { failure = method; }, openedSnapshot: value => { openedSnapshot = value; } };
 }
 
 test('同页新建草稿按电脑和项目隔离，分配首次项目不创建真实会话', () => {
@@ -64,27 +63,26 @@ test('连续点击只提交一次，离线与未选择项目不触发创建', as
   f.connection.connected = false; draft.text = '离线输入'; await assert.rejects(f.sendNewConversation(draft, () => {}), /连接已变化/);
 });
 
-test('未知发送保留草稿和操作编号，核对成功进入原会话且不补发', async () => {
-  const f = fixture(), draft = f.newDraft('pc', 'project'); draft.text = '消息';
-  f.fail('unknown'); await assert.rejects(f.sendNewConversation(draft, () => {}), /结果未知/);
-  assert.equal(draft.pendingAction, 'send'); assert.ok(draft.pendingCommandId); assert.equal(draft.text, '消息');
-  const saved = JSON.parse([...f.storage.values()][0]); assert.equal(saved.threadId, 'created-thread'); assert.equal(saved.text, undefined);
-  const count = f.calls.length; await assert.rejects(f.sendNewConversation(draft, () => {}), /核对上次操作/); assert.equal(f.calls.length, count);
-  f.ledger({ state: 'done', result: {} }); assert.equal(await f.checkNewConversation(draft), 'created-thread'); assert.equal(f.calls.length, count); assert.equal(draft.text, '');
+test('未知发送保留草稿并释放提交状态，不自动补发，用户可主动重试空会话', async () => {
+  const f=fixture(),draft=f.newDraft('pc','project');draft.text='消息';
+  f.fail('unknown');await assert.rejects(f.sendNewConversation(draft,()=>{}),/结果未知/);
+  assert.equal(draft.pendingAction,'');assert.equal(draft.pendingCommandId,'');assert.equal(draft.text,'消息');assert.equal(f.storage.size,0);
+  const count=f.calls.length;await Promise.resolve();assert.equal(f.calls.length,count);
+  f.fail('');assert.equal(await f.sendNewConversation(draft,()=>{}),'created-thread');
+  assert.equal(f.calls.filter(c=>c.method==='thread.create').length,1);assert.equal(f.calls.filter(c=>c.method==='turn.send').length,2);
 });
 
-test('创建结果未知时恢复账本中的编号，核对不会自动发送或重复创建', async () => {
-  const f = fixture(), draft = f.newDraft('pc', 'project'); draft.text = '首条消息';
-  f.fail('unknown-create'); await assert.rejects(f.sendNewConversation(draft, () => {}), /创建结果未知/);
-  f.ledger({ state: 'done', result: { getString: key => key === 'threadId' ? 'created-thread' : '' } });
-  assert.equal(await f.checkNewConversation(draft), ''); assert.equal(draft.threadId, 'created-thread'); assert.equal(f.calls.length, 1);
-  f.fail(''); await f.sendNewConversation(draft, () => {}); assert.equal(f.calls.filter(call => call.method === 'thread.create').length, 1);
+test('创建结果未知保留输入，恢复联网不会自动创建，只有用户再次发送才创建', async () => {
+  const f=fixture(),draft=f.newDraft('pc','project');draft.text='首条消息';
+  f.fail('unknown-create');await assert.rejects(f.sendNewConversation(draft,()=>{}),/创建结果未知/);
+  assert.equal(draft.threadId,'');assert.equal(draft.pendingCommandId,'');assert.equal(draft.text,'首条消息');
+  f.connection.connected=false;f.connection.connected=true;assert.equal(f.calls.length,1);
+  f.fail('');await f.sendNewConversation(draft,()=>{});assert.equal(f.calls.filter(c=>c.method==='thread.create').length,2);
 });
 
-test('设备不能保存核对编号时，在任何创建请求之前停止，草稿保持可编辑', async () => {
-  const f = fixture(), draft = f.newDraft('pc', 'project'); draft.text = '首条消息'; f.denyStorage();
-  await assert.rejects(f.sendNewConversation(draft, () => {}), /无法保存新对话状态/);
-  assert.equal(f.calls.length, 0); assert.equal(draft.text, '首条消息');
+test('存储不可写不再阻止新建发送，旧创建记录清理失败也不会锁住草稿', async () => {
+  const f=fixture(),draft=f.newDraft('pc','project');draft.text='首条消息';f.denyStorage();
+  assert.equal(await f.sendNewConversation(draft,()=>{}),'created-thread');assert.equal(draft.text,'');
 });
 
 test('返回后重新打开新建页时保留输入并新建不同会话，附件重新上传且设置重新应用', async () => {
@@ -112,17 +110,14 @@ test('刷新页面不恢复普通创建编号，也不影响当前流程内的�
   assert.equal(f.calls.find(call => call.method === 'turn.send').params.threadId, 'created-thread');
 });
 
-test('重新打开和刷新仍保留未知发送的核对编号，核对成功不重复发送', async () => {
-  const first = fixture(), draft = first.newDraft('pc', 'project'); draft.text = '待确认消息';
-  first.fail('unknown'); await assert.rejects(first.sendNewConversation(draft, () => {}), /结果未知/);
-  const command = draft.pendingCommandId;
-  first.beginNewConversation(); assert.equal(draft.threadId, 'created-thread'); assert.equal(draft.pendingCommandId, command);
-  const reloaded = fixture(first.storage), recovered = reloaded.newDraft('pc', 'project');
-  reloaded.connection.pendingCommandId = command; reloaded.beginNewConversation();
-  assert.equal(recovered.threadId, 'created-thread');
-  recovered.text = '再次点击'; await assert.rejects(reloaded.sendNewConversation(recovered, () => {}), /核对上次操作/);
-  reloaded.ledger({ state: 'done', result: {} }); assert.equal(await reloaded.checkNewConversation(recovered), 'created-thread');
-  assert.equal(reloaded.calls.length, 0); assert.equal(recovered.threadId, '');
+test('未知发送后重新打开保留输入，刷新不恢复旧提交目标或锁定发送', async () => {
+  const first=fixture(),draft=first.newDraft('pc','project');draft.text='保留的消息';
+  first.fail('unknown');await assert.rejects(first.sendNewConversation(draft,()=>{}));
+  first.beginNewConversation();assert.equal(draft.threadId,'');assert.equal(draft.pendingCommandId,'');assert.equal(draft.text,'保留的消息');
+  const storage=new Map([['codex-mobile-new-pc-project',JSON.stringify({threadId:'old',pendingAction:'send',pendingCommandId:'old-command'})]]);
+  const reloaded=fixture(storage),recovered=reloaded.newDraft('pc','project');
+  assert.equal(recovered.threadId,'');assert.equal(recovered.pendingCommandId,'');assert.equal(storage.size,0);assert.equal(reloaded.calls.length,0);
+  recovered.text='用户主动发送';await reloaded.sendNewConversation(recovered,()=>{});assert.equal(reloaded.calls.filter(c=>c.method==='turn.send').length,1);
 });
 
 test('当前流程创建的空会话若已被电脑端使用，重试解除旧目标而不发送或修改其设置', async () => {
@@ -144,4 +139,4 @@ test('新建组件每次打开都在读取草稿前开始独立创建流程', ()
 });
 
 test('新建权限草稿隔离，权限失败不发送且重试复用空会话',async()=>{const f=fixture(),d=f.newDraft('pc','project');d.text='消息';d.permissionMode='read-only';assert.equal(f.newDraft('pc','other').permissionMode,'');f.fail('thread.permissions.update');await assert.rejects(f.sendNewConversation(d,()=>{}),/明确失败/);assert.equal(d.threadId,'created-thread');assert.equal(d.text,'消息');assert.equal(f.calls.some(c=>c.method==='turn.send'),false);f.fail('');await f.sendNewConversation(d,()=>{});assert.equal(f.calls.filter(c=>c.method==='thread.create').length,1);assert.ok(f.calls.findIndex(c=>c.method==='thread.permissions.update')<f.calls.findIndex(c=>c.method==='turn.send'));});
-test('权限结果未知必须先核对，恢复后不自动发送',async()=>{const f=fixture(),d=f.newDraft('pc','project');d.text='消息';d.permissionMode='full-access';d.permissionConfirmed=true;f.fail('unknown-permissions');await assert.rejects(f.sendNewConversation(d,()=>{}),/权限结果未知/);assert.equal(d.pendingAction,'permissions');await assert.rejects(f.sendNewConversation(d,()=>{}),/核对上次操作/);f.ledger({state:'done',result:{ok:true}});assert.equal(await f.checkNewConversation(d),'');assert.equal(d.permissionsApplied,true);assert.equal(f.calls.some(c=>c.method==='turn.send'),false);});
+test('权限结果未知释放提交状态，保留草稿且不会自动发送',async()=>{const f=fixture(),d=f.newDraft('pc','project');d.text='消息';d.permissionMode='full-access';d.permissionConfirmed=true;f.fail('unknown-permissions');await assert.rejects(f.sendNewConversation(d,()=>{}),/权限结果未知/);assert.equal(d.pendingAction,'');assert.equal(d.pendingCommandId,'');assert.equal(d.text,'消息');assert.equal(d.permissionsApplied,false);assert.equal(f.calls.some(c=>c.method==='turn.send'),false);});

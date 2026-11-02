@@ -14,8 +14,7 @@
     </view>
       <!-- 状态提示独立占行，连接进度与错误都在输入框外自然换行。 -->
       <view v-if="busy || error.length > 0 || connection.error.length > 0" class="editor-feedback"><text v-if="busy" class="editor-note">{{ progress }}</text><text v-else class="editor-error">{{ error.length > 0 ? error : connection.error }}</text></view>
-    <view v-if="!busy && creationPendingId.length > 0" class="recovery-row"><text class="recovery-label">上次操作结果待确认</text><button class="recover-button" @click="checkPending">核对结果</button></view>
-      <button v-else-if="!busy && error.length > 0 && !projectsLoading && (projects.length == 0 || models.length == 0)" class="retry-button" @click="reloadOptions">重新读取</button>
+      <button v-if="!busy && error.length > 0 && !projectsLoading && (projects.length == 0 || models.length == 0)" class="retry-button" @click="reloadOptions">重新读取</button>
     </view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="picker.length > 0 || menu.length > 0" class="new-overlay" @click="closeMenus">
@@ -37,13 +36,13 @@ import PermissionsControl from '../permissions-control/permissions-control.uvue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import ComposerOptions from '../composer-options/composer-options.uvue'
 import { bridge, connection, computerIcon, Computer } from '../../services/bridge.uts'
-import { NewProject, NewDraft, newDraft, beginNewConversation, assignUnselectedDraft, sendNewConversation, checkNewConversation } from '../../services/new-conversation.uts'
+import { NewProject, NewDraft, newDraft, beginNewConversation, assignUnselectedDraft, sendNewConversation } from '../../services/new-conversation.uts'
 import { DraftImage, DraftFile } from '../../services/composer.uts'
 import { ModelOption, SettingsResponse, SpeedOption, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
 import { prepareImage } from '../../services/images.uts'
 import { validateFile, fileSizeLabel } from '../../services/files.uts'
 
-// 组件每次重新打开都解除旧创建目标，保留尚未发送的输入和待核对结果。
+// 组件每次重新打开都解除旧创建目标，保留尚未发送的输入与正在提交的流程。
 beginNewConversation()
 
 const emit = defineEmits<{ busy: [value: boolean], created: [threadId: string], dismiss: [] }>()
@@ -185,13 +184,6 @@ async function send() {
   catch (reason) { if (alive) error.value = (reason as Error).message }
   finally { busy.value = false; emit('busy', false) }
 }
-async function checkPending() {
-  if (busy.value || !connection.connected) return
-  busy.value = true; emit('busy', true); progress.value = '正在核对结果…'
-  try { const id = await checkNewConversation(draft.value); error.value = ''; if (alive && id.length > 0) { uni.hideKeyboard(); emit('created', id) } else notify('已核对，请再次点击发送继续') }
-  catch (reason) { if (alive) error.value = (reason as Error).message }
-  finally { busy.value = false; emit('busy', false) }
-}
 onMounted(() => { nextTick(() => { focused.value = true }); loadProjects() })
 onUnmounted(() => { alive = false; projectRequest++; settingsRequest++ })
 
@@ -230,9 +222,7 @@ watch((): string => draft.value.images.length.toString() + ':' + draft.value.fil
 .editor-note, .editor-error { font-size: 12px; line-height: 18px; }
 .editor-note { color: #7b827a; }
 .editor-error { color: #8d4d2b; }
-.recovery-row { flex-direction: row; align-items: center; justify-content: space-between; margin-top: 5px; }
-.recovery-label { font-size: 12px; color: #8d4d2b; }
-.recover-button, .retry-button { height: 36px; line-height: 36px; font-size: 13px; color: #285c49; background-color: transparent; margin: 0; padding: 0 8px; }
+.retry-button { height: 36px; line-height: 36px; font-size: 13px; color: #285c49; background-color: transparent; margin: 0; padding: 0 8px; }
 .retry-button { align-self: flex-start; }
 .plan-chip { align-self: flex-start; flex-direction: row; align-items: center; height: 28px; padding: 0 9px; border-radius: 14px; background-color: #e8eee6; margin-bottom: 8px; }
 .plan-label { font-size: 12px; color: #285c49; margin-left: 5px; }

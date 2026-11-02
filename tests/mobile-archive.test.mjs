@@ -8,24 +8,22 @@ import { stripTypeScriptTypes } from 'node:module';
 function fixture() {
   const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
   const methods = source.slice(source.indexOf('// 归档只在原生回执'), source.indexOf('// 自动跟随只在靠近底部'));
-  const checking = source.slice(source.indexOf('function checkPending()'), source.indexOf('// 目标表单与聊天草稿独立'));
   const json = value => Object.assign(value, { getString(key) { return this[key] ?? null; }, getBoolean(key) { return this[key] ?? null; } });
-  const context = { operationError: { value: '' }, pageHostId: { value: 'pc' }, pageThreadId: { value: 'thread' }, pageVisible: { value: true }, canWrite: { value: true }, busy: { value: false }, pendingAction: { value: '' }, checking: { value: false }, activeTurnId: { value: '' }, approvalCount: { value: 0 }, connection: { connected: true, hostId: 'pc', activeThreadId: 'thread', snapshot: { status: 'idle' }, threads: [{ id: 'thread' }, { id: 'other' }], pendingCommandId: '', error: '', epoch: 'epoch', sequence: 5 }, calls: [], notices: [], returned: 0, draft: '保留的草稿' };
-  let modal, respond, reject, ledger;
+  const context = { operationError: { value: '' }, pageHostId: { value: 'pc' }, pageThreadId: { value: 'thread' }, pageVisible: { value: true }, canWrite: { value: true }, busy: { value: false }, pendingAction: { value: '' }, activeTurnId: { value: '' }, approvalCount: { value: 0 }, connection: { connected: true, hostId: 'pc', activeThreadId: 'thread', snapshot: { status: 'idle' }, threads: [{ id: 'thread' }, { id: 'other' }], pendingCommandId: '', error: '', epoch: 'epoch', sequence: 5 }, calls: [], notices: [], returned: 0, draft: '保留的草稿' };
+  let modal, respond, reject;
   context.loadingEvents = []; context.unloadCallbacks = [];
   context.onUnload = callback => context.unloadCallbacks.push(callback);
   let home;
   context.uni = { showLoading: options => context.loadingEvents.push(options), hideLoading: () => context.loadingEvents.push('关闭'), showModal: options => { modal = options; }, showToast() {}, navigateBack: () => { context.returned++; home.show(); }, reLaunch: () => { context.returned++; home.show(); } };
   context.bridge = {
-    request(method, params, write) { context.calls.push({ method, params, write }); context.connection.pendingCommandId = 'command'; return new Promise((resolve, fail) => { respond = result => { context.connection.pendingCommandId = ''; resolve(json(result)); }; reject = unknown => { if (!unknown) context.connection.pendingCommandId = ''; fail(new Error(unknown ? '结果待核对' : '归档失败')); }; }); },
+    request(method, params, write) { context.calls.push({ method, params, write }); context.connection.pendingCommandId = 'command'; return new Promise((resolve, fail) => { respond = result => { context.connection.pendingCommandId = ''; resolve(json(result)); }; reject = unknown => { context.connection.pendingCommandId = ''; fail(new Error(unknown ? '结果待核对' : '归档失败')); }; }); },
     clearCommand(id) { if (context.connection.pendingCommandId === id) context.connection.pendingCommandId = ''; },
-    checkPending: async () => json(ledger),
   };
   Object.assign(context, { removeArchivedThread() {}, notify: message => context.notices.push(message), closeActions() {}, getCurrentPages: () => [{}, {}], isCurrentPage: () => context.connection.hostId === context.pageHostId.value && context.connection.activeThreadId === context.pageThreadId.value, acceptPlanReceipt: () => false, settleSubmission() {}, refresh() {} });
   const notices = fs.readFileSync('apps/mobile/services/page-notices.uts', 'utf8').replace(/\bexport /g, '');
-  vm.runInNewContext(stripTypeScriptTypes(notices + '\n' + methods + checking, { mode: 'transform' }) + '\nglobalThis.subject={archiveFromMenu,checkPending};', context);
+  vm.runInNewContext(stripTypeScriptTypes(notices + '\n' + methods, { mode: 'transform' }) + '\nglobalThis.subject={archiveFromMenu};', context);
   home = homeFixture(context.consumeArchiveSuccessNotice);
-  return { ...context.subject, context, home, createHome: () => homeFixture(context.consumeArchiveSuccessNotice), modal: () => modal, respond: value => respond(value), reject: unknown => reject(unknown), ledger: value => { ledger = value; } };
+  return { ...context.subject, context, home, createHome: () => homeFixture(context.consumeArchiveSuccessNotice), modal: () => modal, respond: value => respond(value), reject: unknown => reject(unknown) };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
@@ -112,22 +110,12 @@ test('明确失败和未知结果均保留当前页面、列表与草稿，未�
   for (const unknown of [false, true]) {
     const f = fixture(); f.archiveFromMenu(); f.modal().success({ confirm: true }); f.reject(unknown); await flush();
     assert.equal(f.context.returned, 0); assert.equal(f.context.connection.threads.length, 2); assert.equal(f.context.draft, '保留的草稿');
-    assert.equal(f.context.calls.length, 1); assert.equal(f.context.connection.pendingCommandId, unknown ? 'command' : '');
+    assert.equal(f.context.calls.length, 1); assert.equal(f.context.connection.pendingCommandId, '');
     assert.equal(f.context.busy.value, false);
     assert.equal(f.context.operationError.value, unknown ? '结果待核对' : '归档失败');
     assert.equal(f.context.connection.error, '');
     assert.equal(f.context.loadingEvents.at(-1), '关闭'); assert.notEqual(f.context.notices.at(-1), '归档成功');
     f.home.show(); assert.equal(f.home.visible.value, false);
-  }
-});
-
-test('断线后核对原生成功回执才返回列表，普通未知结果仍保持待确认', async () => {
-  for (const confirmed of [true, false]) {
-    const f = fixture(); f.context.connection.pendingCommandId = 'command';
-    f.ledger({ state: 'unknown', ...(confirmed ? { result: { archived: true, threadId: 'thread', getBoolean(key) { return this[key]; }, getString(key) { return this[key]; } } } : {}) });
-    f.checkPending(); await flush();
-    assert.equal(f.context.returned, confirmed ? 1 : 0); assert.equal(f.context.connection.pendingCommandId, confirmed ? '' : 'command');
-    assert.equal(f.context.calls.length, 0);
   }
 });
 

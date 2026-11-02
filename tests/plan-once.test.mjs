@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import {EventEmitter} from 'node:events';import {stripTypeScriptTypes} from 'node:module';
+import test from 'node:test';import assert from 'node:assert/strict';import {EventEmitter} from 'node:events';
 import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';import {Journal} from '../apps/bridge/journal.mjs';import {BridgeAgent} from '../apps/bridge/agent.mjs';import {validateRequest} from '../packages/protocol/contracts.mjs';import {normalizeConversation} from '../apps/bridge/conversation.mjs';import {conversationUpdate,applyConversationUpdate} from '../apps/bridge/updates.mjs';
 
 const models=[{id:'model',efforts:['high'],speeds:[{id:'priority'}]}];
@@ -59,13 +59,4 @@ test('发送接收后立即保存独立回执，恢复模式尚未完成时也�
 test('协议限制一次性标记和本次模式，快照增量保留能力',()=>{
  const good=request('validation');assert.doesNotThrow(()=>validateRequest(good));for(const params of [{planMode:'other'},{resetPlanAfterSend:'true'},{planMode:null},{resetPlanAfterSend:true,planMode:undefined}])assert.throws(()=>validateRequest({...good,params:{...good.params,...params}}));assert.throws(()=>validateRequest({...good,method:'turn.stop'}));
  const snapshot=normalizeConversation({id:'thread',turns:[]}),first={snapshot:{...snapshot,supportsPlanReset:false},seq:1},update=conversationUpdate(first,snapshot);assert.equal(applyConversationUpdate(first,update,2).snapshot.supportsPlanReset,true);
-});
-
-// 以下保留旧协议的接收检查点核对，兼容升级前已提交的请求。
-test('进程中断后核对已接收回执可解锁恢复设置，尚未确认接收的未知操作保持锁定',async()=>{
- const storage=new Map(),context=vm.createContext({reactive:value=>value,uni:{setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)},setTimeout,clearTimeout});
- const source=fs.readFileSync('apps/mobile/services/bridge.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={MobileBridge,connection};',context);
- const {MobileBridge,connection}=context.subject,bridge=new MobileBridge();connection.hostId='pc';connection.activeThreadId='thread';bridge.rememberCommand('sent');
- const value={state:'unknown',result:{messageAccepted:true,getBoolean(key){return this[key]??null;}},getString(key){return this[key]??null;}};bridge.request=async()=>value;
- await bridge.checkPending();assert.equal(connection.pendingCommandId,'');bridge.rememberCommand('uncertain');value.result.messageAccepted=false;await bridge.checkPending();assert.equal(connection.pendingCommandId,'uncertain');
 });

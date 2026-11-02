@@ -19,10 +19,9 @@ function page(){
  const read=source.slice(source.indexOf('function loadSettings()'),source.indexOf('\nfunction openComposerMenu('));
  const write=source.slice(source.indexOf('function selectSetting('),source.indexOf('// 附件变更始终写回'));
  const send=source.slice(source.indexOf('function send() {'),source.indexOf('\nfunction stop() {'));
- const check=source.slice(source.indexOf('function checkPending()'),source.indexOf('// 目标表单与聊天草稿独立'));
  const watchStart=source.indexOf('watch((): string => JSON.stringify(connection.snapshot?.executionSettings');
  const watch=source.slice(watchStart,source.indexOf('\nfunction onDraftLineChange',watchStart));
- vm.runInContext(stripTypeScriptTypes([derived,read,write,send,check,watch].join('\n'),{mode:'transform'})+'\nglobalThis.f={planEnabled,loadSettings,selectSetting,send,checkPending};',context);
+ vm.runInContext(stripTypeScriptTypes([derived,read,write,send,watch].join('\n'),{mode:'transform'})+'\nglobalThis.f={planEnabled,loadSettings,selectSetting,send};',context);
  return {context,pending,calls,settled,...context.f,desktop(value){context.connection.snapshot={...context.connection.snapshot,executionSettings:setting(value)};watchers[0].changed();}};
 }
 
@@ -50,12 +49,4 @@ test('手机切换等待桌面确认；较旧写回执也不能覆盖后来桌�
 test('旧桥接没有实时设置时使用读取结果，换会话后的迟到读取不污染其他会话',async()=>{
  const f=page();f.loadSettings();f.pending.shift().resolve({settings:setting('default'),models:[]});await tick();assert.equal(f.planEnabled.value,false);
  f.loadSettings();f.context.connection.hostId='other';f.pending.shift().resolve({settings:setting('plan'),models:[]});await tick();assert.equal(f.planEnabled.value,false);
-});
-
-
-// 升级前留下的接收检查点仍能核对，不再影响计划标签或发送正文。
-test('旧已接收回执只结算对应会话草稿，不消费计划或再次发送',async()=>{
- const f=page(),receipt={messageAccepted:true,threadId:'thread',planReset:false,getBoolean(key){return this[key]??null;},getString(key){return this[key]??null;}};
- f.context.bridge.checkPending=async()=>({result:receipt,getString:()=> 'unknown'});f.checkPending();await tick();assert.equal(f.settled.length,1);assert.equal(f.settled[0][2],true);assert.equal(f.planEnabled.value,true);assert.equal(f.calls.length,0);
- receipt.threadId='other';f.checkPending();await tick();assert.equal(f.settled.length,1);assert.equal(f.planEnabled.value,true);
 });

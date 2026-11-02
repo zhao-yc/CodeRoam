@@ -13,7 +13,6 @@
     <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
     <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
-    <view v-if="isCurrentPage() && connection.pendingCommandId.length > 0 && !busy" class="notice pending-notice"><text class="notice-text">本会话上次操作结果待确认</text><button class="check button-secondary" :disabled="checking || !connection.connected" @click="checkPending">{{ checking ? '正在核对…' : '核对结果' }}</button></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
     <!-- 问题提醒独立于运行状态和消息滚动位置，点击后定位原题。 -->
     <view v-if="pendingQuestionCount > 0 && !readOnly" class="question-notice action-frame"><text class="question-notice-label">有 {{ pendingQuestionCount }} 组问题待回答</text><text class="question-notice-action">查看问题</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" aria-label="查看待回答问题" @click="showQuestions"></button></view>
@@ -150,7 +149,6 @@ const pageVisible = ref(false)
 onShow(() => { pageVisible.value = true })
 onHide(() => { pageVisible.value = false })
 const pendingAction = ref('')
-const checking = ref(false)
 const activating = ref(false)
 const autoConnectPending = ref(false)
 let activationRequest = 0
@@ -210,17 +208,17 @@ const projectName = computed((): string => { const parts = (connection.snapshot?
 const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
 const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
 const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - (composerExpanded.value ? 360 : 280))))
-const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '请先核对上次操作结果。' : '')
+const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '操作正在提交，请稍候。' : '')
 const conversationConnectionHint = computed((): string => {
   if (activating.value) return '正在连接会话…'
-  if (connection.pendingCommandId.length > 0) return autoConnectPending.value ? '请先核对上次操作，核对完成后将自动连接此会话。' : '请先核对上次操作结果，再重新连接。'
+  if (connection.pendingCommandId.length > 0) return autoConnectPending.value ? '操作提交结束后将自动连接此会话。' : '操作正在提交，请稍后重新连接。'
   if (!connection.connected) return autoConnectPending.value ? '连接恢复后将自动连接此会话。' : '连接恢复后可重新连接此会话。'
   return autoConnectPending.value ? '正在等待电脑连接此会话…' : '会话连接未完成，历史内容和草稿已保留。'
 })
 const openingTitle = computed((): string => conversationOpeningTitle(connection.snapshot != null, detailError.value, connection.connected))
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
 const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : '', openingTitle.value))
-const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && !checking.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
+const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
 
 onLoad((options: OnLoadOptions) => {
   // 已保存的配对在应用启动时恢复；未配置时先返回首页。
@@ -305,7 +303,7 @@ function tryAutoConnectConversation() {
   if (!readOnly.value) { autoConnectPending.value = false; return }
   continueConversation()
 }
-// 在方法声明后注册监听，兼容 Android UTS；离线或待核对时保留本次打开意图。
+// 在方法声明后注册监听，兼容 Android UTS；离线或提交中保留本次打开意图。
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
 function copyLatestReply() { closeActions(); const messages = connection.snapshot?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(parseAnnotationReferences(messages[index].text).text); return } }; notify('还没有可复制的回复') }
@@ -614,7 +612,7 @@ function selectSetting(key: string, value: string) {
     busy.value = false; settingsBusy.value = false
     if (request != settingsRequest || !isCurrentPage()) return
     settingsError.value = error.message
-    // 结果未知仍由全局待核对锁保护，不自动再次提交设置。
+    // 设置失败后由用户查看同步结果，重连不会自动再次提交。
     // 保留失败原因，用户点击重新读取后再核对桌面设置。
   })
 }
@@ -774,31 +772,6 @@ function reply(id: string, turnId: string, decision: string) {
   busy.value = true; pendingAction.value = 'approval:' + id
   bridge.request('approval.reply', { threadId: pageThreadId.value, approvalId: id, turnId, decision }, true).then((_: UTSJSONObject) => { handledApprovalIds.value.push(id); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify(decision == 'accept' ? '已允许本次操作' : '已拒绝本次操作'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
-function checkPending() {
-  if (checking.value || !connection.connected || connection.pendingCommandId.length == 0) return
-  checking.value = true
-  const hostId = connection.hostId
-  const commandId = connection.pendingCommandId
-  bridge.checkPending(pageThreadId.value).then((result: UTSJSONObject) => {
-    checking.value = false
-    const state = result.getString('state') ?? ''
-    const error = result['error'] as UTSJSONObject | null
-    const receipt = result['result'] as UTSJSONObject | null
-    if ((state == 'done' || state == 'unknown') && receipt?.getBoolean('archived') == true && acceptArchiveReceipt(hostId, receipt, commandId)) return
-    // 兼容旧桥接的已接收检查点，只核对原会话，不再消费或重置计划。
-    const accepted = receipt != null && (state == 'done' || state == 'unknown') && receipt!.getBoolean('messageAccepted') == true && receipt!.getString('threadId') == pageThreadId.value
-    if (accepted) settleSubmission(hostId, commandId, true)
-    else if (state == 'done') settleSubmission(hostId, commandId, error == null)
-    else if (state == 'not_found') settleSubmission(hostId, commandId, false)
-    if (!isCurrentPage()) return
-    if (accepted) { operationError.value = ''; notify('消息已发送'); refresh(); return }
-    if (state == 'done') operationError.value = error == null ? '' : error.getString('message') ?? '操作未成功，草稿已保留'
-    else if (state == 'not_found') operationError.value = ''
-    uni.showToast({ title: state == 'done' ? (error == null ? '操作已完成' : '操作未成功，草稿已保留') : state == 'not_found' ? '电脑未收到操作，可以重新提交' : '结果仍待确认，请查看电脑会话', icon: 'none' }); if (error == null) refresh()
-  }, (error: Error) => { checking.value = false; if (isCurrentPage()) operationError.value = error.message })
-}
-
-
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
 function dismissGoal() { if (!goalBusy.value && goalExpanded.value) { goalCloseRequest.value++; goalExpanded.value = false } }

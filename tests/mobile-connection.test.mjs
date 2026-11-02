@@ -17,14 +17,14 @@ function mobileFixture(storage=new Map()){
   return {bridge,connection,timers,sockets,storage,uni};
 }
 
-test('导入默认持久保存必要配置，新页面自动恢复并保留待核对编号，不重发写操作',()=>{
+test('导入默认保存连接，新页面忽略旧操作锁且不重发写操作',()=>{
   const storage=new Map(),first=mobileFixture(storage);first.bridge.foreground=false;
   const config={relayUrl:'wss://relay.example/ws',hostId:'pc',token:'s'.repeat(43),extra:'不应保存'};
   first.bridge.configure(JSON.stringify(config));
   assert.deepEqual(JSON.parse(storage.get('codex-mobile-connection')),{relayUrl:config.relayUrl,token:config.token,hostId:config.hostId});
   storage.set('codex-mobile-pending-pc','unknown-command');
   const reopened=mobileFixture(storage);reopened.bridge.restore();
-  assert.equal(reopened.connection.configured,true);assert.equal(reopened.connection.hostId,'pc');assert.equal(reopened.connection.pendingCommandId,'');assert.equal(reopened.connection.legacyPendingCommandId,'unknown-command');
+  assert.equal(reopened.connection.configured,true);assert.equal(reopened.connection.hostId,'pc');assert.equal(reopened.connection.pendingCommandId,'');assert.equal(reopened.storage.has('codex-mobile-pending-pc'),false);
   assert.equal(reopened.bridge.config.token,config.token);assert.equal(reopened.sockets.length,1);assert.equal(reopened.bridge.pending.size,0);
   assert.equal(JSON.parse(storage.get('codex-mobile-connection')).extra,undefined);
 });
@@ -53,7 +53,7 @@ test('清除连接只删除指定配置并断开，不影响其他记录，刷�
 
 test('待核对操作或存储删除失败时不清除连接，不丢失原配置',()=>{
   const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
-  f.bridge.rememberCommand('pending','pc','thread');assert.throws(()=>f.bridge.forgetConfiguration(),/核对上次操作结果/);assert.equal(f.storage.has('codex-mobile-connection'),true);assert.equal(f.connection.configured,true);
+  f.bridge.rememberCommand('pending','pc','thread');assert.throws(()=>f.bridge.forgetConfiguration(),/正在提交/);assert.equal(f.storage.has('codex-mobile-connection'),true);assert.equal(f.connection.configured,true);
   f.bridge.clearCommand('pending');f.uni.removeStorageSync=()=>{throw new Error('删除失败');};
   assert.throws(()=>f.bridge.forgetConfiguration(),/无法清除本地连接/);assert.equal(f.connection.configured,true);assert.notEqual(f.bridge.config,null);
 });
@@ -111,7 +111,7 @@ test('继续只发加载标记不发送草稿，成功恢复实时状态，失�
   const loading=f.bridge.activate('thread');assert.equal(f.sent.length,1);assert.equal(f.sent[0].method,'thread.watch');assert.deepEqual(f.sent[0].params,{threadId:'thread',activate:true});assert.equal(f.connection.pendingCommandId,'');
   respond(f,f.sent[0],{snapshot:{threadId:'thread',readOnly:false,messages:[]},epoch:'e',seq:2});await loading;assert.equal(f.connection.snapshot.readOnly,false);
   f.connection.snapshot={threadId:'thread',readOnly:true};const failed=f.bridge.activate('thread');respond(f,f.sent[1],{},{message:'加载失败'});await assert.rejects(failed,/加载失败/);assert.equal(f.connection.snapshot.readOnly,true);
-  f.bridge.rememberCommand('pending');await assert.rejects(f.bridge.activate('thread'),/先核对上次操作/);assert.equal(f.sent.length,2);
+  f.bridge.rememberCommand('pending');await assert.rejects(f.bridge.activate('thread'),/正在提交/);assert.equal(f.sent.length,2);
 });
 
 test('继续期间切换电脑或会话，旧加载响应不会覆盖当前快照',async()=>{
@@ -131,24 +131,19 @@ test('增量快照保留历史只读标记，并允许真实快照解除只读',
   }
 });
 
-test('存在待核对操作时，发送、追加、停止和审批均不发送且不覆盖操作编号',async()=>{
+test('请求尚在提交时，发送、追加、停止和审批均不能连续点击',async()=>{
   const f=connectedFixture();f.bridge.rememberCommand('unknown-command');
   for(const method of ['turn.send','turn.steer','turn.stop','approval.reply']){
-    await assert.rejects(f.bridge.request(method,{threadId:'thread'},true),/请先核对结果/);
+    await assert.rejects(f.bridge.request(method,{threadId:'thread'},true),/正在提交/);
     assert.equal(f.connection.pendingCommandId,'unknown-command');
   }
   assert.equal(f.sent.length,0);assert.equal(f.bridge.pending.size,0);assert.equal(f.timers.size,0);
 });
 
-test('存在待核对操作时仍可读取会话列表和核对未知结果',async()=>{
-  const f=connectedFixture();f.bridge.rememberCommand('unknown-command');
-  const status=f.bridge.checkPending();
-  assert.equal(f.sent[0].method,'command.status');assert.equal(f.sent[0].params.commandId,'unknown-command');
-  respond(f,f.sent[0],{state:'unknown'});assert.equal((await status).state,'unknown');
-  assert.equal(f.connection.pendingCommandId,'unknown-command');
-  const read=f.bridge.request('threads.list',{});assert.equal(f.sent[1].method,'threads.list');
-  respond(f,f.sent[1],{threads:[{id:'thread'}]});assert.equal((await read).threads[0].id,'thread');
-  assert.equal(f.connection.pendingCommandId,'unknown-command');assert.equal(f.bridge.pending.size,0);
+test('提交中的会话仍可读取列表，读取完成不会解除在途写请求保护',async()=>{
+  const f=connectedFixture(),write=f.bridge.request('turn.send',{threadId:'thread',text:'消息'},true),id=f.connection.pendingCommandId;
+  const read=f.bridge.request('threads.list',{});respond(f,f.sent[1],{threads:[{id:'thread'}]});await read;
+  assert.equal(f.connection.pendingCommandId,id);respond(f,f.sent[0],{});await write;assert.equal(f.connection.pendingCommandId,'');
 });
 
 test('切换电脑后，旧电脑的延迟会话列表不会覆盖当前电脑结果',async()=>{
@@ -180,107 +175,73 @@ test('切换电脑后同号会话的旧响应不覆盖快照、错误或清除�
   }
 });
 
-test('写请求尚未结束时不核对账本或解锁，超时后仍可正常核对',async()=>{
-  const f=connectedFixture();const write=f.bridge.request('turn.send',{threadId:'thread',text:'继续'},true);
-  const commandId=f.connection.pendingCommandId;
-  await assert.rejects(f.bridge.checkPending(),/操作仍在提交，请稍后核对/);
-  assert.equal(f.sent.length,1);assert.equal(f.sent[0].method,'turn.send');assert.equal(f.connection.pendingCommandId,commandId);assert.equal(f.bridge.pending.has(commandId),true);
-  [...f.timers.values()].find(timer=>timer.delay===20000).fn();await assert.rejects(write,/操作响应超时/);
-  assert.equal(f.bridge.pending.has(commandId),false);
-  const status=f.bridge.checkPending();assert.equal(f.sent[1].method,'command.status');assert.equal(f.sent[1].params.commandId,commandId);
-  respond(f,f.sent[1],{state:'not_found'});await status;assert.equal(f.connection.pendingCommandId,'');
-});
-
-test('核对期间待核对编号变化时，旧操作的完成响应不清除新编号',async()=>{
-  const f=connectedFixture();f.bridge.rememberCommand('old-command');
-  const status=f.bridge.checkPending();f.bridge.clearCommand('old-command');f.bridge.rememberCommand('new-command');
-  respond(f,f.sent[0],{state:'done'});await status;
-  assert.equal(f.sent[0].params.commandId,'old-command');assert.equal(f.connection.pendingCommandId,'new-command');
-});
-
-test('核对期间切换电脑时，即使待核对编号相同也不清除新电脑状态',async()=>{
-  const f=connectedFixture();f.bridge.rememberCommand('same-command');
-  const status=f.bridge.checkPending();f.connection.hostId='other-pc';f.bridge.rememberCommand('same-command','other-pc','thread');
-  respond(f,f.sent[0],{state:'not_found'});await status;
-  assert.equal(f.sent[0].hostId,'pc');assert.equal(f.connection.pendingCommandId,'same-command');
-});
-
-test('核对电脑和编号均未变化时，完成和未收到响应仍能正常收口',async()=>{
-  for(const state of ['done','not_found']){
-    const f=connectedFixture();f.bridge.rememberCommand('pending-command');
-    const status=f.bridge.checkPending();respond(f,f.sent[0],{state});await status;
-    assert.equal(f.connection.pendingCommandId,'');
-  }
-});
-
-test('A会话未知暂停只锁定A，切到B不显示待核对且B可独立写入',async()=>{
-  const f=connectedFixture();f.connection.activeThreadId='A';
-  const first=f.bridge.request('thread.goal.update',{threadId:'A',action:'pause',expectedRevision:'v'},true);
-  const command=f.sent[0];respond(f,command,{}, {message:'需要核对',outcomeUnknown:true});await assert.rejects(first,/需要核对/);
-  assert.equal(f.connection.pendingCommandId,command.requestId);
-  f.bridge.watch('B');assert.equal(f.connection.pendingCommandId,'');
-  assert.equal(f.bridge.pendingCommand('pc','A'),command.requestId);
-  const second=f.bridge.request('turn.send',{threadId:'B',text:'B会话'},true);const b=f.sent.at(-1);
-  respond(f,b,{});await second;assert.equal(f.bridge.pendingCommand('pc','A'),command.requestId);
-  f.bridge.watch('A');assert.equal(f.connection.pendingCommandId,command.requestId);
-  await assert.rejects(f.bridge.request('turn.stop',{threadId:'A'},true),/请先核对结果/);
-});
-
-test('切换页面后的超时及断线仍绑定原会话，不能覆盖B的待核对编号',async()=>{
-  for(const reason of ['timeout','disconnect','send-fail']) {
-    const f=connectedFixture();f.connection.activeThreadId='A';let failSend;
-    if(reason==='send-fail')f.bridge.socket.send=options=>{f.sent.push(JSON.parse(options.data));failSend=options.fail;};
-    const a=f.bridge.request('turn.send',{threadId:'A'},true),aError=assert.rejects(a);const id=f.sent[0].requestId;
-    f.connection.activeThreadId='B';f.bridge.syncPendingCommand();f.bridge.rememberCommand('B-pending-command','pc','B');
-    if(reason==='timeout')[...f.timers.values()].find(timer=>timer.delay===20000).fn();
+test('超时、断线、发送失败与未知回执均释放提交状态，用户可手动再次发送',async()=>{
+  for(const reason of ['timeout','disconnect','send-fail','unknown']){
+    const f=connectedFixture();let failSend;
+    f.bridge.socket.send=options=>{f.sent.push(JSON.parse(options.data));failSend=options.fail;};
+    const first=f.bridge.request('turn.send',{threadId:'thread',text:'消息'},true),rejected=assert.rejects(first,/查看会话/),old=f.sent[0];
+    await assert.rejects(f.bridge.request('turn.send',{threadId:'thread',text:'连续点击'},true),/正在提交/);
+    if(reason==='timeout')[...f.timers.values()].find(t=>t.delay===20000).fn();
     if(reason==='disconnect')f.bridge.disconnect();
     if(reason==='send-fail')failSend({});
-    await aError;assert.equal(f.connection.pendingCommandId,'B-pending-command');assert.equal(f.bridge.pendingCommand('pc','A'),id);
+    if(reason==='unknown')respond(f,old,{}, {message:'内部核对信息',outcomeUnknown:true});
+    await rejected;assert.equal(f.connection.pendingCommandId,'');assert.equal(f.bridge.hasPendingCommands(),false);assert.equal(f.bridge.pending.size,0);
+    assert.equal(f.sent.length,1);assert.equal(f.storage.size,0);
+    f.connection.connected=true;f.bridge.socket={send:options=>f.sent.push(JSON.parse(options.data)),close(){}};
+    const retry=f.bridge.request('turn.send',{threadId:'thread',text:'用户主动重发'},true),current=f.sent.at(-1);
+    assert.notEqual(current.requestId,old.requestId);assert.equal(current.method,'turn.send');
+    respond(f,old,{});assert.equal(f.connection.pendingCommandId,current.requestId);
+    respond(f,current,{});await retry;assert.equal(f.connection.pendingCommandId,'');
   }
 });
 
-test('核对A期间切到B只清除A，迟到成功或明确失败不会改写B',async()=>{
-  for(const outcome of ['check','success','failure']) {
-    const f=connectedFixture();f.connection.activeThreadId='A';let promise,request;
-    if(outcome==='check'){f.bridge.rememberCommand('A-pending-command');promise=f.bridge.checkPending('A');request=f.sent.at(-1);}
-    else {promise=f.bridge.request('turn.send',{threadId:'A'},true);request=f.sent.at(-1);}
-    const rejected=outcome==='failure'?assert.rejects(promise):promise;
-    f.connection.activeThreadId='B';f.bridge.syncPendingCommand();f.bridge.rememberCommand('B-pending-command');
-    respond(f,request,outcome==='check'?{state:'done'}:{},outcome==='failure'?{message:'明确失败'}:null);await rejected;
-    assert.equal(f.bridge.pendingCommand('pc','A'),'');assert.equal(f.connection.pendingCommandId,'B-pending-command');
+test('重连刷新会话与列表不查询操作账本、不自动重发消息，用户查看后可主动发送',async()=>{
+  const f=connectedFixture();f.connection.computers=[{id:'pc',online:true}];
+  const first=f.bridge.request('turn.send',{threadId:'thread',text:'消息'},true),rejected=assert.rejects(first);
+  f.bridge.disconnect();await rejected;const count=f.sent.length;
+  f.bridge.socket={send:options=>f.sent.push(JSON.parse(options.data)),close(){}};
+  f.bridge.receive(utsObject({type:'welcome',hosts:[{id:'pc',online:true}]}));f.bridge.refreshThreads();
+  const refreshed=f.sent.slice(count);assert.deepEqual(refreshed.map(r=>r.method),['thread.watch','threads.list']);
+  respond(f,refreshed[0],{snapshot:{threadId:'thread',messages:[{role:'user',text:'消息'}]},epoch:'new',seq:1});
+  respond(f,refreshed[1],{threads:[{id:'thread',title:'消息'}]});await Promise.resolve();
+  assert.equal(f.connection.snapshot.messages[0].text,'消息');assert.equal(f.connection.threads[0].id,'thread');assert.equal(f.connection.pendingCommandId,'');
+  assert.equal(f.sent.some(r=>r.method==='command.status'),false);assert.equal(f.sent.filter(r=>r.method==='turn.send').length,1);
+  const retry=f.bridge.request('turn.send',{threadId:'thread',text:'用户决定再发送'},true);respond(f,f.sent.at(-1),{});await retry;
+  assert.equal(f.sent.filter(r=>r.method==='turn.send').length,2);
+});
+
+test('A失败只释放A，切换电脑和会话不会解除B正在提交的保护',async()=>{
+  for(const reason of ['timeout','send-fail','unknown','success']){
+    const f=connectedFixture();f.connection.activeThreadId='A';let failSend;
+    f.bridge.socket.send=options=>{f.sent.push(JSON.parse(options.data));failSend=options.fail;};
+    const first=f.bridge.request('turn.send',{threadId:'A'},true),settled=reason==='success'?first:assert.rejects(first),old=f.sent[0];
+    f.connection.hostId='other';f.connection.activeThreadId='B';f.bridge.rememberCommand('B-command','other','B');
+    if(reason==='timeout')[...f.timers.values()].find(t=>t.delay===20000).fn();
+    if(reason==='send-fail')failSend({});
+    if(reason==='unknown')respond(f,old,{}, {message:'未知',outcomeUnknown:true});
+    if(reason==='success')respond(f,old,{});
+    await settled;assert.equal(f.bridge.pendingCommand('pc','A'),'');assert.equal(f.connection.pendingCommandId,'B-command');
   }
 });
 
-test('多个会话待核对记录持久保存，恢复与跨电脑同号会话互不污染且不重发',async()=>{
-  const f=connectedFixture();f.bridge.rememberCommand('A-command','pc','A');f.bridge.rememberCommand('B-command','pc','B');
-  f.connection.computers=[{id:'pc',online:true},{id:'other',online:true}];f.bridge.selectComputer('other');
-  f.connection.activeThreadId='A';f.bridge.rememberCommand('other-A-command');assert.equal(f.connection.pendingCommandId,'other-A-command');
-  f.bridge.selectComputer('pc');f.bridge.watch('B');assert.equal(f.connection.pendingCommandId,'B-command');
-  const reopened=mobileFixture(f.storage);reopened.bridge.foreground=false;reopened.bridge.configure(JSON.stringify(f.bridge.config));
-  assert.equal(reopened.connection.pendingCommandId,'');reopened.connection.activeThreadId='A';reopened.bridge.syncPendingCommand();
-  assert.equal(reopened.connection.pendingCommandId,'A-command');assert.equal(reopened.bridge.pendingCommand('pc','B'),'B-command');
-  reopened.bridge.restoreCommands('other');assert.equal(reopened.bridge.pendingCommand('other','A'),'other-A-command');assert.equal(reopened.bridge.pending.size,0);
-  assert.equal(reopened.sockets.length,0);
+test('断线同时释放所有在途操作，旧格式及损坏记录不再恢复或阻止新操作',async()=>{
+  const f=connectedFixture();
+  const a=f.bridge.request('turn.send',{threadId:'A'},true),b=f.bridge.request('turn.send',{threadId:'B'},true);
+  const rejected=Promise.all([assert.rejects(a),assert.rejects(b)]);f.bridge.disconnect();await rejected;
+  assert.equal(f.bridge.hasPendingCommands(),false);assert.equal(f.connection.pendingCommands.length,0);
+  for(const saved of ['{损坏',JSON.stringify([{id:'old',hostId:'pc',threadId:'A'}])]){
+    const storage=new Map([['codex-mobile-pending-pc','old'],['codex-mobile-pending-v2-pc',saved]]),reopened=mobileFixture(storage);
+    reopened.bridge.foreground=false;reopened.bridge.configure(JSON.stringify(reopened.bridge.config));
+    assert.equal(reopened.bridge.hasPendingCommands(),false);assert.equal(reopened.connection.configured,true);assert.equal(storage.has('codex-mobile-pending-pc'),false);assert.equal(storage.has('codex-mobile-pending-v2-pc'),false);
+    assert.equal(reopened.bridge.pending.size,0);assert.equal(reopened.sockets.length,0);
+  }
 });
 
-test('旧版未知编号只在设置保留核对入口，不猜测会话归属，核对完成才清除',async()=>{
-  const f=connectedFixture();f.storage.set('codex-mobile-pending-pc','old-command');f.bridge.restoreCommands('pc');
-  f.bridge.watch('B');assert.equal(f.connection.pendingCommandId,'');assert.equal(f.connection.legacyPendingCommandId,'old-command');
-  let check=f.bridge.checkLegacyPending();respond(f,f.sent.at(-1),{state:'unknown'});await check;
-  assert.equal(f.storage.get('codex-mobile-pending-pc'),'old-command');
-  check=f.bridge.checkLegacyPending();respond(f,f.sent.at(-1),{state:'done'});await check;
-  assert.equal(f.storage.has('codex-mobile-pending-pc'),false);assert.equal(f.connection.legacyPendingCommandId,'');
-});
-
-test('返回待核对A可只读同步，切到B仍可主动导航，保存失败不发送写请求',async()=>{
-  const f=connectedFixture();f.bridge.rememberCommand('A-command','pc','A');
-  f.bridge.watch('A');let request=f.sent.at(-1);assert.equal(request.params.activate,undefined);
-  respond(f,request,{snapshot:{threadId:'A'},epoch:'e',seq:1});await Promise.resolve();assert.equal(f.connection.pendingCommandId,'A-command');
-  f.bridge.watch('B');request=f.sent.at(-1);respond(f,request,{snapshot:{threadId:'B'},epoch:'e',seq:2});await Promise.resolve();
-  const opening=f.bridge.activate('B');request=f.sent.at(-1);assert.equal(request.params.activate,true);
-  respond(f,request,{snapshot:{threadId:'B',readOnly:false},epoch:'e',seq:3});await opening;assert.equal(f.connection.pendingCommandId,'');
-  f.uni.setStorageSync=()=>{throw new Error('不可写');};const count=f.sent.length;
-  await assert.rejects(f.bridge.request('turn.send',{threadId:'B'},true),/操作未发送/);assert.equal(f.sent.length,count);
+test('旧记录删除失败仍可进入连接，存储不可写不再阻止消息发送',async()=>{
+  const f=connectedFixture();f.uni.removeStorageSync=()=>{throw Error('存储不可写');};f.uni.setStorageSync=()=>{throw Error('存储不可写');};
+  assert.doesNotThrow(()=>f.bridge.clearLegacyCommands('pc'));
+  const sending=f.bridge.request('turn.send',{threadId:'thread',text:'消息'},true);respond(f,f.sent[0],{});await sending;
+  assert.equal(f.connection.pendingCommandId,'');
 });
 
 /** 执行首页实际使用的派生状态，验证连接、空结果与后台刷新的显示边界。 */
