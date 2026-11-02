@@ -12,9 +12,9 @@ export class MacInstanceIpcClient extends IpcClient {
   constructor({ instance, verify, ...options }) { super({ ...options, socketPath: instance.ipcSocketPath }); this.instance = instance; this.verify = verify; this.allowedClients = new Set(); }
   /** 未就绪或已退出的实例不接受任何新操作。 */
   assertCurrent() { if (!this.instance.alive || !this.instance.ready) throw new BridgeError('INSTANCE_NOT_READY', '所选 Mac 实例连接尚未就绪，请稍后核对原操作', this.instance.wasReady === true); }
-  /** 归属查询前后都核对独占目录，期间发生进程变化时不接纳旧客户端。 */
+  /** 查询只携带会话编号；接纳返回的所有者前核对独占目录，避免每行重复前置全盘扫描。 */
   async findOwner(threadId, hostId = 'local', timeoutMs = this.timeoutMs) {
-    this.assertCurrent(); await this.verify();
+    this.assertCurrent();
     const result = await super.request('thread-owner-discovery', { hostId, conversationId: threadId }, 1, { timeoutMs });
     await this.verify(); this.assertCurrent();
     if (result.resultType !== 'success') return null;

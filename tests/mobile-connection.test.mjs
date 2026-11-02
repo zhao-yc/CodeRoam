@@ -41,6 +41,28 @@ test('缓存损坏或浏览器禁用存储不阻止启动，导入校验或保�
   const blocked=mobileFixture();blocked.uni.getStorageSync=()=>{throw new Error('禁止存储');};assert.doesNotThrow(()=>blocked.bridge.restore());assert.match(blocked.connection.error,/无法读取/);
 });
 
+test('切换到授权子实例后刷新恢复同一电脑，保留配对字段且不重放写请求',()=>{
+  const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
+  f.connection.computers=[{id:'pc',online:true},{id:'pc~00000000-0000-4000-8000-000000000002',online:true}];
+  f.bridge.resume=()=>{};
+  const selected=f.connection.computers[1].id;
+  f.bridge.selectComputer(selected);
+  assert.equal(f.connection.hostId,selected);assert.equal(f.bridge.config.hostId,selected);
+  assert.deepEqual(JSON.parse(f.storage.get('codex-mobile-connection')),{relayUrl:'wss://relay.example/ws',token:'s'.repeat(43),hostId:selected});
+  const restored=mobileFixture(f.storage);restored.bridge.restore();
+  assert.equal(restored.connection.hostId,selected);assert.equal(restored.bridge.pending.size,0);assert.equal(restored.connection.activeThreadId,'');
+});
+
+test('切换所选电脑保存失败或越权时保留原会话，不退订也不改变持久配置',()=>{
+  const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
+  f.connection.computers=[{id:'pc',online:true},{id:'other',online:true}];f.connection.activeThreadId='current';const snapshot={threadId:'current'};f.connection.snapshot=snapshot;
+  const saved=f.storage.get('codex-mobile-connection');f.bridge.request=()=>assert.fail('失败的切换不应发送请求');
+  assert.throws(()=>f.bridge.selectComputer('unauthorized'),/不在当前授权/);
+  f.uni.setStorageSync=()=>{throw new Error('私有存储错误');};
+  assert.throws(()=>f.bridge.selectComputer('other'),/无法保存所选电脑/);
+  assert.equal(f.connection.hostId,'pc');assert.equal(f.bridge.config.hostId,'pc');assert.equal(f.connection.activeThreadId,'current');assert.equal(f.connection.snapshot,snapshot);assert.equal(f.storage.get('codex-mobile-connection'),saved);
+});
+
 test('清除连接只删除指定配置并断开，不影响其他记录，刷新后不再连接',()=>{
   const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
   f.storage.set('其他站点设置','保留');f.storage.set('codex-mobile-pending-other','待核对');
