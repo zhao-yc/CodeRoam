@@ -7,7 +7,8 @@ import { BridgeError } from '../../packages/protocol/contracts.mjs';
 
 /** 只使用本机配置或已安装桌面附带的 CLI，手机不能指定程序、命令或工作目录。 */
 export function desktopCodexPath(configuredPath, { platform = process.platform, env = process.env, exists = fs.existsSync, directories = fs.readdirSync, stat = fs.statSync } = {}) {
-  const paths = platform === 'win32' ? path.win32 : path;
+  // 根据目标平台选择路径规则，使跨平台模拟与实际平台行为一致。
+  const paths = platform === 'win32' ? path.win32 : path.posix;
   for (const candidate of [configuredPath, env.CODEX_CLI_PATH]) if (typeof candidate === 'string' && paths.isAbsolute(candidate) && exists(candidate)) return candidate;
   if (platform === 'darwin') {
     // 兼容独立 Codex 与整合版桌面，始终使用桌面自带的 CLI。

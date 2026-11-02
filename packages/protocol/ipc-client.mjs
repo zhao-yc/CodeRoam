@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 
 /** 使用原桌面的平台默认通道，私有配置可指定另一套 Codex 用户目录。 */
 export function defaultIpcSocketPath({ platform = process.platform, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex') } = {}) {
-  return platform === 'win32' ? '\\\\.\\pipe\\codex-ipc' : path.join(codexHome, 'ipc', 'ipc.sock');
+  return platform === 'win32' ? '\\\\.\\pipe\\codex-ipc' : path.posix.join(codexHome, 'ipc', 'ipc.sock');
 }
 
 /** 编码 Codex 本地 IPC 的四字节小端长度加 UTF-8 JSON 消息。 */

@@ -938,7 +938,7 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .action-pressed { background-color: rgba(40, 92, 73, 0.07); }
 .page { flex: 1; height: 100%; overflow: hidden; background-color: #f8f8f3; }
 .status-spacer { height: var(--status-bar-height); flex-shrink: 0; }
-.conversation-header { flex-direction: row; align-items: center; padding: 4px 8px; flex-shrink: 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.conversation-header { flex-direction: row; align-items: center; padding: 10px 8px; flex-shrink: 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
 .icon-button { width: 44px; height: 44px; padding: 0; margin: 0; align-items: center; justify-content: center; border-radius: 14px; background-color: transparent; border-width: 0; }
 .round-button { background-color: transparent; }
 .thread-capsule { flex: 1; min-width: 0; min-height: 44px; margin: 0 2px; padding: 0 6px; justify-content: center; }
