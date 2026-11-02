@@ -930,7 +930,8 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .draft-image { width: 64px; height: 64px; margin-right: 10px; position: relative; }
 .draft-thumbnail { width: 64px; height: 64px; border-radius: 8px; }
 .remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; line-height: 22px; padding: 0; margin: 0; border-radius: 12px; font-size: 18px; color: #ffffff; background-color: #285c49; }
-.add-image { width: 36px; height: 36px; line-height: 32px; padding: 0; margin: 0 8px 0 0; border-radius: 10px; font-size: 25px; color: #285c49; background-color: #e8eee6; }
+/* 加号在固定点击区域内水平、垂直居中，不靠偏短行高调整位置。 */
+.add-image { align-items: center; justify-content: center; flex-shrink: 0; width: 36px; height: 36px; line-height: 36px; padding: 0; margin: 0 8px 0 0; border-radius: 10px; font-size: 25px; color: #285c49; background-color: #e8eee6; }
 .image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
 .composer-panel { border-radius: 14px; background-color: #f8f8f3; padding: 8px 12px 6px; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
 .draft { width: 100%; min-height: 24px; color: #202c28; font-size: 15px; line-height: 24px; padding: 0; background-color: transparent; }
@@ -968,7 +969,7 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .draft-line { flex-direction: row; align-items: center; }
 .draft { flex: 1; width: 0; min-width: 0; }
 .compact-draft { margin: 0 8px; }
-.compact-add { width: 38px; height: 42px; line-height: 40px; margin: 0; padding: 0; background-color: transparent; color: #285c49; font-size: 29px; }
+.compact-add { align-items: center; justify-content: center; flex-shrink: 0; width: 38px; height: 42px; line-height: 42px; margin: 0; padding: 0; background-color: transparent; color: #285c49; font-size: 29px; }
 .settings-trigger { flex: 1; min-width: 0; height: 42px; flex-direction: row; justify-content: flex-end; align-items: center; margin: 0 10px 0 2px; padding: 0 3px; }
 .settings-trigger-label { min-width: 0; flex-shrink: 1; lines: 1; text-overflow: ellipsis; font-size: 13px; color: #202c28; margin-right: 4px; }
 .plan-chip { align-self: flex-start; height: 30px; padding: 0 10px; margin-bottom: 10px; border-radius: 15px; flex-direction: row; align-items: center; background-color: #e8eee6; }

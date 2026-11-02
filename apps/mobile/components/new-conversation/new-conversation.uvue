@@ -218,7 +218,8 @@ watch((): string => draft.value.images.length.toString() + ':' + draft.value.fil
 .new-input { width: 100%; min-height: 64px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
 .editor-content { flex-shrink: 0; }
 .new-actions { flex-direction: row; align-items: center; margin-top: 6px; }
-.add-action { width: 44px; height: 44px; line-height: 40px; margin: 0; padding: 0; font-size: 29px; color: #202c28; background-color: transparent; }
+/* 与发送按钮共用居中轴，避免加号受按钮默认布局影响而偏移。 */
+.add-action { align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; line-height: 44px; margin: 0; padding: 0; font-size: 29px; color: #202c28; background-color: transparent; }
 /* 提交或上传时仅淡化加号，覆盖按钮默认禁用态的灰色底块。 */
 .new-actions .add-action[disabled] { background-color: transparent; color: #a0a6a0; }
 .model-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
