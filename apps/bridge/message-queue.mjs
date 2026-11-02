@@ -46,6 +46,19 @@ export class MessageQueue {
       if (this.rows(threadId).length >= 20) throw new BridgeError('QUEUE_FULL', '最多排队20条消息，请先处理已有消息');
       const snapshot = await this.snapshot(threadId);
       if (snapshot.readOnly) throw new BridgeError('HISTORY_READ_ONLY', '请先连接原桌面聊天再排队');
+      // 排队偏好只约束忙时跟进；以电脑最新事实判断，空闲且无待发消息时直接开始一轮。
+      const hasBacklog = this.rows(threadId).some(row => row.state !== 'editing');
+      const waitingForInput = snapshot.approvals?.length || snapshot.pendingPlan || snapshot.questionGroups?.some(group => group.state === 'pending' && group.kind === 'native');
+      if (!hasBacklog && snapshot.status === 'idle' && !snapshot.activeTurnId && !waitingForInput) {
+        try {
+          const result = await this.adapter.operate('turn.send', { threadId, text, images, attachments, ...(pluginIds.length ? { pluginIds } : {}) }, commandId, deviceId);
+          this.release(threadId);
+          return { ...result, queued: false };
+        } catch (error) {
+          // 仅明确的轮次竞争可安全回队；超时或结果未知不能再次保存正文造成重复投递。
+          if (error.code !== 'TURN_ACTIVE' || error.outcomeUnknown) { this.release(threadId); throw error; }
+        }
+      }
       let selection;
       try {
         selection = pluginIds.length ? await this.adapter.selectPlugins(threadId, WATCHER, pluginIds) : null;

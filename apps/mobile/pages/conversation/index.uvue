@@ -1189,7 +1189,7 @@ function send() {
   const request = bridge.request(method, params, true)
   const commandId = connection.pendingCommandId
   rememberSubmission(hostId, threadId, commandId, text)
-  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(steer ? '已追加到当前任务' : queue ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(steer ? '已追加到当前任务' : result['queued'] == true ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
 // 追加和取消都指向电脑保存的同一条消息，避免手机重传正文形成重复指令。
 function operateQueuedMessage(id: string, action: string) {

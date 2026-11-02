@@ -143,3 +143,38 @@ test('已发送或待核对状态拒绝编辑，跨设备和过期附件也不�
   f.adapter.attachments.metadata = () => { throw Object.assign(Error('附件已过期'), { code: 'UPLOAD_EXPIRED' }); };
   assert.equal((await f.send('edit', { queueId })).error.code, 'UPLOAD_EXPIRED'); assert.equal(f.queue.rows('thread')[0].state, 'queued'); assert.equal(f.client.calls.length, 0);
 });
+
+test('空闲聊天的排队偏好直接发送，回执不谎报排队，重复请求也不重复投递', async t => {
+  const f = fixture(t); f.client.idle(); const commandId = randomUUID();
+  const first = await f.send('enqueue', { text: '空闲时正常发送' }, commandId);
+  assert.equal(first.error, undefined); assert.equal(first.result.queued, false); assert.equal(f.queue.rows('thread').length, 0);
+  assert.equal(f.client.calls.length, 1); assert.equal(f.client.calls[0].method, 'thread-follower-start-turn');
+  assert.equal(f.client.calls[0].params.turnStart.request.input[0].text, '空闲时正常发送');
+  assert.equal(f.adapter.conversations.get('thread').watchers.has('message-queue'), false);
+  const replay = await f.send('enqueue', { text: '空闲时正常发送' }, commandId); assert.equal(replay.result.queued, false); await f.queue.pump(); assert.equal(f.client.calls.length, 1);
+});
+
+test('空闲判断后的明确轮次竞争才转排队，超时和未知结果不会再次保存正文', async t => {
+  const f = fixture(t); f.client.idle(); const original = f.adapter.operate.bind(f.adapter); let attempted = 0;
+  f.adapter.operate = (...args) => { if (attempted++ === 0) throw Object.assign(Error('任务已开始'), { code: 'TURN_ACTIVE' }); return original(...args); };
+  const accepted = await f.send('enqueue', { text: '竞争后的合成消息' }); assert.equal(accepted.result.queued, true); assert.equal(f.queue.rows('thread').length, 1); assert.equal(f.client.calls.length, 0);
+  await f.queue.pump(); assert.equal(f.client.calls.length, 1);
+  const other = fixture(t); other.client.idle(); other.client.error = Object.assign(Error('IPC timeout'), { outcomeUnknown: true });
+  const unknown = await other.send('enqueue', { text: '结果未知的合成消息' }); assert.equal(unknown.error.outcomeUnknown, true); assert.equal(other.queue.rows('thread').length, 0);
+  await other.queue.pump(); assert.equal(other.client.calls.length, 1);
+});
+
+test('已有待发消息时空闲也不越过队列，已撤回的编辑记录不造成假排队', async t => {
+  const f = fixture(t); await f.send('enqueue', { text: '已有第一条' }); f.client.idle();
+  const next = await f.send('enqueue', { text: '追加到已有队尾' }); assert.equal(next.result.queued, true); assert.equal(f.client.calls.length, 0);
+  await f.queue.pump(); assert.equal(f.client.calls[0].params.turnStart.request.input[0].text, '已有第一条');
+  const other = fixture(t), first = await other.send('enqueue', { text: '已撤回的旧消息' }); await other.send('edit', { queueId: first.result.queueId }); other.client.idle();
+  const direct = await other.send('enqueue', { text: '不等待编辑记录的新消息' }); assert.equal(direct.result.queued, false); assert.equal(other.queue.rows('thread')[0].state, 'editing'); assert.equal(other.client.calls.length, 1);
+});
+
+test('审批、原生问题、计划确认和未知状态不能被空闲直发绕过', async t => {
+  for (const blocker of [{ approvals: [{ id: 'synthetic-approval' }] }, { pendingPlan: { id: 'synthetic-plan' } }, { questionGroups: [{ kind: 'native', state: 'pending' }] }, { status: 'unknown' }]) {
+    const f = fixture(t); f.client.idle(); f.queue.snapshot = async () => ({ threadId: 'thread', status: 'idle', activeTurnId: '', approvals: [], questionGroups: [], ...blocker });
+    const result = await f.send('enqueue', { text: '等待状态确认' }); assert.equal(result.result.queued, true); assert.equal(f.queue.rows('thread').length, 1); assert.equal(f.client.calls.length, 0);
+  }
+});
