@@ -5,7 +5,7 @@
       <text class="options-title">{{ section == 'models' ? '模型' : section == 'speeds' ? '速度' : '推理强度' }}</text>
       <view class="close-action"><app-icon name="close" :size="18" tone="muted" /><button class="option-hitbox" aria-label="关闭输入选项" @click="emit('dismiss')"></button></view>
     </view>
-    <scroll-view direction="vertical" class="options-scroll" :style="{ height: height + 'px' }">
+    <scroll-view direction="vertical" class="options-scroll" :style="{ height: scrollHeight + 'px' }">
       <template v-if="section == 'add'">
         <view class="option-row"><app-icon name="camera" :size="21" /><text class="option-label">拍照</text><button class="option-hitbox" :disabled="!imagesEnabled" aria-label="拍照" @click="emit('action', 'camera')"></button></view>
         <view class="option-row"><app-icon name="photo" :size="21" /><text class="option-label">上传照片</text><button class="option-hitbox" :disabled="!imagesEnabled" aria-label="上传照片" @click="emit('action', 'album')"></button></view>
@@ -39,6 +39,8 @@ import AppIcon from '../app-icon/app-icon.uvue'
 import { ExecutionSettings, ModelOption, SpeedOption, effortLabel } from '../../services/execution-settings.uts'
 const props = defineProps<{ section: string, settings: ExecutionSettings | null, models: ModelOption[], loading: boolean, busy: boolean, error: string, width: number, height: number, imagesEnabled: boolean, filesEnabled: boolean, settingsEnabled: boolean, note: string }>()
 const emit = defineEmits<{ section: [value: string], action: [value: string], select: [key: string, value: string], dismiss: [], retry: [] }>()
+// 新建与已有会话共用紧凑附件菜单，仅为实际显示的说明和同步提示预留高度；小屏继续滚动。
+const scrollHeight = computed((): number => props.section == 'add' ? Math.min(props.height, 4 * 46 + 17 + ((!props.filesEnabled || !props.settingsEnabled) ? 60 : 0) + (props.busy ? 40 : 0)) : props.height)
 const selectedModel = computed((): ModelOption | null => props.models.find((model: ModelOption): boolean => model.id == props.settings?.model) ?? null)
 const currentSpeed = computed((): string => selectedModel.value?.speeds.find((speed: SpeedOption): boolean => speed.id == props.settings?.serviceTier)?.label ?? (props.settings?.serviceTier == '' ? '常速' : props.settings?.serviceTier ?? '常速'))
 // 模板使用页面方法转发，兼容原生端对导入函数的引用限制。
