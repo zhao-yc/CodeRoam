@@ -49,6 +49,8 @@ node apps/bridge/cli.mjs --config .local/bridge.json
 & $env:HBX_CLI publish web --project "$PWD/apps/mobile" --webTitle '掌上 Codex'
 ```
 
+日常开发、运行和重新打包复用固定的 `apps/mobile` 工程。只有需要隔离验证或私有配置时才创建临时工程；用完后停止对应任务，从 HBuilderX 项目列表移除临时工程，并清理临时源码目录。清理前确认目录已不再使用，必要产物和私有文件已妥善保存。
+
 `HBX_CLI` 指向自己的 HBuilderX CLI。原生构建前，将示例包名 `org.example.codexmobile` 替换为自己的包名。签名和打包说明见 [Android 模板](native/android/README.md)。
 
 ## 安全与隐私
