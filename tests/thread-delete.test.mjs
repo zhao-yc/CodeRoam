@@ -5,7 +5,7 @@ import { deleteThread } from '../apps/bridge/thread-delete.mjs';
 import { DesktopDeleteController } from '../apps/bridge/desktop-delete.mjs';
 import { BridgeAgent } from '../apps/bridge/agent.mjs';
 import { Journal } from '../apps/bridge/journal.mjs';
-import { validateRequest, WRITE_METHODS } from '../packages/protocol/contracts.mjs';
+import { BridgeError, validateRequest, WRITE_METHODS } from '../packages/protocol/contracts.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,7 +24,7 @@ function fixture({ running = false, stopFails = false, lost = false } = {}) {
   adapter.operate = async (method, params) => { calls.push(method + ':' + params.threadId); if (stopFails) throw new Error('停止失败'); const state = adapter.conversations.get(params.threadId).state; state.activeTurnId = ''; state.status = 'idle'; state.approvals = []; state.questionGroups = []; };
   adapter.unwatch = (id, device) => { const entry = adapter.conversations.get(id); entry?.watchers.delete(device); if (entry && !entry.watchers.size) adapter.conversations.delete(id); };
   adapter.close = () => {};
-  const controller = { async delete(_params, verify) { calls.push('prepare'); await verify(); calls.push('delete'); removed = true; if (lost) throw new Error('连接中断'); } };
+  const controller = { async delete(_params, verify) { calls.push('prepare'); await verify(); calls.push('delete'); removed = true; if (lost) throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '连接中断', true); } };
   return { adapter, controller, calls, tree };
 }
 
@@ -52,6 +52,21 @@ test('原生确认框准备期间关联范围变化时不提交删除', async ()
   await assert.rejects(deleteThread(f.adapter, f.controller, 'root', 'phone'), { code: 'THREAD_CHANGED' }); assert.equal(f.calls.includes('delete'), false);
 });
 
+test('最终回读之后原桌面取消确认框仍为明确失败，不虚报删除结果未知', async () => {
+  const f = fixture(); let prepared = false;
+  f.controller.delete = async (_params, verify) => { await verify(); prepared = true; throw new BridgeError('DELETE_TARGET_CHANGED', '原桌面确认框已取消，对话尚未删除'); };
+  await assert.rejects(deleteThread(f.adapter, f.controller, 'root', 'phone'), { code: 'DELETE_TARGET_CHANGED', outcomeUnknown: false });
+  assert.equal(prepared, true); assert.equal(f.calls.includes('delete'), false);
+});
+
+test('提交表达式明确回报目标已变化时不保留未知删除状态', async () => {
+  let verified = false;
+  const page = { close() {}, async step(phase) { if (phase === 'inspect') return { target: true, matched: true, ready: true, dialog: true }; return { state: phase === 'open' ? 'opened' : 'changed' }; } };
+  const controller = new DesktopDeleteController({ platform: 'win32', discover: async () => [{ pid: 42, port: 1234 }], fetcher: async () => ({ ok: true, text: async () => JSON.stringify([{ id: 'synthetic', type: 'page', url: 'app://-/index.html' }]) }), openPage: async () => page });
+  await assert.rejects(controller.delete({ threadId: 'root', hostId: 'local', commandId: 'synthetic-command', deadline: Date.now() + 5000, native: { processId: 42, navigate: async () => {} } }, async () => { verified = true; }), { code: 'DELETE_TARGET_CHANGED', outcomeUnknown: false });
+  assert.equal(verified, true);
+});
+
 test('提交后断线与部分删除均保留未知结果，不能登记成功', async () => {
   for (const partial of [false, true]) {
     const f = fixture({ lost: !partial }); let checkpointed = false;
@@ -72,7 +87,6 @@ test('重复请求由账本去重，原命令可恢复成功回执', async t => 
 test('桌面控制绑定同一原生进程，提交前回读失败不会点击删除', async () => {
   const steps = [], page = { close() {}, async step(phase) { steps.push(phase); if (phase === 'inspect') return { target: true, dialog: true, matched: true, ready: true }; return { state: phase === 'open' ? 'opened' : 'submitted' }; } };
   const controller = new DesktopDeleteController({ platform: 'win32', discover: async () => [{ pid: 42, port: 1234 }], fetcher: async () => ({ ok: true, text: async () => JSON.stringify([{ id: 'synthetic', type: 'page', url: 'app://-/index.html' }]) }), openPage: async url => { assert.equal(url, 'ws://127.0.0.1:1234/devtools/page/synthetic'); return page; } });
-  controller.selectMenu = async pid => assert.equal(pid, 42);
   await assert.rejects(controller.delete({ threadId: 'root', hostId: 'local', commandId: 'command', deadline: Date.now() + 5000, native: { processId: 42, navigate: async () => {} } }, async () => { throw new Error('状态变化'); }), { code: 'DELETE_UNAVAILABLE' });
   assert.equal(steps.includes('commit'), false); assert.equal(steps.at(-1), 'cancel');
 });

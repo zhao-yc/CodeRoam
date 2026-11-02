@@ -67,7 +67,9 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
       // 在真正删除前保存范围；进程中断后仍能只读核对全部目标是否已消失。
       checkpoint({ deletionPending: true, threadId, deletedThreadIds: ids });
     };
-    await controller.delete({ threadId, hostId: owner.hostId, commandId, deadline, native: adapter.native }, async () => { await verify(); committed = true; });
+    // 控制器负责区分“尚未点击”与“提交后未知”；仅保存核对范围不代表删除已经发生。
+    await controller.delete({ threadId, hostId: owner.hostId, commandId, deadline, native: adapter.native }, verify);
+    committed = true;
     if (adapter.index.existingThreadIds(ids).length) throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '删除尚未全部确认，请核对原操作结果，勿重复提交', true);
     const result = { threadId, deleted: true, deletedThreadIds: ids };
     checkpoint(result);

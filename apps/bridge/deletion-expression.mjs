@@ -22,6 +22,20 @@ function desktopDeletionStep(phase, expectedHost, expectedThread, commandId) {
     return pairs.length > 0 && pairs.every(([host, thread]) => host === expectedHost && thread === expectedThread);
   };
   const targetRows = () => [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')].filter(matchesRow);
+  /** 菜单必须来自该行已绑定正式编号的组件，不能调用共享容器或其他会话的动作。 */
+  const rowMenu = row => {
+    const rowId = row.getAttribute('data-app-action-sidebar-thread-id');
+    let fiber = row[Object.keys(row).find(name => name.startsWith('__reactFiber$'))], bound = false;
+    for (let depth = 0; fiber && depth < 24; depth++, fiber = fiber.return) {
+      const props = fiber.memoizedProps, attributes = props?.dataAttributes;
+      if (attributes?.['data-app-action-sidebar-thread-id'] === rowId && attributes['data-app-action-sidebar-thread-host-id'] === expectedHost && typeof props.conversationId === 'string' && typeof props.hostId === 'string') {
+        if (props.conversationId !== expectedThread || props.hostId !== expectedHost) return null;
+        bound = true;
+      }
+      if (typeof props?.getItems === 'function') return bound ? props.getItems : null;
+    }
+    return null;
+  };
   const targetDialog = () => {
     if (dialogs.length !== 1) return null;
     const dialog = dialogs[0], pairs = [];
@@ -51,15 +65,26 @@ function desktopDeletionStep(phase, expectedHost, expectedThread, commandId) {
     const rows = targetRows().filter(rendered);
     if (!rows.length) return { state: 'missing' };
     const row = rows.find(visible) ?? rows[0]; row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    // 滚动后再次核对身份与命中节点，防止列表复用 DOM 或目标被其他内容遮挡。
+    // 滚动后再次核对身份，原桌面菜单动作始终绑定明确会话，不依赖鼠标坐标或标题。
     if (!matchesRow(row) || !visible(row)) return { state: 'changed' };
-    const rect = row.getBoundingClientRect();
-    const x = rect.left + Math.min(64, rect.width / 2), y = rect.top + rect.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    if (!hit || !row.contains(hit)) return { state: 'covered' };
-    window[key] = { host: expectedHost, thread: expectedThread, commandId, submitted: false };
-    // 返回刚核对节点的坐标；控制器以原生鼠标事件打开菜单，避免脚本事件被桌面忽略。
-    return { state: 'ready', x, y };
+    const getItems = rowMenu(row);
+    if (!getItems || window[key]) return { state: 'unavailable' };
+    const guard = { host: expectedHost, thread: expectedThread, commandId, submitted: false };
+    window[key] = guard;
+    return (async () => {
+      try {
+        const items = await getItems();
+        if (window[key] !== guard || !matchesRow(row) || rowMenu(row) !== getItems || !rendered(row)) return { state: 'changed' };
+        if ([...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(visible)) return { state: 'blocked' };
+        const actions = Array.isArray(items) ? items.filter(item => item?.id === 'delete-thread') : [];
+        if (actions.length !== 1) return { state: 'unavailable' };
+        const action = actions[0];
+        // 原动作声明为打开确认框；拒绝同名、禁用、批量或不兼容的菜单定义。
+        if (action.message?.id !== 'sidebarElectron.deleteThread' || action.selectAfterClose !== true || action.enabled === false || action.disabled === true || typeof action.onSelect !== 'function') return { state: 'unavailable' };
+        action.onSelect();
+        return { state: 'opened' };
+      } catch { return { state: 'unavailable' }; }
+    })();
   }
   const guard = window[key];
   if (!guard || guard.host !== expectedHost || guard.thread !== expectedThread || guard.commandId !== commandId) return { state: 'changed' };
