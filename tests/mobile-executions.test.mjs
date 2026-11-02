@@ -82,7 +82,7 @@ test('页面打开列表暂停跟随，详情关闭不收起列表，同步裁�
   const page=context.subject;
   // 短内容及触摸后仍在底部时隐藏按钮，离开底部才显示。
   page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,true);
-  page.beginTimelineTouch();page.endTimelineTouch();assert.equal(page.atTimelineBottom.value,true);assert.equal(page.following.value,true);
+  page.beginTimelineTouch();page.endTimelineTouch();assert.equal(page.atTimelineBottom.value,true);assert.equal(page.following.value,false);
   bottom=900;page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,false);
   bottom=720;page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,true);
   page.toggleExecutions(page.timeline.value[0]);

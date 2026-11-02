@@ -5,15 +5,17 @@
   </view>
 </template>
 <script setup lang="uts">
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onUnmounted } from 'vue'
 import { bridge } from '../../services/bridge.uts'
 const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, count?: number, large?: boolean }>()
-const emit = defineEmits<{ (event: 'layout'): void }>()
+const emit = defineEmits<{ (event: 'beforelayout'): void, (event: 'layout'): void }>()
 const sources = ref<string[]>([])
 const error = ref('')
 let loading = false
 let requestVersion = 0
 let alive = true
+// 占位、错误提示和缩略图替换均通知父页；图片解码完成沿用同一位置保持链。
+function beforeImageLayout() { emit('beforelayout'); nextTick(() => { if (alive) emit('layout') }) }
 // 大图按片读取，避免设计稿超过中转单条消息上限；离页或断线立即停止后续请求。
 async function loadLargeImages(version: number): Promise<string[]> {
   const images: string[] = []
@@ -69,6 +71,8 @@ watch((): boolean => props.connected, (connected: boolean) => {
   requestVersion++; loading = false
   if (connected && sources.value.length == 0) loadImages()
 })
+watch(sources, () => { beforeImageLayout() }, { flush: 'pre' })
+watch(error, () => { beforeImageLayout() }, { flush: 'pre' })
 onUnmounted(() => { alive = false; requestVersion++ })
 </script>
 <style>

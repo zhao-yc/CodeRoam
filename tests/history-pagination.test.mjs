@@ -85,6 +85,6 @@ test('页面读取早期历史不覆盖实时状态，重复点击不重复请�
  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={loadOlder,historyPage,loadingHistory,historyError,displayConversation,pageHostId,pageThreadId,following,scrollTarget,beginTimelineTouch,endTimelineTouch};',context);
  const page=context.subject;page.pageHostId.value='pc';page.pageThreadId.value='thread';page.beginTimelineTouch();page.endTimelineTouch();assert.equal(page.following.value,false);assert.equal(page.scrollTarget.value,'');page.loadOlder();page.loadOlder();assert.equal(requests.length,1);assert.equal(requests[0].params.beforeMessageId,'current');
  requests[0].resolve({messages:[message('old')],turns:[],cursor:'cursor',hasMore:true});await Promise.resolve();await Promise.resolve();
- assert.deepEqual(plain(page.displayConversation.value.messages.map(item=>item.id)),['old','current']);assert.equal(connection.snapshot,live);assert.equal(page.following.value,false);assert.equal(page.scrollTarget.value,'message-current');
+ assert.deepEqual(plain(page.displayConversation.value.messages.map(item=>item.id)),['old','current']);assert.equal(connection.snapshot,live);assert.equal(page.following.value,false);assert.equal(page.scrollTarget.value,'');
  page.loadOlder();assert.equal(requests[1].params.before,'cursor');unloads.forEach(callback=>callback());requests[1].resolve({messages:[message('stale')],turns:[],cursor:'',hasMore:false});await Promise.resolve();await Promise.resolve();assert.equal(page.displayConversation.value.messages.some(item=>item.id==='stale'),false);
 });

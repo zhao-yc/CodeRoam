@@ -21,9 +21,9 @@ test('网页链接同步新开标签，隔离opener，不改当前路由；失�
 /** 流式重排直接执行会话页方法，确认锚点、跟随和新手势优先级。 */
 test('Markdown重排保持历史阅读锚点，跟随时到底，新手势取消旧位置恢复',()=>{
   const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
-  const methods=page.slice(page.indexOf('let markdownAnchor ='),page.indexOf('// 历史只补充正文'));
+  const methods=page.slice(page.indexOf('function beginTimelineTouch()'),page.indexOf('// 历史只补充正文'));
   let top=120;const ticks=[],scrolls=[];
-  const context=vm.createContext({following:{value:false},touchingTimeline:false,loadingHistory:{value:false},historyGesture:1,lastScrollTop:240,historyScrollTop:{value:240},layoutUntil:0,timeline:{value:[{id:'a'}]},entryAnchor:entry=>entry.id,isCurrentPage:()=>true,uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{top:100,bottom:700}:{top,bottom:top+50}})},nextTick:callback=>ticks.push(callback),scrollLatest:()=>scrolls.push('latest'),updateTimelinePosition:()=>{},pauseFollowing:()=>{context.following.value=false;}});
+  const context=vm.createContext({following:{value:false},readingFloor:{value:0},hasUnseenBelow:{value:false},atTimelineBottom:{value:false},touchingTimeline:false,loadingHistory:{value:false},historyGesture:1,lastScrollTop:240,historyScrollTop:{value:240},layoutUntil:0,timeline:{value:[{id:'a'}]},isCurrentPage:()=>true,uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{top:100,bottom:700,height:600}:{top,bottom:top+50}})},nextTick:callback=>ticks.push(callback),scrollLatest:()=>scrolls.push('latest'),pauseFollowing:()=>{context.following.value=false;}});
   vm.runInContext(stripTypeScriptTypes(methods,{mode:'transform'})+'\nglobalThis.subject={beforeMarkdownLayout,afterMarkdownLayout,markdownReading};',context);
   const flush=()=>{while(ticks.length)ticks.shift()();},f=context.subject;
   f.beforeMarkdownLayout();top=190;f.afterMarkdownLayout();flush();assert.equal(context.historyScrollTop.value,310);

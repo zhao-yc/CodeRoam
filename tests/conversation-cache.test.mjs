@@ -81,7 +81,9 @@ function pageFixture() {
   const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,refresh};',f.c);
   const p=f.c.page;loads.forEach(fn=>fn({threadId:'thread',title:'列表标题'}));
-  return {...f,p,geometry,connection,calls,watchers,timers,hides,unloads,live:()=>watchers.find(w=>w.source===p.liveConversation).callback()};
+  for(const [id,timer] of timers)if(timer.delay===50){timers.delete(id);timer.fn();}
+  let previous=p.displayConversation.value;
+  return {...f,p,geometry,connection,calls,watchers,timers,hides,unloads,live:()=>{watchers.find(w=>w.source===p.liveConversation).callback();watchers.find(w=>w.source===p.displayConversation).callback(p.displayConversation.value,previous);previous=p.displayConversation.value;}};
 }
 
 test('缓存先于 PC 回执呈现，后台失败保留内容与重试，缓存不能启用发送',()=>{

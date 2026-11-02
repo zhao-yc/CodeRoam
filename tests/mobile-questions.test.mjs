@@ -29,10 +29,11 @@ test('离线、提交中、结果未知和已提交均阻止修改选择与重�
 /** 执行页面实际计算与监听，供问题提醒及状态清理回归共用。 */
 function pageFixture() {
   const watches=[],connection={snapshot:{messages:[],approvals:[],questionGroups:[{id:'answered',state:'answered'},{id:'pending',state:'pending'},{id:'expired',state:'expired'},{id:'other',state:'pending'}],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
-  const context=vm.createContext({connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
+  const context=vm.createContext({setTimeout:()=>0,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
   const pageSource=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
   const source=pageSource.match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pendingQuestionGroups,pendingQuestionCount,expandedQuestionIds,submittedGroupIds,showQuestions,scrollTarget,following,pageVisible};',context);
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pendingQuestionGroups,pendingQuestionCount,expandedQuestionIds,submittedGroupIds,showQuestions,scrollTarget,following,pageVisible,pageHostId,pageThreadId};',context);
+  context.subject.pageHostId.value='pc';context.subject.pageThreadId.value='thread';connection.hostId='pc';
   return {pageSource,page:context.subject,connection,watches,plain:value=>JSON.parse(JSON.stringify(value))};
 }
 

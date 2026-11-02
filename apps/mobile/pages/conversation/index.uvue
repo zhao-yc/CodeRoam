@@ -18,7 +18,8 @@
     <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><button v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome">核对删除结果</button></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
     <view class="timeline-region" @click="dismissGoal">
-      <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch">
+      <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch" @wheel="onTimelineWheel">
+        <view id="timeline-content" class="timeline-content" :style="{ minHeight: readingFloor + 'px' }">
         <!-- 历史提示预留固定高度，骨架出现和移除时不改变现有消息的位置。 -->
         <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的聊天，请再次下拉重试</text><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部聊天</text></view>
         <!-- 首次同步仅替换正文占位，导航、输入区和失败重试继续沿用真实状态。 -->
@@ -26,12 +27,12 @@
         <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得聊天内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步聊天。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
         <view v-for="entry in timeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
-            <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" />
+            <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
             <plan-preview v-if="entry.role == 'assistant' && entry.kind == 'planImplementation'" :source="planSource(entry.id, entry.text)" @open="openPlan(entry.id, entry.text)" />
             <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? pluginMessageText(entry.text) : entry.text }}</text>
-            <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :large="true" @layout="afterMarkdownLayout" />
+            <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
             <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
               <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
               <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
@@ -78,11 +79,13 @@
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
         <message-queue :messages="queuedMessages" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
+        <view id="timeline-message-end" class="content-end"></view>
         <!-- 同步骨架紧跟缓存消息末尾，与聊天内容一起滚动。 -->
         <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
         <view id="timeline-bottom" class="bottom-space"></view>
+        </view>
       </scroll-view>
-      <view v-if="!atTimelineBottom" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing"></button></view>
+      <view v-if="!atTimelineBottom || hasUnseenBelow" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing(true)"></button></view>
     </view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
@@ -270,6 +273,9 @@ let activationRequest = 0
 const actionsVisible = ref(false)
 const following = ref(true)
 const atTimelineBottom = ref(true)
+// 几何位置、跟随意图和未读增量分别维护；只有向下箭头能恢复跟随。
+const hasUnseenBelow = ref(false)
+const readingFloor = ref(0)
 const scrollTarget = ref('')
 const selectedFileReport = ref<FileReport | null>(null)
 const selectedChangedFileId = ref('')
@@ -399,9 +405,18 @@ function restoreConversationCache() {
   if (pageCacheNamespace.value.length == 0) return
   cachedDetail.value = readConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
   const cached = cachedDetail.value
+  if (cached != null) {
+    pauseFollowing()
+    // 缓存首屏仍按原策略定位最新处，此后所有后台刷新只保持阅读位置。
+    nextTick(() => {
+      if (!isCurrentPage() || historyGesture != 0) return
+      scrollTarget.value = 'timeline-bottom'
+      setTimeout(() => { if (isCurrentPage() && historyGesture == 0) { scrollTarget.value = ''; rememberReadingPosition() } }, 50)
+    })
+  }
   if (cached != null && cached.olderMessages.length > 0) historyPage.value = { messages: cached.olderMessages, turns: cached.olderTurns, cursor: '', hasMore: true } as HistoryPage
 }
-watch(liveConversation, () => { beforeMarkdownLayout(); scheduleConversationCache(); nextTick(() => { afterMarkdownLayout() }) })
+watch(liveConversation, () => { scheduleConversationCache() })
 watch(historyPage, () => { scheduleConversationCache() })
 // 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
 watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
@@ -490,7 +505,7 @@ function onComposerConfirm() {
 
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 // 原页面卸载后仍结算提交记录，但异步回执不再修改首页提示或重新同步。
-onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; settingsRequest++; clearTimeout(settingsRetryTimer); bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
+onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; cancelReadingCorrection(); settingsRequest++; clearTimeout(settingsRetryTimer); bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
 function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
 // 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
 function closeComposerMenu() { composerMenu.value = '' }
@@ -630,9 +645,23 @@ function archiveFromMenu() {
 }
 onUnload(() => { hideArchiveLoading() })
 
-// 自动跟随只在靠近底部时保持；手指阅读期间不抢占滚动位置。
-function scrollLatest() { if (touchingTimeline) return; scrollTarget.value = ''; nextTick(() => { if (following.value && !touchingTimeline) scrollTarget.value = 'timeline-bottom' }) }
-function resumeFollowing() { historyFollowRevision++; following.value = true; scrollLatest() }
+// 首次打开沿用自动定位；暂停后只有点击已有向下箭头才重新允许跟随。
+function scrollLatest() {
+  if (!following.value || touchingTimeline) return
+  scrollTarget.value = ''
+  const gesture = historyGesture
+  nextTick(() => {
+    if (!isCurrentPage() || !following.value || touchingTimeline || gesture != historyGesture) return
+    scrollTarget.value = 'timeline-bottom'
+    // 原生滚动和 Web 锚点定位可能晚于 Vue 提交，完成后再测量按钮，迟到测量不能解锁跟随。
+    setTimeout(() => { if (isCurrentPage() && following.value && gesture == historyGesture) { updateTimelinePosition(); rememberReadingPosition() } }, 80)
+  })
+}
+function resumeFollowing(explicit: boolean = false) {
+  // 发送和重试回执只能延续原跟随意图，不能解除缓存浏览或手动阅读的暂停。
+  if (!explicit) { if (following.value) scrollLatest(); return }
+  historyGesture++; historyFollowRevision++; cancelReadingCorrection(); readingFloor.value = 0; hasUnseenBelow.value = false; following.value = true; scrollLatest()
+}
 function pauseFollowing() { following.value = false; scrollTarget.value = '' }
 // 面板不插入时间线，阅读期间暂停自动跟随；关闭时保持原来的消息位置和草稿。
 function openAnnotations(messageId: string) {
@@ -645,47 +674,80 @@ onHide(() => { closeAnnotations() })
 onUnload(() => { closeAnnotations() })
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { closeAnnotations() })
 watch((): boolean => selectedAnnotationId.value.length > 0 && !messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value), (missing: boolean) => { if (missing) closeAnnotations() })
-function beginTimelineTouch() { historyGesture++; touchingTimeline = true; pauseFollowing() }
-// 按底部锚点的实际位置控制按钮；触摸暂停跟随不代表离开底部。
-function updateTimelinePosition() {
+// 新手势先取消待执行的布局补偿，不能让迟到回调抢回滚动位置。
+function beginTimelineTouch() { historyGesture++; touchingTimeline = true; cancelReadingCorrection(); pauseFollowing(); readingFloor.value = 0 }
+function onTimelineWheel() { beginTimelineTouch(); touchingTimeline = false; nextTick(() => { rememberReadingPosition(); updateTimelinePosition(true) }) }
+function entryAnchor(entry: TimelineEntry): string { return 'message-' + entry.id.split(':').join('-') }
+type ReadingAnchor = { id: string, offset: number }
+type ReadingPosition = { anchors: ReadingAnchor[], top: number, gesture: number, height: number, bottom: number }
+let readingPosition: ReadingPosition | null = null
+let pendingReadingPosition: ReadingPosition | null = null
+let readingCorrectionRevision = 0
+let readingCorrectionPending = false
+// 以消息编号和视口偏移保存后续候选；首条被移除时顺延，全部失效则保留滚动距离。
+function captureReadingPosition(entries: TimelineEntry[] = timeline.value): ReadingPosition | null {
   const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
-  const bottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect()
+  if (viewport == null || viewport.height <= 0) return null
+  const anchors = [] as ReadingAnchor[]
+  let visible = false
+  entries.forEach((entry: TimelineEntry) => {
+    const rect = uni.getElementById(entryAnchor(entry))?.getBoundingClientRect()
+    if (rect == null) return
+    if (rect.bottom > viewport.top) visible = true
+    if (visible) anchors.push({ id: entryAnchor(entry), offset: rect.top - viewport.top })
+  })
+  const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect()
+  return { anchors, top: lastScrollTop, gesture: historyGesture, height: viewport.height, bottom: bottom == null ? 0 : bottom.bottom - viewport.top }
+}
+function rememberReadingPosition() { if (!readingCorrectionPending && !touchingTimeline) readingPosition = captureReadingPosition() }
+function cancelReadingCorrection() { readingCorrectionRevision++; readingCorrectionPending = false; pendingReadingPosition = null; readingPosition = null }
+// 底部测量只管理按钮；手动看完可清除提示，永远不改变跟随意图。
+function updateTimelinePosition(userScroll: boolean = false) {
+  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+  const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect() ?? uni.getElementById('timeline-bottom')?.getBoundingClientRect()
   if (viewport == null || bottom == null || viewport.height <= 0) return
   atTimelineBottom.value = bottom.bottom <= viewport.bottom + 36
-  if (atTimelineBottom.value && !touchingTimeline && !loadingHistory.value && Date.now() > layoutUntil) following.value = true
+  if (userScroll && bottom.bottom <= viewport.bottom + 2) hasUnseenBelow.value = false
 }
-function entryAnchor(entry: TimelineEntry): string { return 'message-' + entry.id.split(':').join('-') }
-// 正文重排前记录首个可见消息；阅读历史时恢复锚点，不抢占用户的新手势。
-let markdownAnchor = ''
-let markdownAnchorTop = 0
-let markdownGesture = 0
-let markdownLayoutPending = false
-function beforeMarkdownLayout() {
-  if (following.value || touchingTimeline || loadingHistory.value || markdownLayoutPending) return
-  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
-  if (viewport == null) return
-  const visible = timeline.value.find((entry: TimelineEntry): boolean => (uni.getElementById(entryAnchor(entry))?.getBoundingClientRect().bottom ?? 0) > viewport.top)
-  if (visible == null) return
-  markdownAnchor = entryAnchor(visible); markdownAnchorTop = uni.getElementById(markdownAnchor)?.getBoundingClientRect().top ?? viewport.top
-  markdownGesture = historyGesture; markdownLayoutPending = true
+// 布局前锁住当前有效滚动范围，防止内容缩短时浏览器先强制回弹。
+function beforeMarkdownLayout(entries: TimelineEntry[] = timeline.value) {
+  if (following.value || touchingTimeline || readingCorrectionPending) return
+  pendingReadingPosition = captureReadingPosition(entries) ?? readingPosition
+  if (pendingReadingPosition == null) return
+  readingCorrectionPending = true
+  readingFloor.value = Math.max(readingFloor.value, pendingReadingPosition!.top + pendingReadingPosition!.height)
 }
+// 所有异步布局共用一条补偿链；布局完成后只保留维持原位置所需的最小尾部空间。
 function afterMarkdownLayout() {
+  if (!following.value && !touchingTimeline && !readingCorrectionPending && readingPosition != null) {
+    pendingReadingPosition = readingPosition; readingCorrectionPending = true
+  }
+  const revision = ++readingCorrectionRevision
   nextTick(() => {
-    if (!isCurrentPage()) return
-    if (following.value) { markdownLayoutPending = false; scrollLatest(); return }
-    if (!markdownLayoutPending) { updateTimelinePosition(); return }
-    markdownLayoutPending = false
-    if (touchingTimeline || loadingHistory.value || markdownGesture != historyGesture) return
-    const current = uni.getElementById(markdownAnchor)?.getBoundingClientRect()
-    if (current == null) return
-    const target = Math.max(0, lastScrollTop + current.top - markdownAnchorTop)
-    if (Math.abs(target - lastScrollTop) < 1) return
-    layoutUntil = Date.now() + 350; historyScrollTop.value = -1
-    nextTick(() => { if (isCurrentPage() && !touchingTimeline && markdownGesture == historyGesture) historyScrollTop.value = target })
+    if (!isCurrentPage() || revision != readingCorrectionRevision) return
+    if (following.value) { readingCorrectionPending = false; pendingReadingPosition = null; scrollLatest(); nextTick(() => { updateTimelinePosition(); rememberReadingPosition() }); return }
+    const saved = pendingReadingPosition
+    if (saved == null || touchingTimeline || saved.gesture != historyGesture) { readingCorrectionPending = false; return }
+    const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+    if (viewport == null) { readingCorrectionPending = false; return }
+    const anchor = saved.anchors.find((item: ReadingAnchor): boolean => uni.getElementById(item.id) != null)
+    const rect = anchor == null ? null : uni.getElementById(anchor.id)?.getBoundingClientRect()
+    const target = Math.max(0, rect == null ? saved.top : lastScrollTop + rect.top - viewport.top - anchor!.offset)
+    readingFloor.value = target + viewport.height
+    const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect()
+    const actualBottom = bottom == null ? saved.bottom : bottom.bottom - viewport.top - (target - lastScrollTop)
+    // 骨架与保位空间均位于真实内容之后，不计入新增内容。
+    if (actualBottom > saved.bottom + 2 && bottom != null && bottom.bottom > viewport.bottom + 2) hasUnseenBelow.value = true
+    layoutUntil = Date.now() + 350
+    const finish = () => { if (!isCurrentPage() || revision != readingCorrectionRevision || saved.gesture != historyGesture || touchingTimeline) return; readingCorrectionPending = false; pendingReadingPosition = null; updateTimelinePosition(); rememberReadingPosition() }
+    if (Math.abs(target - lastScrollTop) < 0.5) { finish(); return }
+    // 属性可能与上一次补偿相同，先写当前实际位置，不使用 -1 造成无意义的上下滚动。
+    historyScrollTop.value = lastScrollTop
+    nextTick(() => { if (!isCurrentPage() || revision != readingCorrectionRevision || touchingTimeline || saved.gesture != historyGesture) return; lastScrollTop = target; historyScrollTop.value = target; nextTick(finish) })
   })
 }
 // 代码和表格横向阅读期间暂停纵向跟随，结束后保留阅读位置。
-function markdownReading(active: boolean) { if (active) { historyGesture++; pauseFollowing() }; touchingTimeline = active }
+function markdownReading(active: boolean) { if (active) beginTimelineTouch(); else { touchingTimeline = false; rememberReadingPosition() } }
 // 历史只补充正文；响应时合并最新内容，不把请求期间的实时消息覆盖回旧快照。
 function readOlderPage(request: number, preserveFollowing: boolean, remaining: number) {
   const base = displayConversation.value
@@ -699,13 +761,7 @@ function readOlderPage(request: number, preserveFollowing: boolean, remaining: n
     if (page == null || page.messages == null || page.turns == null || (page.hasMore && (page.cursor.length == 0 || page.cursor == cursor))) { historyError.value = '历史游标未推进'; loadingHistory.value = false; return }
     const current = displayConversation.value ?? base
     const added = page.messages.some((message: ChatMessage): boolean => !current.messages.some((item: ChatMessage): boolean => item.id == message.id))
-    const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
-    let anchor = timeline.value.length > 0 ? entryAnchor(timeline.value[0]) : ''
-    if (viewport != null) {
-      const visible = timeline.value.find((entry: TimelineEntry): boolean => (uni.getElementById(entryAnchor(entry))?.getBoundingClientRect().bottom ?? 0) > viewport.top)
-      if (visible != null) anchor = entryAnchor(visible)
-    }
-    const before = anchor.length > 0 ? uni.getElementById(anchor)?.getBoundingClientRect() : null
+    beforeMarkdownLayout()
     const merged = conversationWithHistory(current, page)!
     historyPage.value = { messages: merged.messages, turns: merged.turns ?? [], cursor: page.cursor, hasMore: page.hasMore } as HistoryPage
     if (!added && page.hasMore) {
@@ -716,16 +772,7 @@ function readOlderPage(request: number, preserveFollowing: boolean, remaining: n
     nextTick(() => {
       if (request != historyRequest || !isCurrentPage()) return
       if ((preserveFollowing && following.value) || followRevision != historyFollowRevision) { scrollLatest(); return }
-      if (!added || anchor.length == 0) return
-      following.value = false; scrollTarget.value = ''
-      const after = uni.getElementById(anchor)?.getBoundingClientRect()
-      if (before != null && after != null) {
-        const targetTop = Math.max(0, lastScrollTop + after.top - before.top)
-        // 用户滚回顶部后，下一页可能需要相同偏移；先改变属性，确保原生和 Web 都执行恢复。
-        historyScrollTop.value = -1
-        nextTick(() => { if (request == historyRequest && isCurrentPage()) historyScrollTop.value = targetTop })
-      }
-      else scrollTarget.value = anchor
+      afterMarkdownLayout()
     })
   }, (error: Error) => { if (request == historyRequest && isCurrentPage()) { loadingHistory.value = false; historyError.value = error.message } })
 }
@@ -745,37 +792,57 @@ function onHistoryTop() {
 }
 // 短会话没有可滚动距离，首个稳定布局自动检查一次，不关闭跟随最新消息。
 function checkShortHistory() {
-  if (initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
+  if (!following.value || initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
   const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
   const bottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect()
   if (viewport == null || bottom == null || viewport.height <= 0) return
   initialHistoryChecked = true
   if (bottom.bottom <= viewport.bottom + 1) { lastHistoryGesture = historyGesture; loadOlder(true) }
 }
-function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); updateTimelinePosition(); if (following.value) scrollLatest() }
+function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); rememberReadingPosition(); updateTimelinePosition(true) }
 // 内层列表结束触摸不恢复自动跟随，避免新输出打断阅读。
-function beginExecutionTouch() { pauseFollowing(); touchingTimeline = true }
-function endExecutionTouch() { touchingTimeline = false }
+function beginExecutionTouch() { beginTimelineTouch() }
+function endExecutionTouch() { touchingTimeline = false; rememberReadingPosition() }
 function onTimelineScroll(event: UniScrollEvent) {
   const top = event.detail.scrollTop
   const element = uni.getElementById('conversation-timeline')
   const height = element?.getBoundingClientRect().height ?? 0
-  updateTimelinePosition()
-  if (height > 0 && Date.now() > layoutUntil) {
-    const nearBottom = event.detail.scrollHeight - top - height <= 36
-    if (nearBottom && !touchingTimeline) { following.value = true }
-    else if (top < lastScrollTop - 6 || touchingTimeline) pauseFollowing()
-  }
-  if (!touchingTimeline && lastScrollTop > 60 && top <= 60) historyGesture++
+  if (height > 0 && Date.now() > layoutUntil && (top < lastScrollTop - 6 || touchingTimeline)) pauseFollowing()
+  if (!touchingTimeline && lastScrollTop > 60 && top <= 60 && Date.now() > layoutUntil) historyGesture++
   lastScrollTop = top
+  updateTimelinePosition(touchingTimeline || !readingCorrectionPending && Date.now() > layoutUntil)
+  rememberReadingPosition()
   if (top <= 60 && !following.value) onHistoryTop()
 }
-// 新输出后重新测量，短会话无滚动事件时也能隐藏按钮。
-watch((): string => (displayConversation.value?.messages ?? []).map((message: ChatMessage): string => message.id + ':' + message.text).join('\n'), (_current: string, _previous: string) => { if (following.value) scrollLatest(); nextTick(() => { updateTimelinePosition(); checkShortHistory() }) })
-watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
+// 在 Vue 更新 DOM 前记录旧消息几何；相同正文只做测量，不设置新增提示。
+watch(displayConversation, (current: Conversation | null, previous: Conversation | null) => {
+  if (!following.value && previous != null && current != null) {
+    const oldEntries = reportTimeline(previous, expandedReportIds.value)
+    // 缓存中已可见的过程在轮次变为完成后继续展开，不让实时快照自动收起。
+    reportTimeline(current, [] as string[]).forEach((entry: TimelineEntry) => {
+      if (entry.role == 'process' && expandedReportIds.value.indexOf(entry.id) < 0 && !oldEntries.some((old: TimelineEntry): boolean => old.id == entry.id) && oldEntries.some((old: TimelineEntry): boolean => old.turnId == entry.turnId && old.role != 'user' && old.role != 'process' && current.messages.some((message: ChatMessage): boolean => message.id == old.id && message.phase == 'commentary'))) expandedReportIds.value.push(entry.id)
+    })
+  }
+  beforeMarkdownLayout(previous == null ? timeline.value : reportTimeline(previous, expandedReportIds.value))
+  if (!following.value && current != null && previous != null) {
+    const oldIds = previous.messages.map((message: ChatMessage): string => message.id)
+    const firstRetained = current.messages.findIndex((message: ChatMessage): boolean => oldIds.indexOf(message.id) >= 0)
+    const increased = current.messages.filter((message: ChatMessage, index: number): boolean => {
+      const old = previous.messages.find((item: ChatMessage): boolean => item.id == message.id)
+      return old == null ? firstRetained >= 0 && index > firstRetained : message.text.length > old.text.length || (message.imageCount ?? 0) > (old.imageCount ?? 0)
+    })
+    if (increased.length > 0) { const gesture = historyGesture; nextTick(() => {
+      if (!isCurrentPage() || gesture != historyGesture || following.value) return
+      const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+      if (viewport != null && increased.some((message: ChatMessage): boolean => (uni.getElementById('message-' + message.id.split(':').join('-'))?.getBoundingClientRect().bottom ?? 0) > viewport.bottom + 2)) hasUnseenBelow.value = true
+    }) }
+  }
+  afterMarkdownLayout(); nextTick(() => { checkShortHistory() })
+}, { flush: 'pre' })
+watch(cacheRefreshing, () => { beforeMarkdownLayout(); afterMarkdownLayout() }, { flush: 'pre' })
+watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
-  if (following.value) scrollLatest()
   nextTick(() => { updateTimelinePosition() })
   if (connection.snapshot == null) return
   // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
@@ -1360,6 +1427,10 @@ onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(f
 .history-note { font-size: 12px; line-height: 18px; color: #7b827a; text-align: center; }
 .timeline-region { flex: 1; min-height: 0; position: relative; }
 .timeline { flex: 1; min-height: 0; }
+.timeline-content { flex-shrink: 0; }
+/* #ifdef WEB */
+.timeline, .timeline-content { overflow-anchor: none; }
+/* #endif */
 .empty { padding: 90px 26px; }
 .empty-title { color: #202c28; font-size: 20px; }
 .empty-detail { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 12px; }

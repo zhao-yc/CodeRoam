@@ -7,7 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 /** 执行页面实际归档方法，检查弹窗取消、跨页回执和未知结果恢复。 */
 function fixture() {
   const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
-  const methods = source.slice(source.indexOf('// 归档只在原生回执'), source.indexOf('// 自动跟随只在靠近底部'));
+  const methods = source.slice(source.indexOf('// 归档只在原生回执'), source.indexOf('// 首次打开沿用自动定位'));
   const json = value => Object.assign(value, { getString(key) { return this[key] ?? null; }, getBoolean(key) { return this[key] ?? null; } });
   const context = { operationError: { value: '' }, pageHostId: { value: 'pc' }, pageThreadId: { value: 'thread' }, pageVisible: { value: true }, canWrite: { value: true }, busy: { value: false }, pendingAction: { value: '' }, activeTurnId: { value: '' }, approvalCount: { value: 0 }, connection: { connected: true, hostId: 'pc', activeThreadId: 'thread', snapshot: { status: 'idle' }, threads: [{ id: 'thread' }, { id: 'other' }], pendingCommandId: '', error: '', epoch: 'epoch', sequence: 5 }, calls: [], notices: [], returned: 0, draft: '保留的草稿' };
   let modal, respond, reject;
