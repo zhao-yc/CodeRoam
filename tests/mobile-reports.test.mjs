@@ -29,6 +29,15 @@ test('明确完成轮次默认仅保留提问、过程入口和最终报告，�
   assert.match(f.reportTimeline(state,['process:turn:final'])[1].label,/收起执行过程/);
 });
 
+test('生成图片保留在最终回复下方，收起过程不隐藏图片，展开不重复',()=>{
+  const f=fixture(),state=snapshot();
+  state.messages.splice(-1,0,{id:'design',kind:'imageGeneration',role:'assistant',text:'',imageCount:1,turnId:'turn'});
+  const collapsed=f.reportTimeline(state,[]),expanded=f.reportTimeline(state,['process:turn:final']);
+  assert.deepEqual(plain(collapsed.map(entry=>entry.id)),['u','process:turn:final','final','design']);
+  assert.equal(expanded.filter(entry=>entry.id==='design').length,1);
+  assert.equal(expanded.at(-1).imageCount,1);
+});
+
 test('运行、失败、停止、待操作、无报告和旧阶段数据均保持展开，不用末条回复猜报告',()=>{
   const f=fixture();
   const cases=['inProgress','failed','interrupted','unknown'].map(status=>snapshot(status));

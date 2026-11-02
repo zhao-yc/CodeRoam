@@ -32,7 +32,7 @@ export function reportTurnIds(snapshot: Conversation | null): string[] {
     // 分离的同编号片段不能重排合并；缺少阶段的旧回复继续完整展示。
     const first = messages.findIndex((message: ChatMessage): boolean => message.turnId == turn.turnId)
     if (messages.slice(first, first + group.length).some((message: ChatMessage): boolean => message.turnId != turn.turnId)) return
-    if (group.some((message: ChatMessage): boolean => message.role == 'assistant' && message.phase != 'commentary' && message.phase != 'final_answer')) return
+    if (group.some((message: ChatMessage): boolean => message.role == 'assistant' && message.kind != 'imageGeneration' && message.phase != 'commentary' && message.phase != 'final_answer')) return
     let start = 0
     const hasProcess = reportFinalIndexes(group).some((finalIndex: number): boolean => {
       const promptEnd = reportPromptEnd(group, start, finalIndex)
@@ -85,9 +85,11 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
           // 多份报告共享底层轮次总耗时，不能将总耗时冒充每段耗时。
           const duration = finals.length == 1 ? turn?.durationMs ?? null : null
           entries.push({ id: processId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(duration, expanded) })
-          if (expanded) entries.push(...executionTimeline(group.slice(promptEnd, finalIndex)))
+          if (expanded) entries.push(...executionTimeline(group.slice(promptEnd, finalIndex).filter((message: ChatMessage): boolean => message.kind != 'imageGeneration')))
         }
         entries.push(...executionTimeline(group.slice(finalIndex, finalIndex + 1)))
+        // 生成图片属于交付内容，过程收起时仍显示在对应最终回复下方，展开后不重复。
+        entries.push(...executionTimeline(group.slice(promptEnd, finalIndex).filter((message: ChatMessage): boolean => message.kind == 'imageGeneration')))
         start = finalIndex + 1
       })
       // 最终回复之后的新消息尚不属于已完成报告，必须继续完整显示。
