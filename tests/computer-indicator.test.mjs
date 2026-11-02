@@ -7,7 +7,7 @@ import {stripTypeScriptTypes} from 'node:module';
 /** 执行实际首页和列表状态，覆盖跨电脑汇总及实时快照带来的状态变化。 */
 function fixture() {
   const connection = {configured:true, connected:true, configurationRevision:1, hostId:'pc-a', snapshot:null, computers:[{id:'pc-a',label:'合成电脑甲',online:true},{id:'pc-b',label:'合成电脑乙',online:true}]};
-  const context = vm.createContext({connection, liveThreadLists:{updates:[]}, bridge:{}, reactive:value=>value, ref:value=>({value}), computed:fn=>({get value(){return fn();}}), watch:()=>{}, nextTick:fn=>fn(), onShow:()=>{}, onHide:()=>{}, onUnload:()=>{}, onBackPress:()=>{}, uni:{getStorageSync:()=>''}});
+  const context = vm.createContext({connection, liveThreadLists:{updates:[]}, bridge:{}, reactive:value=>value, ref:value=>({value}), computed:fn=>({get value(){return fn();}}), watch:()=>{}, nextTick:fn=>fn(), onShow:()=>{}, onHide:()=>{}, onUnload:()=>{}, onUnmounted:()=>{}, onBackPress:()=>{}, uni:{getStorageSync:()=>''}});
   const bridge = fs.readFileSync('apps/mobile/services/bridge.uts','utf8');
   const states = bridge.slice(bridge.indexOf('export function taskState'),bridge.indexOf('type TextAppend'));
   const list = fs.readFileSync('apps/mobile/services/thread-list.uts','utf8');
