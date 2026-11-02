@@ -78,6 +78,8 @@ test('页面完成后收起一次，手动展开与命令选择跨同步保留�
   const connection={snapshot:snapshot('inProgress'),computers:[],activeThreadId:'thread'};
   const context=vm.createContext({...f,conversationWithHistory:snapshot=>snapshot,executionRecordTitle:f.executionTitle,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},readDraft:()=>'',nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{},setClipboardData:options=>calls.push(options.data)}});
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
+  // 页面展示依赖真实注释解析器，避免新展示字段影响过程折叠回归。
+  vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/annotations.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={timeline,expandedTurnIds,expandedExecutionIds,following,scrollTarget,toggleProcess,toggleExecutions,copyLatestReply};',context);
   const page=context.subject,sync=watches.find(watch=>watch.source===page.timeline).callback;
   page.toggleExecutions(page.timeline.value.find(entry=>entry.role==='execution'));

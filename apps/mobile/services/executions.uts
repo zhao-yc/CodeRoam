@@ -1,6 +1,7 @@
 import { ChatMessage, Conversation, ConversationTurn, Approval, QuestionGroup } from './bridge.uts'
+import type { MessageAnnotation } from './annotations.uts'
 
-export type TimelineEntry = { id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string }
+export type TimelineEntry = { id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[] }
 
 // 只有同一轮的完成状态、报告和过程阶段都明确时，才允许默认隐藏过程。
 export function reportTurnIds(snapshot: Conversation | null): string[] {

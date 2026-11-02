@@ -10,7 +10,7 @@
 - 新建会话、发送文字、图片和附件、执行中追加指令、停止任务。
 - 转发原桌面的审批、问答和目标管理，保留原审批及沙箱边界。
 - 前后台恢复、断线重连、请求去重、未知结果核对和设备授权隔离。
-- Markdown 展示、外部链接、会话名称同步及 Windows 桥接服务托管。
+- Markdown 展示、外部链接、会话名称同步、折叠注释详情及 Windows 桥接服务托管。
 
 ## 环境
 
@@ -55,7 +55,7 @@ node apps/bridge/cli.mjs --config .local/bridge.json
 
 中转能处理明文会话内容，传输使用 TLS，当前没有应用层端到端加密。只使用自己信任的中转。配对令牌不进入 URL 和日志，模型账号凭据留在桌面端。
 
-安全边界与私有报告方式见 [SECURITY.md](SECURITY.md)，贡献要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。不要把真实会话、个人路径、截图、诊断日志或签名文件附到公开 Issue。
+安全边界与私有报告方式见 [SECURITY.md](SECURITY.md)，贡献要求见 [CONTRIBUTING.md](CONTRIBUTING.md)，旧功能迁移与隐私审查结果见 [迁移记录](docs/migration-review.md)。不要把真实会话、个人路径、截图、诊断日志或签名文件附到公开 Issue。
 
 ## 许可证
 

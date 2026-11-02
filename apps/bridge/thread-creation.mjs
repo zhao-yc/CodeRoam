@@ -6,19 +6,33 @@ import { StringDecoder } from 'node:string_decoder';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 
 /** 只使用本机配置或已安装桌面附带的 CLI，手机不能指定程序、命令或工作目录。 */
-export function desktopCodexPath(configuredPath, { platform = process.platform, env = process.env, exists = fs.existsSync, directories = fs.readdirSync } = {}) {
-  for (const candidate of [configuredPath, env.CODEX_CLI_PATH]) if (candidate && path.isAbsolute(candidate) && exists(candidate)) return candidate;
+export function desktopCodexPath(configuredPath, { platform = process.platform, env = process.env, exists = fs.existsSync, directories = fs.readdirSync, stat = fs.statSync } = {}) {
+  const paths = platform === 'win32' ? path.win32 : path;
+  for (const candidate of [configuredPath, env.CODEX_CLI_PATH]) if (typeof candidate === 'string' && paths.isAbsolute(candidate) && exists(candidate)) return candidate;
   if (platform === 'win32') {
-    const root = path.join(env.ProgramFiles ?? 'C:\\Program Files', 'WindowsApps');
+    // 独立用户服务无法枚举 WindowsApps；优先使用桌面已解包到用户目录的同套 CLI。
+    const localData = env.LOCALAPPDATA || paths.join(env.USERPROFILE || os.homedir(), 'AppData', 'Local');
+    if (paths.isAbsolute(localData)) {
+      const cacheRoot = paths.join(localData, 'OpenAI', 'Codex', 'bin');
+      try {
+        const candidates = directories(cacheRoot).filter(name => /^[a-f0-9]{16,64}$/i.test(name)).flatMap(name => {
+          const candidate = paths.join(cacheRoot, name, 'codex.exe');
+          try { const info = stat(candidate); return info.isFile() ? [{ candidate, modified: info.mtimeMs }] : []; }
+          catch { return []; } // 桌面升级清理旧缓存时，继续检查其他完整版本。
+        }).sort((a, b) => b.modified - a.modified || a.candidate.localeCompare(b.candidate));
+        for (const { candidate } of candidates) if (exists(candidate)) return candidate;
+      } catch { /* 尚未解包或缓存不可读时，继续尝试已安装程序。 */ }
+    }
+    const root = paths.join(env.ProgramFiles || 'C:\\Program Files', 'WindowsApps');
     try {
       const installs = directories(root).filter(name => /^OpenAI\.Codex_[\d.]+_x64__/.test(name)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
       for (const name of installs) {
-        const candidate = path.join(root, name, 'app', 'resources', 'codex.exe');
+        const candidate = paths.join(root, name, 'app', 'resources', 'codex.exe');
         if (exists(candidate)) return candidate;
       }
     } catch { /* 无权读取安装目录时，保留明确的能力错误。 */ }
   }
-  throw new BridgeError('CREATION_UNSUPPORTED', '未找到桌面附带的 Codex，请更新电脑连接服务或配置本机 CLI 路径');
+  throw new BridgeError('CREATION_UNSUPPORTED', '未找到可访问的 Codex 程序，请先打开电脑端 Codex，或配置电脑连接服务的本机 CLI 路径');
 }
 
 /** 短连接只读取配置或创建空会话；轮次执行仍交给原桌面所有者。 */

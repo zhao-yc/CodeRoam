@@ -26,6 +26,10 @@
             <markdown-body v-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.text }}</text>
             <message-images v-if="(entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" />
+            <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
+              <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
+              <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
+            </view>
           </template>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
           <template v-else>
@@ -63,6 +67,7 @@
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">会话操作</text><view class="menu-item action-frame"><text class="menu-label">{{ connection.snapshot?.goal != null ? '查看目标' : '新建目标' }}</text><button class="action-hitbox" aria-label="查看或新建目标" @click="showGoal"></button></view><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">会话信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="会话信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档会话"></button></view><view class="menu-item action-frame"><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+    <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
   </view>
 </template>
 
@@ -76,6 +81,8 @@ import { removeArchivedThread } from '../../services/thread-list.uts'
 import { conversationOpeningTitle, conversationDisplayTitle } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
+import { MessageAnnotation, MessagePresentation, presentAnnotatedMessages, parseAnnotationReferences } from '../../services/annotations.uts'
+import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
 import MessageImages from '../../components/message-images/message-images.uvue'
@@ -147,6 +154,7 @@ const following = ref(true)
 const atTimelineBottom = ref(true)
 const scrollTarget = ref('')
 const selectedExecutionId = ref('')
+const selectedAnnotationId = ref('')
 const historyPage = ref<HistoryPage | null>(null)
 const loadingHistory = ref(false)
 const historyError = ref('')
@@ -160,7 +168,17 @@ let historyFollowRevision = 0
 const displayConversation = computed(() => conversationWithHistory(connection.snapshot, historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedTurnIds = ref<string[]>([])
-const timeline = computed((): TimelineEntry[] => reportTimeline(displayConversation.value, expandedTurnIds.value))
+const messagePresentations = computed((): MessagePresentation[] => presentAnnotatedMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
+const selectedAnnotations = computed((): MessageAnnotation[] => messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
+// 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
+const timeline = computed((): TimelineEntry[] => {
+  const entries = reportTimeline(displayConversation.value, expandedTurnIds.value)
+  entries.forEach((entry: TimelineEntry) => {
+    const presentation = messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == entry.id)
+    if (presentation != null) { entry.text = presentation.text; entry.annotations = presentation.annotations }
+  })
+  return entries
+})
 const expandedExecutionIds = ref<string[]>([])
 const expandedQuestionIds = ref<string[]>([])
 const handledApprovalIds = ref<string[]>([])
@@ -252,7 +270,7 @@ onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAliv
 function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
 // 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
 function closeComposerMenu() { composerMenu.value = '' }
-function goBack() { if (composerMenu.value.length > 0) { closeComposerMenu(); return }; uni.hideKeyboard(); if (selectedExecutionId.value.length > 0) { selectedExecutionId.value = ''; return }; if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+function goBack() { if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return }; if (composerMenu.value.length > 0) { closeComposerMenu(); return }; uni.hideKeyboard(); if (selectedExecutionId.value.length > 0) { selectedExecutionId.value = ''; return }; if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
 function closeActions() { actionsVisible.value = false }
 function showActions() { closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
@@ -285,7 +303,7 @@ function tryAutoConnectConversation() {
 // 在方法声明后注册监听，兼容 Android UTS；离线或待核对时保留本次打开意图。
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
-function copyLatestReply() { closeActions(); const messages = connection.snapshot?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(messages[index].text); return } }; notify('还没有可复制的回复') }
+function copyLatestReply() { closeActions(); const messages = connection.snapshot?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(parseAnnotationReferences(messages[index].text).text); return } }; notify('还没有可复制的回复') }
 function showConversationInfo() { closeActions(); uni.showModal({ title: '会话信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (connection.snapshot?.cwd ?? '') + '\n连接：' + connection.status, showCancel: false, confirmText: '知道了' }) }
 
 // 归档只在原生回执确认后移除列表项；草稿继续按原会话编号保留。
@@ -331,6 +349,17 @@ onUnload(() => { hideArchiveLoading() })
 function scrollLatest() { if (touchingTimeline) return; scrollTarget.value = ''; nextTick(() => { if (following.value && !touchingTimeline) scrollTarget.value = 'timeline-bottom' }) }
 function resumeFollowing() { historyFollowRevision++; following.value = true; scrollLatest() }
 function pauseFollowing() { following.value = false; scrollTarget.value = '' }
+// 面板不插入时间线，阅读期间暂停自动跟随；关闭时保持原来的消息位置和草稿。
+function openAnnotations(messageId: string) {
+  if (!messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == messageId && message.annotations.length > 0)) return
+  closeActions(); closeComposerMenu(); dismissGoal(); uni.hideKeyboard()
+  historyGesture++; pauseFollowing(); touchingTimeline = true; selectedAnnotationId.value = messageId
+}
+function closeAnnotations() { if (selectedAnnotationId.value.length == 0) return; selectedAnnotationId.value = ''; touchingTimeline = false }
+onHide(() => { closeAnnotations() })
+onUnload(() => { closeAnnotations() })
+watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { closeAnnotations() })
+watch((): boolean => selectedAnnotationId.value.length > 0 && !messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value), (missing: boolean) => { if (missing) closeAnnotations() })
 function beginTimelineTouch() { historyGesture++; touchingTimeline = true; pauseFollowing() }
 // 按底部锚点的实际位置控制按钮；触摸暂停跟随不代表离开底部。
 function updateTimelinePosition() {
@@ -785,11 +814,17 @@ function operateGoal(action: string, objective: string, revision: string) {
 function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop() }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
-onBackPress((): boolean => { if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
+onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
 </script>
 
 <style>
 /* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
+.annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #cdd6cc; background-color: #f8faf6; flex-direction: row; align-items: center; align-self: flex-start; }
+.annotation-after-text { margin-top: 12px; }
+.annotation-entry-label { font-size: 14px; line-height: 22px; color: #42564a; margin-left: 8px; margin-right: 8px; }
+.annotation-icon { width: 17px; height: 15px; border-width: 1.5px; border-style: solid; border-color: #7b8f81; border-radius: 4px; padding: 3px; }
+.annotation-icon-line { height: 1px; background-color: #7b8f81; margin-bottom: 2px; }
+.annotation-icon-short { width: 5px; }
 .sheet-grip { width: 42px; height: 4px; border-radius: 2px; background-color: #c7cbc1; align-self: center; margin-top: 8px; flex-shrink: 0; }
 .sheet-caption { margin: 0 16px; padding: 8px 12px; color: #b8cec0; font-size: 12px; line-height: 18px; background-color: #202c28; border-top-left-radius: 12px; border-top-right-radius: 12px; flex-shrink: 0; }
 .sheet-note { color: #7b827a; font-size: 12px; line-height: 20px; margin: 6px 16px 0; flex-shrink: 0; }

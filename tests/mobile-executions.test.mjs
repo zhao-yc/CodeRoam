@@ -75,6 +75,8 @@ test('页面打开列表暂停跟随，详情关闭不收起列表，同步裁�
   const connection={snapshot:{messages:[message('c'),message('f','fileChange')],approvals:[],questionGroups:[],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
   const context=vm.createContext({...f,conversationWithHistory:snapshot=>snapshot,executionRecordTitle:f.executionTitle,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},readDraft:()=>'',nextTick:callback=>callback(),uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{height:600,bottom:700}:{bottom}}),getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>calls.push('收起键盘')}});
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
+  // 注释展示与执行记录共用时间线，回归时一并加载真实展示解析器。
+  vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/annotations.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={atTimelineBottom,updateTimelinePosition,beginTimelineTouch,endTimelineTouch,timeline,following,scrollTarget,expandedExecutionIds,selectedExecutionId,selectedExecution,toggleExecutions,toggleExecution,closeExecution,beginExecutionTouch,endExecutionTouch}',context);
   const page=context.subject;
   // 短内容及触摸后仍在底部时隐藏按钮，离开底部才显示。

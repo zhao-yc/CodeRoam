@@ -1,0 +1,134 @@
+import type { ChatMessage } from './bridge.uts'
+
+export type MessageAnnotation = { index: number, text: string, comment: string, available: boolean }
+export type MessagePresentation = { messageId: string, text: string, annotations: MessageAnnotation[], referenceIndices: number[] }
+type AnnotationInput = { text?: string, annotation?: string }
+type CodeRange = { start: number, end: number }
+type AnnotationSource = { turnId: string, annotations: MessageAnnotation[] }
+export type AnnotationReferences = { text: string, indices: number[] }
+
+// 跳过围栏、缩进代码和行内代码；只转换正文协议，代码示例和转义字符保持原样。
+function codeRanges(source: string): CodeRange[] {
+  const ranges = [] as CodeRange[]
+  let fenceSymbol = ''
+  let fenceSize = 0
+  let fenceStart = 0
+  let offset = 0
+  const lines = source.split('\n')
+  lines.forEach((line: string) => {
+    const marker = /^(?: {0,3}>[ \t]?)* {0,3}(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?(`{3,}|~{3,})(.*)$/.exec(line)
+    if (fenceSymbol.length > 0) {
+      if (marker != null && marker[1].charAt(0) == fenceSymbol && marker[1].length >= fenceSize && marker[2].trim().length == 0) {
+        ranges.push({ start: fenceStart, end: offset + line.length + 1 })
+        fenceSymbol = ''
+      }
+    } else if (marker != null) {
+      fenceSymbol = marker[1].charAt(0); fenceSize = marker[1].length; fenceStart = offset
+    } else if (/^(?: {4}|\t)/.test(line)) ranges.push({ start: offset, end: offset + line.length + 1 })
+    offset += line.length + 1
+  })
+  if (fenceSymbol.length > 0) ranges.push({ start: fenceStart, end: source.length })
+  // 行内反引号允许跨行，闭合符必须与起始符长度一致。
+  let cursor = 0
+  while (cursor < source.length) {
+    const protectedRange = ranges.find((range: CodeRange): boolean => range.start <= cursor && cursor < range.end)
+    if (protectedRange != null) { cursor = protectedRange.end; continue }
+    if (source.charAt(cursor) == '\\') { cursor += 2; continue }
+    if (source.charAt(cursor) != '`') { cursor++; continue }
+    let size = 1
+    while (source.charAt(cursor + size) == '`') size++
+    let end = cursor + size
+    let found = false
+    while (end < source.length) {
+      if (source.charAt(end) != '`') { end++; continue }
+      let length = 1
+      while (source.charAt(end + length) == '`') length++
+      if (length == size) { found = true; break }
+      end += length
+    }
+    if (found && !ranges.some((range: CodeRange): boolean => range.start < end + size && range.end > cursor)) {
+      ranges.push({ start: cursor, end: end + size }); cursor = end + size
+    } else cursor += size
+  }
+  return ranges.sort((left: CodeRange, right: CodeRange): number => left.start - right.start)
+}
+
+// 包装不完整或字段不合法时整体回退，不跳过数组项，避免改变注释编号。
+export function parseUserAnnotations(source: string): MessagePresentation {
+  const original = { messageId: '', text: source, annotations: [] as MessageAnnotation[], referenceIndices: [] as number[] } as MessagePresentation
+  const header = /^# Response annotations:[ \t]*\r?$/m.exec(source)
+  if (header == null) return original
+  const start = header.index
+  if (codeRanges(source).some((range: CodeRange): boolean => range.start <= start && start < range.end)) return original
+  const tail = source.slice(start + header[0].length)
+  const wrapper = /\n<response-annotations>[ \t]*\r?\n([\s\S]*?)\r?\n<\/response-annotations>[ \t]*\r?\n[ \t\r\n]*## My request:[ \t]*(?:\r?\n|$)/.exec(tail)
+  if (wrapper == null) return original
+  let items: AnnotationInput[] | null = null
+  try { items = JSON.parse<AnnotationInput[]>(wrapper[1]) } catch (_) { return original }
+  if (items == null || !Array.isArray(items) || items.length == 0) return original
+  const annotations = [] as MessageAnnotation[]
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
+    if (item == null || typeof item.text != 'string' || item.text!.trim().length == 0 || (item.annotation != null && typeof item.annotation != 'string')) return original
+    annotations.push({ index: index + 1, text: item.text!, comment: item.annotation ?? '', available: true })
+  }
+  const prefix = source.slice(0, start).trimEnd()
+  const request = tail.slice(wrapper.index + wrapper[0].length).trim()
+  return { messageId: '', text: prefix + (prefix.length > 0 && request.length > 0 ? '\n\n' : '') + request, annotations, referenceIndices: [] as number[] }
+}
+
+// 仅提取完整的正整数编号；流式末尾的协议片段等补全后再显示，结束仍不合法则保留原文。
+export function parseAnnotationReferences(source: string, streaming: boolean = false): AnnotationReferences {
+  if (source.indexOf(':codex-') < 0) return { text: source, indices: [] as number[] }
+  const ranges = codeRanges(source)
+  const indices = [] as number[]
+  const opening = ':codex-annotation{index="'
+  let text = ''
+  let cursor = 0
+  let rangeIndex = 0
+  while (cursor < source.length) {
+    while (rangeIndex < ranges.length && ranges[rangeIndex].end <= cursor) rangeIndex++
+    if (rangeIndex < ranges.length && ranges[rangeIndex].start <= cursor) {
+      text += source.slice(cursor, ranges[rangeIndex].end); cursor = ranges[rangeIndex].end; continue
+    }
+    if (source.charAt(cursor) == '\\') { text += source.slice(cursor, cursor + 2); cursor += 2; continue }
+    if (source.charAt(cursor) == ':') {
+      const rest = source.slice(cursor)
+      const match = /^:codex-annotation\{index="([1-9][0-9]*)"\}/.exec(rest)
+      if (match != null) {
+        const index = Number(match[1])
+        if (Number.isSafeInteger(index)) {
+          if (indices.indexOf(index) < 0) indices.push(index)
+          cursor += match[0].length
+          if (cursor == source.length) text = text.trimEnd()
+          continue
+        }
+      }
+      if (streaming && rest.length >= 7 && (opening.startsWith(rest) || (rest.startsWith(opening) && /^[0-9]*"?$/.test(rest.slice(opening.length))))) { text = text.trimEnd(); break }
+    }
+    text += source.charAt(cursor); cursor++
+  }
+  return { text, indices: indices.sort((left: number, right: number): number => left - right) }
+}
+
+// 在完整合并历史上建立展示模型，过程折叠不影响同轮次注释来源；不修改原消息。
+export function presentAnnotatedMessages(messages: ChatMessage[]): MessagePresentation[] {
+  const sources = [] as AnnotationSource[]
+  return messages.map((message: ChatMessage): MessagePresentation => {
+    if (message.role == 'user') {
+      const parsed = parseUserAnnotations(message.text)
+      parsed.messageId = message.id
+      if (message.turnId.length > 0 && parsed.annotations.length > 0) {
+        const previous = sources.findIndex((entry: AnnotationSource): boolean => entry.turnId == message.turnId)
+        if (previous >= 0) sources.splice(previous, 1)
+        sources.push({ turnId: message.turnId, annotations: parsed.annotations })
+      }
+      return parsed
+    }
+    if (message.role != 'assistant') return { messageId: message.id, text: message.text, annotations: [], referenceIndices: [] }
+    const parsed = parseAnnotationReferences(message.text, ['inProgress', 'in_progress', 'active', 'running'].indexOf(message.status) >= 0)
+    const source = message.turnId.length > 0 ? sources.find((entry: AnnotationSource): boolean => entry.turnId == message.turnId) : null
+    const annotations = parsed.indices.map((index: number): MessageAnnotation => source?.annotations.find((entry: MessageAnnotation): boolean => entry.index == index) ?? { index, text: '', comment: '', available: false } as MessageAnnotation)
+    return { messageId: message.id, text: parsed.text, annotations, referenceIndices: parsed.indices }
+  })
+}
