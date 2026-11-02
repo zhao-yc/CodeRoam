@@ -1,0 +1,144 @@
+import { reactive, watch } from 'vue'
+import { bridge, connection, Computer, PendingCommand } from './bridge.uts'
+import { clearConversationCache } from './conversation-cache.uts'
+import { clearDeletedDrafts } from './composer.uts'
+import { removeDeletedThreads } from './thread-list.uts'
+
+export type DeleteTask = { namespace: string, hostId: string, threadId: string, commandId: string, state: string, error: string, checking: boolean }
+export type DeletedThreads = { hostId: string, ids: string[] }
+type DeleteTaskState = { namespace: string, tasks: DeleteTask[], deleted: DeletedThreads[], revision: number, error: string }
+export const deletionTasks = reactive<DeleteTaskState>({ namespace: '', tasks: [] as DeleteTask[], deleted: [] as DeletedThreads[], revision: 0, error: '' })
+let installed = false
+let foreground = true
+let pollTimer = 0
+let noticeTimer = 0
+const notices = [] as string[]
+
+function storageKey(): string { return 'codex-mobile-delete-tasks-v1-' + deletionTasks.namespace }
+function currentTask(task: DeleteTask): boolean { return task.namespace == connection.cacheNamespace && task.namespace == deletionTasks.namespace && deletionTasks.tasks.some((entry: DeleteTask): boolean => entry === task) }
+function online(task: DeleteTask): boolean { return foreground && connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == task.hostId && computer.online) }
+function saveTasks() { uni.setStorageSync(storageKey(), JSON.stringify(deletionTasks.tasks.map((task: DeleteTask): UTSJSONObject => ({ namespace: task.namespace, hostId: task.hostId, threadId: task.threadId, commandId: task.commandId, state: task.state, error: task.error })))) }
+function saveQuietly() { try { saveTasks() } catch (_) { deletionTasks.error = '无法保存删除任务状态，请检查本地存储，勿重复提交' } }
+
+// 通知属于应用，不绑定即将卸载的详情页；隐藏期间留到恢复后显示一次。
+function showNextNotice() {
+  clearTimeout(noticeTimer)
+  if (!foreground || notices.length == 0) return
+  noticeTimer = setTimeout(() => { if (!foreground) return; uni.showToast({ title: notices.shift()!, icon: 'none', duration: 3000 }); if (notices.length > 0) noticeTimer = setTimeout(() => { showNextNotice() }, 3000) }, 250)
+}
+function queueNotice(message: string) { notices.push(message); if (notices.length == 1) showNextNotice() }
+
+export function deletionTask(hostId: string, threadId: string): DeleteTask | null { return deletionTasks.tasks.find((task: DeleteTask): boolean => task.hostId == hostId && task.threadId == threadId && task.namespace == connection.cacheNamespace) ?? null }
+export function deletionPending(hostId: string, threadId: string): boolean { const task = deletionTask(hostId, threadId); return task != null && task.state != 'failed' }
+export function deletedThread(hostId: string, threadId: string): boolean { return deletionTasks.namespace == connection.cacheNamespace && deletionTasks.deleted.some((entry: DeletedThreads): boolean => entry.hostId == hostId && entry.ids.indexOf(threadId) >= 0) }
+export function deletionLabel(task: DeleteTask): string { return task.state == 'running' ? '删除中' : task.state == 'failed' ? '删除未完成' : '结果待核对' }
+
+// 仅有效的完整成功回执可以清理；原命令保护在应用清理完成后才解除。
+function acceptReceipt(task: DeleteTask, result: UTSJSONObject | null): boolean {
+  if (!currentTask(task) || result?.getBoolean('deleted') != true || result?.getString('threadId') != task.threadId) return false
+  let ids = [] as string[]
+  try { ids = JSON.parse<string[]>(JSON.stringify(result!['deletedThreadIds'])) ?? [] as string[]; if (ids.indexOf(task.threadId) < 0 || ids.some((id: string): boolean => typeof id != 'string' || id.length == 0)) return false } catch (_) { return false }
+  if (!deletedThread(task.hostId, task.threadId)) deletionTasks.deleted.push({ hostId: task.hostId, ids } as DeletedThreads)
+  // 同步通知详情页废弃历史读取和缓存写回，然后清除应用级数据。
+  deletionTasks.revision++
+  clearConversationCache(task.namespace, task.hostId, ids)
+  removeDeletedThreads(task.hostId, ids); clearDeletedDrafts(task.hostId, ids)
+  if (connection.hostId == task.hostId && ids.indexOf(connection.activeThreadId) >= 0) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0; bridge.syncPendingCommand() }
+  bridge.clearCommand(task.commandId, task.hostId)
+  if (bridge.pendingCommand(task.hostId, task.threadId) == task.commandId) { task.state = 'unknown'; task.error = '删除已确认，本地核对记录尚未清除，请检查存储后核对'; saveQuietly(); return true }
+  deletionTasks.tasks = deletionTasks.tasks.filter((entry: DeleteTask): boolean => entry !== task)
+  saveQuietly(); queueNotice('永久删除成功')
+  return true
+}
+
+function unknownTask(task: DeleteTask, message: string) { if (!currentTask(task) || task.state == 'failed') return; task.state = 'unknown'; task.error = message; saveQuietly() }
+function failTask(task: DeleteTask, message: string) {
+  if (!currentTask(task) || task.state == 'failed') return
+  bridge.clearCommand(task.commandId, task.hostId)
+  if (bridge.pendingCommand(task.hostId, task.threadId) == task.commandId) { unknownTask(task, message); return }
+  task.state = 'failed'; task.error = message; saveQuietly(); queueNotice(message)
+}
+
+// 页面只发起一次；此 Promise 与回执清理均由应用服务持有。
+export function startDeletion(hostId: string, threadId: string): boolean {
+  if (!foreground || !connection.connected || connection.hostId != hostId || connection.activeThreadId != threadId || deletionPending(hostId, threadId) || bridge.pendingCommand(hostId, threadId).length > 0) return false
+  if (deletionTasks.namespace.length == 0 || deletionTasks.namespace != connection.cacheNamespace) throw new Error('连接信息尚未恢复，请稍后重试')
+  const task: DeleteTask = { namespace: deletionTasks.namespace, hostId, threadId, commandId: Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2), state: 'running', error: '', checking: false }
+  const previous = deletionTasks.tasks
+  deletionTasks.tasks = previous.filter((entry: DeleteTask): boolean => entry.hostId != hostId || entry.threadId != threadId).concat([task])
+  try { saveTasks() } catch (_) { deletionTasks.tasks = previous; throw new Error('无法保存删除核对信息，请检查本地存储后重试') }
+  // Vue 将数组元素代理化，后续身份校验始终使用公开状态中的同一对象。
+  const active = deletionTask(hostId, threadId)!
+  bridge.submitDeletion(threadId, active.commandId).then((result: UTSJSONObject) => {
+    if (currentTask(active) && !acceptReceipt(active, result)) unknownTask(active, '永久删除回执需要核对，请勿重复提交')
+  }, (error: Error) => {
+    if (!currentTask(active)) return
+    if (bridge.pendingCommand(hostId, threadId) == active.commandId) unknownTask(active, error.message)
+    else failTask(active, error.message)
+  })
+  schedulePoll()
+  return true
+}
+
+// 查询始终发往原电脑；未知或未找到不能解释成“未执行”，也不能补发删除。
+export function checkDeletion(task: DeleteTask) {
+  if (!currentTask(task) || task.checking || task.state == 'failed' || !online(task)) return
+  task.checking = true
+  bridge.readCommandStatus(task.hostId, task.commandId).then((status: UTSJSONObject) => {
+    if (!currentTask(task) || task.state == 'failed') return
+    task.checking = false
+    if (acceptReceipt(task, status['result'] as UTSJSONObject | null)) return
+    const error = status['error'] as UTSJSONObject | null
+    if (status.getString('state') == 'done' && error != null && error.getBoolean('outcomeUnknown') != true) failTask(task, error.getString('message') ?? '删除未完成，聊天已保留')
+    else if (status.getString('state') == 'pending') { task.state = 'running'; task.error = ''; saveQuietly() }
+    else unknownTask(task, '删除结果尚未确认，请核对原操作，勿重复提交')
+    schedulePoll()
+  }, (_: Error) => { if (currentTask(task)) { task.checking = false; unknownTask(task, '暂时无法核对删除结果，恢复连接后会再次核对') } })
+}
+
+function schedulePoll() {
+  clearTimeout(pollTimer)
+  if (!foreground || !deletionTasks.tasks.some((task: DeleteTask): boolean => task.state == 'running' && online(task))) return
+  pollTimer = setTimeout(() => { deletionTasks.tasks.forEach((task: DeleteTask) => { if (task.state == 'running') checkDeletion(task) }); schedulePoll() }, 3000)
+}
+export function dismissDeletion(task: DeleteTask) { if (!currentTask(task) || task.state != 'failed') return; deletionTasks.tasks = deletionTasks.tasks.filter((entry: DeleteTask): boolean => entry !== task); saveQuietly() }
+
+// 刷新恢复只读取原命令；不保存聊天名称、正文、凭据或附件。
+function restoreTasks() {
+  clearTimeout(pollTimer); clearTimeout(noticeTimer); notices.splice(0, notices.length)
+  deletionTasks.namespace = connection.cacheNamespace
+  deletionTasks.tasks = [] as DeleteTask[]; deletionTasks.deleted = [] as DeletedThreads[]; deletionTasks.error = ''
+  if (deletionTasks.namespace.length == 0) return
+  try {
+    const raw = uni.getStorageSync(storageKey()) as string
+    const saved = raw != null && raw.length > 0 ? JSON.parse<DeleteTask[]>(raw) ?? [] as DeleteTask[] : [] as DeleteTask[]
+    deletionTasks.tasks = saved.filter((task: DeleteTask): boolean => task.namespace == deletionTasks.namespace && task.hostId.length > 0 && task.threadId.length > 0 && task.commandId.length >= 16).map((task: DeleteTask): DeleteTask => ({ namespace: task.namespace, hostId: task.hostId, threadId: task.threadId, commandId: task.commandId, state: task.state == 'failed' ? 'failed' : 'unknown', error: task.state == 'failed' ? task.error : '上次删除结果待核对', checking: false }))
+  } catch (_) { deletionTasks.error = '无法读取删除任务，请检查本地存储，勿重复提交' }
+}
+
+function reconcileTasks() {
+  if (!foreground || !connection.connected || deletionTasks.namespace.length == 0) return
+  connection.computers.forEach((computer: Computer) => { bridge.restoreDeletionCommands(computer.id) })
+  // 兼容旧版只保存了原请求编号的待核对记录。
+  connection.pendingCommands.forEach((entry: PendingCommand) => {
+    if (entry.method == 'thread.delete' && (entry.namespace ?? connection.cacheNamespace) == deletionTasks.namespace && deletionTask(entry.hostId, entry.threadId) == null) deletionTasks.tasks.push({ namespace: deletionTasks.namespace, hostId: entry.hostId, threadId: entry.threadId, commandId: entry.id, state: 'unknown', error: '上次删除结果待核对', checking: false } as DeleteTask)
+  })
+  deletionTasks.tasks.forEach((task: DeleteTask) => {
+    if (task.state == 'failed') return
+    try { if (bridge.pendingCommand(task.hostId, task.threadId).length == 0) bridge.rememberCommand(task.commandId, task.hostId, task.threadId, 'thread.delete') } catch (_) { task.error = '无法保存删除保护信息，请检查本地存储' }
+    checkDeletion(task)
+  })
+  saveQuietly()
+}
+
+export function startDeletionTasks() {
+  if (installed) return
+  installed = true
+  watch((): string => connection.cacheNamespace, () => { restoreTasks(); reconcileTasks() }, { immediate: true, flush: 'sync' })
+  watch((): string => connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
+    if (!connection.connected) { clearTimeout(pollTimer); deletionTasks.tasks.forEach((task: DeleteTask) => { task.checking = false; if (task.state == 'running') { task.state = 'unknown'; task.error = '连接已中断，返回后核对删除结果' } }); saveQuietly() }
+    else reconcileTasks()
+  })
+}
+export function resumeDeletionTasks() { foreground = true; reconcileTasks(); showNextNotice() }
+export function backgroundDeletionTasks() { foreground = false; clearTimeout(pollTimer); clearTimeout(noticeTimer) }

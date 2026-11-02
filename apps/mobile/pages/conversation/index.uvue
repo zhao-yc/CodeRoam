@@ -15,7 +15,7 @@
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
     <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><button class="check button-secondary" :disabled="!connection.connected || busy" @click="checkRetryOutcome">核对重试结果</button></view>
-    <view v-if="pendingDeleteCommand.length > 0 && pendingAction != 'delete'" class="notice pending-notice"><text class="notice-text">删除结果尚未确认，请核对原操作，勿重复提交。</text><button class="check button-secondary" :disabled="!connection.connected || busy" @click="checkDeleteOutcome">核对删除结果</button></view>
+    <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><button v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome">核对删除结果</button></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch">
@@ -124,9 +124,9 @@ import { shouldExpandComposer, composerInputHeight } from '../../services/compos
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
 import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, Approval, conversationTaskState } from '../../services/bridge.uts'
-import { removeArchivedThread, removeDeletedThreads } from '../../services/thread-list.uts'
-import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice, queueDeleteSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
-import { clearDeletedDrafts } from '../../services/composer.uts'
+import { removeArchivedThread } from '../../services/thread-list.uts'
+import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
+import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
@@ -341,7 +341,7 @@ let cacheDirty = false
 // 缓存写入受页面、配对和授权共同约束；旧页面不能在清理后重新写回内容。
 function flushConversationCache() {
   clearTimeout(cacheWriteTimer); cacheWriteTimer = 0
-  if (!cacheDirty) return
+  if (!cacheDirty || deletedThread(pageHostId.value, pageThreadId.value)) return
   cacheDirty = false
   const namespace = pageCacheNamespace.value
   if (namespace.length == 0 || namespace != connection.cacheNamespace || !pageAlive || !isCurrentPage() || liveConversation.value == null) return
@@ -494,7 +494,6 @@ function showConversationInfo() { closeActions(); uni.showModal({ title: '聊天
 // 永久删除必须完成两次独立确认；页面变化后旧确认立即失效。
 let deletePromptOpen = false
 let deletePromptRevision = 0
-let deleteLoading = false
 const deleteFinalVisible = ref(false)
 const deleteFinalContent = ref('')
 let deleteFinalAnswer: ((confirmed: boolean) => void) | null = null
@@ -506,33 +505,24 @@ function answerDeleteFinal(confirmed: boolean) {
   const answer = deleteFinalAnswer; deleteFinalAnswer = null; deleteFinalVisible.value = false; deleteFinalContent.value = ''
   if (answer != null) answer(confirmed)
 }
-const pendingDeleteCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.method == 'thread.delete' && entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value)?.id ?? '')
+const pageDeleteTask = computed(() => deletionTask(pageHostId.value, pageThreadId.value))
 function invalidateDeletePrompt() { deletePromptRevision++; deletePromptOpen = false; deleteFinalAnswer = null; deleteFinalVisible.value = false; deleteFinalContent.value = '' }
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.connected, () => { invalidateDeletePrompt() }, { flush: 'sync' })
-function hideDeleteLoading() { if (deleteLoading) { deleteLoading = false; uni.hideLoading() } }
 onHide(() => { invalidateDeletePrompt() })
-onUnload(() => { invalidateDeletePrompt(); hideDeleteLoading() })
+onUnload(() => { invalidateDeletePrompt() })
 
-// 成功回执按原电脑和编号清理；迟到回执不能导航其他页面或清理其他电脑的草稿。
-function acceptDeleteReceipt(hostId: string, threadId: string, receipt: UTSJSONObject | null, commandId: string = ''): boolean {
-  if (receipt?.getBoolean('deleted') != true || receipt?.getString('threadId') != threadId) return false
-  let ids = [] as string[]
-  try { ids = JSON.parse<string[]>(JSON.stringify(receipt!['deletedThreadIds'])) ?? [] as string[] } catch (_) { return false }
-  if (ids.indexOf(threadId) < 0) return false
-  const returnToList = isCurrentPage() && pageVisible.value && pageHostId.value == hostId && pageThreadId.value == threadId
-  if (commandId.length > 0) bridge.clearCommand(commandId, hostId)
-  clearConversationCache(pageCacheNamespace.value, hostId, ids)
+// 应用服务处理回执；详情页只撤掉自己的缓存，并且只导航仍在眼前的删除目标。
+const pageDeletionRevision = computed((): number => deletionTasks.revision)
+watch(pageDeletionRevision, () => {
+  if (!deletedThread(pageHostId.value, pageThreadId.value)) return
+  const returnToList = pageVisible.value && isCurrentPage()
   cachedDetail.value = null; cacheDirty = false; clearTimeout(cacheWriteTimer); cacheWriteTimer = 0
-  removeDeletedThreads(hostId, ids); clearDeletedDrafts(hostId, ids)
-  if (connection.hostId == hostId && ids.indexOf(connection.activeThreadId) >= 0) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0 }
-  if (pageHostId.value == hostId && ids.indexOf(pageThreadId.value) >= 0) { historyRequest++; historyPage.value = null; historyError.value = ''; operationError.value = '' }
+  historyRequest++; historyPage.value = null; historyError.value = ''; operationError.value = ''; invalidateDeletePrompt()
   if (returnToList) {
-    queueDeleteSuccessNotice()
-    if (getCurrentPages().length > 1) uni.navigateBack({ fail: (_) => { consumeDeleteSuccessNotice(); notify('永久删除成功') } })
-    else uni.reLaunch({ url: '/pages/index/index', fail: (_) => { consumeDeleteSuccessNotice(); notify('永久删除成功') } })
+    if (getCurrentPages().length > 1) uni.navigateBack({})
+    else uni.reLaunch({ url: '/pages/index/index' })
   }
-  return true
-}
+}, { flush: 'sync' })
 
 function deleteFromMenu() {
   closeActions()
@@ -546,28 +536,16 @@ function deleteFromMenu() {
     if (!first.confirm || !current()) { finishPrompt(); return }
     showDeleteFinalModal('正在执行的任务会先停止。确认永久删除吗？', (confirmed: boolean) => {
       if (!confirmed || !current()) { finishPrompt(); return }
-      finishPrompt(); busy.value = true; pendingAction.value = 'delete'; operationError.value = ''
-      deleteLoading = true; uni.showLoading({ title: '正在永久删除…', mask: true })
-      bridge.request('thread.delete', { threadId }, true).then((result: UTSJSONObject) => {
-        hideDeleteLoading(); busy.value = false; pendingAction.value = ''
-        if (!acceptDeleteReceipt(hostId, threadId, result) && isCurrentPage()) operationError.value = '永久删除回执需要核对，请勿重复提交'
-      }, (error: Error) => { hideDeleteLoading(); busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { operationError.value = error.message; notify(error.message) } })
+      finishPrompt(); operationError.value = ''
+      try { startDeletion(hostId, threadId) } catch (error) { operationError.value = (error as Error).message; notify(operationError.value) }
     })
   }, fail: (_) => { finishPrompt() } })
 }
 
 // 未知结果只查询原命令状态，不重新提交删除或停止任务。
 function checkDeleteOutcome() {
-  if (!connection.connected || busy.value || pendingDeleteCommand.value.length == 0 || connection.hostId != pageHostId.value) return
-  const hostId = pageHostId.value; const threadId = pageThreadId.value; const commandId = pendingDeleteCommand.value
-  busy.value = true
-  bridge.request('command.status', { commandId }).then((status: UTSJSONObject) => {
-    busy.value = false
-    if (acceptDeleteReceipt(hostId, threadId, status['result'] as UTSJSONObject | null, commandId)) return
-    const error = status['error'] as UTSJSONObject | null
-    if (status.getString('state') == 'done' && error?.getBoolean('outcomeUnknown') != true) { bridge.clearCommand(commandId, hostId); if (isCurrentPage()) operationError.value = error?.getString('message') ?? '删除未完成，聊天已保留' }
-    else if (isCurrentPage()) operationError.value = '永久删除结果仍待核对，请稍后再次核对或查看原桌面，勿重复提交'
-  }, (error: Error) => { busy.value = false; if (isCurrentPage()) operationError.value = error.message })
+  const task = pageDeleteTask.value
+  if (task != null) checkDeletion(task)
 }
 
 // 归档只在原生回执确认后移除列表项；草稿继续按原会话编号保留。

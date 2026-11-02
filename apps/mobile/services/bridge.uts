@@ -45,7 +45,7 @@ type ConversationDelta = { latestTurn?: LatestTurn, supportsTurnRetry?: boolean,
 type ConnectionConfig = { relayUrl: string, token: string, hostId: string, cacheNamespace?: string }
 type SessionTicket = { ticket: string }
 type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string }
-export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string }
+export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string, namespace?: string }
 type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, subscriptionRevision: number, configurationRevision: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
 export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number }
@@ -76,6 +76,7 @@ class MobileBridge {
   listingHost = ''
   listingRevision = 0
   conversationUpdateRevision = 0
+  migrateDeleteCommands = false
 
   restore() {
     // 浏览器禁用存储或缓存损坏时仍可打开应用，不把原始配置写入错误信息。
@@ -110,6 +111,8 @@ class MobileBridge {
     liveThreadLists.updates = [] as ThreadListUpdate[]
     connection.configurationRevision++
     this.config = parsed
+    this.migrateDeleteCommands = !persist
+    connection.pendingCommands = [] as PendingCommand[]
     connection.cacheNamespace = parsed.cacheNamespace ?? ''
     connection.configured = true
     connection.hostId = parsed.hostId
@@ -240,10 +243,7 @@ class MobileBridge {
     try { uni.removeStorageSync('codex-mobile-pending-v2-' + hostId) } catch (_) {}
     try { uni.removeStorageSync('codex-mobile-pending-' + hostId) } catch (_) {}
     // 删除请求与普通消息分开保存，重连和刷新页面不能解除未知删除的保护。
-    try {
-      const saved = JSON.parse<PendingCommand[]>(uni.getStorageSync('codex-mobile-delete-pending-v1-' + hostId) as string) ?? [] as PendingCommand[]
-      saved.forEach((entry: PendingCommand) => { if (entry.method == 'thread.delete' && entry.hostId == hostId && entry.id.length >= 16 && entry.threadId.length > 0 && this.pendingCommand(hostId, entry.threadId).length == 0) connection.pendingCommands.push(entry) })
-    } catch (_) {}
+    this.restoreDeletionCommands(hostId)
     // 重试独立保存身份，刷新和重连只允许核对，不自动重新提交。
     try {
       const saved = JSON.parse<PendingCommand[]>(uni.getStorageSync('codex-mobile-retry-pending-v1-' + hostId) as string) ?? [] as PendingCommand[]
@@ -260,14 +260,31 @@ class MobileBridge {
   syncPendingCommand() { connection.pendingCommandId = this.pendingCommand(connection.hostId, connection.activeThreadId) }
   hasPendingCommands(): boolean { return connection.pendingCommands.length > 0 }
 
+  // 删除核对按配对隔离；只有启动恢复允许迁移旧版未分命名空间的记录。
+  private deletionStorageKey(hostId: string): string { return 'codex-mobile-delete-pending-v1-' + hostId + (connection.cacheNamespace.length > 0 ? ':' + connection.cacheNamespace : '') }
+  restoreDeletionCommands(hostId: string) {
+    try {
+      const key = this.deletionStorageKey(hostId)
+      let raw = uni.getStorageSync(key) as string
+      const legacyKey = 'codex-mobile-delete-pending-v1-' + hostId
+      const legacy = (raw == null || raw.length == 0) && key != legacyKey && this.migrateDeleteCommands
+      if (legacy) raw = uni.getStorageSync(legacyKey) as string
+      const saved = raw != null && raw.length > 0 ? JSON.parse<PendingCommand[]>(raw) ?? [] as PendingCommand[] : [] as PendingCommand[]
+      const valid = saved.filter((entry: PendingCommand): boolean => entry.method == 'thread.delete' && entry.hostId == hostId && entry.id.length >= 16 && entry.threadId.length > 0 && ((entry.namespace ?? connection.cacheNamespace) == connection.cacheNamespace))
+      if (legacy && valid.length > 0) { uni.setStorageSync(key, JSON.stringify(valid)); uni.removeStorageSync(legacyKey) }
+      valid.forEach((entry: PendingCommand) => { if (this.pendingCommand(hostId, entry.threadId).length == 0) connection.pendingCommands.push({ id: entry.id, hostId, threadId: entry.threadId, method: 'thread.delete', namespace: connection.cacheNamespace } as PendingCommand) })
+      this.syncPendingCommand()
+    } catch (_) { connection.error = '无法读取删除核对信息，请检查本地存储' }
+  }
+
   // 普通请求编号仅保存在运行期，永久删除额外持久化，防止刷新后重复提交。
   rememberCommand(id: string, hostId: string = connection.hostId, threadId: string = connection.activeThreadId, method: string = '') {
     const scope = threadId.length > 0 ? threadId : '@new'
     const previous = this.pendingCommand(hostId, scope)
     if (previous.length > 0 && previous != id) throw new Error('此聊天正在提交，请稍后再试')
-    const records = connection.pendingCommands.filter((entry: PendingCommand): boolean => !(entry.hostId == hostId && entry.threadId == scope)).concat([{ id, hostId, threadId: scope, method } as PendingCommand])
+    const records = connection.pendingCommands.filter((entry: PendingCommand): boolean => !(entry.hostId == hostId && entry.threadId == scope)).concat([{ id, hostId, threadId: scope, method, namespace: connection.cacheNamespace } as PendingCommand])
     if (method == 'turn.retry') uni.setStorageSync('codex-mobile-retry-pending-v1-' + hostId, JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'turn.retry')))
-    if (method == 'thread.delete') uni.setStorageSync('codex-mobile-delete-pending-v1-' + hostId, JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'thread.delete')))
+    if (method == 'thread.delete') uni.setStorageSync(this.deletionStorageKey(hostId), JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'thread.delete')))
     connection.pendingCommands = records
     this.syncPendingCommand()
   }
@@ -276,7 +293,7 @@ class MobileBridge {
     const records = connection.pendingCommands.filter((entry: PendingCommand): boolean => !(entry.hostId == hostId && entry.id == id))
     if (records.length == connection.pendingCommands.length) return
     if (connection.pendingCommands.some((entry: PendingCommand): boolean => entry.hostId == hostId && entry.id == id && entry.method == 'thread.delete')) {
-      try { uni.setStorageSync('codex-mobile-delete-pending-v1-' + hostId, JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'thread.delete'))) } catch (_) { return }
+      try { uni.setStorageSync(this.deletionStorageKey(hostId), JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'thread.delete'))) } catch (_) { return }
     }
     if (connection.pendingCommands.some((entry: PendingCommand): boolean => entry.hostId == hostId && entry.id == id && entry.method == 'turn.retry')) {
       try { uni.setStorageSync('codex-mobile-retry-pending-v1-' + hostId, JSON.stringify(records.filter((entry: PendingCommand): boolean => entry.hostId == hostId && entry.method == 'turn.retry'))) } catch (_) { return }
@@ -335,7 +352,8 @@ class MobileBridge {
           if (!valid) { entry.reject(new Error('永久删除回执需要核对，请勿重复提交')); return }
         }
         if (entry.method == 'turn.retry' && (result?.getBoolean('ok') != true || result?.getString('threadId') != entry.threadId)) { entry.reject(new Error('重试回执需要核对，请勿重复提交')); return }
-        if (entry.write) this.clearCommand(id, entry.hostId); entry.resolve(result)
+        // 删除由应用级任务在缓存和草稿清理完成后释放保护。
+        if (entry.write && entry.method != 'thread.delete') this.clearCommand(id, entry.hostId); entry.resolve(result)
       }
     } else if (type == 'event') {
       if (envelope.getString('hostId') != connection.hostId || envelope.getString('threadId') != connection.activeThreadId) return
@@ -386,6 +404,13 @@ class MobileBridge {
     return this.requestForComputer(connection.hostId, method, params, write)
   }
 
+  // 应用级任务先持久化原编号，再发送一次删除；请求参数仍只有 threadId。
+  submitDeletion(threadId: string, commandId: string): Promise<UTSJSONObject> { return this.requestForComputer(connection.hostId, 'thread.delete', { threadId }, true, commandId) }
+  readCommandStatus(hostId: string, commandId: string): Promise<UTSJSONObject> {
+    if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
+    return this.requestForComputer(hostId, 'command.status', { commandId }, false)
+  }
+
   // 菜单查询不切换执行电脑，仅向已授权电脑读取归档列表与账户用量。
   readComputerMenu(hostId: string, params: UTSJSONObject): Promise<UTSJSONObject> {
     if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
@@ -400,7 +425,7 @@ class MobileBridge {
   }
 
   // 通道内部复用回执和超时处理；写请求始终由当前电脑入口发出。
-  private requestForComputer(hostId: string, method: string, params: UTSJSONObject, write: boolean): Promise<UTSJSONObject> {
+  private requestForComputer(hostId: string, method: string, params: UTSJSONObject, write: boolean, commandId: string = ''): Promise<UTSJSONObject> {
     return new Promise<UTSJSONObject>((resolve, reject) => {
       // 历史浏览不能承载执行、停止或审批；后端也会重新核对真实所有者。
       if (write && connection.snapshot?.readOnly == true && params['threadId'] == connection.snapshot?.threadId) { reject(new Error('这条聊天当前仅支持历史浏览，暂不支持发送、停止或审批')); return }
@@ -411,7 +436,7 @@ class MobileBridge {
       if (write && pendingId.length > 0) { reject(new Error('操作正在提交，请稍后再试')); return }
       const socket = this.socket
       if (!connection.connected || socket == null) { reject(new Error('尚未连接电脑')); return }
-      const id = Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2)
+      const id = commandId.length > 0 ? commandId : Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2)
       const timer = setTimeout(() => {
         this.pending.delete(id)
         if (write && method != 'thread.delete' && method != 'turn.retry') this.clearCommand(id, hostId)

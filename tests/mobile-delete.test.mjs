@@ -4,48 +4,110 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 
-/** 执行实际页面删除方法，验证确认顺序及回执归属，不连接真实电脑。 */
-function fixture() {
-  const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
-  const methods = source.slice(source.indexOf('// 永久删除必须完成两次独立确认'), source.indexOf('// 归档只在原生回执'));
-  const ref = value => ({ value }), modals = [], calls = [], cleared = [], removed = [], drafts = [], notices = [], life = {};
-  let resolve, reject;
-  const json = data => ({ ...data, getBoolean: key => data[key], getString: key => data[key] });
-  const c = { ref, pageHostId: ref('pc'), pageThreadId: ref('root'), pageVisible: ref(true), displayTitle: ref('合成对话'), busy: ref(false), pendingAction: ref(''), operationError: ref(''), historyPage: ref({ messages: ['合成历史'] }), historyError: ref(''), historyRequest: 0, archivePromptOpen: false, connection: { connected: true, hostId: 'pc', activeThreadId: 'root', pendingCommands: [], snapshot: { threadId: 'root' }, epoch: 'e', sequence: 1 }, computed: fn => ({ get value() { return fn(); } }), watch: (_read, fn) => { life.change = fn; }, onHide: fn => { life.hide = fn; }, onUnload: fn => { life.unload = fn; }, closeActions() {}, isCurrentPage: () => c.connection.hostId === c.pageHostId.value && c.connection.activeThreadId === c.pageThreadId.value, getCurrentPages: () => [{}, {}], notify: message => notices.push(message), removeDeletedThreads: (host, ids) => removed.push([host, ids]), clearDeletedDrafts: (host, ids) => drafts.push([host, ids]), queueDeleteSuccessNotice: () => notices.push('交接成功提示'), consumeDeleteSuccessNotice() {}, returned: 0 };
-  c.canWrite = { get value() { return !c.busy.value && c.connection.connected && c.connection.pendingCommands.length === 0; } };
-  c.uni = { showModal: options => modals.push(options), showLoading() {}, hideLoading() {}, hideKeyboard() {}, navigateBack: () => { c.returned++; }, reLaunch: () => { c.returned++; } };
-  c.bridge = { request(method, params, write) { calls.push({ method, params, write }); return new Promise((ok, fail) => { resolve = value => ok(json(value)); reject = fail; }); }, clearCommand: (...args) => cleared.push(args) };
-  Object.assign(c, {clearConversationCache(){},pageCacheNamespace:{value:'synthetic-pair'},cachedDetail:{value:null},cacheDirty:false,cacheWriteTimer:0,clearTimeout(){}});
-  vm.runInNewContext(stripTypeScriptTypes(methods, { mode: 'transform' }) + '\nglobalThis.subject={deleteFromMenu,acceptDeleteReceipt,checkDeleteOutcome,answerDeleteFinal,deleteFinalVisible,deleteFinalContent};', c);
-  return { c, ...c.subject, modals, calls, cleared, removed, drafts, notices, life, resolve: value => resolve(value), reject: error => reject(error) };
-}
+const json = data => data == null ? null : ({ ...data, getBoolean: key => data[key], getString: key => data[key] });
+const receipt = () => json({ deleted: true, threadId: 'root', deletedThreadIds: ['root', 'child'] });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-test('删除按钮在归档下方，第二次确认前不发送写请求', async () => {
-  const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8'); assert.ok(source.indexOf('@click="archiveFromMenu"') < source.indexOf('@click="deleteFromMenu"'));
-  const f = fixture(); f.deleteFromMenu(); f.deleteFromMenu(); assert.equal(f.modals.length, 1); assert.equal(f.modals[0].title, '永久删除聊天'); assert.equal(f.calls.length, 0);
-  f.modals[0].success({ confirm: true }); assert.equal(f.modals.length, 1); assert.equal(f.deleteFinalVisible.value, true); assert.equal(f.deleteFinalContent.value, '正在执行的任务会先停止。确认永久删除吗？'); assert.equal(f.calls.length, 0);
-  f.answerDeleteFinal(true); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].method, 'thread.delete'); assert.equal(f.calls[0].write, true); assert.equal(f.removed.length, 0); assert.equal(f.drafts.length, 0);
-  f.resolve({ threadId: 'root', deleted: true, deletedThreadIds: ['root', 'child'] }); await flush();
-  assert.equal(f.c.returned, 1); assert.equal(f.removed[0][0], 'pc'); assert.deepEqual(Array.from(f.removed[0][1]), ['root', 'child']); assert.equal(f.c.historyPage.value, null); assert.equal(f.c.connection.snapshot, null);
+/** 执行实际应用服务和页面方法，不连接真实电脑或删除真实数据。 */
+function fixture(storage = new Map()) {
+  const watches = [], timers = new Map(), calls = [], removed = [], drafts = [], caches = [], notices = [], modals = [], life = {};
+  let nextTimer = 0, flushing = false;
+  function tick() { if (flushing) return; flushing = true; try { for (const w of watches) { const next = w.read(); if (next !== w.last) { const old = w.last; w.last = next; w.callback(next, old); } } } finally { flushing = false; } }
+  const c = {
+    connection: { cacheNamespace: 'synthetic-pair', connected: true, hostId: 'pc', activeThreadId: 'root', pendingCommands: [], computers: [{ id: 'pc', online: true }, { id: 'other', online: true }], snapshot: { threadId: 'root' }, epoch: 'e', sequence: 1 },
+    reactive: value => new Proxy(value, { set(target, key, value) { target[key] = value; tick(); return true; } }),
+    watch(source, callback, options = {}) { const read = typeof source === 'function' ? source : () => source.value; const w = { read, callback, last: read() }; watches.push(w); if (options.immediate) callback(w.last); },
+    setTimeout(fn, delay) { const id = ++nextTimer; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id),
+    uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), showToast: options => notices.push(options.title), showModal: options => modals.push(options), showLoading() { throw new Error('后台删除不能全屏等待'); }, hideKeyboard() {}, navigateBack: () => { c.returned++; }, reLaunch: () => { c.returned++; } },
+    clearConversationCache: (...args) => caches.push(args), clearDeletedDrafts: (...args) => drafts.push(args), removeDeletedThreads: (...args) => removed.push(args),
+    ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }),
+    pageHostId: { value: 'pc' }, pageThreadId: { value: 'root' }, pageVisible: { value: true }, busy: { value: false }, operationError: { value: '' }, archivePromptOpen: false,
+    cachedDetail: { value: null }, cacheDirty: false, cacheWriteTimer: 0, historyRequest: 0, historyPage: { value: { messages: ['合成历史'] } }, historyError: { value: '' },
+    closeActions() {}, notify: message => notices.push(message), onHide: fn => { life.hide = fn; }, onUnload: fn => { life.unload = fn; }, getCurrentPages: () => [{}, {}], returned: 0,
+  };
+  c.isCurrentPage = () => c.connection.hostId === c.pageHostId.value && c.connection.activeThreadId === c.pageThreadId.value;
+  c.canWrite = { get value() { return c.connection.connected && !c.busy.value && !c.connection.pendingCommands.some(e => e.hostId === c.pageHostId.value && e.threadId === c.pageThreadId.value); } };
+  function request(method, hostId, commandId, params) { const call = { method, hostId, commandId, params }; calls.push(call); return new Promise((resolve, reject) => { call.resolve = resolve; call.reject = message => reject(new Error(message)); }); }
+  c.bridge = {
+    pendingCommand: (hostId, threadId) => c.connection.pendingCommands.find(e => e.hostId === hostId && e.threadId === threadId)?.id ?? '',
+    rememberCommand(id, hostId, threadId, method) { if (!this.pendingCommand(hostId, threadId)) c.connection.pendingCommands.push({ id, hostId, threadId, method, namespace: c.connection.cacheNamespace }); },
+    clearCommand(id, hostId) { c.connection.pendingCommands = c.connection.pendingCommands.filter(e => e.id !== id || e.hostId !== hostId); },
+    syncPendingCommand() {}, restoreDeletionCommands() {},
+    submitDeletion(threadId, commandId) { this.rememberCommand(commandId, c.connection.hostId, threadId, 'thread.delete'); return request('thread.delete', c.connection.hostId, commandId, { threadId }); },
+    readCommandStatus: (hostId, commandId) => request('command.status', hostId, commandId, { commandId }),
+  };
+  const context = vm.createContext(c);
+  const service = fs.readFileSync('apps/mobile/services/delete-tasks.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
+  vm.runInContext(stripTypeScriptTypes(service, { mode: 'transform' }) + '\nglobalThis.manager={deletionTasks,startDeletionTasks,startDeletion,checkDeletion,reconcileTasks,backgroundDeletionTasks,resumeDeletionTasks,deletionPending,acceptReceipt};', context);
+  c.manager.startDeletionTasks();
+  const page = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
+  const methods = page.slice(page.indexOf('// 永久删除必须完成两次独立确认'), page.indexOf('// 归档只在原生回执'));
+  vm.runInContext(stripTypeScriptTypes(methods, { mode: 'transform' }) + '\nglobalThis.page={deleteFromMenu,answerDeleteFinal,deleteFinalVisible,deleteFinalContent};', context);
+  return { c, ...c.manager, ...c.page, storage, calls, removed, drafts, caches, notices, modals, life, timers, tick,
+    begin() { c.page.deleteFromMenu(); modals.at(-1).success({ confirm: true }); c.page.answerDeleteFinal(true); return calls.findLast(call => call.method === 'thread.delete'); },
+    runTimer(delay) { const pair = [...timers].find(([, timer]) => timer.delay === delay); assert.ok(pair, `缺少 ${delay}ms 定时器`); timers.delete(pair[0]); pair[1].fn(); },
+  };
+}
+
+test('两次确认后只提交一次，第二层无名称且执行时不锁住页面', async () => {
+  const f = fixture(); f.deleteFromMenu(); f.deleteFromMenu(); assert.equal(f.modals.length, 1); assert.equal(f.calls.length, 0);
+  f.modals[0].success({ confirm: true }); assert.equal(f.deleteFinalContent.value, '正在执行的任务会先停止。确认永久删除吗？');
+  f.answerDeleteFinal(true); f.answerDeleteFinal(true); assert.equal(f.calls.length, 1); assert.equal(f.c.busy.value, false); assert.equal(f.startDeletion('pc', 'root'), false);
+  const persisted = f.storage.get('codex-mobile-delete-tasks-v1-synthetic-pair'); assert.ok(persisted.includes(f.calls[0].commandId)); assert.equal(persisted.includes('合成历史'), false);
+  f.calls[0].resolve(receipt()); await flush(); assert.equal(f.c.returned, 1); assert.equal(f.deletionTasks.tasks.length, 0);
+  f.runTimer(250); assert.deepEqual(f.notices, ['永久删除成功']);
 });
 
-test('取消任一次确认均不停止任务、不删除或清理草稿', () => {
-  for (const stage of [0, 1]) { const f = fixture(); f.deleteFromMenu(); if (stage) f.modals[0].success({ confirm: true }); if (stage == 0) f.modals[0].success({ confirm: false }); else f.answerDeleteFinal(false); assert.equal(f.calls.length, 0); assert.equal(f.drafts.length, 0); assert.equal(f.c.returned, 0); }
+test('任一步取消、切换目标或离开页面后旧确认均不发请求', () => {
+  for (const action of ['first', 'second', 'hide', 'unload', 'host', 'thread']) {
+    const f = fixture(); f.deleteFromMenu();
+    if (action === 'first') f.modals[0].success({ confirm: false });
+    else { f.modals[0].success({ confirm: true }); if (action === 'hide') f.life.hide(); if (action === 'unload') f.life.unload(); if (action === 'host') f.c.connection.hostId = 'other'; if (action === 'thread') f.c.pageThreadId.value = 'other'; f.tick(); f.answerDeleteFinal(action !== 'second'); }
+    assert.equal(f.calls.length, 0); assert.equal(f.drafts.length, 0);
+  }
 });
 
-test('切换电脑、会话或隐藏页面后旧确认失效', () => {
-  for (const change of [f => { f.c.connection.hostId = 'other'; }, f => { f.c.pageThreadId.value = 'other'; }, f => f.life.hide()]) { const f = fixture(); f.deleteFromMenu(); f.modals[0].success({ confirm: true }); change(f); f.answerDeleteFinal(true); assert.equal(f.calls.length, 0); }
+test('返回并打开其他电脑聊天后，成功只清理原目标且不导航', async () => {
+  const f = fixture(), call = f.begin(); f.c.pageVisible.value = false; f.life.hide(); f.life.unload();
+  f.c.connection.hostId = 'other'; f.c.connection.activeThreadId = 'root'; f.c.pageHostId.value = 'other'; f.tick(); call.resolve(receipt()); await flush();
+  assert.equal(f.c.returned, 0); assert.equal(f.c.connection.activeThreadId, 'root'); assert.equal(f.c.historyPage.value.messages[0], '合成历史');
+  assert.equal(f.removed[0][0], 'pc'); assert.deepEqual(Array.from(f.removed[0][1]), ['root', 'child']); assert.equal(f.drafts[0][0], 'pc'); assert.equal(f.caches[0][0], 'synthetic-pair');
+  assert.equal(f.acceptReceipt({ namespace: 'synthetic-pair', hostId: 'pc', threadId: 'root' }, receipt()), false); assert.equal(f.removed.length, 1);
 });
 
-test('失败保留历史与草稿，迟到成功不导航其他页面或清理其他电脑', async () => {
-  const failed = fixture(); failed.deleteFromMenu(); failed.modals[0].success({ confirm: true }); failed.answerDeleteFinal(true); failed.reject(new Error('结果待核对')); await flush(); assert.equal(failed.removed.length, 0); assert.equal(failed.drafts.length, 0); assert.notEqual(failed.c.historyPage.value, null);
-  const late = fixture(); late.deleteFromMenu(); late.modals[0].success({ confirm: true }); late.answerDeleteFinal(true); late.c.connection.hostId = 'other'; late.c.connection.activeThreadId = 'other'; late.c.pageThreadId.value = 'other';
-  late.resolve({ threadId: 'root', deleted: true, deletedThreadIds: ['root'] }); await flush(); assert.equal(late.c.returned, 0); assert.equal(late.c.connection.activeThreadId, 'other'); assert.equal(late.drafts[0][0], 'pc');
+test('明确失败保留历史和草稿，未知结果继续保护原目标', async () => {
+  for (const known of [true, false]) {
+    const f = fixture(), call = f.begin(); if (known) f.c.bridge.clearCommand(call.commandId, call.hostId); call.reject(known ? '停止失败' : '结果需要核对'); await flush();
+    assert.equal(f.deletionTasks.tasks[0].state, known ? 'failed' : 'unknown'); assert.equal(f.deletionPending('pc', 'root'), !known); assert.equal(f.removed.length, 0); assert.equal(f.drafts.length, 0); assert.notEqual(f.c.historyPage.value, null);
+  }
 });
 
-test('未知结果只核对原命令，成功后不重发删除', async () => {
-  const f = fixture(); f.c.connection.pendingCommands = [{ id: 'original-command', hostId: 'pc', threadId: 'root', method: 'thread.delete' }];
-  f.checkDeleteOutcome(); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].method, 'command.status');
-  f.resolve({ state: 'done', result: { threadId: 'root', deleted: true, deletedThreadIds: ['root'], getBoolean: key => key === 'deleted', getString: key => key === 'threadId' ? 'root' : null } }); await flush(); assert.equal(f.c.returned, 1); assert.deepEqual(f.cleared[0], ['original-command', 'pc']);
+test('锁屏断线后向原电脑核对成功，不重放删除或停止', async () => {
+  const f = fixture(), call = f.begin(); f.backgroundDeletionTasks(); f.c.connection.connected = false; f.tick(); call.reject('连接中断'); await flush();
+  f.c.pageVisible.value = false; f.c.connection.hostId = 'other'; f.c.connection.activeThreadId = 'different'; f.resumeDeletionTasks(); f.c.connection.connected = true; f.tick();
+  const check = f.calls.at(-1); assert.equal(check.method, 'command.status'); assert.equal(check.hostId, 'pc'); assert.equal(check.commandId, call.commandId);
+  check.resolve(json({ state: 'done', result: receipt() })); await flush(); assert.equal(f.removed.length, 1); assert.equal(f.c.returned, 0); assert.equal(f.calls.filter(e => e.method === 'thread.delete').length, 1);
+});
+
+test('刷新恢复及目标不在列表时仍保留原编号核对入口', async () => {
+  const first = fixture(), call = first.begin(), reopened = fixture(first.storage);
+  assert.equal(reopened.calls.some(e => e.method === 'thread.delete'), false);
+  const check = reopened.calls.at(-1); assert.equal(check.method, 'command.status'); assert.equal(check.commandId, call.commandId); check.resolve(json({ state: 'not_found' })); await flush();
+  assert.equal(reopened.deletionTasks.tasks[0].state, 'unknown'); assert.equal(reopened.deletionPending('pc', 'root'), true); assert.match(fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8'), /<deletion-task-list/);
+});
+
+test('存储失败不发送，重新配对后旧回执不清理新配对', async () => {
+  const blocked = fixture(); blocked.c.uni.setStorageSync = () => { throw new Error('禁止存储'); }; blocked.begin(); assert.equal(blocked.calls.length, 0); assert.equal(blocked.deletionTasks.tasks.length, 0); assert.match(blocked.c.operationError.value, /无法保存/);
+  const late = fixture(), call = late.begin(); late.c.connection.cacheNamespace = 'new-pair'; late.tick(); call.resolve(receipt()); await flush(); assert.equal(late.removed.length, 0); assert.equal(late.drafts.length, 0); assert.equal(late.c.returned, 0);
+});
+
+test('运行中三秒核对，未知结果停止轮询且不能依据部分回执清理', async () => {
+  const f = fixture(); f.begin(); f.runTimer(3000); const check = f.calls.at(-1); assert.equal(check.method, 'command.status'); check.resolve(json({ state: 'pending' })); await flush();
+  assert.equal(f.deletionTasks.tasks[0].state, 'running'); f.runTimer(3000); f.calls.at(-1).resolve(json({ state: 'unknown', result: json({ deletionPending: true, threadId: 'root', deletedThreadIds: ['root', 'child'] }) })); await flush();
+  assert.equal(f.deletionTasks.tasks[0].state, 'unknown'); assert.equal(f.removed.length, 0); assert.equal([...f.timers.values()].some(timer => timer.delay === 3000), false); assert.equal(f.calls.filter(e => e.method === 'thread.delete').length, 1);
+});
+
+test('旧版待核对记录和多电脑同号聊天各自隔离', async () => {
+  const f = fixture(); f.c.connection.pendingCommands = ['pc', 'other'].map((hostId, i) => ({ hostId, threadId: 'root', id: 'legacy-delete-command-' + i, method: 'thread.delete' })); f.reconcileTasks(); assert.equal(f.deletionTasks.tasks.length, 2); assert.equal(f.calls.length, 2);
+  f.c.pageVisible.value = false; f.calls[0].resolve(json({ state: 'done', result: receipt() })); f.calls[1].resolve(json({ state: 'unknown' })); await flush(); assert.equal(f.deletionPending('pc', 'root'), false); assert.equal(f.deletionPending('other', 'root'), true); assert.equal(f.removed[0][0], 'pc');
 });

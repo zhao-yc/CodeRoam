@@ -84,6 +84,51 @@ test('重复请求由账本去重，原命令可恢复成功回执', async t => 
   assert.equal(f.calls.filter(call => call === 'delete').length, 1); assert.equal(journal.status('phone', request.requestId).result.deleted, true);
 });
 
+test('删除排队时已入账并保留内部订阅，手机退订不取消任务', async t => {
+  const f = fixture(), journal = new Journal(), agent = new BridgeAgent({ config: {}, adapter: f.adapter, journal, deleteController: f.controller });
+  t.after(() => agent.close());
+  let releasePrevious;
+  agent.threadLocks.set('root', new Promise(resolve => { releasePrevious = resolve; }));
+  const request = { v: 1, type: 'request', requestId: 'queued-delete-command', method: 'thread.delete', deviceId: 'phone', params: { threadId: 'root' } };
+  const pending = agent.handleRequest(request);
+  assert.equal(journal.status('phone', request.requestId).state, 'pending');
+  assert.ok([...f.adapter.conversations.get('root').watchers].some(id => id.startsWith('delete:')));
+  f.adapter.unwatch('root', 'phone');
+  releasePrevious();
+  assert.equal((await pending).result?.deleted, true);
+  assert.equal(f.calls.filter(call => call === 'delete').length, 1);
+  assert.equal(f.adapter.conversations.size, 0);
+});
+
+test('执行中手机断开不取消删除，但原桌面身份变化仍中止', async t => {
+  for (const changed of [false, true]) {
+    const f = fixture(), journal = new Journal();
+    const original = f.controller.delete;
+    f.controller.delete = async (params, verify) => {
+      f.adapter.unwatch('root', 'phone');
+      if (changed) f.adapter.conversations.get('root').owner = { clientId: 'different-desktop', hostId: 'local' };
+      return original(params, verify);
+    };
+    const agent = new BridgeAgent({ config: {}, adapter: f.adapter, journal, deleteController: f.controller }); t.after(() => agent.close());
+    const result = await agent.handleRequest({ v: 1, type: 'request', requestId: 'running-delete-command', method: 'thread.delete', deviceId: 'phone', params: { threadId: 'root' } });
+    if (changed) { assert.equal(result.error.code, 'THREAD_CHANGED'); assert.equal(f.calls.includes('delete'), false); }
+    else assert.equal(result.result.deleted, true);
+    assert.equal([...f.adapter.conversations.values()].some(entry => [...entry.watchers].some(id => id.startsWith('delete:'))), false);
+  }
+});
+
+test('后台删除仍要求首次请求已订阅，并拒绝复用原编号更换目标', async t => {
+  const f = fixture(), journal = new Journal(), agent = new BridgeAgent({ config: {}, adapter: f.adapter, journal, deleteController: f.controller }); t.after(() => agent.close());
+  const request = { v: 1, type: 'request', requestId: 'guard-delete-command', method: 'thread.delete', deviceId: 'other-phone', params: { threadId: 'root' } };
+  assert.ok((await agent.handleRequest(request)).error);
+  assert.equal(f.calls.includes('prepare'), false);
+  request.deviceId = 'phone';
+  const pending = agent.handleRequest(request);
+  const changed = await agent.handleRequest({ ...request, params: { threadId: 'child' } });
+  assert.equal(changed.error.code, 'REQUEST_ID_REUSED');
+  assert.equal((await pending).result.deleted, true);
+});
+
 test('桌面控制绑定同一原生进程，提交前回读失败不会点击删除', async () => {
   const steps = [], page = { close() {}, async step(phase) { steps.push(phase); if (phase === 'inspect') return { target: true, dialog: true, matched: true, ready: true }; return { state: phase === 'open' ? 'opened' : 'submitted' }; } };
   const controller = new DesktopDeleteController({ platform: 'win32', discover: async () => [{ pid: 42, port: 1234 }], fetcher: async () => ({ ok: true, text: async () => JSON.stringify([{ id: 'synthetic', type: 'page', url: 'app://-/index.html' }]) }), openPage: async url => { assert.equal(url, 'ws://127.0.0.1:1234/devtools/page/synthetic'); return page; } });

@@ -1,0 +1,29 @@
+<template>
+  <view v-if="deletionTasks.tasks.length > 0 || deletionTasks.error.length > 0" class="delete-tasks">
+    <text v-if="deletionTasks.error.length > 0" class="task-error">{{ deletionTasks.error }}</text>
+    <view v-for="task in deletionTasks.tasks" :key="task.commandId" class="delete-task">
+      <view class="task-copy"><text class="task-title">{{ title(task) }}</text><text class="task-description">{{ computerName(task.hostId) }} · {{ deletionLabel(task) }}{{ task.state == 'running' ? '，可以继续使用其他聊天' : '' }}</text><text v-if="task.error.length > 0" class="task-error">{{ task.error }}</text></view>
+      <button v-if="task.state == 'failed'" class="task-button button-secondary" @click="dismissDeletion(task)">关闭</button>
+      <button v-else class="task-button button-secondary" :disabled="!canCheck(task) || task.checking" @click="checkDeletion(task)">{{ task.checking ? '核对中' : '核对结果' }}</button>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { connection, Computer, ThreadSummary } from '../../services/bridge.uts'
+import { threadList, ComputerThreads } from '../../services/thread-list.uts'
+import { deletionTasks, DeleteTask, deletionLabel, checkDeletion, dismissDeletion } from '../../services/delete-tasks.uts'
+// 名称仅从当前应用列表读取，不随删除任务写入持久存储。
+function title(task: DeleteTask): string { return threadList.computers.find((computer: ComputerThreads): boolean => computer.hostId == task.hostId)?.threads.find((thread: ThreadSummary): boolean => thread.id == task.threadId)?.title ?? '聊天删除任务' }
+function computerName(hostId: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == hostId)?.label ?? '原电脑' }
+function canCheck(task: DeleteTask): boolean { return connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == task.hostId && computer.online) }
+</script>
+
+<style>
+.delete-tasks { margin: 8px 16px; border-radius: 12px; background-color: #fff2e7; padding: 0 12px; flex-shrink: 0; }
+.delete-task { flex-direction: row; align-items: center; padding: 10px 0; }
+.task-copy { flex: 1; min-width: 0; }
+.task-title { font-size: 14px; color: #202c28; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-description, .task-error { font-size: 12px; line-height: 18px; color: #90522f; }
+.task-button { margin: 0 0 0 10px; padding: 0 10px; font-size: 12px; height: 34px; line-height: 34px; flex-shrink: 0; }
+</style>

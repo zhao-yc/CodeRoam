@@ -71,6 +71,7 @@ test('应用级清理保留离线电脑内容，welcome 完成后才核对完整
 /** 执行实际详情页，模拟缓存首屏、最新回执和阅读锚点，不把缓存注入实时快照。 */
 function pageFixture() {
   const f=fixture(),watchers=[],loads=[],hides=[],unloads=[],timers=new Map(),calls=[];let timer=0;
+  f.c.deletedThread=()=>false;
   const connection={configured:true,cacheNamespace:'pair',configurationRevision:1,hostId:'pc',activeThreadId:'thread',snapshot:null,connected:true,error:'',conversationError:'',epoch:'',sequence:0,subscriptionRevision:0,pendingCommandId:'',pendingCommands:[],computers:[{id:'pc',online:true}]};
   f.saveConversationCache('pair','pc',snapshot([message('recent','旧正文')]),{messages:[message('older','更早正文')],turns:[],cursor:'old-cursor',hasMore:false});
   Object.assign(f.c,{connection,ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watchers.push({source,callback}),onLoad:fn=>loads.push(fn),onShow:()=>{},onHide:fn=>hides.push(fn),onUnload:fn=>unloads.push(fn),onResize:()=>{},onBackPress:()=>{},nextTick:fn=>fn(),setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),readDraft:()=>'',bridge:{watch:()=>calls.push('watch'),cancelOpen:()=>{connection.snapshot=null;},resume:()=>calls.push('resume')},reportTimeline:current=>(current?.messages??[]).map(item=>({...item,executions:[],label:''})),taskNotifications:{focusRevision:0},pendingTaskNotice:()=>null,bindImagePaste:()=>()=>{}});

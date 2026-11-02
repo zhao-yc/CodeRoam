@@ -2,10 +2,11 @@
 import { bridge } from './services/bridge.uts'
 import { startConversationCacheLifecycle } from './services/conversation-cache-lifecycle.uts'
 import { startTaskNotifications, resetTaskNotifications } from './services/task-notifications.uts'
+import { startDeletionTasks, resumeDeletionTasks, backgroundDeletionTasks } from './services/delete-tasks.uts'
 export default {
-  onLaunch() { startConversationCacheLifecycle(); startTaskNotifications(); bridge.restore() },
-  onShow() { bridge.resume() },
-  onHide() { resetTaskNotifications(); bridge.background() }
+  onLaunch() { startConversationCacheLifecycle(); startTaskNotifications(); startDeletionTasks(); bridge.restore() },
+  onShow() { resumeDeletionTasks(); bridge.resume() },
+  onHide() { backgroundDeletionTasks(); resetTaskNotifications(); bridge.background() }
 }
 </script>
 

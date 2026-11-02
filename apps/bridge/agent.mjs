@@ -4,14 +4,14 @@ import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { DesktopFileReportReader } from './file-reports.mjs';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
-import { WRITE_METHODS, UPLOAD_METHODS, validateRequest, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
+import { WRITE_METHODS, UPLOAD_METHODS, validateRequest, errorPayload, BridgeError, requestFingerprint } from '../../packages/protocol/contracts.mjs';
 import { conversationUpdate } from './updates.mjs';
 import { computerName } from './computer-name.mjs';
 import { hostname } from 'node:os';
 import { NewThreadService } from './new-thread-service.mjs';
 import { archiveThread } from './thread-archive.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
-import { deleteThread, deletionCommandStatus } from './thread-delete.mjs';
+import { deleteThread, deletionCommandStatus, retainDeletionTarget } from './thread-delete.mjs';
 import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
 import { readAccountUsage } from './account-usage.mjs';
@@ -27,7 +27,7 @@ export class BridgeAgent extends EventEmitter {
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     adapter.pluginCatalog ??= new PluginCatalog({ creation: newThreads.creation, verify: pluginInstanceVerifier(adapter, newThreads.creation) });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();this.fileReports=new DesktopFileReportReader();
-    this.deleteController=deleteController;this.deletingIds=new Set();
+    this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
     adapter.on('conversation',snapshot=>{if(!adapter.conversations||[...adapter.conversations.get(snapshot.threadId)?.watchers??[]].some(id=>id!=='list-status'))this.publish(snapshot);});
@@ -78,6 +78,7 @@ export class BridgeAgent extends EventEmitter {
     try {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
+      let deletionTarget = null;
       const execute=async()=>{
         if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该聊天正在永久删除，请先核对删除结果');
         if(message.method==='turn.send'&&message.params.queueAction) {
@@ -104,7 +105,7 @@ export class BridgeAgent extends EventEmitter {
             try {await Promise.all(ids.filter(id=>id!==message.params.threadId).map(id=>this.threadLocks.get(id)?.catch(()=>{})));return release;}
             catch(error){release();throw error;}
           };
-          const result=await deleteThread(this.adapter,this.deleteController,message.params.threadId,message.deviceId,result=>{this.journal.checkpoint(message.deviceId,message.requestId,result);if(result.deleted===true)this.journal.forgetThreads(result.deletedThreadIds);},message.requestId,lockRelated);
+          const result=await deleteThread(this.adapter,this.deleteController,message.params.threadId,message.deviceId,result=>{this.journal.checkpoint(message.deviceId,message.requestId,result);if(result.deleted===true)this.journal.forgetThreads(result.deletedThreadIds);},message.requestId,lockRelated,deletionTarget);
           this.messageQueue?.forget(result.deletedThreadIds);
           for(const id of result.deletedThreadIds)this.published.delete(id);
           this.threadListFeed.schedule();return result;
@@ -135,6 +136,20 @@ export class BridgeAgent extends EventEmitter {
       };
       if(WRITE_METHODS.has(message.method)) {
         const key=message.method==='thread.create'?'create:'+message.deviceId:message.params.threadId, previous=this.threadLocks.get(key)??Promise.resolve();
+        // 删除先入账并持有目标，再排队；立即返回、退订和断线均不依赖页面存活。
+        if(message.method==='thread.delete') {
+          const requestKey=JSON.stringify([message.deviceId,message.requestId]), fingerprint=requestFingerprint(message.method,message.params);
+          const existing=this.deletionRequests.get(requestKey);
+          if(existing) {
+            if(existing.fingerprint!==fingerprint)throw new BridgeError('REQUEST_ID_REUSED','同一请求编号不能用于不同操作');
+            response.result=await existing.operation;return response;
+          }
+          if(this.journal.status(message.deviceId,message.requestId).state==='not_found') deletionTarget=retainDeletionTarget(this.adapter,message.params.threadId,message.deviceId,message.requestId);
+          const operation=this.journal.execute(message.deviceId,message.requestId,message.method,message.params,()=>previous.catch(()=>{}).then(execute));
+          this.threadLocks.set(key,operation);this.deletionRequests.set(requestKey,{fingerprint,operation});
+          try {response.result=await operation;} finally {deletionTarget?.release();this.deletionRequests.delete(requestKey);if(this.threadLocks.get(key)===operation)this.threadLocks.delete(key);}
+          return response;
+        }
         const operation=previous.catch(()=>{}).then(()=>this.journal.execute(message.deviceId,message.requestId,message.method,message.params,execute));
         this.threadLocks.set(key,operation);
         try { response.result=await operation; } finally {if(this.threadLocks.get(key)===operation)this.threadLocks.delete(key);}

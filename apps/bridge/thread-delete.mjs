@@ -4,15 +4,25 @@ import { BridgeError, requestFingerprint } from '../../packages/protocol/contrac
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const idle = snapshot => snapshot.status === 'idle' && !snapshot.activeTurnId && !snapshot.approvals.length && !snapshot.questionGroups.some(group => group.kind === 'native' && group.state === 'pending');
 
-/** 只停止已核对的原桌面任务；永久删除始终交给原桌面的删除流程。 */
-export async function deleteThread(adapter, controller, threadId, deviceId, checkpoint = () => {}, commandId = randomUUID(), lockRelated = async () => () => {}) {
+/** 接收删除时同步保留已授权目标；页面退订不能撤销已经确认的任务。 */
+export function retainDeletionTarget(adapter, threadId, deviceId, commandId) {
   const entry = adapter.subscribed(threadId, deviceId), owner = { ...entry.owner };
-  const deadline = Date.now() + 50000, watcher = 'delete:' + commandId;
+  const watcher = 'delete:' + commandId + ':' + randomUUID();
+  entry.watchers.add(watcher);
+  let released = false;
+  return { entry, owner, watcher, release() { if (!released) { released = true; adapter.unwatch(threadId, watcher); } } };
+}
+
+/** 只停止已核对的原桌面任务；永久删除始终交给原桌面的删除流程。 */
+export async function deleteThread(adapter, controller, threadId, deviceId, checkpoint = () => {}, commandId = randomUUID(), lockRelated = async () => () => {}, retained = null) {
+  const target = retained ?? retainDeletionTarget(adapter, threadId, deviceId, commandId);
+  const { entry, owner, watcher } = target;
+  const deadline = Date.now() + 50000;
   const observed = new Map(), temporary = new Set();
   let release = () => {}, committed = false;
   const assertTime = () => { if (Date.now() >= deadline) throw new BridgeError('DELETE_TIMEOUT', '删除准备超时，聊天尚未确认删除，请重新核对'); };
   const rootCurrent = () => {
-    const current = adapter.subscribed(threadId, deviceId);
+    const current = adapter.subscribed(threadId, watcher);
     if (current !== entry || current.owner?.clientId !== owner.clientId || current.owner?.hostId !== owner.hostId) throw new BridgeError('THREAD_CHANGED', '聊天连接已变化，已停止删除');
   };
   try {
@@ -81,6 +91,7 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
   } finally {
     for (const id of temporary) adapter.unwatch(id, watcher);
     release();
+    target.release();
   }
 }
 

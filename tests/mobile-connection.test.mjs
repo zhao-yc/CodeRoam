@@ -134,13 +134,31 @@ test('永久删除超时、断线和未知回执保留编号，重连恢复后�
   }
 });
 
-test('永久删除的明确失败和成功回执释放保护，成功状态不会在下次连接恢复',async()=>{
+test('永久删除明确失败释放保护，成功由应用完成清理后释放',async()=>{
   for(const failure of [false,true]){
     const f=connectedFixture(),pending=f.bridge.request('thread.delete',{threadId:'thread'},true),request=f.sent.at(-1);
     respond(f,request,{threadId:'thread',deleted:true,deletedThreadIds:['thread']},failure?{code:'DELETE_STOP_FAILED',message:'停止失败',outcomeUnknown:false}:null);
     if(failure)await assert.rejects(pending,/停止失败/);else assert.equal((await pending).deleted,true);
+    if(!failure){assert.equal(f.bridge.pendingCommand('pc','thread'),request.requestId);f.bridge.clearCommand(request.requestId,'pc');}
     assert.equal(f.bridge.pendingCommand('pc','thread'),'');f.bridge.clearLegacyCommands('pc');assert.equal(f.bridge.pendingCommand('pc','thread'),'');
   }
+});
+
+test('删除状态读取固定原电脑，不改变当前电脑或聊天，越权请求不发送',async()=>{
+  const f=connectedFixture();f.connection.computers=[{id:'pc',online:true},{id:'other',online:true}];
+  const read=f.bridge.readCommandStatus('other','original-delete-command'),request=f.sent.at(-1);
+  assert.equal(request.hostId,'other');assert.equal(request.method,'command.status');assert.equal(f.connection.hostId,'pc');assert.equal(f.connection.activeThreadId,'thread');
+  respond(f,request,{state:'pending'});assert.equal((await read).state,'pending');
+  await assert.rejects(f.bridge.readCommandStatus('untrusted','original-delete-command'),/离线或已取消授权/);assert.equal(f.sent.length,1);
+});
+
+test('删除保护按配对隔离，旧版记录仅在启动恢复时迁移',()=>{
+  const f=connectedFixture();f.connection.cacheNamespace='pair-a';f.bridge.rememberCommand('original-delete-command','pc','thread','thread.delete');
+  assert.ok(f.storage.get('codex-mobile-delete-pending-v1-pc:pair-a'));
+  f.connection.cacheNamespace='pair-b';f.connection.pendingCommands=[];f.bridge.restoreDeletionCommands('pc');assert.equal(f.bridge.pendingCommand('pc','thread'),'');
+  f.storage.set('codex-mobile-delete-pending-v1-pc',JSON.stringify([{id:'legacy-delete-command',hostId:'pc',threadId:'thread',method:'thread.delete'}]));
+  f.bridge.restoreDeletionCommands('pc');assert.equal(f.bridge.pendingCommand('pc','thread'),'');
+  f.bridge.migrateDeleteCommands=true;f.bridge.restoreDeletionCommands('pc');assert.equal(f.bridge.pendingCommand('pc','thread'),'legacy-delete-command');assert.equal(f.storage.has('codex-mobile-delete-pending-v1-pc'),false);
 });
 
 test('手机增量接收保留报告阶段与轮次耗时，阶段替换和后续文本追加可组合',()=>{
