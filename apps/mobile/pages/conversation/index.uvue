@@ -130,9 +130,9 @@ const composerSettings = computed((): ExecutionSettings | null => settings.value
 const executionSettingsUnavailable = computed((): boolean => connection.snapshot != null && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.supportsExecutionSettings != true)
 const modelLabel = computed((): string => {
   if (settingsBusy.value) return '正在同步…'
-  if (connection.snapshot?.readOnly == true) return '历史浏览'
   if (!connection.connected) return '等待连接'
   if (connection.snapshot?.threadId != pageThreadId.value) return '正在加载…'
+  if (connection.snapshot?.readOnly == true) return '历史浏览'
   if (settings.value == null) return '跟随电脑端'
   const model = models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)
   return shortModelLabel(model?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort)

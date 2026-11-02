@@ -1,6 +1,6 @@
 <template>
   <view class="permission-control">
-    <view :id="triggerId" class="permission-trigger"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'muted'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
+    <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || !available || busy ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'muted'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
     <view v-if="opened" class="permission-overlay" @click="closeMenu">
       <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
         <view class="permission-heading"><text class="permission-title">{{ label }}</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
