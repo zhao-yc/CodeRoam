@@ -28,7 +28,7 @@ export class MessageQueue {
       const payload = JSON.parse(row.payload);
       return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({id,displayName}) => ({id,displayName})) } : {}) };
     });
-    return { ...snapshot, supportsMessageQueue: true, queuedMessages };
+    return { ...snapshot, supportsMessageQueue: true, supportsQueueEditing: true, queuedMessages };
   }
 
   async snapshot(threadId) {
@@ -60,6 +60,7 @@ export class MessageQueue {
     const row = this.rows(threadId).find(item => item.id === params.queueId);
     if (!row) throw new BridgeError('QUEUE_CHANGED', '这条排队消息已处理，请重新同步');
     if (row.device_id !== deviceId) throw new BridgeError('QUEUE_FORBIDDEN', '只能处理本设备发送的排队消息');
+    if (queueAction === 'edit') return this.withdrawForEdit(row);
     if (queueAction === 'cancel') {
       this.db.prepare('DELETE FROM message_queue WHERE id=?').run(row.id); this.changed(threadId); this.release(threadId);
       return { ok: true, canceled: true };
@@ -68,6 +69,22 @@ export class MessageQueue {
     const snapshot = await this.snapshot(threadId);
     if (!snapshot.activeTurnId || snapshot.activeTurnId !== params.expectedTurnId) throw new BridgeError('STALE_TURN', '当前任务已经变化，消息仍保留在队列中');
     return this.deliver(row, 'turn.steer', snapshot.activeTurnId);
+  }
+
+  /** 先停止自动投递，再回传完整草稿；手机确认恢复前保留可再次读取的撤回记录。 */
+  withdrawForEdit(row) {
+    if (!['queued', 'editing'].includes(row.state)) throw new BridgeError('QUEUE_CHANGED', '这条消息已开始发送或需要核对，不能撤回编辑');
+    const payload = JSON.parse(row.payload);
+    const attachments = payload.attachments.map(id => {
+      const { metadata } = this.adapter.attachments.metadata(row.device_id, row.thread_id, id);
+      if (!metadata.complete) throw new BridgeError('UPLOAD_INCOMPLETE', '原附件尚未就绪，消息仍保留，请先核对附件');
+      return { id, name: metadata.name, size: metadata.size };
+    });
+    // 只返回原上传编号和显示信息，不允许手机获得服务器文件路径。
+    const draft = { text: payload.text, images: payload.images, attachments, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({ id, displayName }) => ({ id, displayName })) } : {}) };
+    this.db.prepare("UPDATE message_queue SET state='editing',error='' WHERE id=?").run(row.id);
+    this.changed(row.thread_id);
+    return { ok: true, edited: true, queueId: row.id, draft };
   }
 
   /** 发送前先落盘占位；断线或超时保留未知状态，明确失败也暂停队列供用户处理。 */
@@ -93,7 +110,7 @@ export class MessageQueue {
   /** 刷新原桌面事实后按先进先出发送；切页、重连和进程恢复都不依赖手机页面。 */
   async drain(threadId) {
     if (this.closed || this.blocked(threadId)) return;
-    const rows = this.rows(threadId); if (!rows.length) return;
+    const rows = this.rows(threadId).filter(row => row.state !== 'editing'); if (!rows.length) return;
     const snapshot = await this.snapshot(threadId); if (this.closed) return;
     const head = rows[0];
     if (head.state === 'dispatched') {

@@ -100,7 +100,7 @@ export function validateRequest(message) {
   // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
   if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {
     const p = message.params, enqueue = p.queueAction === 'enqueue';
-    if (message.method !== 'turn.send' || !['enqueue','steer','cancel'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
+    if (message.method !== 'turn.send' || !['enqueue','steer','cancel','edit'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
     if (!enqueue) requireString(p.queueId, '排队消息编号', 80);
     if (p.queueAction === 'steer') requireString(p.expectedTurnId, '当前任务编号', 200);
     if (enqueue && p.attachments?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id))) throw new BridgeError('BAD_ATTACHMENTS', '排队附件编号无效');

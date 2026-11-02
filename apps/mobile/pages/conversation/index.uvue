@@ -63,7 +63,7 @@
         <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
-        <message-queue :messages="queuedMessages" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" @cancel="cancelQueuedMessage" />
+        <message-queue :messages="queuedMessages" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
         <!-- 同步骨架紧跟缓存消息末尾，与聊天内容一起滚动。 -->
         <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
         <view id="timeline-bottom" class="bottom-space"></view>
@@ -83,7 +83,7 @@
         <view class="composer-stage" :style="{ height: composerStageHeight + 'px' }">
           <!-- 紧凑与展开共用同一编辑节点，布局切换不会重建原生输入框。 -->
           <view class="draft-editor" :class="{ 'draft-editor-compact': !composerExpanded }" :style="{ height: composerHeight + 'px' }">
-            <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @click="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :style="{ height: composerHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
+            <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @click="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly || queueEditing" class="draft" :style="{ height: composerHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
             <!-- 同宽文本只测量排版；零宽字符保留末尾换行，不写入草稿。 -->
             <view class="draft-measure-box" aria-hidden="true"><text id="draft-placeholder-measure" class="draft-placeholder-measure">{{ visiblePrediction + '\u200b' }}</text></view>
           </view>
@@ -117,6 +117,7 @@ import { readDraftPlugins, saveDraftPlugins } from '../../services/composer.uts'
 import MessageQueue from '../../components/message-queue/message-queue.uvue'
 import { QueuedMessage } from '../../services/message-queue.uts'
 import { messageSendingPreferences } from '../../services/message-sending-preferences.uts'
+import { QueueEditDraft, QueueEditPlugin, isQueueEditing, beginQueueEdit, finishQueueEdit, restoreQueuedDraft } from '../../services/queue-edit.uts'
 import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
@@ -177,6 +178,7 @@ let predictionExpiryTimer = 0
 let predictionRevision = 0
 let predictionDeadline = 0
 const draft = computed((): string => readDraft(pageHostId.value, pageThreadId.value))
+const queueEditing = computed((): boolean => isQueueEditing(pageHostId.value, pageThreadId.value))
 const draftImages = computed((): DraftImage[] => readDraftImages(pageHostId.value, pageThreadId.value))
 const draftPlugins = computed((): SelectedPlugin[] => readDraftPlugins(pageHostId.value, pageThreadId.value))
 const pluginOpen = ref(false)
@@ -1200,6 +1202,32 @@ function operateQueuedMessage(id: string, action: string) {
 }
 function steerQueuedMessage(id: string) { if (activeTurnId.value.length > 0) operateQueuedMessage(id, 'steer') }
 function cancelQueuedMessage(id: string) { operateQueuedMessage(id, 'cancel') }
+// 先撤回并恢复完整草稿，再确认清理撤回记录；失败时保留可继续读取的电脑端记录。
+function editQueuedMessage(id: string) {
+  if (!canWrite.value || imageBusy.value || connection.snapshot?.supportsQueueEditing != true) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  try { beginQueueEdit(hostId, threadId, draftPlugins.value.length > 0) } catch (error) { notify((error as Error).message); return }
+  busy.value = true; pendingAction.value = 'queue-edit:' + id; operationError.value = ''
+  bridge.request('turn.send', { threadId, queueAction: 'edit', queueId: id }, true).then((result: UTSJSONObject) => {
+    try {
+      const restored = JSON.parse<QueueEditDraft>(JSON.stringify(result['draft']))
+      if (result.getBoolean('edited') != true || result.getString('queueId') != id || restored == null) throw new Error('撤回结果尚未确认，请重新同步后继续编辑')
+      restoreQueuedDraft(hostId, threadId, id, restored, readDraftPlugins(hostId, threadId).length > 0, (plugins: QueueEditPlugin[]) => { saveDraftPlugins(hostId, threadId, plugins.map((plugin: QueueEditPlugin): SelectedPlugin => ({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin))) })
+    } catch (error) {
+      finishQueueEdit(hostId, threadId); busy.value = false; pendingAction.value = ''
+      if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = (error as Error).message
+      return
+    }
+    // 草稿已恢复后才移除记录；清理回执丢失也不会重新发送或清空正在编辑的内容。
+    const cleanup = connection.hostId == hostId ? bridge.request('turn.send', { threadId, queueAction: 'cancel', queueId: id }, true) : null
+    finishQueueEdit(hostId, threadId); busy.value = false; pendingAction.value = ''
+    if (pageVisible.value && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { focusComposerInput(); notify('已撤回，编辑后可重新发送') }
+    cleanup?.then((_: UTSJSONObject) => {}, (_: Error) => { if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = '内容已恢复到输入框；撤回记录清理尚未确认，可同步后移除记录' })
+  }, (error: Error) => {
+    finishQueueEdit(hostId, threadId); busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message
+  })
+}
 let stopPromptOpen = false
 // 所有停止入口共用确认框，确认时复核原会话及任务，避免误停后续任务。
 function stop() {

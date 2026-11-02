@@ -106,3 +106,40 @@ test('排队图片原样追加，展示快照只含数量，追加成功不重�
   assert.deepEqual(f.client.calls[0].params.input, [{ type: 'image', url: image }]);
   f.client.idle(); await f.queue.pump(); assert.equal(f.client.calls.length, 1);
 });
+
+test('编辑先撤回完整图文和附件，不投递正文且只返回原上传编号与展示信息', async t => {
+  const f = fixture(t), image = 'data:image/png;base64,' + fs.readFileSync('apps/mobile/static/icons/check-dark.png').toString('base64');
+  const uploadId = 'synthetic-upload-00001';
+  f.adapter.attachments.metadata = (_device, _thread, id) => ({ metadata: { id, name: '合成附件.txt', size: 12, complete: true, privatePath: '/example/private/upload' } });
+  const first = await f.send('enqueue', { text: '原合成消息', images: [image], attachments: [uploadId] });
+  const commandId = randomUUID(), response = await f.send('edit', { queueId: first.result.queueId }, commandId);
+  assert.equal(response.error, undefined); assert.equal(response.result.edited, true);
+  assert.deepEqual(response.result.draft, { text: '原合成消息', images: [image], attachments: [{ id: uploadId, name: '合成附件.txt', size: 12 }] });
+  assert.equal(f.queue.rows('thread')[0].state, 'editing'); assert.equal(f.client.calls.length, 0);
+  const replay = await f.send('edit', { queueId: first.result.queueId }, commandId); assert.deepEqual(replay.result, response.result);
+  const snapshot = f.queue.decorate({ threadId: 'thread' }); assert.equal(snapshot.supportsQueueEditing, true); assert.equal(JSON.stringify(snapshot).includes('base64'), false);
+  assert.equal(JSON.stringify(response.result).includes('privatePath'), false);
+});
+
+test('撤回回执丢失可再次恢复，退出或切页不自动发送，后续排队消息正常执行', async t => {
+  const f = fixture(t), first = await f.send('enqueue', { text: '撤回后编辑' });
+  await f.send('enqueue', { text: '下一条合成消息' });
+  await f.send('edit', { queueId: first.result.queueId });
+  f.client.idle(); await f.queue.pump(); assert.equal(f.client.calls.length, 1);
+  assert.equal(f.client.calls[0].params.turnStart.request.input[0].text, '下一条合成消息');
+  const recovered = await f.send('edit', { queueId: first.result.queueId }); assert.equal(recovered.result.draft.text, '撤回后编辑');
+  await f.send('cancel', { queueId: first.result.queueId }); await f.queue.pump(); assert.equal(f.client.calls.length, 1);
+  assert.equal(f.queue.rows('thread').some(row => row.id === first.result.queueId), false);
+});
+
+test('已发送或待核对状态拒绝编辑，跨设备和过期附件也不能借编辑改变原队列', async t => {
+  const f = fixture(t), first = await f.send('enqueue', { text: '合成消息' }), queueId = first.result.queueId;
+  assert.equal((await f.send('edit', { queueId }, randomUUID(), 'other-phone')).error.code, 'QUEUE_FORBIDDEN');
+  for (const state of ['sending', 'dispatched', 'unknown', 'failed']) {
+    f.journal.db.prepare('UPDATE message_queue SET state=? WHERE id=?').run(state, queueId);
+    assert.equal((await f.send('edit', { queueId })).error.code, 'QUEUE_CHANGED'); assert.equal(f.queue.rows('thread')[0].state, state);
+  }
+  f.journal.db.prepare("UPDATE message_queue SET state='queued',payload=? WHERE id=?").run(JSON.stringify({ threadId: 'thread', text: '合成附件', images: [], attachments: ['synthetic-upload-00001'] }), queueId);
+  f.adapter.attachments.metadata = () => { throw Object.assign(Error('附件已过期'), { code: 'UPLOAD_EXPIRED' }); };
+  assert.equal((await f.send('edit', { queueId })).error.code, 'UPLOAD_EXPIRED'); assert.equal(f.queue.rows('thread')[0].state, 'queued'); assert.equal(f.client.calls.length, 0);
+});

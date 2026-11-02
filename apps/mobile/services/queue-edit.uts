@@ -1,0 +1,41 @@
+import { reactive } from 'vue'
+import { readDraft, readDraftImages, readDraftFiles, saveDraft, saveDraftImages, saveDraftFiles, DraftImage, DraftFile } from './composer.uts'
+
+export type QueueEditPlugin = { id: string, displayName: string }
+type QueueEditAttachment = { id: string, name: string, size: number }
+export type QueueEditDraft = { text: string, images: string[], attachments: QueueEditAttachment[], plugins?: QueueEditPlugin[] }
+type QueueEditScope = { hostId: string, threadId: string }
+type QueueEditState = { scopes: QueueEditScope[] }
+const editing = reactive<QueueEditState>({ scopes: [] as QueueEditScope[] })
+
+// 撤回期间统一锁住同一聊天的输入，切页后仍使用原电脑和聊天归属。
+export function isQueueEditing(hostId: string, threadId: string): boolean { return editing.scopes.some((scope: QueueEditScope): boolean => scope.hostId == hostId && scope.threadId == threadId) }
+export function beginQueueEdit(hostId: string, threadId: string, hasExtraDraft: boolean = false) {
+  if (isQueueEditing(hostId, threadId)) throw new Error('这条聊天正在撤回消息，请稍候')
+  requireEmptyDraft(hostId, threadId, hasExtraDraft)
+  editing.scopes.push({ hostId, threadId } as QueueEditScope)
+}
+export function finishQueueEdit(hostId: string, threadId: string) { editing.scopes = editing.scopes.filter((scope: QueueEditScope): boolean => scope.hostId != hostId || scope.threadId != threadId) }
+
+function requireEmptyDraft(hostId: string, threadId: string, hasExtraDraft: boolean) {
+  if (readDraft(hostId, threadId).length > 0 || readDraftImages(hostId, threadId).length > 0 || readDraftFiles(hostId, threadId).length > 0 || hasExtraDraft) throw new Error('输入框已有草稿，请先发送或清空后再编辑排队消息')
+}
+
+// 先完整校验再恢复；附件复用原上传编号，不回填电脑路径，也不重复上传。
+export function restoreQueuedDraft(hostId: string, threadId: string, queueId: string, draft: QueueEditDraft, hasExtraDraft: boolean = false, restorePlugins: ((plugins: QueueEditPlugin[]) => void) | null = null) {
+  requireEmptyDraft(hostId, threadId, hasExtraDraft)
+  if (typeof draft.text != 'string' || draft.text.length > 32000 || draft.images == null || draft.attachments == null || draft.images.length + draft.attachments.length > 3) throw new Error('撤回内容不完整，请重新同步后继续编辑')
+  if ((draft.plugins?.length ?? 0) > 0 && restorePlugins == null) throw new Error('请更新手机客户端后继续编辑含插件的消息，原撤回记录仍保留')
+  const images = draft.images.map((src: string, index: number): DraftImage => {
+    if (!src.startsWith('data:image/')) throw new Error('撤回图片无效，原撤回记录仍保留')
+    return { id: queueId + '-image-' + index, src } as DraftImage
+  })
+  const files = draft.attachments.map((file: QueueEditAttachment): DraftFile => {
+    if (file.id.length == 0 || file.name.length == 0 || file.size <= 0) throw new Error('撤回附件无效，原撤回记录仍保留')
+    return { id: file.id, name: file.name, size: file.size, source: '', data: '', status: 'ready', progress: 100, error: '' } as DraftFile
+  })
+  saveDraft(hostId, threadId, draft.text)
+  saveDraftImages(hostId, threadId, images)
+  saveDraftFiles(hostId, threadId, files)
+  if (restorePlugins != null) restorePlugins(draft.plugins ?? [] as QueueEditPlugin[])
+}

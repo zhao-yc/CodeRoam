@@ -3,6 +3,7 @@ export type QueuedMessage = { id: string, text: string, imageCount: number, atta
 
 // 排队和已执行消息分开展示，不能把成功入队误报成已经送达模型。
 export function queuedMessageLabel(state: string): string {
+  if (state == 'editing') return '已撤回，可继续编辑'
   if (state == 'sending') return '正在发送…'
   if (state == 'dispatched') return '正在确认任务开始…'
   if (state == 'unknown') return '结果待核对'
