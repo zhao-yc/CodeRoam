@@ -10,9 +10,10 @@
       </view>
       <view class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="会话菜单" @click="showActions"></button></view>
     </view>
+    <view v-if="showingCachedContent" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><button v-if="!connection.connected || detailError.length > 0" class="cache-retry button-secondary" @click="refresh" aria-label="重试同步">重试</button></view>
     <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
-    <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
+    <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="pendingDeleteCommand.length > 0 && pendingAction != 'delete'" class="notice pending-notice"><text class="notice-text">删除结果尚未确认，请核对原操作，勿重复提交。</text><button class="check button-secondary" :disabled="!connection.connected || busy" @click="checkDeleteOutcome">核对删除结果</button></view>
     <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试切换电脑</button></view>
     <view class="timeline-region" @click="dismissGoal">
@@ -20,8 +21,8 @@
         <!-- 历史提示预留固定高度，骨架出现和移除时不改变现有消息的位置。 -->
         <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的对话，请再次下拉重试</text><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部对话</text></view>
         <!-- 首次同步仅替换正文占位，导航、输入区和失败重试继续沿用真实状态。 -->
-        <loading-skeleton v-if="connection.snapshot == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
-        <view v-else-if="connection.snapshot == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得会话内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步会话。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
+        <loading-skeleton v-if="displayConversation == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
+        <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得会话内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步会话。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
         <view v-for="entry in timeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
             <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" />
@@ -111,6 +112,8 @@ import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
+import type { Conversation } from '../../services/bridge.uts'
+import { CachedConversation, readConversationCache, saveConversationCache, cachedConversationSnapshot, clearConversationCache } from '../../services/conversation-cache.uts'
 import { MessageAnnotation, MessagePresentation, parseAnnotationReferences, annotationPresentationsForTimeline } from '../../services/annotations.uts'
 import { presentConversationMessages } from '../../services/message-presentations.uts'
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
@@ -228,7 +231,12 @@ let historyGesture = 0
 let lastHistoryGesture = -1
 let historyTopTimer = 0
 let historyFollowRevision = 0
-const displayConversation = computed(() => conversationWithHistory(connection.snapshot, historyPage.value))
+const cachedDetail = ref<CachedConversation | null>(null)
+const pageCacheNamespace = ref('')
+const liveConversation = computed((): Conversation | null => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot : null)
+const showingCachedContent = computed((): boolean => liveConversation.value == null && cachedDetail.value != null && pageCacheNamespace.value == connection.cacheNamespace)
+const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同步失败，当前显示缓存' : !connection.connected ? '当前显示缓存，连接恢复后同步' : '正在同步最新内容')
+const displayConversation = computed(() => conversationWithHistory(liveConversation.value ?? (showingCachedContent.value ? cachedConversationSnapshot(cachedDetail.value!) : null), historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
 const messagePresentations = computed((): MessagePresentation[] => presentConversationMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
@@ -269,7 +277,7 @@ const pendingQuestionCount = computed((): number => pendingQuestionGroups.value.
 const currentTaskState = computed((): string => conversationTaskState(connection.snapshot, connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)))
 const hostName = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == pageHostId.value)?.label ?? '电脑')
 // 与标题共用当前电脑和会话的身份限制，加载期间不显示其他会话的项目。
-const projectName = computed((): string => conversationProjectName(listProjectName.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.cwd ?? '' : ''))
+const projectName = computed((): string => conversationProjectName(listProjectName.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.cwd ?? '' : cachedDetail.value?.cwd ?? ''))
 // 后台历史只用于浏览，写操作须有原桌面的实时所有者和快照。
 const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
 const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
@@ -283,8 +291,47 @@ const conversationConnectionHint = computed((): string => {
 })
 const openingTitle = computed((): string => conversationOpeningTitle(connection.snapshot != null, detailError.value, connection.connected))
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
-const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : '', openingTitle.value))
+const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : cachedDetail.value?.title ?? '', openingTitle.value))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
+
+let cacheWriteTimer = 0
+let cacheDirty = false
+// 缓存写入受页面、配对和授权共同约束；旧页面不能在清理后重新写回内容。
+function flushConversationCache() {
+  clearTimeout(cacheWriteTimer); cacheWriteTimer = 0
+  if (!cacheDirty) return
+  cacheDirty = false
+  const namespace = pageCacheNamespace.value
+  if (namespace.length == 0 || namespace != connection.cacheNamespace || !pageAlive || !isCurrentPage() || liveConversation.value == null) return
+  if (connection.connected && !connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value)) return
+  saveConversationCache(namespace, pageHostId.value, liveConversation.value!, historyPage.value)
+}
+// 固定窗口节流，持续输出也会落盘；不因每个分片重新延后写入。
+function scheduleConversationCache() {
+  if (liveConversation.value == null || pageCacheNamespace.value.length == 0) return
+  cacheDirty = true
+  if (cacheWriteTimer == 0) cacheWriteTimer = setTimeout(() => { flushConversationCache() }, 500)
+}
+// 只恢复额外历史，不把缓存最近快照混入历史，且不恢复旧分页游标。
+function restoreConversationCache() {
+  pageCacheNamespace.value = connection.cacheNamespace ?? ''
+  if (pageCacheNamespace.value.length == 0) return
+  cachedDetail.value = readConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
+  const cached = cachedDetail.value
+  if (cached != null && cached.olderMessages.length > 0) historyPage.value = { messages: cached.olderMessages, turns: cached.olderTurns, cursor: '', hasMore: true } as HistoryPage
+}
+watch(liveConversation, () => { beforeMarkdownLayout(); scheduleConversationCache(); nextTick(() => { afterMarkdownLayout() }) })
+watch(historyPage, () => { scheduleConversationCache() })
+// 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
+watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
+  if (pageCacheNamespace.value.length == 0) return
+  if (pageCacheNamespace.value != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value))) {
+    clearTimeout(cacheWriteTimer); cacheWriteTimer = 0; cacheDirty = false
+    cachedDetail.value = null; historyPage.value = null; historyRequest++
+  }
+})
+onHide(() => { flushConversationCache() })
+onUnload(() => { flushConversationCache(); clearTimeout(cacheWriteTimer) })
 
 onLoad((options: OnLoadOptions) => {
   // 已保存的配对在应用启动时恢复；未配置时先返回首页。
@@ -298,7 +345,9 @@ onLoad((options: OnLoadOptions) => {
   // 页面参数已由框架解码，直接保留百分号及形似转义序列的原始名称。
   listTitle.value = options['title'] ?? ''
   listProjectName.value = options['projectName'] ?? ''
+  if (id.length > 0) restoreConversationCache()
   if (id.length > 0 && notice == null) bridge.watch(id)
+  scheduleConversationCache()
 })
 
 // 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
@@ -397,8 +446,8 @@ function tryAutoConnectConversation() {
 // 在方法声明后注册监听，兼容 Android UTS；离线或提交中保留本次打开意图。
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
-function copyLatestReply() { closeActions(); const messages = connection.snapshot?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(parseAnnotationReferences(messages[index].text).text); return } }; notify('还没有可复制的回复') }
-function showConversationInfo() { closeActions(); uni.showModal({ title: '会话信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (connection.snapshot?.cwd ?? '') + '\n连接：' + connection.status, showCancel: false, confirmText: '知道了' }) }
+function copyLatestReply() { closeActions(); const messages = displayConversation.value?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(parseAnnotationReferences(messages[index].text).text); return } }; notify('还没有可复制的回复') }
+function showConversationInfo() { closeActions(); uni.showModal({ title: '会话信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (displayConversation.value?.cwd ?? '') + '\n连接：' + connection.status, showCancel: false, confirmText: '知道了' }) }
 
 // 永久删除必须完成两次独立确认；页面变化后旧确认立即失效。
 let deletePromptOpen = false
@@ -419,6 +468,8 @@ function acceptDeleteReceipt(hostId: string, threadId: string, receipt: UTSJSONO
   if (ids.indexOf(threadId) < 0) return false
   const returnToList = isCurrentPage() && pageVisible.value && pageHostId.value == hostId && pageThreadId.value == threadId
   if (commandId.length > 0) bridge.clearCommand(commandId, hostId)
+  clearConversationCache(pageCacheNamespace.value, hostId, ids)
+  cachedDetail.value = null; cacheDirty = false; clearTimeout(cacheWriteTimer); cacheWriteTimer = 0
   removeDeletedThreads(hostId, ids); clearDeletedDrafts(hostId, ids)
   if (connection.hostId == hostId && ids.indexOf(connection.activeThreadId) >= 0) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0 }
   if (pageHostId.value == hostId && ids.indexOf(pageThreadId.value) >= 0) { historyRequest++; historyPage.value = null; historyError.value = ''; operationError.value = '' }
@@ -472,7 +523,7 @@ function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, com
   const threadId = pageThreadId.value
   const returnToList = isCurrentPage() && pageVisible.value
   if (commandId.length > 0) bridge.clearCommand(commandId, hostId)
-  removeArchivedThread(hostId, threadId)
+  clearConversationCache(pageCacheNamespace.value, hostId, [threadId]); cachedDetail.value = null; cacheDirty = false; clearTimeout(cacheWriteTimer); cacheWriteTimer = 0; removeArchivedThread(hostId, threadId)
   connection.threads = connection.threads.filter((thread: ThreadSummary): boolean => thread.id != threadId)
   if (connection.activeThreadId == threadId) { connection.activeThreadId = ''; connection.snapshot = null; connection.epoch = ''; connection.sequence = 0 }
   operationError.value = ''
@@ -650,7 +701,7 @@ function onTimelineScroll(event: UniScrollEvent) {
   if (top <= 60 && !following.value) onHistoryTop()
 }
 // 新输出后重新测量，短会话无滚动事件时也能隐藏按钮。
-watch((): string => (connection.snapshot?.messages ?? []).map((message: ChatMessage): string => message.id + ':' + message.text).join('\n'), (_current: string, _previous: string) => { if (following.value) scrollLatest(); nextTick(() => { updateTimelinePosition(); checkShortHistory() }) })
+watch((): string => (displayConversation.value?.messages ?? []).map((message: ChatMessage): string => message.id + ':' + message.text).join('\n'), (_current: string, _previous: string) => { if (following.value) scrollLatest(); nextTick(() => { updateTimelinePosition(); checkShortHistory() }) })
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
@@ -1099,6 +1150,10 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 
 <style>
 .queue-compose-hint { color: #69766b; font-size: 12px; line-height: 18px; margin: 0 4px 8px; }
+/* 缓存同步提示保持轻量，避免错误提示重复挤占聊天区域。 */
+.cache-notice { flex-direction: row; align-items: center; padding: 8px 16px; background-color: #eef2eb; }
+.cache-note { flex: 1; font-size: 12px; line-height: 20px; color: #68776c; }
+.cache-retry { width: 56px; height: 28px; padding: 0; margin: 0 0 0 8px; font-size: 12px; border-radius: 8px; }
 /* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
 .annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #cdd6cc; background-color: #f8faf6; flex-direction: row; align-items: center; align-self: flex-start; }
 .annotation-after-text { margin-top: 12px; }

@@ -50,7 +50,7 @@ test('列表跳转携带完整标题和项目名，中文和查询分隔符不�
   navigation.open({id:'thread',hostId:'pc',online:true,title,cwd:'/workspace/'+project+'/'});
   // 与 uni-app 页面生命周期一致，进入 onLoad 前框架已解码导航参数。
   const options=Object.fromEntries(url.split('?')[1].split('&').map(pair=>pair.split('=').map(decodeURIComponent)));
-  const page={connection:{configured:true,hostId:'pc'},pageHostId:{value:''},pageThreadId:{value:''},listTitle:{value:''},listProjectName:{value:''},uni:{getWindowInfo:()=>({windowHeight:800})},bridge:{watch(){}},decodeURIComponent};
+  const page={restoreConversationCache(){},scheduleConversationCache(){},connection:{configured:true,hostId:'pc'},pageHostId:{value:''},pageThreadId:{value:''},listTitle:{value:''},listProjectName:{value:''},uni:{getWindowInfo:()=>({windowHeight:800})},bridge:{watch(){}},decodeURIComponent};
   const loading=vm.createContext({...page,onLoad:callback=>callback(options)});
   const onLoad=detail.match(/onLoad\(\(options: OnLoadOptions\) => \{[\s\S]*?\n\}\)/)[0];
   vm.runInContext(stripTypeScriptTypes('let baseWindowHeight=0;'+onLoad,{mode:'transform'}),loading);
@@ -62,7 +62,7 @@ test('列表跳转携带完整标题和项目名，中文和查询分隔符不�
 test('旧会话或其他电脑的快照不能覆盖列表项目名',()=>{
   const detail=fs.readFileSync(new URL('../apps/mobile/pages/conversation/index.uvue',import.meta.url),'utf8');
   const declaration=detail.match(/^const projectName = computed\(.*$/m)[0];
-  const page={computed:read=>({get value(){return read();}}),conversationProjectName:context.projectName,listProjectName:{value:'列表项目'},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},connection:{hostId:'other',snapshot:{threadId:'thread',cwd:'/workspace/其他项目'}}};
+  const page={cachedDetail:{value:null},computed:read=>({get value(){return read();}}),conversationProjectName:context.projectName,listProjectName:{value:'列表项目'},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},connection:{hostId:'other',snapshot:{threadId:'thread',cwd:'/workspace/其他项目'}}};
   const reading=vm.createContext(page);
   vm.runInContext(stripTypeScriptTypes(declaration,{mode:'transform'})+';globalThis.project=projectName;',reading);
   assert.equal(reading.project.value,'列表项目');

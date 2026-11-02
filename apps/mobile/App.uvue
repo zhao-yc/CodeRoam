@@ -1,8 +1,9 @@
 <script lang="uts">
 import { bridge } from './services/bridge.uts'
+import { startConversationCacheLifecycle } from './services/conversation-cache-lifecycle.uts'
 import { startTaskNotifications, resetTaskNotifications } from './services/task-notifications.uts'
 export default {
-  onLaunch() { startTaskNotifications(); bridge.restore() },
+  onLaunch() { startConversationCacheLifecycle(); startTaskNotifications(); bridge.restore() },
   onShow() { bridge.resume() },
   onHide() { resetTaskNotifications(); bridge.background() }
 }

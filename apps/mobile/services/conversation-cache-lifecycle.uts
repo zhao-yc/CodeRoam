@@ -1,0 +1,19 @@
+import { watch } from 'vue'
+import { connection, Computer } from './bridge.uts'
+import { clearConversationCache, retainConversationCacheHosts } from './conversation-cache.uts'
+
+let installed = false
+// 应用级清理覆盖详情页未打开的情况；电脑离线仍保留缓存，授权移除才清理。
+export function startConversationCacheLifecycle() {
+  if (installed) return
+  installed = true
+  watch((): string => connection.cacheNamespace, (_next: string, previous: string) => {
+    if (previous.length > 0) clearConversationCache(previous)
+  }, { flush: 'sync' })
+  watch((): string => connection.connected + ':' + connection.cacheNamespace + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
+    if (!connection.connected || connection.cacheNamespace.length == 0) return
+    // 授权全集由 welcome/hosts 提供，不依据截断的最近会话列表删除缓存。
+    const namespace = connection.cacheNamespace
+    retainConversationCacheHosts(namespace, connection.computers.map((computer: Computer): string => computer.id))
+  })
+}

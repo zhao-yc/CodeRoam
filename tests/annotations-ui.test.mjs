@@ -29,7 +29,7 @@ test('返回优先关闭注释，隐藏、卸载和切换会话均清理面板',
 });
 test('复制回复通过展示解析器清理标记，引用与评论按纯文本渲染',()=>{
   const method=page.match(/function copyLatestReply\(\) \{[^\n]+/)[0],copied=[];
-  const context=vm.createContext({closeActions(){},connection:{snapshot:{messages:[{role:'assistant',text:'完成 :codex-annotation{index="1"}'}]}},parseAnnotationReferences:value=>({text:value.replace(/ :codex-annotation\{index="1"\}/,'')}),copyText:value=>copied.push(value),notify(){}});
+  const context=vm.createContext({closeActions(){},displayConversation:{value:{messages:[{role:'assistant',text:'完成 :codex-annotation{index="1"}'}]}},parseAnnotationReferences:value=>({text:value.replace(/ :codex-annotation\{index="1"\}/,'')}),copyText:value=>copied.push(value),notify(){}});
   vm.runInContext(stripTypeScriptTypes(method,{mode:'transform'})+'\ncopyLatestReply();',context);assert.deepEqual(copied,['完成']);
   const sheet=fs.readFileSync('apps/mobile/components/annotation-sheet/annotation-sheet.uvue','utf8');
   assert.match(sheet,/class="annotation-text" selectable>\{\{ item.text \}\}/);assert.match(sheet,/annotation-comment" selectable>\{\{ item.comment \}\}/);assert.doesNotMatch(sheet,/v-html|rich-text|markdown-body/);

@@ -15,6 +15,7 @@ function fixture() {
   c.canWrite = { get value() { return !c.busy.value && c.connection.connected && c.connection.pendingCommands.length === 0; } };
   c.uni = { showModal: options => modals.push(options), showLoading() {}, hideLoading() {}, navigateBack: () => { c.returned++; }, reLaunch: () => { c.returned++; } };
   c.bridge = { request(method, params, write) { calls.push({ method, params, write }); return new Promise((ok, fail) => { resolve = value => ok(json(value)); reject = fail; }); }, clearCommand: (...args) => cleared.push(args) };
+  Object.assign(c, {clearConversationCache(){},pageCacheNamespace:{value:'synthetic-pair'},cachedDetail:{value:null},cacheDirty:false,cacheWriteTimer:0,clearTimeout(){}});
   vm.runInNewContext(stripTypeScriptTypes(methods, { mode: 'transform' }) + '\nglobalThis.subject={deleteFromMenu,acceptDeleteReceipt,checkDeleteOutcome};', c);
   return { c, ...c.subject, modals, calls, cleared, removed, drafts, notices, life, resolve: value => resolve(value), reject: error => reject(error) };
 }

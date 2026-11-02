@@ -1,0 +1,98 @@
+import type { ChatMessage, Conversation, ConversationTurn } from './bridge.uts'
+import type { HistoryPage } from './history.uts'
+
+export type CachedConversation = { hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
+type CacheStore = { version: number, namespace: string, entries: CachedConversation[] }
+const CACHE_KEY = 'codex-mobile-conversation-cache-v1'
+const ENTRY_BYTES = 512 * 1024
+const TOTAL_BYTES = 3 * 1024 * 1024
+
+// 只保存显示正文所需字段，图片数据、协议游标、审批及能力信息均不落入缓存。
+function cacheMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message: ChatMessage): ChatMessage => ({ id: message.id, role: message.role, kind: message.kind, summary: message.summary, phase: message.phase, imageCount: message.imageCount, text: message.text, turnId: message.turnId, status: message.status }))
+}
+
+function validMessages(messages: ChatMessage[]): boolean {
+  return Array.isArray(messages) && messages.every((message: ChatMessage): boolean => message != null && typeof message.id == 'string' && typeof message.role == 'string' && typeof message.text == 'string' && typeof message.turnId == 'string' && typeof message.status == 'string')
+}
+
+function validEntry(entry: CachedConversation): boolean {
+  return entry != null && typeof entry.hostId == 'string' && typeof entry.threadId == 'string' && typeof entry.title == 'string' && typeof entry.cwd == 'string' && typeof entry.savedAt == 'number' && typeof entry.accessedAt == 'number' && validMessages(entry.messages) && validMessages(entry.olderMessages) && Array.isArray(entry.turns) && Array.isArray(entry.olderTurns) && entry.turns.concat(entry.olderTurns).every((turn: ConversationTurn): boolean => turn != null && typeof turn.turnId == 'string' && typeof turn.status == 'string')
+}
+
+// 所有存储异常均静默降级；不把包含会话内容的异常写入日志或错误提示。
+function loadStore(namespace: string): CacheStore {
+  const empty = { version: 1, namespace, entries: [] as CachedConversation[] } as CacheStore
+  try {
+    const raw = uni.getStorageSync(CACHE_KEY)
+    if (typeof raw != 'string' || raw.length == 0 || raw.length * 2 > TOTAL_BYTES) return empty
+    const store = JSON.parse<CacheStore>(raw)
+    if (store == null || store.version != 1 || store.namespace != namespace || !Array.isArray(store.entries)) return empty
+    store.entries = store.entries.filter((entry: CachedConversation): boolean => validEntry(entry))
+    return store
+  } catch (_) { return empty }
+}
+
+function writeStore(store: CacheStore): boolean {
+  try { uni.setStorageSync(CACHE_KEY, JSON.stringify(store)); return true } catch (_) { return false }
+}
+
+// 同一电脑的同号会话才可命中；本地只恢复展示，不恢复任何实时连接状态。
+export function readConversationCache(namespace: string, hostId: string, threadId: string): CachedConversation | null {
+  if (namespace.length == 0 || hostId.length == 0 || threadId.length == 0) return null
+  const store = loadStore(namespace)
+  const entry = store.entries.find((item: CachedConversation): boolean => item.hostId == hostId && item.threadId == threadId)
+  if (entry == null) return null
+  entry.accessedAt = Date.now(); writeStore(store)
+  return entry
+}
+
+// 按最新快照拆分历史补充，旧快照的尾部绝不能再次拼回 PC 返回的新快照。
+export function saveConversationCache(namespace: string, hostId: string, snapshot: Conversation, history: HistoryPage | null): boolean {
+  if (namespace.length == 0 || hostId.length == 0 || snapshot.threadId.length == 0) return false
+  const now = Date.now()
+  const messages = cacheMessages(snapshot.messages)
+  const turns = (snapshot.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs }))
+  const olderMessages = cacheMessages((history?.messages ?? [] as ChatMessage[]).filter((message: ChatMessage): boolean => !messages.some((current: ChatMessage): boolean => current.id == message.id)))
+  const entry = { hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: (history?.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs })), savedAt: now, accessedAt: now } as CachedConversation
+  // 剔除最早完整消息和无引用轮次，不截断正文，不影响当前页面的完整内容。
+  while (JSON.stringify(entry).length * 2 > ENTRY_BYTES) {
+    if (entry.olderMessages.length > 0) entry.olderMessages.shift()
+    else if (entry.messages.length > 0) entry.messages.shift()
+    else return false
+    entry.olderTurns = entry.olderTurns.filter((turn: ConversationTurn): boolean => entry.olderMessages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
+    entry.turns = entry.turns.filter((turn: ConversationTurn): boolean => entry.messages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
+  }
+  const store = loadStore(namespace)
+  store.entries = store.entries.filter((item: CachedConversation): boolean => item.hostId != hostId || item.threadId != snapshot.threadId)
+  store.entries.sort((left: CachedConversation, right: CachedConversation): number => right.accessedAt - left.accessedAt)
+  store.entries.unshift(entry)
+  while (store.entries.length > 20 || JSON.stringify(store).length * 2 > TOTAL_BYTES) store.entries.pop()
+  // 实际配额可能更低；先淘汰旧会话后重试，仍失败则保留联网加载能力。
+  while (!writeStore(store)) { if (store.entries.length <= 1) return false; store.entries.pop() }
+  return true
+}
+
+// 将缓存转换为纯展示快照；永远不能写入 connection.snapshot。
+export function cachedConversationSnapshot(entry: CachedConversation): Conversation {
+  return { threadId: entry.threadId, title: entry.title, cwd: entry.cwd, messages: entry.messages, turns: entry.turns, updatedAt: entry.savedAt, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], readOnly: true } as Conversation
+}
+
+// 清理只触及本应用的会话缓存；失败时旧命名空间也不能被新配对读取。
+export function clearConversationCache(namespace: string, hostId: string = '', threadIds: string[] | null = null) {
+  if (namespace.length == 0) return
+  try { const raw = uni.getStorageSync(CACHE_KEY); if (typeof raw != 'string' || JSON.parse<CacheStore>(raw)?.namespace != namespace) return } catch (_) { return }
+  const store = loadStore(namespace)
+  store.entries = store.entries.filter((entry: CachedConversation): boolean => hostId.length > 0 && (entry.hostId != hostId || (threadIds != null && threadIds.indexOf(entry.threadId) < 0)))
+  if (store.entries.length > 0) { writeStore(store); return }
+  try { uni.removeStorageSync(CACHE_KEY) } catch (_) { writeStore(store) }
+}
+
+// 中转给出完整授权电脑列表后，移除已经撤回授权的电脑内容。
+export function retainConversationCacheHosts(namespace: string, hostIds: string[]) {
+  if (namespace.length == 0) return
+  const store = loadStore(namespace)
+  const retained = store.entries.filter((entry: CachedConversation): boolean => hostIds.indexOf(entry.hostId) >= 0)
+  if (retained.length == store.entries.length) return
+  store.entries = retained; writeStore(store)
+}

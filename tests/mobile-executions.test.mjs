@@ -77,7 +77,8 @@ test('页面打开列表暂停跟随，详情关闭不收起列表，同步裁�
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   // 注释展示与执行记录共用时间线，回归时一并加载真实展示解析器。
   for (const module of ['annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={atTimelineBottom,updateTimelinePosition,beginTimelineTouch,endTimelineTouch,timeline,following,scrollTarget,expandedExecutionIds,selectedExecutionId,selectedExecution,toggleExecutions,toggleExecution,closeExecution,beginExecutionTouch,endExecutionTouch}',context);
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pageHostId,pageThreadId,atTimelineBottom,updateTimelinePosition,beginTimelineTouch,endTimelineTouch,timeline,following,scrollTarget,expandedExecutionIds,selectedExecutionId,selectedExecution,toggleExecutions,toggleExecution,closeExecution,beginExecutionTouch,endExecutionTouch}',context);
+  connection.hostId='pc';connection.snapshot.threadId='thread';context.subject.pageHostId.value='pc';context.subject.pageThreadId.value='thread';
   const page=context.subject;
   // 短内容及触摸后仍在底部时隐藏按钮，离开底部才显示。
   page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,true);

@@ -80,7 +80,8 @@ test('页面完成后收起一次，手动展开与命令选择跨同步保留�
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   // 页面展示依赖真实注释解析器，避免新展示字段影响过程折叠回归。
   for (const module of ['annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={timeline,expandedReportIds,expandedExecutionIds,following,scrollTarget,toggleProcess,toggleExecutions,copyLatestReply};',context);
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pageHostId,pageThreadId,timeline,expandedReportIds,expandedExecutionIds,following,scrollTarget,toggleProcess,toggleExecutions,copyLatestReply};',context);
+  connection.hostId='pc';connection.snapshot.threadId='thread';context.subject.pageHostId.value='pc';context.subject.pageThreadId.value='thread';
   const page=context.subject,sync=watches.find(watch=>watch.source===page.timeline).callback;
   page.toggleExecutions(page.timeline.value.find(entry=>entry.role==='execution'));
   assert.equal(page.following.value,false);assert.deepEqual(plain(page.expandedExecutionIds.value),['c']);

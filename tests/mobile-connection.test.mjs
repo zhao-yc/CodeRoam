@@ -21,7 +21,7 @@ test('导入默认保存连接，新页面忽略旧操作锁且不重发写操�
   const storage=new Map(),first=mobileFixture(storage);first.bridge.foreground=false;
   const config={relayUrl:'wss://relay.example/ws',hostId:'pc',token:'s'.repeat(43),extra:'不应保存'};
   first.bridge.configure(JSON.stringify(config));
-  assert.deepEqual(JSON.parse(storage.get('codex-mobile-connection')),{relayUrl:config.relayUrl,token:config.token,hostId:config.hostId});
+  assert.deepEqual(JSON.parse(storage.get('codex-mobile-connection')),{relayUrl:config.relayUrl,token:config.token,hostId:config.hostId,cacheNamespace:first.bridge.config.cacheNamespace});
   storage.set('codex-mobile-pending-pc','unknown-command');
   const reopened=mobileFixture(storage);reopened.bridge.restore();
   assert.equal(reopened.connection.configured,true);assert.equal(reopened.connection.hostId,'pc');assert.equal(reopened.connection.pendingCommandId,'');assert.equal(reopened.storage.has('codex-mobile-pending-pc'),false);
@@ -41,6 +41,16 @@ test('缓存损坏或浏览器禁用存储不阻止启动，导入校验或保�
   const blocked=mobileFixture();blocked.uni.getStorageSync=()=>{throw new Error('禁止存储');};assert.doesNotThrow(()=>blocked.bridge.restore());assert.match(blocked.connection.error,/无法读取/);
 });
 
+test('旧配对自动补齐缓存命名空间，刷新与切换电脑沿用，重新导入隔离旧内容',()=>{
+  const f=mobileFixture();f.bridge.foreground=false;
+  const raw=JSON.stringify(f.bridge.config);f.bridge.configure(raw,false);
+  const namespace=f.connection.cacheNamespace;assert.ok(namespace.length>0);assert.equal(namespace.includes(f.bridge.config.token),false);
+  const restored=mobileFixture(f.storage);restored.bridge.foreground=false;restored.bridge.restore();assert.equal(restored.connection.cacheNamespace,namespace);
+  restored.connection.computers=[{id:'other',online:true}];restored.bridge.selectComputer('other');assert.equal(restored.connection.cacheNamespace,namespace);
+  restored.bridge.configure(raw);assert.notEqual(restored.connection.cacheNamespace,namespace);
+  restored.bridge.forgetConfiguration();assert.equal(restored.connection.cacheNamespace,'');
+});
+
 test('切换到授权子实例后刷新恢复同一电脑，保留配对字段且不重放写请求',()=>{
   const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
   f.connection.computers=[{id:'pc',online:true},{id:'pc~00000000-0000-4000-8000-000000000002',online:true}];
@@ -48,7 +58,7 @@ test('切换到授权子实例后刷新恢复同一电脑，保留配对字段�
   const selected=f.connection.computers[1].id;
   f.bridge.selectComputer(selected);
   assert.equal(f.connection.hostId,selected);assert.equal(f.bridge.config.hostId,selected);
-  assert.deepEqual(JSON.parse(f.storage.get('codex-mobile-connection')),{relayUrl:'wss://relay.example/ws',token:'s'.repeat(43),hostId:selected});
+  assert.deepEqual(JSON.parse(f.storage.get('codex-mobile-connection')),{relayUrl:'wss://relay.example/ws',token:'s'.repeat(43),hostId:selected,cacheNamespace:f.bridge.config.cacheNamespace});
   const restored=mobileFixture(f.storage);restored.bridge.restore();
   assert.equal(restored.connection.hostId,selected);assert.equal(restored.bridge.pending.size,0);assert.equal(restored.connection.activeThreadId,'');
 });

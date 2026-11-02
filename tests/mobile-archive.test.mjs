@@ -21,6 +21,7 @@ function fixture() {
   };
   Object.assign(context, { removeArchivedThread() {}, notify: message => context.notices.push(message), closeActions() {}, getCurrentPages: () => [{}, {}], isCurrentPage: () => context.connection.hostId === context.pageHostId.value && context.connection.activeThreadId === context.pageThreadId.value, acceptPlanReceipt: () => false, settleSubmission() {}, refresh() {} });
   const notices = fs.readFileSync('apps/mobile/services/page-notices.uts', 'utf8').replace(/\bexport /g, '');
+  Object.assign(context, {clearConversationCache(){},pageCacheNamespace:{value:'synthetic-pair'},cachedDetail:{value:null},cacheDirty:false,cacheWriteTimer:0,clearTimeout(){}});
   vm.runInNewContext(stripTypeScriptTypes(notices + '\n' + methods, { mode: 'transform' }) + '\nglobalThis.subject={archiveFromMenu};', context);
   home = homeFixture(context.consumeArchiveSuccessNotice);
   return { ...context.subject, context, home, createHome: () => homeFixture(context.consumeArchiveSuccessNotice), modal: () => modal, respond: value => respond(value), reject: unknown => reject(unknown) };

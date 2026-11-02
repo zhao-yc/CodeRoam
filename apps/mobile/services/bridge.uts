@@ -40,18 +40,18 @@ export function threadIndicator(state: string, hasUnreadTurn: boolean | null = n
 
 type TextAppend = { id: string, text: string, status: string }
 type ConversationDelta = { supportsMessageQueue?: boolean, queuedMessages?: QueuedMessage[], notificationState?: NotificationSnapshot, pendingPlan?: PendingPlan | null, supportsPlanImplementation?: boolean, hasUnreadTurn?: boolean, activeFlags?: string[], goal?: ThreadGoal | null, goalRevision?: string, supportsGoals?: boolean, supportsGoalControl?: boolean, supportsComposerPrediction?: boolean, predictionTurnId?: string, executionSettings?: ExecutionSettings | null, supportsPlanReset?: boolean, supportsPermissionSettings?: boolean, permissionSettings?: PermissionState, supportsExecutionSettings?: boolean, supportsAttachments?: boolean, threadId: string, title: string, cwd: string, status: string, activeTurnId: string, activity?: string, turns?: ConversationTurn[], approvals: Approval[], questionGroups: QuestionGroup[], updatedAt: number, order: string[], upserts: ChatMessage[], appends: TextAppend[], readOnly?: boolean, supportsImages?: boolean, supportsHistoryPages?: boolean }
-type ConnectionConfig = { relayUrl: string, token: string, hostId: string }
+type ConnectionConfig = { relayUrl: string, token: string, hostId: string, cacheNamespace?: string }
 type SessionTicket = { ticket: string }
 type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string }
 export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string }
-type ConnectionState = { supportsHostProfiles: boolean, subscriptionRevision: number, configurationRevision: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
+type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, subscriptionRevision: number, configurationRevision: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
 export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number }
 type LiveThreadListsState = { updates: ThreadListUpdate[] }
 export const liveThreadLists = reactive<LiveThreadListsState>({ updates: [] as ThreadListUpdate[] })
 
 export const connection = reactive<ConnectionState>({
-  supportsHostProfiles: false, configurationRevision: 0, desktopNavigationError: '', status: '尚未配置', connected: false, configured: false, error: '', conversationError: '', hostId: '',
+  cacheNamespace: '', supportsHostProfiles: false, configurationRevision: 0, desktopNavigationError: '', status: '尚未配置', connected: false, configured: false, error: '', conversationError: '', hostId: '',
   computers: [] as Computer[], threads: [] as ThreadSummary[], threadsLoading: false, threadsLoadedHostId: '', snapshot: null as Conversation | null,
   subscriptionRevision: 0, activeThreadId: '', epoch: '', sequence: 0, pendingCommandId: '', pendingCommands: [] as PendingCommand[]
 })
@@ -97,14 +97,18 @@ class MobileBridge {
     if (!parsed.relayUrl.startsWith('wss://') && !parsed.relayUrl.startsWith('ws://127.0.0.1:') && !parsed.relayUrl.startsWith('ws://localhost:')) throw new Error('连接地址必须使用 WSS')
     if (parsed.relayUrl.indexOf('?') >= 0 || parsed.relayUrl.indexOf('#') >= 0 || parsed.relayUrl.indexOf('@') >= 0) throw new Error('连接地址不能包含凭据或查询参数')
     // 各端统一保存必要字段；保存失败不覆盖当前连接，刷新后按原配置自动恢复。
-    if (persist) {
-      try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: parsed.relayUrl, token: parsed.token, hostId: parsed.hostId })) }
-      catch (_) { throw new Error('无法保存连接配置，请检查浏览器存储权限') }
+    // 明确导入生成新配对命名空间；启动恢复时沿用，不使用令牌作缓存键。
+    const restoredNamespace = parsed.cacheNamespace ?? ''
+    parsed.cacheNamespace = !persist && restoredNamespace.length > 0 ? restoredNamespace : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
+    if (persist || restoredNamespace.length == 0) {
+      try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: parsed.relayUrl, token: parsed.token, hostId: parsed.hostId, cacheNamespace: parsed.cacheNamespace })) }
+      catch (_) { if (persist) throw new Error('无法保存连接配置，请检查浏览器存储权限'); parsed.cacheNamespace = '' }
     }
     this.disconnect()
     liveThreadLists.updates = [] as ThreadListUpdate[]
     connection.configurationRevision++
     this.config = parsed
+    connection.cacheNamespace = parsed.cacheNamespace ?? ''
     connection.configured = true
     connection.hostId = parsed.hostId
     connection.error = ''; connection.desktopNavigationError = ''
@@ -125,6 +129,7 @@ class MobileBridge {
     this.disconnect()
     connection.configurationRevision++
     this.config = null
+    connection.cacheNamespace = ''
     this.attempts = 0
     this.listingHost = ''
     connection.configured = false
@@ -443,7 +448,7 @@ class MobileBridge {
     // 先保存已授权的所选实例，刷新详情时沿用同一电脑；失败则保留原会话和订阅。
     const config = this.config
     if (config == null) throw new Error('请先连接电脑')
-    try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: config.relayUrl, token: config.token, hostId: id })) }
+    try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: config.relayUrl, token: config.token, hostId: id, cacheNamespace: config.cacheNamespace })) }
     catch (_) { throw new Error('无法保存所选电脑，请检查浏览器存储权限') }
     config.hostId = id
     const previous = connection.activeThreadId
