@@ -8,7 +8,6 @@ import { currentActivity } from './activity.mjs';
 import { normalizeGoal, goalRevision } from './goals.mjs';
 import { taskNotificationState } from './task-notifications.mjs';
 import { latestTurnSummary, boundedTurnMetadata, turnStatus } from './turn-failure.mjs';
-import { visibleThreadMentionText } from './thread-mention-presentation.mjs';
 
 /** 对本地快照应用 Immer 路径补丁，拒绝原型链路径和非法数组索引。 */
 export function applyPatches(state, patches) {
@@ -56,7 +55,7 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       let text = '';
       let summary;
       let imageParts=[];
-      if (['userMessage','steeringUserMessage'].includes(item.type)) { role='user'; const content=item.content ?? item.input; imageParts=Array.isArray(content)?content.filter(part=>['image','localImage'].includes(part?.type)).slice(0,MAX_IMAGES):[]; text=visibleThreadMentionText(textOf(content,imageParts.length>0)); const replies=parseQuestionReply(text); if(replies.length) text=replies.map(reply=>`${reply.question ?? '问题'}\n回答：${reply.answer}`).join('\n\n'); }
+      if (['userMessage','steeringUserMessage'].includes(item.type)) { role='user'; const content=item.content ?? item.input; imageParts=Array.isArray(content)?content.filter(part=>['image','localImage'].includes(part?.type)).slice(0,MAX_IMAGES):[]; text=textOf(content,imageParts.length>0); const replies=parseQuestionReply(text); if(replies.length) text=replies.map(reply=>`${reply.question ?? '问题'}\n回答：${reply.answer}`).join('\n\n'); }
       else if (item.type === 'userInputResponse') { role='user'; text=questionResponseText(item); }
       // 历史方案使用 plan/text，桌面确认项使用 planImplementation/planContent；统一展示，但确认状态仍只信任桌面确认项。
       else if (['plan','planImplementation'].includes(item.type)) { role='assistant'; const content=item.type==='plan'?item.text:item.planContent; text=typeof content==='string'?content:''; }
