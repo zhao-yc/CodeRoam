@@ -38,7 +38,7 @@ const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'pr
 const section = ref('main')
 const entries = ref([] as MenuComputer[])
 const panelWidth = Math.min(276, uni.getWindowInfo().windowWidth - 32)
-const mainHeight = computed((): number => Math.min(entries.value.length == 0 ? 392 : 366 + entries.value.reduce((height: number, entry: MenuComputer): number => height + 20 + (entry.online && !entry.usageLoading ? 38 : 0) + (entry.windows.length > 0 ? entry.windows.length * 24 : 26), 0), uni.getWindowInfo().windowHeight - 82))
+const mainHeight = computed((): number => Math.min(entries.value.length == 0 ? 392 : 386 + entries.value.reduce((height: number, entry: MenuComputer): number => height + 20 + (entry.online && !entry.usageLoading ? 38 : 0) + (entry.windows.length > 0 ? entry.windows.length * 24 : 26), 0), uni.getWindowInfo().windowHeight - 82))
 const archiveHeight = Math.max(120, Math.min(440, uni.getWindowInfo().windowHeight - 160))
 let revision = 0
 let archiveRevision = 0
@@ -97,7 +97,7 @@ onUnmounted(() => { revision++ })
 .menu-note { color: #7b827a; font-size: 13px; line-height: 22px; padding: 1px 32px 4px; }
 .usage-entry { padding-bottom: 4px; }
 .usage-computer { color: #7b827a; font-size: 12px; line-height: 18px; padding: 0 32px; }
-.usage-account { color: #59665f; font-size: 12px; line-height: 18px; padding: 1px 32px; lines: 2; text-overflow: ellipsis; }
+.usage-account { color: #59665f; font-size: 12px; line-height: 18px; padding: 1px 32px; max-height: 38px; overflow: hidden; lines: 2; text-overflow: ellipsis; }
 .usage-value { font-size: 14px; line-height: 22px; color: #202c28; padding: 1px 32px; }
 .archive-heading { flex-direction: row; align-items: center; padding: 0 8px 8px; }
 .back-action { position: relative; width: 36px; height: 36px; align-items: center; justify-content: center; }
@@ -111,6 +111,6 @@ onUnmounted(() => { revision++ })
 /* #ifdef WEB */
 .menu-panel { box-shadow: 0 12px 40px rgba(32, 44, 40, 0.14); }
 .menu-hitbox::after { border: 0; }
-.usage-account { overflow-wrap: anywhere; }
+.usage-account { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 /* #endif */
 </style>
