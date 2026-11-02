@@ -56,8 +56,8 @@ test('桥接重启的新快照会重新读取设置，消除抢先读取留下�
   context.connection.subscriptionRevision++; // 重启不会更换持久化 epoch，订阅确认必须有独立信号。
   assert.notEqual(watcher.read(),before);
   watcher.changed();
-  pending.shift().resolve({settings:{model:'model',mode:'default'},models:[{id:'model'}]});await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(context.settingsError.value,'');assert.equal(context.settings.value.model,'model');
+  pending.shift().resolve({settings:{model:'model',effort:'',serviceTier:'',mode:'default'},models:[{id:'model',defaultEffort:'high',efforts:['high']}]});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(context.settingsError.value,'');assert.equal(context.settings.value.model,'model');assert.equal(context.settings.value.effort,'high');
 });
 
 test('只有当前会话的订阅确认推进恢复标记，较旧回执不能覆盖新消息',()=>{

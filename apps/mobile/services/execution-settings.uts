@@ -3,7 +3,16 @@ export type SpeedOption = { id: string, label: string, description: string }
 export type ModelOption = { id: string, label: string, defaultEffort: string, efforts: string[], speeds: SpeedOption[], supportsImages: boolean }
 export type SettingsResponse = { settings: ExecutionSettings, models: ModelOption[] }
 
-// 快照可能省略默认强度；同一模型先保留已确认值，随后由只读请求核对。
+// 兼容旧连接服务：空值按电脑返回的当前模型目录解析，不能沿用另一模型或固定档位。
+export function resolveSettingsEffort(settings: ExecutionSettings, models: ModelOption[]): ExecutionSettings {
+  if (settings.effort.length > 0) return settings
+  const model = models.find((item: ModelOption): boolean => item.id == settings.model)
+  const effort = model?.defaultEffort ?? ''
+  if (effort.length == 0 || model?.efforts.includes(effort) != true) return settings
+  return { model: settings.model, effort: effort, serviceTier: settings.serviceTier, mode: settings.mode } as ExecutionSettings
+}
+
+// 快照可能省略强度；同一模型先保留已确认值，随后由只读请求核对。
 export function mergeSettingsSnapshot(current: ExecutionSettings | null, snapshot: ExecutionSettings): ExecutionSettings {
   if (snapshot.effort.length > 0 || current == null || current.model != snapshot.model) return snapshot
   return { model: snapshot.model, effort: current.effort, serviceTier: snapshot.serviceTier, mode: snapshot.mode } as ExecutionSettings
@@ -18,7 +27,7 @@ export function mergeSettingsRead(current: ExecutionSettings | null, response: E
 
 // 仅翻译名称，实际可选档位与排序始终来自当前电脑的模型目录。
 export function effortLabel(effort: string): string {
-  if (effort.length == 0) return '默认'
+  if (effort.length == 0) return '同步中…'
   if (effort == 'none') return '无'
   if (effort == 'minimal') return '最小'
   if (effort == 'low') return '低'

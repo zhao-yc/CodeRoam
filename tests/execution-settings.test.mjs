@@ -114,6 +114,45 @@ test('计划切换保留原始空强度条件，显示设置仍沿用协作模�
   }
 });
 
+test('桌面保存空强度时只读解析当前模型默认档位，不修改原桌面设置', async t => {
+  for (const empty of [null, undefined, '']) {
+    const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } });
+    t.after(() => adapter.close());
+    client.state.latestReasoningEffort = empty;
+    client.state.latestThreadSettings.effort = empty;
+    client.state.latestCollaborationMode.settings.reasoning_effort = empty;
+    await adapter.watch('thread', 'phone');
+    const result = await adapter.readSettings('thread', 'phone');
+    assert.equal(result.settings.effort, 'high');
+    assert.equal(client.state.latestReasoningEffort, empty);
+    assert.deepEqual(client.calls.map(call => call.method), ['thread-follower-read-model-settings']);
+    // 解析值只用于显示，更新时仍以原始空值检查并发。
+    await adapter.operate('thread.settings.update', { threadId: 'thread', changes: { mode: 'plan' } }, 'command', 'phone');
+    assert.equal(client.calls.find(call => call.method === 'thread-follower-update-thread-settings').params.condition.ifEffortEquals, empty);
+  }
+});
+
+test('模型目录不能确认默认强度时明确读取失败，有具体强度时不擅自改档', async t => {
+  const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => [{ ...models[0], defaultEffort: '' }] } });
+  t.after(() => adapter.close()); await adapter.watch('thread', 'phone');
+  assert.equal((await adapter.readSettings('thread', 'phone')).settings.effort, 'high');
+  client.state.latestReasoningEffort = null;
+  client.state.latestThreadSettings.effort = null;
+  client.state.latestCollaborationMode.settings.reasoning_effort = null; client.publish();
+  await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(adapter.readSettings('thread', 'phone'), { code: 'SETTINGS_UNAVAILABLE' });
+});
+
+test('读取回执模型发生变化时不继承旧模型强度', async t => {
+  const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } });
+  t.after(() => adapter.close()); await adapter.watch('thread', 'phone');
+  const request = client.request.bind(client);
+  client.request = (method, ...args) => method === 'thread-follower-read-model-settings'
+    ? Promise.resolve({ resultType: 'success', result: { settings: { model: 'model-b', reasoningEffort: null } } })
+    : request(method, ...args);
+  assert.deepEqual((await adapter.readSettings('thread', 'phone')).settings, { ...current, model: 'model-b', effort: 'medium' });
+});
+
 test('协作模式与保存模型不一致时，以保存字段检查并发并更新实际选项', async t => {
   const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } }); t.after(() => adapter.close());
   client.state.latestModel = 'saved-model';

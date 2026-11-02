@@ -44,7 +44,7 @@ function fixture() {
   };
 }
 
-test('空强度快照不清除已确认值，重新读取可以确认默认强度', async () => {
+test('空强度快照不清除已确认值，重新读取解析电脑模型的具体默认档位', async () => {
   const f = fixture(), c = f.context;
   c.settings.value = { ...initial };
   c.connection.snapshot.executionSettings = { ...initial, effort: '', mode: 'plan' };
@@ -53,8 +53,27 @@ test('空强度快照不清除已确认值，重新读取可以确认默认强�
   assert.equal(c.settings.value.mode, 'plan');
   assert.equal(f.pending.length, 1);
   await f.reply({ ...initial, effort: '', mode: 'plan' });
-  assert.equal(c.settings.value.effort, '');
-  assert.equal(c.effortLabel(c.settings.value.effort), '默认');
+  assert.equal(c.settings.value.effort, 'high');
+  assert.equal(c.effortLabel(c.settings.value.effort), '高');
+});
+
+test('首次空强度按同模型目录解析，不硬编码高档或沿用其他模型', async () => {
+  const f = fixture(), c = f.context;
+  c.settings.value = { ...initial, model: 'model-b', effort: 'high' };
+  c.loadSettings();
+  await f.reply({ ...initial, effort: '' }, [{ ...catalog[0], defaultEffort: 'low' }]);
+  assert.equal(c.settings.value.model, 'model-a');
+  assert.equal(c.settings.value.effort, 'low');
+  assert.equal(c.effortLabel(''), '同步中…');
+});
+
+test('未解析到实际强度时保留已确认值并允许重读，不把空值宣称为默认', async () => {
+  const f = fixture(), c = f.context;
+  c.settings.value = { ...initial }; c.loadSettings();
+  await f.reply({ ...initial, effort: '' }, [{ ...catalog[0], defaultEffort: '' }]);
+  assert.equal(c.settings.value.effort, 'high');
+  assert.ok(c.settingsError.value.includes('思考强度'));
+  assert.equal(f.timers.size, 1);
 });
 
 test('读取中到达不完整快照，回执补全强度并保留新的模式和速度', async () => {

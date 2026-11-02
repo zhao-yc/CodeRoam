@@ -12,7 +12,7 @@ import { NativeDesktop } from './native-desktop.mjs';
 import { openDesktopThread } from './desktop-launcher.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
 import { resetPlanAfterSend, preparePlanForSend } from './plan-reset.mjs';
-import { ModelCatalog, executionSettings, validateSettings } from './model-settings.mjs';
+import { ModelCatalog, executionSettings, validateSettings, resolveExecutionEffort } from './model-settings.mjs';
 import { AttachmentStore } from './attachment-store.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { readGoal, updateGoal } from './goals.mjs';
@@ -225,8 +225,11 @@ export class DesktopAdapter extends EventEmitter {
     const settings=response.result?.settings;
     if(response.resultType!=='success'||!settings?.model)throw new BridgeError('SETTINGS_UNAVAILABLE','电脑端暂不支持读取模型设置，请更新后重试');
     const current=executionSettings(entry.state)??{model:settings.model,effort:settings.reasoningEffort??'',serviceTier:'',mode:'default'};
+    // 回执切换了模型时，不能把旧模型的强度套到新模型；缺省档位按桌面目录解析。
+    if(current.model!==settings.model)current.effort='';
     current.model=settings.model;current.effort=settings.reasoningEffort??current.effort;
-    return {settings:current,models:this.modelCatalog.read(settings.modelProvider??entry.state.modelProvider??'openai')};
+    const models=this.modelCatalog.read(settings.modelProvider??entry.state.modelProvider??'openai');
+    return {settings:resolveExecutionEffort(current,models),models};
   }
 
   /** 只读刷新原生未读记录，失败保留未知，不猜测已读。 */

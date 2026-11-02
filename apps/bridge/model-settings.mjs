@@ -10,6 +10,15 @@ export function normalizeServiceTier(serviceTier) {
   return serviceTier == null || serviceTier === 'default' ? '' : serviceTier;
 }
 
+/** 桌面空强度表示采用该模型的具体默认档位，不是一个名为“默认”的档位。 */
+export function resolveExecutionEffort(settings, models) {
+  if (settings.effort) return settings;
+  const model = models.find(model => model.id === settings.model);
+  const effort = model?.defaultEffort;
+  if (!effort || !model.efforts.includes(effort)) throw new BridgeError('SETTINGS_UNAVAILABLE', '尚未读取到电脑端的思考强度，请刷新后重试');
+  return { ...settings, effort };
+}
+
 /** 只读桌面生成的模型目录，只向手机返回选择器需要的公开能力字段。 */
 export class ModelCatalog {
   constructor({ codexHome = path.join(os.homedir(), '.codex'), now = Date.now } = {}) {
