@@ -1,0 +1,52 @@
+<template>
+  <view class="delete-confirmation-overlay" @click="emit('cancel')">
+    <view class="delete-confirmation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-confirmation-title" aria-describedby="delete-confirmation-content" @click.stop>
+      <text id="delete-confirmation-title" class="delete-confirmation-title">最后确认</text>
+      <text id="delete-confirmation-content" class="delete-confirmation-content">{{ content }}</text>
+      <view class="delete-confirmation-actions">
+        <button id="delete-confirmation-delete" class="delete-confirmation-button delete-confirmation-destructive" hover-class="delete-confirmation-pressed" @click="emit('confirm')">永久删除</button>
+        <button id="delete-confirmation-cancel" class="delete-confirmation-button delete-confirmation-cancel" hover-class="delete-confirmation-pressed" @click="emit('cancel')">取消</button>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { onMounted, onUnmounted, nextTick } from 'vue'
+defineProps<{ content: string }>()
+const emit = defineEmits<{ (event: 'confirm'): void; (event: 'cancel'): void }>()
+
+// Web 的退出键只取消弹窗，默认焦点放在取消按钮，避免沿用上一次确认的焦点。
+// #ifdef WEB
+const onDialogKeydown = (event: KeyboardEvent) => {
+  if (event.key == 'Escape') { event.preventDefault(); event.stopPropagation(); emit('cancel'); return }
+  if (event.key != 'Tab') return
+  const confirm = document.getElementById('delete-confirmation-delete'); const cancel = document.getElementById('delete-confirmation-cancel')
+  if (confirm instanceof HTMLElement && cancel instanceof HTMLElement) { event.preventDefault(); (document.activeElement == cancel ? confirm : cancel).focus() }
+}
+onMounted(() => {
+  document.addEventListener('keydown', onDialogKeydown, true)
+  nextTick(() => {
+    const confirm = document.getElementById('delete-confirmation-delete'); if (confirm instanceof HTMLElement) confirm.tabIndex = 0
+    const cancel = document.getElementById('delete-confirmation-cancel'); if (cancel instanceof HTMLElement) { cancel.tabIndex = 0; cancel.focus() }
+  })
+})
+onUnmounted(() => { document.removeEventListener('keydown', onDialogKeydown, true) })
+// #endif
+</script>
+
+<style>
+.delete-confirmation-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 120; background-color: rgba(0, 0, 0, 0.4); align-items: center; justify-content: center; }
+.delete-confirmation-dialog { width: 300px; max-width: 88%; border-radius: 12px; background-color: #ffffff; overflow: hidden; }
+.delete-confirmation-title { margin-top: 24px; padding: 0 20px; color: #202c28; font-size: 18px; line-height: 26px; font-weight: bold; text-align: center; }
+.delete-confirmation-content { padding: 16px 22px 24px; color: #59615d; font-size: 15px; line-height: 24px; text-align: center; }
+.delete-confirmation-actions { flex-direction: row; border-top-width: 1px; border-top-style: solid; border-top-color: #eceeeb; }
+.delete-confirmation-button { flex: 1; height: 50px; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: #ffffff; color: #202c28; font-size: 17px; line-height: 50px; text-align: center; }
+.delete-confirmation-destructive { color: #bb3f44; }
+.delete-confirmation-cancel { border-left-width: 1px; border-left-style: solid; border-left-color: #eceeeb; }
+.delete-confirmation-pressed { background-color: #f1f3ef; }
+/* #ifdef WEB */
+.delete-confirmation-content { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.delete-confirmation-button::after { border: none; }
+/* #endif */
+</style>

@@ -90,6 +90,7 @@
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">会话操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">会话信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="会话信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档会话"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除对话"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+    <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
     <task-notice :active="pageVisible" header-id="conversation-header" :host-id="pageHostId" :thread-id="pageThreadId" />
@@ -121,6 +122,7 @@ import { presentConversationMessages } from '../../services/message-presentation
 import { FileReport } from '../../services/file-reports.uts'
 import FileChangeSummary from '../../components/file-change-summary/file-change-summary.uvue'
 import FileChangeSheet from '../../components/file-change-sheet/file-change-sheet.uvue'
+import DeleteConfirmation from '../../components/delete-confirmation/delete-confirmation.uvue'
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
@@ -465,8 +467,19 @@ function showConversationInfo() { closeActions(); uni.showModal({ title: '会话
 let deletePromptOpen = false
 let deletePromptRevision = 0
 let deleteLoading = false
+const deleteFinalVisible = ref(false)
+const deleteFinalContent = ref('')
+let deleteFinalAnswer: ((confirmed: boolean) => void) | null = null
+// 第二次确认使用明确的左右按钮，关闭或返回始终只执行取消。
+function showDeleteFinalModal(content: string, answer: (confirmed: boolean) => void) {
+  uni.hideKeyboard(); deleteFinalContent.value = content; deleteFinalAnswer = answer; deleteFinalVisible.value = true
+}
+function answerDeleteFinal(confirmed: boolean) {
+  const answer = deleteFinalAnswer; deleteFinalAnswer = null; deleteFinalVisible.value = false; deleteFinalContent.value = ''
+  if (answer != null) answer(confirmed)
+}
 const pendingDeleteCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.method == 'thread.delete' && entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value)?.id ?? '')
-function invalidateDeletePrompt() { deletePromptRevision++; deletePromptOpen = false }
+function invalidateDeletePrompt() { deletePromptRevision++; deletePromptOpen = false; deleteFinalAnswer = null; deleteFinalVisible.value = false; deleteFinalContent.value = '' }
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.connected, () => { invalidateDeletePrompt() }, { flush: 'sync' })
 function hideDeleteLoading() { if (deleteLoading) { deleteLoading = false; uni.hideLoading() } }
 onHide(() => { invalidateDeletePrompt() })
@@ -503,15 +516,15 @@ function deleteFromMenu() {
   const finishPrompt = () => { if (revision == deletePromptRevision) deletePromptOpen = false }
   uni.showModal({ title: '永久删除对话', content: '将永久删除该对话及其子智能体对话，无法恢复。', confirmText: '继续', confirmColor: '#bb3f44', cancelText: '取消', success: (first) => {
     if (!first.confirm || !current()) { finishPrompt(); return }
-    uni.showModal({ title: '最后确认', content: title + '\n\n正在执行的任务会先停止。确认永久删除吗？', confirmText: '永久删除', confirmColor: '#bb3f44', cancelText: '取消', success: (second) => {
-      if (!second.confirm || !current()) { finishPrompt(); return }
+    showDeleteFinalModal(title + '\n\n正在执行的任务会先停止。确认永久删除吗？', (confirmed: boolean) => {
+      if (!confirmed || !current()) { finishPrompt(); return }
       finishPrompt(); busy.value = true; pendingAction.value = 'delete'; operationError.value = ''
       deleteLoading = true; uni.showLoading({ title: '正在永久删除…', mask: true })
       bridge.request('thread.delete', { threadId }, true).then((result: UTSJSONObject) => {
         hideDeleteLoading(); busy.value = false; pendingAction.value = ''
         if (!acceptDeleteReceipt(hostId, threadId, result) && isCurrentPage()) operationError.value = '永久删除回执需要核对，请勿重复提交'
       }, (error: Error) => { hideDeleteLoading(); busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { operationError.value = error.message; notify(error.message) } })
-    }, fail: (_) => { finishPrompt() } })
+    })
   }, fail: (_) => { finishPrompt() } })
 }
 
@@ -1173,7 +1186,7 @@ function operateGoal(action: string, objective: string, revision: string) {
 function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (activeTurnId.value.length > 0) stop() }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
-onBackPress((): boolean => { if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
+onBackPress((): boolean => { if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false })
 </script>
 
 <style>
