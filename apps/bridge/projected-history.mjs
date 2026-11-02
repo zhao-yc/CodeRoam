@@ -5,7 +5,8 @@ import {BridgeError} from '../../packages/protocol/contracts.mjs';
 import {normalizeConversation} from './conversation.mjs';
 import {projectedTurnMetadata} from './turn-failure.mjs';
 
-const visibleTypes=['userMessage','steeringUserMessage','userInputResponse','agentMessage','assistantMessage','imageGeneration','commandExecution','fileChange'];
+// 方案是独立的可见项目，不能仅查询普通回复；保留原编号以复用历史分页游标。
+const visibleTypes=['userMessage','steeringUserMessage','userInputResponse','agentMessage','assistantMessage','plan','planImplementation','imageGeneration','commandExecution','fileChange'];
 
 /** 只从索引指定的会话文件读取继承关系；归档源会话也必须位于受控目录并匹配身份。 */
 function sessionMetadata(row, home, inherited) {

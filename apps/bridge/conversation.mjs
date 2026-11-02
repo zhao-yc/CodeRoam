@@ -8,6 +8,7 @@ import { currentActivity } from './activity.mjs';
 import { normalizeGoal, goalRevision } from './goals.mjs';
 import { taskNotificationState } from './task-notifications.mjs';
 import { latestTurnSummary, boundedTurnMetadata, turnStatus } from './turn-failure.mjs';
+import { visibleThreadMentionText } from './thread-mention-presentation.mjs';
 
 /** 对本地快照应用 Immer 路径补丁，拒绝原型链路径和非法数组索引。 */
 export function applyPatches(state, patches) {
@@ -47,7 +48,7 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
   const seen = new Set();
   for (const turn of turns) {
     // 先用原文确认重复关系，不能根据截断后的相同尾部误删另一份最终回复。
-    const planContents = new Set((turn.items ?? []).filter(item => item.type === 'planImplementation' && typeof item.planContent === 'string').map(item => item.planContent.trim()));
+    const planContents = new Set((turn.items ?? []).filter(item => ['plan','planImplementation'].includes(item.type)).map(item => item.type === 'plan' ? item.text : item.planContent).filter(text => typeof text === 'string').map(text => text.trim()));
     for (const item of turn.items ?? []) {
       if (seen.has(item.id)) continue;
       seen.add(item.id);
@@ -55,9 +56,10 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       let text = '';
       let summary;
       let imageParts=[];
-      if (['userMessage','steeringUserMessage'].includes(item.type)) { role='user'; const content=item.content ?? item.input; imageParts=Array.isArray(content)?content.filter(part=>['image','localImage'].includes(part?.type)).slice(0,MAX_IMAGES):[]; text=textOf(content,imageParts.length>0); const replies=parseQuestionReply(text); if(replies.length) text=replies.map(reply=>`${reply.question ?? '问题'}\n回答：${reply.answer}`).join('\n\n'); }
+      if (['userMessage','steeringUserMessage'].includes(item.type)) { role='user'; const content=item.content ?? item.input; imageParts=Array.isArray(content)?content.filter(part=>['image','localImage'].includes(part?.type)).slice(0,MAX_IMAGES):[]; text=visibleThreadMentionText(textOf(content,imageParts.length>0)); const replies=parseQuestionReply(text); if(replies.length) text=replies.map(reply=>`${reply.question ?? '问题'}\n回答：${reply.answer}`).join('\n\n'); }
       else if (item.type === 'userInputResponse') { role='user'; text=questionResponseText(item); }
-      else if (item.type === 'planImplementation') { role='assistant'; text=typeof item.planContent === 'string' ? item.planContent : ''; }
+      // 历史方案使用 plan/text，桌面确认项使用 planImplementation/planContent；统一展示，但确认状态仍只信任桌面确认项。
+      else if (['plan','planImplementation'].includes(item.type)) { role='assistant'; const content=item.type==='plan'?item.text:item.planContent; text=typeof content==='string'?content:''; }
       else if (item.type === 'imageGeneration' && item.status === 'completed') {
         // 生成图片是独立可见记录，只同步图片，不发送提示词、生成参数或本地保存路径。
         role='assistant';
@@ -84,8 +86,8 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       // 日常快照只同步数量；查看时仅读取桌面目标消息已附加的图片，不抓取远程地址。
       const images=String(item.id)===imageMessageId?readMessageImages(imageParts,imageIndex):[];
       // 方案及与其原文完全相同的最终回复保留全文，供展示层准确去重；总预算仍有效。
-      const preservePlan = item.type === 'planImplementation' || (role === 'assistant' && item.phase === 'final_answer' && planContents.has(text.trim()));
-      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
+      const preservePlan = ['plan','planImplementation'].includes(item.type) || (role === 'assistant' && item.phase === 'final_answer' && planContents.has(text.trim()));
+      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type==='plan'?'planImplementation':item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }
   // 先给提问和最终报告预留空间，避免长任务的命令记录挤掉所有早期对话。
@@ -94,7 +96,7 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
   if (preserveDialogue) {
     for (const message of [...messages].reverse()) {
       if (selectedIds.size >= Math.min(40, maxMessages)) break;
-      if ((message.role === 'user' || message.phase === 'final_answer') && total + message.text.length <= Math.min(90000, maxCharacters)) {
+      if ((message.role === 'user' || message.phase === 'final_answer' || message.kind === 'planImplementation') && total + message.text.length <= Math.min(90000, maxCharacters)) {
         selectedIds.add(message.id); total += message.text.length;
       }
     }
