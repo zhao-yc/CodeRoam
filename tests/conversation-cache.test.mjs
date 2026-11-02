@@ -69,7 +69,7 @@ test('应用级清理保留离线电脑内容，welcome 完成后才核对完整
 });
 
 /** 执行实际详情页，模拟缓存首屏、最新回执和阅读锚点，不把缓存注入实时快照。 */
-function pageFixture() {
+function pageFixture(finishInitial = true) {
   const f=fixture(),watchers=[],loads=[],hides=[],unloads=[],timers=new Map(),calls=[];let timer=0;
   f.c.deletedThread=()=>false;
   const connection={configured:true,cacheNamespace:'pair',configurationRevision:1,hostId:'pc',activeThreadId:'thread',snapshot:null,connected:true,error:'',conversationError:'',epoch:'',sequence:0,subscriptionRevision:0,pendingCommandId:'',pendingCommands:[],computers:[{id:'pc',online:true}]};
@@ -81,7 +81,7 @@ function pageFixture() {
   const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,refresh};',f.c);
   const p=f.c.page;loads.forEach(fn=>fn({threadId:'thread',title:'列表标题'}));
-  for(const [id,timer] of timers)if(timer.delay===50){timers.delete(id);timer.fn();}
+  if(finishInitial)for(const [id,timer] of timers)if(timer.delay===50){timers.delete(id);timer.fn();}
   let previous=p.displayConversation.value;
   return {...f,p,geometry,connection,calls,watchers,timers,hides,unloads,live:()=>{watchers.find(w=>w.source===p.liveConversation).callback();watchers.find(w=>w.source===p.displayConversation).callback(p.displayConversation.value,previous);previous=p.displayConversation.value;}};
 }
@@ -90,6 +90,12 @@ test('缓存先于 PC 回执呈现，后台失败保留内容与重试，缓存�
   const f=pageFixture();assert.deepEqual(f.calls,['watch']);assert.equal(f.connection.snapshot,null);assert.equal(f.p.canWrite.value,false);assert.equal(f.p.showingCachedContent.value,true);
   assert.deepEqual(Array.from(f.p.displayConversation.value.messages,m=>m.text),['更早正文','旧正文']);assert.equal(f.p.historyPage.value.cursor,'');assert.equal(f.p.historyPage.value.hasMore,true);
   f.connection.conversationError='读取超时';assert.equal(f.p.cacheSyncHint.value,'同步失败，当前显示缓存');assert.equal(f.p.displayConversation.value.messages.length,2);f.p.refresh();assert.equal(f.calls.length,2);
+});
+
+test('缓存首屏定位期间卡片挂载不产生旧位置补偿，完成初始定位后才锁定阅读',()=>{
+  const f=pageFixture(false);f.connection.snapshot=snapshot();f.live();assert.equal(f.p.historyScrollTop.value,0);assert.equal(f.p.following.value,false);
+  const initial=[...f.timers.values()].find(timer=>timer.delay===50);initial.fn();f.p.following.value=false;
+  f.c.nextTick=fn=>{f.geometry.top=70;fn();};f.live();assert.equal(f.p.historyScrollTop.value,50);
 });
 
 test('实时快照替换旧尾部、保留额外历史，阅读锚点与跟随选择不被抢占',()=>{
