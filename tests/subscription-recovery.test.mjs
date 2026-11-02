@@ -44,18 +44,19 @@ test('桥接重启的新快照会重新读取设置，消除抢先读取留下�
   const start=source.indexOf('watch((): string => connection.hostId +');
   const watchers=source.slice(start,source.indexOf('\nfunction onDraftLineChange',start));
   const subscriptions=[],pending=[];
-  const context=vm.createContext({settingsRequest:0,settingsSnapshotRevision:0,settings:{value:null},models:{value:[]},settingsLoading:{value:false},settingsBusy:{value:false},settingsError:{value:''},readOnly:{value:false},composerMenu:{value:''},
+  const context=vm.createContext({settingsRequest:0,settingsSnapshotRevision:0,settingsRetryTimer:0,settingsRetryCount:0,setTimeout:()=>1,clearTimeout(){},settings:{value:null},models:{value:[]},settingsLoading:{value:false},settingsBusy:{value:false},settingsError:{value:''},readOnly:{value:false},composerMenu:{value:''},
     connection:{hostId:'pc',activeThreadId:'thread',connected:true,epoch:'persistent-epoch',subscriptionRevision:0,snapshot:{supportsExecutionSettings:true}},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},
     isCurrentPage:()=>true,closeComposerMenu(){},confirmDefaultMode(){},updateMenuHeight(){},
     bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))},watch:(read,changed)=>subscriptions.push({read,changed})});
-  vm.runInContext(stripTypeScriptTypes(method+'\n'+watchers,{mode:'transform'}),context);
+  const helpers=fs.readFileSync('apps/mobile/services/execution-settings.uts','utf8').replace(/\bexport /g,'');
+  vm.runInContext(stripTypeScriptTypes(helpers+'\n'+method+'\n'+watchers,{mode:'transform'}),context);
   const watcher=subscriptions[0],before=watcher.read();watcher.changed();
   pending.shift().reject(new Error('请先加载此会话后再操作'));await new Promise(resolve=>setImmediate(resolve));
   assert.match(context.settingsError.value,/请先加载/);
   context.connection.subscriptionRevision++; // 重启不会更换持久化 epoch，订阅确认必须有独立信号。
   assert.notEqual(watcher.read(),before);
   watcher.changed();
-  pending.shift().resolve({settings:{model:'model',mode:'default'},models:[]});await new Promise(resolve=>setImmediate(resolve));
+  pending.shift().resolve({settings:{model:'model',mode:'default'},models:[{id:'model'}]});await new Promise(resolve=>setImmediate(resolve));
   assert.equal(context.settingsError.value,'');assert.equal(context.settings.value.model,'model');
 });
 

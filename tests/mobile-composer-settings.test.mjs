@@ -21,7 +21,9 @@ function fixture() {
     readDraftFiles: (host, thread) => files.get(host + ':' + thread) ?? [], saveDraftFiles: (host, thread, value) => files.set(host + ':' + thread, value), readDraftImages: () => [],
     readFileBase64: async () => Buffer.from('附件测试内容').toString('base64'), FILE_CHUNK_BYTES: 192 * 1024,
   });
-  vm.runInContext(stripTypeScriptTypes(methods, { mode: 'transform' }), context);
+  Object.assign(context, { settingsRetryTimer: 0, settingsRetryCount: 0, setTimeout: () => 1, clearTimeout() {} });
+  const helpers = fs.readFileSync('apps/mobile/services/execution-settings.uts', 'utf8').replace(/\bexport /g, '');
+  vm.runInContext(stripTypeScriptTypes(helpers + '\n' + methods, { mode: 'transform' }), context);
   return { context, calls, pending, files };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));

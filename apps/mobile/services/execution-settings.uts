@@ -3,8 +3,22 @@ export type SpeedOption = { id: string, label: string, description: string }
 export type ModelOption = { id: string, label: string, defaultEffort: string, efforts: string[], speeds: SpeedOption[], supportsImages: boolean }
 export type SettingsResponse = { settings: ExecutionSettings, models: ModelOption[] }
 
+// 快照可能省略默认强度；同一模型先保留已确认值，随后由只读请求核对。
+export function mergeSettingsSnapshot(current: ExecutionSettings | null, snapshot: ExecutionSettings): ExecutionSettings {
+  if (snapshot.effort.length > 0 || current == null || current.model != snapshot.model) return snapshot
+  return { model: snapshot.model, effort: current.effort, serviceTier: snapshot.serviceTier, mode: snapshot.mode } as ExecutionSettings
+}
+
+// 迟到回执只能补全同一模型缺失的强度，不能覆盖较新的模型、模式或速度。
+export function mergeSettingsRead(current: ExecutionSettings | null, response: ExecutionSettings, snapshot: ExecutionSettings | null, snapshotChanged: boolean): ExecutionSettings {
+  if (!snapshotChanged || current == null) return response
+  if (snapshot == null || snapshot.model != response.model || snapshot.effort.length > 0 || current.model != response.model) return current
+  return { model: current.model, effort: response.effort, serviceTier: current.serviceTier, mode: current.mode } as ExecutionSettings
+}
+
 // 仅翻译名称，实际可选档位与排序始终来自当前电脑的模型目录。
 export function effortLabel(effort: string): string {
+  if (effort.length == 0) return '默认'
   if (effort == 'none') return '无'
   if (effort == 'minimal') return '最小'
   if (effort == 'low') return '低'

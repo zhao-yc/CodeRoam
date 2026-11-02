@@ -131,7 +131,7 @@ import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.
 import GoalCard from '../../components/goal-card/goal-card.uvue'
 import { ThreadGoal } from '../../services/goals.uts'
 import ComposerOptions from '../../components/composer-options/composer-options.uvue'
-import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
+import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel, mergeSettingsSnapshot, mergeSettingsRead } from '../../services/execution-settings.uts'
 import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '../../services/files.uts'
 // 操作错误仅属于当前页面，公共连接和会话读取错误分别展示。
 const operationError = ref('')
@@ -169,6 +169,8 @@ const menuHeight = ref(280)
 const menuBottom = ref(134)
 const menuWidth = ref(Math.min(330, uni.getWindowInfo().windowWidth - 28))
 let settingsRequest = 0
+let settingsRetryTimer = 0
+let settingsRetryCount = 0
 // 设置快照每次变化都推进代次，读写回执不能覆盖较新的桌面模式。
 let settingsSnapshotRevision = 0
 const hiddenPlanId = ref('')
@@ -409,7 +411,7 @@ function onComposerConfirm() {
 
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 // 原页面卸载后仍结算提交记录，但异步回执不再修改首页提示或重新同步。
-onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; settingsRequest++; bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
+onUnload(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; settingsRequest++; clearTimeout(settingsRetryTimer); bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
 function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
 // 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
 function closeComposerMenu() { composerMenu.value = '' }
@@ -825,7 +827,8 @@ function updateMenuHeight() {
 function changeComposerSection(section: string) { composerMenu.value = section; nextTick(() => { updateMenuHeight() }) }
 // 电脑快照是当前设置的来源；切换电脑、会话或断线后使迟到响应失效。
 function loadSettings() {
-  if (!isCurrentPage() || !connection.connected || readOnly.value || connection.snapshot?.supportsExecutionSettings != true || settingsBusy.value) return
+  if (!isCurrentPage() || !connection.connected || readOnly.value || connection.snapshot?.supportsExecutionSettings != true || settingsBusy.value || settingsLoading.value) return
+  clearTimeout(settingsRetryTimer)
   const request = ++settingsRequest
   const snapshotRevision = settingsSnapshotRevision
   settingsLoading.value = true; settingsError.value = ''
@@ -833,11 +836,23 @@ function loadSettings() {
     if (request != settingsRequest || !isCurrentPage()) return
     const response = JSON.parse<SettingsResponse>(JSON.stringify(result))
     settingsLoading.value = false
-    if (response == null || response.settings == null || response.models == null) { settingsError.value = '电脑端设置暂不可用，请更新连接服务后重试'; return }
-    if (snapshotRevision == settingsSnapshotRevision) settings.value = response.settings
+    if (response == null || response.settings == null || response.models == null || response.models.length == 0) { settingsLoadFailed('电脑端设置暂不可用，请更新连接服务后重试'); return }
+    settings.value = mergeSettingsRead(settings.value, response.settings, connection.snapshot?.executionSettings ?? null, snapshotRevision != settingsSnapshotRevision)
     models.value = response.models
+    settingsRetryCount = 0
     if (composerMenu.value.length > 0) updateMenuHeight()
-  }, (error: Error) => { if (request == settingsRequest && isCurrentPage()) { settingsLoading.value = false; settingsError.value = error.message } })
+  }, (error: Error) => { if (request == settingsRequest && isCurrentPage()) settingsLoadFailed(error.message) })
+}
+
+// 只重试读取两次；定时器绑定当前请求，断线、离页和设置写入后不能重放。
+function settingsLoadFailed(message: string) {
+  settingsLoading.value = false; settingsError.value = message
+  if (settingsRetryCount >= 2) return
+  const request = settingsRequest
+  settingsRetryCount++
+  settingsRetryTimer = setTimeout(() => {
+    if (request == settingsRequest && isCurrentPage()) loadSettings()
+  }, settingsRetryCount * 1000)
 }
 
 function openComposerMenu(section: string) {
@@ -845,7 +860,7 @@ function openComposerMenu(section: string) {
   actionsVisible.value = false
   if (composerMenu.value == section) { closeComposerMenu(); return }
   changeComposerSection(section)
-  if (settings.value == null && connection.snapshot?.supportsExecutionSettings == true) loadSettings()
+  if ((settings.value == null || models.value.length == 0 || settingsError.value.length > 0) && connection.snapshot?.supportsExecutionSettings == true) { settingsRetryCount = 0; loadSettings() }
 }
 
 // 选中即同步电脑输入框设置，无需发送消息；失败和未知结果均保留最后确认值。
@@ -986,12 +1001,15 @@ function sizeLabel(size: number): string { return fileSizeLabel(size) }
 
 // 桥接重启后，即使模型能力字段相同，也要在新快照到达后重新读取设置，清除抢先请求的错误。
 watch((): string => connection.hostId + ':' + connection.activeThreadId + ':' + connection.subscriptionRevision.toString() + ':' + connection.connected.toString() + ':' + (connection.snapshot?.supportsExecutionSettings == true).toString() + ':' + (connection.snapshot?.readOnly == true).toString(), (_current: string, _previous: string) => {
-  settingsRequest++; settingsLoading.value = false; closeComposerMenu()
+  settingsRequest++; settingsLoading.value = false; clearTimeout(settingsRetryTimer); settingsRetryCount = 0; closeComposerMenu()
   if (!isCurrentPage() || !connection.connected || readOnly.value) { settings.value = null; models.value = [] as ModelOption[]; return }
   if (connection.snapshot?.supportsExecutionSettings == true) loadSettings()
 })
 watch((): string => JSON.stringify(connection.snapshot?.executionSettings ?? null), (_current: string, _previous: string) => {
-  if (isCurrentPage() && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.executionSettings != null) { settingsSnapshotRevision++; settings.value = connection.snapshot!.executionSettings! }
+  if (!isCurrentPage() || connection.snapshot?.threadId != pageThreadId.value || connection.snapshot?.executionSettings == null) return
+  const snapshot = connection.snapshot!.executionSettings!
+  settingsSnapshotRevision++; settings.value = mergeSettingsSnapshot(settings.value, snapshot)
+  if (snapshot.effort.length == 0 && !settingsLoading.value && !settingsBusy.value) loadSettings()
 })
 
 
