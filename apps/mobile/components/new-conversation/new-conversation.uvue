@@ -1,20 +1,28 @@
 <template>
-  <view class="new-conversation" :style="{ paddingBottom: keyboardInset + 'px' }">
-    <view class="new-space" @click="dismissEditor"></view>
+  <view class="new-conversation" :class="{ 'new-conversation-compact': !props.expanded }" :style="{ paddingBottom: keyboardInset + 'px' }">
+    <view v-show="props.expanded" class="new-space" @click="dismissEditor"></view>
     <!-- 多台已授权电脑时才显示切换入口，单台时直接使用当前电脑。 -->
-    <view v-if="connection.computers.length > 1" class="destination-row action-frame"><view class="destination-icon"><app-icon :class="currentComputerIcon == 'laptop' ? 'destination-laptop' : ''" :name="currentComputerIcon" :size="currentComputerIcon == 'laptop' ? 22 : 20" tone="muted" /></view><text class="destination-label">{{ computerLabel }}</text><view class="destination-chevron"><app-icon name="chevron-down" :size="16" tone="muted" /></view><button class="action-hitbox" :disabled="busy" aria-label="选择执行电脑" @click="openPicker('computers')"></button></view>
-    <view class="destination-row action-frame"><view class="destination-icon"><app-icon class="destination-folder" name="folder" :size="20" tone="muted" /></view><text class="destination-label">{{ projectLabel }}</text><view class="destination-chevron"><app-icon name="chevron-down" :size="16" tone="muted" /></view><button class="action-hitbox" :disabled="busy" aria-label="选择执行项目" @click="openPicker('projects')"></button></view>
-    <view class="new-dock"><view class="new-panel">
-      <scroll-view direction="vertical" :show-scrollbar="false" :scroll-into-view="contentTarget" class="editor-content" :style="{ height: editorContentHeight + 'px' }">
+    <view v-if="props.expanded && connection.computers.length > 1" class="destination-row action-frame"><view class="destination-icon"><app-icon :class="currentComputerIcon == 'laptop' ? 'destination-laptop' : ''" :name="currentComputerIcon" :size="currentComputerIcon == 'laptop' ? 22 : 20" tone="muted" /></view><text class="destination-label">{{ computerLabel }}</text><view class="destination-chevron"><app-icon name="chevron-down" :size="16" tone="muted" /></view><button class="action-hitbox" :disabled="busy" aria-label="选择执行电脑" @click="openPicker('computers')"></button></view>
+    <view v-show="props.expanded" class="destination-row action-frame"><view class="destination-icon"><app-icon class="destination-folder" name="folder" :size="20" tone="muted" /></view><text class="destination-label">{{ projectLabel }}</text><view class="destination-chevron"><app-icon name="chevron-down" :size="16" tone="muted" /></view><button class="action-hitbox" :disabled="busy" aria-label="选择执行项目" @click="openPicker('projects')"></button></view>
+    <view class="new-dock">
+      <!-- 提示放在面板上方，连接、发送和错误状态均不挤动底部图标。 -->
+      <view v-if="props.expanded && (busy || error.length > 0 || connection.error.length > 0)" class="editor-feedback"><text v-if="busy" class="editor-note">{{ progress }}</text><text v-else class="editor-error">{{ error.length > 0 ? error : connection.error }}</text></view>
+      <button v-if="props.expanded && !busy && error.length > 0 && !projectsLoading && (projects.length == 0 || models.length == 0)" class="retry-button" @click="reloadOptions">重新读取</button>
+      <view class="new-panel" :class="{ 'new-panel-compact': !props.expanded }">
+      <view class="new-composer-stage" :style="{ height: editorStageHeight + 'px' }">
+      <scroll-view direction="vertical" :show-scrollbar="false" :scroll-into-view="contentTarget" :aria-hidden="!props.expanded" class="editor-content" :class="{ 'editor-content-compact': !props.expanded }" :style="{ height: visibleContentHeight + 'px' }">
       <view v-if="draft.images.length > 0" class="draft-images"><view v-for="image in draft.images" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
       <view v-for="file in draft.files" :key="file.id" class="draft-file"><app-icon name="file" :size="21" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'uploading' ? '正在上传 ' + file.progress + '%' : fileSize(file.size) }}</text></view><button class="file-remove" :disabled="busy" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
-      <view id="new-draft-input"><textarea :value="draft.text" :focus="focused" :disabled="busy" :adjust-position="false" :maxlength="32000" class="new-input" :style="{ height: draftHeight + 'px' }" placeholder="问问 Codex" @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"></textarea></view>
+      <view id="new-draft-input"><textarea :value="draft.text" :focus="focused" :disabled="busy || !props.expanded" :adjust-position="false" :maxlength="32000" class="new-input" :style="{ height: visibleInputHeight + 'px' }" placeholder="问问 Codex" @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"></textarea></view>
       </scroll-view>
-      <view class="new-actions"><view class="add-action action-frame" :style="{ opacity: (busy || imageBusy) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="busy || imageBusy" aria-label="添加附件、插件、计划模式或追求目标" @click="openOptions('add')"></button></view><permissions-control :project-id="projectId" :selected-mode="draft.permissionMode" :disabled="busy || creationPendingId.length > 0" @select="selectPermission" /><view v-if="draft.settings?.mode == 'plan'" class="plan-chip action-frame"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="busy || creationPendingId.length > 0" aria-label="关闭计划模式" @click="composerAction('plan')"></button></view><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新对话" @click="send"></button></view></view>
-    </view>
-      <!-- 状态提示独立占行，连接进度与错误都在输入框外自然换行。 -->
-      <view v-if="busy || error.length > 0 || connection.error.length > 0" class="editor-feedback"><text v-if="busy" class="editor-note">{{ progress }}</text><text v-else class="editor-error">{{ error.length > 0 ? error : connection.error }}</text></view>
-      <button v-if="!busy && error.length > 0 && !projectsLoading && (projects.length == 0 || models.length == 0)" class="retry-button" @click="reloadOptions">重新读取</button>
+      <text v-if="!props.expanded" class="new-entry-placeholder">问问 Codex</text>
+      <!-- 加号共用同一节点，左右及底部边距在两种状态下保持一致。 -->
+      <view class="new-composer-add"><view class="add-action action-frame" :style="{ opacity: (busy || imageBusy) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="busy || imageBusy || !props.expanded" aria-label="添加附件、插件、计划模式或追求目标" @click="openOptions('add')"></button></view></view>
+      <view v-show="props.expanded" class="new-actions"><permissions-control :project-id="projectId" :selected-mode="draft.permissionMode" :disabled="busy || creationPendingId.length > 0" @select="selectPermission" /><view v-if="draft.settings?.mode == 'plan'" class="plan-chip action-frame"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="busy || creationPendingId.length > 0" aria-label="关闭计划模式" @click="composerAction('plan')"></button></view><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view></view>
+      <view v-show="props.expanded" class="new-composer-send"><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新对话" @click="send"></button></view></view>
+      </view>
+      <button v-if="!props.expanded" class="action-hitbox new-entry-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="expandEditor"></button>
+      </view>
     </view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="picker.length > 0 || menu.length > 0" class="new-overlay" @click="closeMenus">
@@ -48,17 +56,19 @@ import { validateFile, fileSizeLabel } from '../../services/files.uts'
 // 组件每次重新打开都解除旧创建目标，保留尚未发送的输入与正在提交的流程。
 beginNewConversation()
 
-const emit = defineEmits<{ busy: [value: boolean], created: [threadId: string], dismiss: [] }>()
+const props = withDefaults(defineProps<{ expanded?: boolean }>(), { expanded: false })
+const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadId: string], dismiss: [] }>()
 const projectId = ref(''), projects = ref<NewProject[]>([]), models = ref<ModelOption[]>([])
 const projectsLoading = ref(false), settingsLoading = ref(false)
 const error = ref(''), settingsError = ref(''), busy = ref(false), imageBusy = ref(false), progress = ref('')
 const focused = ref(false), draftHeight = ref(64), keyboardInset = ref(0), picker = ref(''), menu = ref('')
 const menuWidth = Math.min(330, uni.getWindowInfo().windowWidth - 28)
-const baseWindowHeight = uni.getWindowInfo().windowHeight
+let baseWindowHeight = uni.getWindowInfo().windowHeight
 const currentWindowHeight = ref(baseWindowHeight)
 const contentTarget = ref('')
 let projectRequest = 0, settingsRequest = 0
 let alive = true
+let editorRevision = 0, editorLayoutTimer = 0
 const draft = computed((): NewDraft => newDraft(connection.hostId, projectId.value))
 const creationPendingId = computed((): string => draft.value.pendingCommandId.length > 0 ? draft.value.pendingCommandId : bridge.pendingCommand(connection.hostId, draft.value.threadId))
 const computerOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online))
@@ -68,20 +78,26 @@ const computerLabel = computed((): string => connection.computers.find((computer
 const projectLabel = computed((): string => projectsLoading.value ? '正在读取项目…' : projects.value.find((project: NewProject): boolean => project.id == projectId.value)?.label ?? '选择项目')
 const modelSupportsImages = computed((): boolean => models.value.find((model: ModelOption): boolean => model.id == draft.value.settings?.model)?.supportsImages != false)
 const modelLabel = computed((): string => settingsLoading.value ? '正在读取设置…' : draft.value.settings == null ? '跟随电脑端' : shortModelLabel(models.value.find((model: ModelOption): boolean => model.id == draft.value.settings?.model)?.label ?? draft.value.settings!.model) + ' ' + effortLabel(draft.value.settings!.effort))
-const canSend = computed((): boolean => !busy.value && !imageBusy.value && !projectsLoading.value && !settingsLoading.value && connection.connected && computerOnline.value && creationPendingId.value.length == 0 && projectId.value.length > 0 && (draft.value.text.trim().length > 0 || draft.value.images.length > 0 || draft.value.files.length > 0) && (draft.value.images.length == 0 || modelSupportsImages.value))
+const canSend = computed((): boolean => props.expanded && !busy.value && !imageBusy.value && !projectsLoading.value && !settingsLoading.value && connection.connected && computerOnline.value && creationPendingId.value.length == 0 && projectId.value.length > 0 && (draft.value.text.trim().length > 0 || draft.value.images.length > 0 || draft.value.files.length > 0) && (draft.value.images.length == 0 || modelSupportsImages.value))
 const pickerHeight = computed((): number => Math.max(100, Math.min(340, currentWindowHeight.value - keyboardInset.value - 270)))
 const editorContentHeight = computed((): number => Math.min(draftHeight.value + (draft.value.images.length > 0 ? 70 : 0) + draft.value.files.length * 56, Math.max(64, currentWindowHeight.value - keyboardInset.value - 300)))
+// 常驻编辑节点在收起时只占一行，工具栏始终预留相同的底部高度。
+const visibleInputHeight = computed((): number => props.expanded ? draftHeight.value : 24)
+const visibleContentHeight = computed((): number => props.expanded ? editorContentHeight.value : 24)
+const editorStageHeight = computed((): number => props.expanded ? visibleContentHeight.value + 58 : 44)
+// 单行时整块胶囊都是新对话入口，不提前打开附件菜单或创建会话。
+function expandEditor() { if (!props.expanded) emit('expand') }
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 function closeMenus() { picker.value = ''; menu.value = '' }
 // 点击空白区沿用首页返回逻辑，保留草稿；提交期间保持编辑区可见。
 function dismissEditor() { if (busy.value) return; closeMenus(); focused.value = false; uni.hideKeyboard(); emit('dismiss') }
 function openConnection() { closeMenus(); uni.navigateTo({ url: '/pages/connection/index' }) }
 function openPicker(section: string) { if (busy.value) return; focused.value = false; uni.hideKeyboard(); menu.value = ''; picker.value = section }
-function openOptions(section: string) { if (busy.value || imageBusy.value) return; picker.value = ''; menu.value = menu.value == section ? '' : section }
+function openOptions(section: string) { if (!props.expanded || busy.value || imageBusy.value) return; picker.value = ''; menu.value = menu.value == section ? '' : section }
 function changeSection(section: string) { menu.value = section }
 
 function loadSettings() {
-  if (projectId.value.length == 0 || !connection.connected || !computerOnline.value || busy.value) return
+  if (!props.expanded || projectId.value.length == 0 || !connection.connected || !computerOnline.value || busy.value) return
   const hostId = connection.hostId, id = projectId.value, request = ++settingsRequest
   settingsLoading.value = true; settingsError.value = ''
   bridge.request('thread.create.settings', { projectId: id }).then((result: UTSJSONObject) => {
@@ -96,7 +112,7 @@ function loadSettings() {
 
 // 项目来自电脑的完整保存清单，默认选择在当前电脑中重新验证。
 function loadProjects() {
-  if (!connection.configured || !connection.connected || !computerOnline.value || busy.value) return
+  if (!props.expanded || !connection.configured || !connection.connected || !computerOnline.value || busy.value) return
   const hostId = connection.hostId, request = ++projectRequest
   projectsLoading.value = true; error.value = ''
   bridge.request('projects.list', {}).then((result: UTSJSONObject) => {
@@ -155,7 +171,7 @@ function chooseImages(source: string) {
 }
 // 固定粘贴时的电脑与项目草稿，处理期间切换目标也不会串入其他草稿。
 async function pasteImages(paths: string[]) {
-  if (!alive || busy.value || imageBusy.value) return
+  if (!alive || !props.expanded || busy.value || imageBusy.value) return
   if (!modelSupportsImages.value) { notify('当前模型不支持图片，请切换模型'); return }
   const count = remaining()
   if (count == 0) { notify('每次最多添加3个附件'); return }
@@ -191,18 +207,18 @@ function composerAction(action: string) {
 function focusDraftInput() {
   const hostId = connection.hostId, selectedProjectId = projectId.value
   focused.value = false
-  nextTick(() => { if (alive && hostId == connection.hostId && selectedProjectId == projectId.value && !busy.value) focused.value = true })
+  nextTick(() => { if (alive && props.expanded && hostId == connection.hostId && selectedProjectId == projectId.value && !busy.value) focused.value = true })
 }
 function removeImage(id: string) { if (!busy.value) draft.value.images = draft.value.images.filter((image: DraftImage): boolean => image.id != id) }
 function removeFile(id: string) { if (!busy.value) draft.value.files = draft.value.files.filter((file: DraftFile): boolean => file.id != id) }
 function previewImage(src: string) { uni.previewImage({ urls: draft.value.images.map((image: DraftImage): string => image.src), current: src }) }
 function fileSize(size: number): string { return fileSizeLabel(size) }
-function updateText(event: UniInputEvent) { draft.value.text = event.detail.value }
+function updateText(event: UniInputEvent) { if (props.expanded) draft.value.text = event.detail.value }
 // 附件和长文本在面板内滚动，键盘弹出后仍为电脑、项目和发送按钮保留位置。
-function showDraftInput() { contentTarget.value = ''; nextTick(() => { contentTarget.value = 'new-draft-input' }) }
-function onDraftFocus() { focused.value = true; showDraftInput() }
-function onLineChange(event: UniTextareaLineChangeEvent) { draftHeight.value = Math.max(64, Math.min(144, event.detail.height)); showDraftInput() }
-function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) { currentWindowHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - currentWindowHeight.value); keyboardInset.value = event.detail.height > 0 ? Math.max(0, event.detail.height - resized) : 0 }
+function showDraftInput() { contentTarget.value = ''; nextTick(() => { if (alive && props.expanded) contentTarget.value = 'new-draft-input' }) }
+function onDraftFocus() { if (!props.expanded) return; focused.value = true; showDraftInput() }
+function onLineChange(event: UniTextareaLineChangeEvent) { if (!props.expanded) return; draftHeight.value = Math.max(64, Math.min(144, event.detail.height)); showDraftInput() }
+function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) { if (!props.expanded) { keyboardInset.value = 0; return }; currentWindowHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - currentWindowHeight.value); keyboardInset.value = event.detail.height > 0 ? Math.max(0, event.detail.height - resized) : 0 }
 async function send() {
   if (!canSend.value) return
   busy.value = true; emit('busy', true); closeMenus(); error.value = ''
@@ -210,8 +226,27 @@ async function send() {
   catch (reason) { if (alive) error.value = (reason as Error).message }
   finally { busy.value = false; emit('busy', false) }
 }
-onMounted(() => { nextTick(() => { focused.value = true }); loadProjects() })
-onUnmounted(() => { alive = false; projectRequest++; settingsRequest++ })
+// 每次展开仍开始独立创建流程；关闭使旧聚焦、读取和动画回调失效，草稿保留。
+function syncEditorVisibility(expanded: boolean) {
+  const revision = ++editorRevision
+  clearTimeout(editorLayoutTimer); focused.value = false; closeMenus()
+  if (!expanded) { projectRequest++; settingsRequest++; projectsLoading.value = false; settingsLoading.value = false; keyboardInset.value = 0; return }
+  beginNewConversation(); error.value = ''; settingsError.value = ''
+  baseWindowHeight = uni.getWindowInfo().windowHeight; currentWindowHeight.value = baseWindowHeight
+  loadProjects()
+  nextTick(() => { if (alive && props.expanded && revision == editorRevision) focused.value = true })
+  settleEditorLayout()
+}
+// 为 200ms 过渡额外留一帧，长文本及附件只在最新展开状态下补测滚动位置。
+function settleEditorLayout() {
+  clearTimeout(editorLayoutTimer)
+  if (!props.expanded) return
+  const revision = editorRevision
+  editorLayoutTimer = setTimeout(() => { if (alive && props.expanded && revision == editorRevision) showDraftInput() }, 220)
+}
+watch((): boolean => props.expanded, syncEditorVisibility, { immediate: true, flush: 'post' })
+watch((): number => editorStageHeight.value, () => { settleEditorLayout() }, { flush: 'post' })
+onUnmounted(() => { alive = false; editorRevision++; clearTimeout(editorLayoutTimer); projectRequest++; settingsRequest++ })
 
 let unbindImagePaste: () => void = () => {}
 onMounted(() => { unbindImagePaste = bindImagePaste('.new-input', pasteImages) })
@@ -229,7 +264,8 @@ watch((): string => draft.value.images.length.toString() + ':' + draft.value.fil
 </script>
 
 <style>
-.new-conversation { flex: 1; height: 0; min-height: 0; position: relative; }
+.new-conversation { flex-grow: 1; flex-shrink: 1; height: 0; min-height: 0; position: relative; }
+.new-conversation-compact { flex-grow: 0; flex-shrink: 0; height: auto; }
 .new-space { flex: 1; min-height: 8px; }
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
@@ -242,18 +278,26 @@ watch((): string => draft.value.images.length.toString() + ':' + draft.value.fil
 .destination-chevron { width: 16px; height: 24px; flex-shrink: 0; align-items: center; justify-content: center; }
 /* 固定文字行高，轻微上移以补偿系统字体的基线留白。 */
 .destination-label { height: 24px; line-height: 24px; color: #657269; font-size: 16px; margin: 0 8px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; transform: translateY(-1px); }
-.new-dock { flex-shrink: 0; padding: 12px 12px 8px; }
-.new-panel { border-radius: 24px; padding: 14px 12px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
-.new-input { width: 100%; min-height: 64px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
-.editor-content { flex-shrink: 0; }
-.new-actions { flex-direction: row; align-items: center; margin-top: 6px; }
+.new-dock { flex-shrink: 0; padding: 4px 16px 12px; }
+.new-panel { position: relative; border-radius: 24px; padding: 2px 3px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; transition-property: border-radius; transition-duration: 200ms; transition-timing-function: ease-out; }
+.new-panel-compact { border-radius: 25px; }
+/* 保持列表原有的 50px 胶囊和加号坐标，编辑空间只向上增加。 */
+.new-composer-stage { position: relative; flex-shrink: 0; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
+.new-composer-add { position: absolute; left: 0; bottom: 0; width: 44px; height: 44px; }
+.new-composer-send { position: absolute; right: 0; bottom: 2px; width: 40px; height: 40px; }
+.new-input { width: 100%; min-height: 24px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
+.editor-content { position: absolute; left: 8px; right: 8px; bottom: 50px; flex-shrink: 0; transition-property: height, bottom; transition-duration: 200ms; transition-timing-function: ease-out; }
+.editor-content-compact { left: 43px; right: 8px; bottom: 10px; opacity: 0; }
+.new-entry-placeholder { position: absolute; left: 45px; bottom: 10px; color: #94998f; font-size: 16px; line-height: 24px; }
+.new-entry-hitbox { z-index: 2; border-radius: 25px; }
+.new-actions { position: absolute; left: 44px; right: 40px; bottom: 0; height: 44px; flex-direction: row; align-items: center; }
 /* 图形与透明点击层分离，与权限、模型和发送操作共用中心轴。 */
 .add-action { align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0; padding: 0; background-color: transparent; }
 .model-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
 .model-label { flex-shrink: 1; min-width: 0; color: #657269; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
 .send-action { width: 40px; height: 40px; border-radius: 20px; background-color: #285c49; align-items: center; justify-content: center; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
-.editor-feedback { flex-shrink: 0; padding: 8px 6px 0; }
+.editor-feedback { flex-shrink: 0; padding: 4px 6px 8px; }
 .editor-note, .editor-error { font-size: 12px; line-height: 18px; }
 .editor-note { color: #7b827a; }
 .editor-error { color: #8d4d2b; }
