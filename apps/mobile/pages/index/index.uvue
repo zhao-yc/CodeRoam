@@ -16,7 +16,7 @@
     <view v-show="!editingNewConversation" class="list-shell">
     <view v-if="connection.computers.length > 1" class="computer-tabs">
       <view :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
-      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="'computer-tab-' + computer.id" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view :class="['tab-dot', computer.online && connection.connected ? 'dot-online' : 'dot-offline']"></view><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view></view></scroll-view>
+      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="'computer-tab-' + computer.id" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view></view></scroll-view>
     </view>
     <view v-if="listHint.length > 0 && !showThreadLoading" class="list-hint"><text class="list-hint-text">{{ listHint }}</text></view>
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
@@ -131,6 +131,17 @@ let archiveToastRequest = 0
 // 筛选只影响列表；当前执行电脑在打开会话或新建编辑区时才切换。
 const selectedComputers = computed((): ComputerThreads[] => threadList.computers.filter((entry: ComputerThreads): boolean => selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value))
 const allVisibleThreads = computed((): ComputerThread[] => visibleComputerThreads(selectedComputerId.value, ''))
+type ComputerIndicator = { hostId: string, state: string }
+// 汇总各电脑完整列表，与会话行共用状态判断；筛选和搜索不能隐藏其他电脑的提醒。
+const computerIndicators = computed((): ComputerIndicator[] => {
+  const threads = visibleComputerThreads('', '')
+  return connection.computers.map((computer: Computer): ComputerIndicator => {
+    const states = threads.filter((thread: ComputerThread): boolean => thread.hostId == computer.id).map((thread: ComputerThread): string => threadState(thread))
+    return { hostId: computer.id, state: states.indexOf('running') >= 0 ? 'running' : states.indexOf('unread') >= 0 ? 'unread' : 'idle' } as ComputerIndicator
+  })
+})
+// 运行优先于未读；空列表、已读、等待操作及离线均不生成常驻在线圆点。
+function computerIndicator(hostId: string): string { return computerIndicators.value.find((entry: ComputerIndicator): boolean => entry.hostId == hostId)?.state ?? 'idle' }
 const selectedComputerOnline = computed((): boolean => connection.connected && selectedComputers.value.some((entry: ComputerThreads): boolean => entry.online))
 const showThreadLoading = computed((): boolean => computerThreadsLoading(selectedComputerId.value))
 const listUnavailable = computed((): boolean => selectedComputers.value.length > 0 && selectedComputers.value.every((entry: ComputerThreads): boolean => !entry.online || entry.error.length > 0))
@@ -260,7 +271,9 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .computer-tab-content { flex-direction: row; height: 44px; }
 .tab-label { color: #202c28; font-size: 14px; line-height: 22px; }
 .computer-name { max-width: 120px; margin-left: 6px; lines: 1; text-overflow: ellipsis; }
-.tab-dot { width: 6px; height: 6px; border-radius: 3px; margin-right: 7px; flex-shrink: 0; }
+.computer-indicator { width: 16px; height: 16px; margin-right: 7px; flex-shrink: 0; align-items: center; justify-content: center; }
+.computer-spinner { width: 16px; height: 16px; border-color: #285c49; }
+.computer-unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #285c49; }
 .list-hint { padding: 0 16px 6px; flex-shrink: 0; }
 .list-hint-text { color: #7b827a; font-size: 12px; line-height: 18px; }
 .thread-computer-meta { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
@@ -290,8 +303,6 @@ onBackPress((): boolean => { if (menuVisible.value) { menuVisible.value = false;
 .empty-title { color: #202c28; font-size: 18px; line-height: 28px; text-align: center; }
 .description { color: #7b827a; font-size: 14px; line-height: 23px; margin-top: 12px; text-align: center; }
 .empty-action { height: 44px; line-height: 44px; font-size: 14px; margin-top: 22px; padding: 0 22px; justify-content: center; }
-.dot-online { background-color: #285c49; }
-.dot-offline { background-color: #94998f; }
 /* #ifdef WEB */
 .thread-title, .thread-project, .thread-computer, .computer-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
