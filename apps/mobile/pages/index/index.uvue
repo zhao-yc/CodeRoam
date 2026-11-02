@@ -41,7 +41,7 @@
       </view>
     </scroll-view>
     </view>
-    <view v-if="!editingNewConversation" class="new-entry-dock"><view class="new-entry action-frame"><text class="new-entry-plus">＋</text><text class="new-entry-placeholder">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="openNewConversation"></button></view><view class="entry-safe-area"></view></view>
+    <view v-if="!editingNewConversation" class="new-entry-dock"><view class="new-entry action-frame"><view class="new-entry-plus"><composer-plus /></view><text class="new-entry-placeholder">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新对话" @click="openNewConversation"></button></view><view class="entry-safe-area"></view></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
     <new-conversation v-if="editingNewConversation" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
   </view>
@@ -53,6 +53,7 @@ import { bridge, connection, Computer, computerIcon, taskState, conversationTask
 import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, syncThreadComputers, refreshComputerThreads, disconnectThreadLists } from '../../services/thread-list.uts'
 import { consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
+import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
 import TaskStatus from '../../components/task-status/task-status.uvue'
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import NewConversation from '../../components/new-conversation/new-conversation.uvue'
@@ -224,8 +225,9 @@ onBackPress((): boolean => { if (editingComputerId.value.length > 0) { if (!conn
 .new-entry-dock { flex-shrink: 0; padding: 4px 16px 12px; }
 .entry-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 .new-entry { height: 50px; border-radius: 25px; border-style: solid; border-width: 1px; border-color: #e3e5dc; background-color: #ffffff; flex-direction: row; align-items: center; padding: 0 14px; }
-.new-entry-plus { color: #202c28; font-size: 28px; line-height: 38px; margin-right: 12px; }
-.new-entry-placeholder { color: #94998f; font-size: 16px; }
+/* 加号与占位文字共用入口中心轴，图形不依赖字体基线。 */
+.new-entry-plus { width: 22px; height: 22px; margin-right: 12px; flex-shrink: 0; align-items: center; justify-content: center; }
+.new-entry-placeholder { color: #94998f; font-size: 16px; line-height: 24px; }
 /* 全部标签固定，电脑标签在剩余宽度内横向滚动。 */
 .computer-tabs { height: 56px; padding: 4px 16px 8px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .computer-tab { height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }

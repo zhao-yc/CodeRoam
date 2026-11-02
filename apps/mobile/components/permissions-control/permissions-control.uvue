@@ -81,8 +81,9 @@ watch(context, () => { request++; state.value = null; opened.value = false; load
 onUnmounted(() => { emit('visibility', false); alive = false; request++; if (busy.value) emit('busy', false) })
 </script>
 <style>
-.permission-control { width: 38px; height: 42px; flex-shrink: 0; }
-.permission-trigger { position: relative; width: 38px; height: 42px; padding: 0; margin: 0; background-color: transparent; align-items: center; justify-content: center; }
+/* 工具栏权限入口与加号、模型入口保持相同高度，图标居中。 */
+.permission-control { width: 38px; height: 44px; flex-shrink: 0; }
+.permission-trigger { position: relative; width: 38px; height: 44px; padding: 0; margin: 0; background-color: transparent; align-items: center; justify-content: center; }
 .permission-trigger-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
 .permission-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 250; background-color: rgba(0,0,0,0.12); }
 .permission-panel { position: absolute; border-radius: 22px; padding: 8px; background-color: #f8f8f3; border-width: 1px; border-color: #e3e5dc; }
