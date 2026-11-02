@@ -49,6 +49,12 @@ export function validateRequest(message) {
     if (/[\u0000-\u001f\u007f]/.test(displayName) || !['code', 'terminal', 'laptop', 'desktop'].includes(icon) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || Object.keys(message.params).some(key => !['displayName', 'icon', 'expectedRevision'].includes(key))) throw new BridgeError('BAD_PARAMS', '连接显示信息参数无效');
     return message;
   }
+  if(message.params.planAction!==undefined) {
+    if(message.method!=='turn.send')throw new BridgeError('BAD_PARAMS','计划确认只能用于新一轮消息');
+    requireString(message.params.threadId,'会话编号',200);requireString(message.params.planId,'计划编号',300);
+    if(!['implement','feedback'].includes(message.params.planAction)||Object.keys(message.params).some(key=>!['threadId','planId','planAction','text'].includes(key)))throw new BridgeError('BAD_PARAMS','计划确认参数无效');
+    if(message.params.planAction==='feedback')requireString(message.params.text,'修改意见',32000);
+  }
   if(message.params.planMode!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!['default','plan'].includes(message.params.planMode)||message.params.resetPlanAfterSend!==true))throw new BridgeError('BAD_PARAMS','本次计划模式参数无效');
   if(message.params.resetPlanAfterSend===true&&!['default','plan'].includes(message.params.planMode))throw new BridgeError('BAD_PARAMS','请明确本次消息的执行模式');
   if(message.params.resetPlanAfterSend!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||typeof message.params.resetPlanAfterSend!=='boolean'))throw new BridgeError('BAD_PARAMS','一次性计划标记只能用于发送消息');

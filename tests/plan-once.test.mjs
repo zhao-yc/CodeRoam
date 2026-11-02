@@ -60,3 +60,21 @@ test('协议限制一次性标记和本次模式，快照增量保留能力',()=
  const good=request('validation');assert.doesNotThrow(()=>validateRequest(good));for(const params of [{planMode:'other'},{resetPlanAfterSend:'true'},{planMode:null},{resetPlanAfterSend:true,planMode:undefined}])assert.throws(()=>validateRequest({...good,params:{...good.params,...params}}));assert.throws(()=>validateRequest({...good,method:'turn.stop'}));
  const snapshot=normalizeConversation({id:'thread',turns:[]}),first={snapshot:{...snapshot,supportsPlanReset:false},seq:1},update=conversationUpdate(first,snapshot);assert.equal(applyConversationUpdate(first,update,2).snapshot.supportsPlanReset,true);
 });
+
+/** 使用原生计划项验证确认内容、模式和重复提交。 */
+function planRequest(id,action='implement',text='修改建议'){return {v:1,type:'request',deviceId:'phone',requestId:'plan-confirm-request-'+id,method:'turn.send',params:{threadId:'thread',planId:'plan-item',planAction:action,text}};}
+function addPlan(f){f.client.state.turns=[{turnId:'planned',status:'completed',items:[{id:'plan-item',type:'planImplementation',turnId:'planned',planContent:'# 合成计划\n完成测试功能',isCompleted:false}]}];}
+test('计划确认发送桌面完整正文并切换普通模式，重复请求不重复执行',async t=>{
+ const f=fixture(t);addPlan(f);const message=planRequest('implement');const first=await f.agent.handleRequest(message);assert.equal(first.error,undefined);assert.deepEqual(f.client.started,['default']);
+ const send=f.client.calls.find(c=>c.method==='thread-follower-start-turn');assert.equal(send.params.turnStart.request.input[0].text,'PLEASE IMPLEMENT THIS PLAN:\n# 合成计划\n完成测试功能');
+ const count=f.client.calls.length;assert.deepEqual(await f.agent.handleRequest(message),first);assert.equal(f.client.calls.length,count);
+});
+test('修改意见保持计划模式，过期计划不会发送',async t=>{
+ const f=fixture(t);addPlan(f);const feedback=await f.agent.handleRequest(planRequest('feedback','feedback'));assert.equal(feedback.error,undefined);assert.deepEqual(f.client.started,['plan']);
+ f.client.state.turns[0].items[0].isCompleted=true;const stale=await f.agent.handleRequest(planRequest('stale'));assert.equal(stale.error.code,'STALE_PLAN');assert.equal(f.client.started.length,1);
+});
+test('计划正文正常展示，执行中及已处理计划不再显示确认',()=>{
+ const raw={id:'thread',turns:[{turnId:'planned',status:'completed',items:[{id:'plan',type:'planImplementation',planContent:'合成计划',isCompleted:false}]}]};
+ const snapshot=normalizeConversation(raw);assert.equal(snapshot.messages[0].role,'assistant');assert.equal(snapshot.pendingPlan.text,'合成计划');
+ raw.turns.push({turnId:'running',status:'inProgress',items:[]});assert.equal(normalizeConversation(raw).pendingPlan,null);raw.turns.pop();raw.turns[0].items[0].isCompleted=true;assert.equal(normalizeConversation(raw).pendingPlan,null);
+});

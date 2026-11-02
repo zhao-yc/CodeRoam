@@ -38,6 +38,13 @@
             </scroll-view>
           </template>
         </view>
+        <!-- 计划确认与聊天草稿独立，避免覆盖附件和未发送正文。 -->
+        <view v-if="pendingPlan != null && hiddenPlanId != pendingPlan.id" class="plan-confirm">
+          <text class="plan-confirm-title">实施此计划？</text>
+          <button class="button-primary" :disabled="!canWrite || busy" @click="replyPlan('implement')">{{ pendingAction == 'plan' ? '提交中…' : '是，实施此计划' }}</button>
+          <textarea class="plan-feedback" v-model="planFeedback" :disabled="busy" placeholder="否，告诉 Codex 应该如何调整" :maxlength="32000"></textarea>
+          <view class="plan-confirm-actions"><button class="button-secondary" :disabled="busy" @click="hidePlan">跳过</button><button class="button-secondary" :disabled="!canWrite || busy || planFeedback.trim().length == 0" @click="replyPlan('feedback')">发送修改意见</button></view>
+        </view>
         <view id="questions-anchor"></view>
         <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
         <view v-for="group in pendingQuestionGroups" :key="group.id" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
@@ -125,6 +132,24 @@ const menuWidth = ref(Math.min(330, uni.getWindowInfo().windowWidth - 28))
 let settingsRequest = 0
 // 设置快照每次变化都推进代次，读写回执不能覆盖较新的桌面模式。
 let settingsSnapshotRevision = 0
+const hiddenPlanId = ref('')
+const planFeedback = ref('')
+const pendingPlan = computed(() => connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.readOnly != true ? connection.snapshot?.pendingPlan ?? null : null)
+// 切换会话或计划时清空旧反馈。
+watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + (pendingPlan.value?.id ?? ''), () => { planFeedback.value = ''; hiddenPlanId.value = '' })
+function hidePlan() { hiddenPlanId.value = pendingPlan.value?.id ?? '' }
+// 使用幂等写入通道；未知结果由命令状态核对，不自动重发。
+function replyPlan(action: string) {
+  if (!canWrite.value || busy.value || pendingPlan.value == null) return
+  const planId = pendingPlan.value!.id
+  const hostId = pageHostId.value
+  const threadId = pageThreadId.value
+  busy.value = true; pendingAction.value = 'plan'; operationError.value = ''
+  bridge.request('turn.send', { threadId, planId, planAction: action, text: planFeedback.value.trim() }, true).then((_: UTSJSONObject) => {
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { hiddenPlanId.value = planId; planFeedback.value = ''; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
+  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+}
 const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
 const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
 // 只有当前会话已同步后才能判断能力，初次加载或切换会话时不显示升级提示。
@@ -973,6 +998,10 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
 .settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
 .settings-trigger-label { flex-shrink: 1; min-width: 0; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
+.plan-confirm { padding: 16px; margin: 12px 0; border: 1px solid #deded8; border-radius: 18px; background-color: #ffffff; }
+.plan-confirm-title { font-size: 18px; font-weight: 600; margin-bottom: 14px; }
+.plan-feedback { height: 72px; width: 100%; margin-top: 14px; font-size: 14px; }
+.plan-confirm-actions { flex-direction: row; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 .plan-chip { align-self: flex-start; height: 30px; padding: 0 10px; margin-bottom: 10px; border-radius: 15px; flex-direction: row; align-items: center; background-color: #e8eee6; }
 .plan-label { color: #285c49; font-size: 13px; margin: 0 6px; }
 .draft-file { flex-direction: row; align-items: center; padding: 9px; margin-bottom: 8px; background-color: #e8eee6; border-radius: 12px; }

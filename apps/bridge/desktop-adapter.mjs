@@ -253,6 +253,16 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   async operate(method,params,commandId,deviceId,checkpoint=()=>{}) {
+    // 正文由最新桌面计划提供，手机只能选择计划编号。
+    if(method==='turn.send'&&params.planAction!==undefined) {
+      await this.watch(params.threadId,deviceId,{fresh:true,history:false});
+      const plan=normalizeConversation(this.subscribed(params.threadId,deviceId).state).pendingPlan;
+      if(!plan||plan.id!==params.planId)throw new BridgeError('STALE_PLAN','计划已处理或发生变化，请重新同步');
+      if(!['implement','feedback'].includes(params.planAction))throw new BridgeError('BAD_PARAMS','计划操作无效');
+      const text=params.planAction==='implement'?'PLEASE IMPLEMENT THIS PLAN:\n'+plan.text:params.text;
+      if(typeof text!=='string'||!text.trim()||text.length>32000)throw new BridgeError('BAD_PARAMS','计划或修改意见为空或过长');
+      return this.operate('turn.send',{threadId:params.threadId,text,...(params.planAction==='implement'?{planMode:'default',resetPlanAfterSend:true}:{})},commandId,deviceId,checkpoint);
+    }
     if(method==='thread.permissions.update')return updatePermissions(this,params,commandId,deviceId,checkpoint);
     if(method==='thread.goal.update')return updateGoal(this,params,commandId,deviceId);
     // 问答在回传前读取所有者最新快照，避免使用手机停留期间的旧问题。
