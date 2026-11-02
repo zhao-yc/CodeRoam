@@ -1,0 +1,21 @@
+import type { ChatMessage } from './bridge.uts'
+import { MessagePresentation, MessageAttachment, presentAnnotatedMessages } from './annotations.uts'
+import { AttachmentPresentation, parseMessageAttachments } from './message-attachments.uts'
+
+// 在展示副本上依次解析附件和注释；历史合并、图片请求和执行过程仍使用原消息。
+export function presentConversationMessages(messages: ChatMessage[]): MessagePresentation[] {
+  const attachments = messages.map((message: ChatMessage): AttachmentPresentation => message.role == 'user' ? parseMessageAttachments(message.text) : { text: message.text, attachments: [] as MessageAttachment[] })
+  const prepared = messages.map((message: ChatMessage, index: number): ChatMessage => ({ id: message.id, role: message.role, kind: message.kind, summary: message.summary, phase: message.phase, imageCount: message.imageCount, text: attachments[index].text, turnId: message.turnId, status: message.status }))
+  const result = presentAnnotatedMessages(prepared)
+  result.forEach((presentation: MessagePresentation, index: number) => {
+    if (messages[index].role != 'user') return
+    let imageIndex = 0
+    // 有真实缩略图的图片不重复显示文件名；缺少原图的附件仍保留名称。
+    presentation.attachments = attachments[index].attachments.filter((attachment: MessageAttachment): boolean => {
+      if (attachment.kind != 'image') return true
+      imageIndex++
+      return imageIndex > (messages[index].imageCount ?? 0)
+    })
+  })
+  return result
+}

@@ -1,14 +1,15 @@
 import type { ChatMessage } from './bridge.uts'
 
 export type MessageAnnotation = { index: number, text: string, comment: string, available: boolean }
-export type MessagePresentation = { messageId: string, text: string, annotations: MessageAnnotation[], referenceIndices: number[] }
+export type MessageAttachment = { name: string, kind: string }
+export type MessagePresentation = { messageId: string, text: string, annotations: MessageAnnotation[], referenceIndices: number[], attachments?: MessageAttachment[] }
 type AnnotationInput = { text?: string, annotation?: string }
-type CodeRange = { start: number, end: number }
+export type CodeRange = { start: number, end: number }
 type AnnotationSource = { turnId: string, annotations: MessageAnnotation[] }
 export type AnnotationReferences = { text: string, indices: number[] }
 
 // 跳过围栏、缩进代码和行内代码；只转换正文协议，代码示例和转义字符保持原样。
-function codeRanges(source: string): CodeRange[] {
+export function codeRanges(source: string): CodeRange[] {
   const ranges = [] as CodeRange[]
   let fenceSymbol = ''
   let fenceSize = 0

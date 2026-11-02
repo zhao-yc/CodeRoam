@@ -1,13 +1,13 @@
 <template>
   <view class="message-images">
-    <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFill" class="thumbnail" :aria-label="'预览第' + (index + 1) + '张图片'" @click="preview(source)" /></view>
-    <view v-else class="placeholder"><text class="hint">{{ error.length > 0 ? error : connected ? '正在加载图片…' : '等待连接后加载图片' }}</text><button v-if="error.length > 0 && connected" class="retry" @click="loadImages">重新加载</button></view>
+    <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFit" :class="['thumbnail', sources.length == 1 ? 'thumbnail-single' : '']" :aria-label="'预览第' + (index + 1) + '张图片'" @click="preview(source)" /></view>
+    <view v-else :class="['placeholder', (props.count ?? 1) == 1 ? 'placeholder-single' : '']"><text class="hint">{{ error.length > 0 ? error : connected ? '正在加载图片…' : '等待连接后加载图片' }}</text><button v-if="error.length > 0 && connected" class="retry" @click="loadImages">重新加载</button></view>
   </view>
 </template>
 <script setup lang="uts">
 import { ref, watch, onUnmounted } from 'vue'
 import { bridge } from '../../services/bridge.uts'
-const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean }>()
+const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, count?: number }>()
 const sources = ref<string[]>([])
 const error = ref('')
 let loading = false
@@ -41,10 +41,12 @@ watch((): boolean => props.connected, (connected: boolean) => {
 onUnmounted(() => { alive = false; requestVersion++ })
 </script>
 <style>
-.message-images { margin-top: 8px; }
-.thumbnails { flex-direction: row; flex-wrap: wrap; }
-.thumbnail { width: 96px; height: 96px; margin: 0 6px 6px 0; border-radius: 8px; }
+.message-images { align-self: flex-start; }
+.thumbnails { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+.thumbnail { width: 96px; height: 96px; border-radius: 8px; background-color: #e0e7df; }
+.thumbnail-single { width: 128px; height: 128px; }
 .placeholder { min-width: 96px; min-height: 96px; padding: 8px; border-radius: 8px; background-color: #e0e7df; align-items: center; justify-content: center; }
+.placeholder-single { min-width: 128px; min-height: 128px; }
 .hint { font-size: 12px; color: #7b827a; }
 .retry { margin-top: 6px; font-size: 12px; color: #285c49; background-color: transparent; }
 </style>

@@ -23,9 +23,10 @@
         <view v-else-if="connection.snapshot == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得会话内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步会话。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
         <view v-for="entry in timeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
+            <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" />
+            <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
             <markdown-body v-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.text }}</text>
-            <message-images v-if="(entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" />
             <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
               <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
               <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
@@ -104,7 +105,8 @@ import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
-import { MessageAnnotation, MessagePresentation, presentAnnotatedMessages, parseAnnotationReferences } from '../../services/annotations.uts'
+import { MessageAnnotation, MessagePresentation, parseAnnotationReferences } from '../../services/annotations.uts'
+import { presentConversationMessages } from '../../services/message-presentations.uts'
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
@@ -216,14 +218,14 @@ let historyFollowRevision = 0
 const displayConversation = computed(() => conversationWithHistory(connection.snapshot, historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
-const messagePresentations = computed((): MessagePresentation[] => presentAnnotatedMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
+const messagePresentations = computed((): MessagePresentation[] => presentConversationMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
 const selectedAnnotations = computed((): MessageAnnotation[] => messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 // 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
 const timeline = computed((): TimelineEntry[] => {
   const entries = reportTimeline(displayConversation.value, expandedReportIds.value)
   entries.forEach((entry: TimelineEntry) => {
     const presentation = messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == entry.id)
-    if (presentation != null) { entry.text = presentation.text; entry.annotations = presentation.annotations }
+    if (presentation != null) { entry.text = presentation.text; entry.annotations = presentation.annotations; entry.attachments = presentation.attachments }
   })
   return entries
 })
@@ -235,7 +237,10 @@ const draftHeight = ref(64)
 const keyboardInset = ref(0)
 const goalViewportHeight = ref(uni.getWindowInfo().windowHeight)
 // 用户气泡保留左侧层级留白，正文使用两侧各 16px 以内的宽度。
-const userBubbleWidth = Math.max(120, uni.getWindowInfo().windowWidth - 80)
+const messageWindowWidth = ref(uni.getWindowInfo().windowWidth)
+const userBubbleWidth = computed((): number => Math.max(120, messageWindowWidth.value - 80))
+// 长文件名单行显示时也要及时约束气泡，适配横竖屏与浏览器视口切换。
+onResize(() => { messageWindowWidth.value = uni.getWindowInfo().windowWidth })
 let baseWindowHeight = 0
 let lastScrollTop = 0
 let layoutUntil = 0
@@ -1079,6 +1084,12 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 .message { margin: 0 16px; }
 .message-agent { padding: 8px 0 10px; }
 .message-user { margin: 12px 16px 8px 64px; padding: 8px 12px; border-radius: 12px; background-color: #e8eee6; align-self: flex-end; }
+.message-files { gap: 8px; }
+.message-file { min-height: 32px; flex-direction: row; align-items: center; }
+.message-file-name { flex: 1; min-width: 0; margin-left: 8px; color: #42564a; font-size: 14px; line-height: 22px; lines: 1; text-overflow: ellipsis; }
+/* #ifdef WEB */
+.message-file-name { display: block; white-space: nowrap; overflow: hidden; }
+/* #endif */
 .message-text { color: #202c28; font-size: 16px; line-height: 25px; }
 .message-execution { margin-bottom: 4px; }
 .process-toggle { flex-direction: row; align-items: center; min-height: 44px; align-self: flex-start; border-bottom: 1px solid #e0e5da; }
