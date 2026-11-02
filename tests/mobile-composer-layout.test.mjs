@@ -11,11 +11,12 @@ const helpers=stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/compose
 function fixture(){
   const ref=value=>({value}),frames=[],timers=new Map(),watches=[],unloads=[];let timerId=0;
   const c={computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
+  Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
   const layout=page.slice(page.indexOf('// 占位预测使用独立测量值'),page.indexOf('// 键盘由输入区处理'));
   const blur=page.slice(page.indexOf('function onDraftBlur()'),page.indexOf('function updateMenuHeight()'));
   const focus=page.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0];
-  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerHeight,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}),c);
-  return {c,ui:c.ui,watches,unloads,flush(){while(frames.length)frames.shift()();},blur(){for(const [id,fn] of [...timers]){timers.delete(id);fn();}}};
+  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}),c);
+  return {c,ui:c.ui,watches,unloads,timers,flush(){while(frames.length)frames.shift()();},blur(){for(const [id,fn] of [...timers]){timers.delete(id);fn();}}};
 }
 
 test('空白默认单行，聚焦恢复编辑面板，空白失焦延后收起，重新聚焦取消收起',()=>{
@@ -56,4 +57,21 @@ test('清空草稿与切换会话复位编辑高度及焦点，不把预测写�
   f.c.inputFocused.value=true;f.c.predictionFocus.value=true;f.c.permissionMenuOpen.value=true;f.c.draftHeight.value=144;
   f.watches.find(watch=>watch.read()==='host:thread').run();assert.equal(f.c.inputFocused.value,false);assert.equal(f.c.predictionFocus.value,false);assert.equal(f.c.permissionMenuOpen.value,false);assert.equal(f.c.draftHeight.value,64);
   assert.equal((page.match(/<textarea\b[^>]*class="draft"/g)??[]).length,1);assert.match(page,/:value="draft"/);
+});
+
+test('展开及增行使用明确高度，动画完成后补测菜单与历史阅读位置',()=>{
+  const f=fixture();assert.equal(f.ui.composerStageHeight.value,44);
+  f.ui.onComposerFocus();assert.equal(f.ui.composerStageHeight.value,122);
+  f.c.draft.value='多行草稿';f.ui.onDraftLineChange({detail:{height:120}});assert.equal(f.ui.composerStageHeight.value,178);f.flush();f.c.geometry.length=0;
+  f.c.composerMenu.value='settings';f.ui.settleComposerAnimation();assert.equal(f.c.geometry.length,0);
+  f.blur();f.flush();assert.deepEqual(f.c.geometry,['菜单','消息位置']);
+});
+
+test('快速反向切换只保留最后一次完成回调，会话切换与卸载取消旧回调',()=>{
+  const f=fixture();f.ui.settleComposerAnimation();const old=[...f.timers.values()][0];
+  f.ui.onComposerFocus();f.ui.settleComposerAnimation();assert.equal(f.timers.size,1);old();f.flush();assert.equal(f.c.geometry.length,0);
+  f.blur();f.flush();assert.deepEqual(f.c.geometry,['消息位置']);f.c.geometry.length=0;
+  for(const reset of [()=>f.watches.find(w=>w.read()==='host:thread').run(),()=>f.unloads.forEach(fn=>fn())]){
+    f.ui.settleComposerAnimation();const callback=[...f.timers.values()][0];reset();assert.equal(f.timers.size,0);f.flush();f.c.geometry.length=0;callback();f.flush();assert.equal(f.c.geometry.length,0);
+  }
 });

@@ -66,19 +66,20 @@
         <view v-if="draftImages.length > 0" class="draft-images"><view v-for="image in draftImages" :key="image.id" class="draft-image"><image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="previewImage(image.src)" /><view class="remove-image"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="busy || imageBusy || connection.pendingCommandId.length > 0" aria-label="移除图片" @click="removeImage(image.id)"></button></view></view></view>
         <view v-for="file in draftFiles" :key="file.id" class="draft-file"><app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ file.error.length > 0 ? file.error : file.status == 'ready' ? sizeLabel(file.size) + ' · 已就绪' : file.status == 'paused' ? '上传已暂停，点击重试' : '正在上传 ' + file.progress + '%' }}</text></view><button v-if="file.status == 'error' || file.status == 'paused'" class="file-retry" :disabled="!canWrite" @click="retryFile(file.id)">重试</button><button class="file-remove" :disabled="busy || connection.pendingCommandId.length > 0" :aria-label="'移除附件 ' + file.name" @click="removeFile(file.id)">×</button></view>
         <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
-        <view class="composer-input-row">
-          <view v-if="!composerExpanded" class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view>
+        <text v-if="composerExpanded && executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
+        <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
+        <view class="composer-stage" :style="{ height: composerStageHeight + 'px' }">
           <!-- 紧凑与展开共用同一编辑节点，布局切换不会重建原生输入框。 -->
-          <view class="draft-editor" :class="{ 'draft-editor-compact': !composerExpanded }">
+          <view class="draft-editor" :class="{ 'draft-editor-compact': !composerExpanded }" :style="{ height: composerHeight + 'px' }">
             <textarea :focus="predictionFocus" :value="draft" @input="updateDraft" @keydown="onComposerKeydown" @confirm="onComposerConfirm" @focus="onComposerFocus" @click="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange" :adjust-position="false" :disabled="readOnly" class="draft" :style="{ height: composerHeight + 'px' }" :placeholder="readOnly ? (activating ? '正在连接会话…' : '连接会话后即可发送') : (visiblePrediction.length > 0 ? visiblePrediction : '问问 Codex')" :maxlength="32000"></textarea>
             <!-- 同宽文本只测量排版；零宽字符保留末尾换行，不写入草稿。 -->
             <view class="draft-measure-box" aria-hidden="true"><text id="draft-placeholder-measure" class="draft-placeholder-measure">{{ visiblePrediction + '\u200b' }}</text></view>
           </view>
-          <view v-if="!composerExpanded" class="primary-action action-frame" :style="{ opacity: !canWrite || activeTurnId.length == 0 ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || activeTurnId.length == 0" :aria-label="activeTurnId.length > 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view>
+          <!-- 两端操作始终使用同一节点，展开时只增加上方的编辑空间。 -->
+          <view class="composer-add"><view class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view></view>
+          <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view></view>
+          <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
         </view>
-        <view v-show="composerExpanded" class="composer-actions"><view class="add-image action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view><view class="primary-actions"><view v-if="activeTurnId.length > 0 && (draft.trim().length > 0 || draftImages.length > 0 || draftFiles.length > 0)" class="icon-button stop-secondary action-frame"><app-icon name="stop" :size="17" /><button class="action-hitbox" :disabled="!canWrite" aria-label="停止任务" @click="stop"></button></view><view class="primary-action action-frame" :style="{ opacity: (!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canWrite || imageBusy || !filesReady || (draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && activeTurnId.length == 0)" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view></view>
-        <text v-if="composerExpanded && executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
-        <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
       </view>
     </view>
       <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此会话' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
@@ -135,6 +136,8 @@ const permissionMenuOpen = ref(false)
 const predictionHeight = ref(24)
 let composerBlurTimer = 0
 let composerMeasureRevision = 0
+let composerAnimationTimer = 0
+let composerAnimationRevision = 0
 let composerKeyboardVisible = false
 let predictionTimer = 0
 let predictionExpiryTimer = 0
@@ -913,6 +916,17 @@ function onDraftLineChange(event: UniTextareaLineChangeEvent) {
 }
 const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value, attachmentBusy: imageBusy.value }))
 const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
+// 高度由一行工具栏及编辑空间组成，数值过渡期间两端按钮始终贴住底边。
+const composerStageHeight = computed((): number => composerExpanded.value ? composerHeight.value + 58 : 44)
+// 取消旧完成回调，200ms 过渡后额外留一帧，补测最后一次切换的几何位置。
+function settleComposerAnimation() {
+  clearTimeout(composerAnimationTimer)
+  const revision = ++composerAnimationRevision
+  composerAnimationTimer = setTimeout(() => {
+    if (!pageAlive || revision != composerAnimationRevision) return
+    updateComposerGeometry()
+  }, 220)
+}
 // 布局稳定后更新菜单锚点；用户阅读历史时不强制滚到消息末尾。
 function updateComposerGeometry() {
   nextTick(() => {
@@ -933,11 +947,11 @@ function measureComposerPrediction() {
   })
 }
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + visiblePrediction.value + ':' + composerExpanded.value, () => { measureComposerPrediction(); updateComposerGeometry() }, { flush: 'post' })
-watch((): number => composerHeight.value, () => { updateComposerGeometry() })
+watch((): number => composerStageHeight.value, () => { updateComposerGeometry(); settleComposerAnimation() }, { flush: 'post' })
 watch((): string => draft.value, (text: string) => { if (text.length == 0) draftHeight.value = 64 })
-watch((): string => pageHostId.value + ':' + pageThreadId.value, () => { clearTimeout(composerBlurTimer); inputFocused.value = false; predictionFocus.value = false; permissionMenuOpen.value = false; draftHeight.value = 64; measureComposerPrediction() }, { flush: 'sync' })
+watch((): string => pageHostId.value + ':' + pageThreadId.value, () => { clearTimeout(composerBlurTimer); clearTimeout(composerAnimationTimer); composerAnimationRevision++; inputFocused.value = false; predictionFocus.value = false; permissionMenuOpen.value = false; draftHeight.value = 64; measureComposerPrediction() }, { flush: 'sync' })
 onResize(() => { measureComposerPrediction(); updateComposerGeometry() })
-onUnload(() => { clearTimeout(composerBlurTimer); composerMeasureRevision++ })
+onUnload(() => { clearTimeout(composerBlurTimer); clearTimeout(composerAnimationTimer); composerAnimationRevision++; composerMeasureRevision++ })
 // 键盘由输入区处理，扣除系统已缩小的窗口高度，避免自定义顶栏被整体上推或重复留白。
 function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
   const height = event.detail.height
@@ -1139,18 +1153,21 @@ onBackPress((): boolean => { if (selectedAnnotationId.value.length > 0) { closeA
 /* 图形与透明点击层分离，与权限、模型和发送操作共用中心轴。 */
 .add-image { align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0; padding: 0; background-color: transparent; }
 .image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
-.composer-panel { border-radius: 24px; padding: 14px 12px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; }
-.composer-compact { border-radius: 30px; padding: 6px 8px; }
-.composer-input-row { flex-direction: row; align-items: center; }
-.draft-editor { position: relative; flex: 1; min-width: 0; }
-.draft-editor-compact { margin: 0 8px; }
-.draft { width: 100%; min-height: 24px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; }
+.composer-panel { border-radius: 24px; padding: 6px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; transition-property: border-radius; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-compact { border-radius: 30px; }
+/* 只过渡编辑区高度和文字位置；按钮的底部坐标与尺寸始终不变。 */
+.composer-stage { position: relative; flex-shrink: 0; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-add { position: absolute; left: 0; bottom: 0; width: 44px; height: 44px; }
+.composer-send { position: absolute; right: 0; bottom: 2px; width: 40px; height: 40px; }
+.draft-editor { position: absolute; left: 0; right: 0; bottom: 50px; min-width: 0; transition-property: height, bottom; transition-duration: 200ms; transition-timing-function: ease-out; }
+.draft-editor-compact { left: 52px; right: 48px; bottom: 10px; }
+.draft { width: 100%; min-height: 24px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
 /* 裁切容器不占布局高度，内部文本保留真实排版尺寸供跨端测量。 */
 .draft-measure-box { position: absolute; left: 2px; right: 2px; top: 0; height: 0; overflow: hidden; opacity: 0; }
 .draft-placeholder-measure { flex-shrink: 0; font-size: 16px; line-height: 24px; }
 /* 模型文字使用与工具栏图标一致的深色色值。 */
 .settings-trigger-label { color: #171717; }
-.composer-actions { flex-direction: row; align-items: center; margin-top: 6px; }
+.composer-actions { position: absolute; left: 44px; right: 40px; bottom: 0; height: 44px; flex-direction: row; align-items: center; }
 .composer-context { flex-direction: row; align-items: center; flex: 1; }
 .composer-hint { color: #7b827a; font-size: 12px; margin-left: 8px; }
 .primary-actions { flex-direction: row; align-items: center; }
