@@ -66,7 +66,7 @@ export class TaskNotificationCenter {
     if (this.phase != 'idle' && now < this.deadline) return
     if (this.phase == 'enter') { this.phase = 'visible'; this.deadline = now + 5200; return }
     if (this.phase == 'visible') { this.phase = 'leave'; this.deadline = now + 200; return }
-    if (this.phase == 'leave') { this.current = null; this.phase = 'idle' }
+    if (this.phase == 'leave' || this.phase == 'swipe') { this.current = null; this.phase = 'idle' }
     while (this.queue.length > 0) {
       const next = this.queue.shift()!
       if (!this.valid(next)) continue
@@ -77,6 +77,13 @@ export class TaskNotificationCenter {
 
   // 点击只结束当前卡片，下一条继续沿用同一队列。
   dismiss(now: number) { this.current = null; this.phase = 'idle'; this.deadline = 0; this.tick(now) }
+
+  // 上滑只关闭手势开始时的卡片，保留 200ms 离场动画，不能误关随后出现的通知。
+  swipeDismiss(key: string, now: number): boolean {
+    if (this.current?.key != key || this.phase != 'visible') return false
+    this.phase = 'swipe'; this.deadline = now + 200
+    return true
+  }
 }
 
 // 标题只表达结构化事件类型，详情名称单独展示。

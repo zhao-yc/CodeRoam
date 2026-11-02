@@ -17,7 +17,7 @@ test('结构化结果独立于正文窗口，异常为失败，停止不变为�
  const questions=[{id:'q',turnId:'t',state:'pending',questions:[{answer:'不应广播'}]}],approvals=[{id:'a',turnId:'t',detail:'不应广播'}];
  assert.deepEqual(taskNotificationState([{turnId:'t',status:'completed',error:{message:'不应广播'}}],questions,approvals,{id:'p',turnId:'t',text:'不应广播'}),{latestTurnId:'t',latestTurnStatus:'failed',pending:[action('question','q','t'),action('approval','a','t'),action('plan','p','t')]});
  assert.equal(taskNotificationState([{turnId:'t',status:'interrupted'}],[],[],null).latestTurnStatus,'interrupted');
- const snapshot=normalizeConversation({id:'thread',turns:[{turnId:'empty',status:'failed',items:[]}]});assert.equal(snapshot.notificationState.latestTurnStatus,'failed');assert.equal(snapshot.turns.length,0);
+ const snapshot=normalizeConversation({id:'thread',turns:[{turnId:'empty',status:'failed',items:[]}]});assert.equal(snapshot.notificationState.latestTurnStatus,'failed');assert.deepEqual(snapshot.turns,[{turnId:'empty',status:'failed',errorMessage:'任务执行失败，未提供具体原因'}]);assert.deepEqual(snapshot.latestTurn,{turnId:'empty',status:'failed'});
  const initial=normalizeConversation({id:'thread',turns:[{turnId:'t',status:'inProgress',items:[{id:'msg',type:'agentMessage',text:'合成正文'.repeat(1000)}]}]});
  const final=normalizeConversation({id:'thread',turns:[{turnId:'t',status:'completed',items:[{id:'msg',type:'agentMessage',text:'合成正文'.repeat(1000)}]}]});
  const event=conversationUpdate({snapshot:initial,seq:1},final);const rebuilt=applyConversationUpdate({snapshot:initial,epoch:'epoch',seq:1},{...event,epoch:'epoch',seq:2});assert.deepEqual(rebuilt.snapshot.notificationState,final.notificationState);
@@ -35,6 +35,13 @@ test('进入动画后完整展示五秒，再淡出并依次展示；重复推�
  const c=fixture();c.observe('host','g',[row('inProgress',[action(),action('approval','a')])],0);assert.equal(c.phase,'enter');c.tick(16);assert.equal(c.phase,'visible');assert.equal(c.deadline,5216);
  c.observe('host','g',[row('inProgress',[action(),action('approval','a')])],1000);assert.equal(c.deadline,5216);assert.equal(c.queue.length,1);
  c.tick(5215);assert.equal(c.phase,'visible');c.tick(5216);assert.equal(c.phase,'leave');c.tick(5416);assert.equal(c.current.kind,'approval');assert.equal(c.phase,'enter');
+});
+
+test('上滑提前离场后继续队列，不改待办，不因重复关闭而延长动画',()=>{
+ const c=fixture();c.observe('host','g',[row('inProgress',[action(),action('approval','a')])],0);c.tick(16);const key=c.current.key;
+ assert.equal(c.swipeDismiss(key,1000),true);assert.equal(c.phase,'swipe');assert.equal(c.deadline,1200);assert.equal(c.queue.length,1);
+ assert.equal(c.swipeDismiss(key,1050),false);assert.equal(c.deadline,1200);c.tick(1199);assert.equal(c.current.key,key);c.tick(1200);assert.equal(c.current.kind,'approval');
+ assert.equal(c.hosts[0].threads[0].notificationState.pending.length,2);c.tick(1216);assert.equal(c.swipeDismiss(key,1217),false);assert.equal(c.current.kind,'approval');
 });
 
 test('异步问题在运行中提醒，同数量新事项仍提醒，排队事项失效即剔除',()=>{

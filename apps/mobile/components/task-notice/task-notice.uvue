@@ -1,35 +1,88 @@
 <template>
-  <view v-if="active && taskNotifications.current != null" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible' }" :style="{ top: top + 'px' }" role="status" aria-live="polite">
+  <view v-if="active && taskNotifications.current != null" :id="'task-notice-' + headerId" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible', 'task-notice-dragging': dragging }" :style="{ top: top + 'px', transform: noticeTransform, opacity: noticeOpacity }" role="status" aria-live="polite">
     <view class="task-notice-copy"><text class="task-notice-title">{{ title }}</text><text class="task-notice-subtitle">{{ taskNotifications.current!.threadTitle }}</text></view>
     <app-icon name="chevron-right" :size="20" />
-    <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，打开会话'" @click="openNotice"></button>
+    <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，点击打开会话，向上滑动关闭'" @touchstart.stop="beginTouch" @touchmove.stop="moveTouch" @touchend.stop="finishTouch" @touchcancel.stop="cancelTouch" @click.stop="openNotice"></button>
   </view>
 </template>
 
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
-import { taskNotifications, openTaskNotice } from '../../services/task-notifications.uts'
+import { taskNotifications, openTaskNotice, dismissTaskNotice } from '../../services/task-notifications.uts'
 import { taskNoticeTitle } from '../../services/task-notification-state.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 const props = withDefaults(defineProps<{ active: boolean, headerId: string, hostId?: string, threadId?: string }>(), { hostId: '', threadId: '' })
 const top = ref(72)
+const cardHeight = ref(70)
+const dragging = ref(false)
+const dragOffset = ref(0)
+let gestureKey = ''
+let touchId = -1
+let startX = 0
+let startY = 0
+let gestureMoved = false
+let ignoreClickUntil = 0
 const title = computed((): string => taskNoticeTitle(taskNotifications.current?.kind ?? 'completed'))
+const noticeTransform = computed((): string => 'translateY(' + (taskNotifications.phase == 'swipe' ? -(top.value + cardHeight.value + 12) : taskNotifications.phase == 'visible' ? dragOffset.value : -8) + 'px)')
+const noticeOpacity = computed((): number => taskNotifications.phase == 'visible' ? Math.max(0.25, 1 + dragOffset.value / 180) : 0)
 // 实测标题栏底边，适应不同页面、状态栏和横竖屏，不占用正文布局。
-function measureTop() { nextTick(() => { const rect = uni.getElementById(props.headerId)?.getBoundingClientRect(); if (rect != null) top.value = rect.bottom + 8 }) }
+function measureTop() { nextTick(() => { const rect = uni.getElementById(props.headerId)?.getBoundingClientRect(); if (rect != null) top.value = rect.bottom + 8; const card = uni.getElementById('task-notice-' + props.headerId)?.getBoundingClientRect(); if (card != null) cardHeight.value = card.height }) }
 onMounted(() => { measureTop() })
-watch((): string => props.active.toString() + ':' + (taskNotifications.current?.key ?? '') + ':' + uni.getWindowInfo().windowWidth, () => { if (props.active) measureTop() })
-function openNotice() { const notice = taskNotifications.current; if (notice != null) openTaskNotice(notice, props.hostId, props.threadId) }
+watch((): string => props.active.toString() + ':' + (taskNotifications.current?.key ?? ''), () => { cancelTouch(); if (props.active) measureTop() })
+
+// 只接受当前卡片上的单指手势，普通轻点仍保留打开会话的行为。
+function beginTouch(event: UniTouchEvent) {
+  if (event.touches.length != 1) { cancelTouch(); return }
+  const notice = taskNotifications.current
+  if (!props.active || notice == null || taskNotifications.phase != 'visible') return
+  const touch = event.touches[0]
+  gestureKey = notice.key; touchId = touch.identifier; startX = touch.clientX; startY = touch.clientY
+  gestureMoved = false; ignoreClickUntil = 0; dragOffset.value = 0; dragging.value = true
+}
+
+// 卡片只跟随向上的位移，横滑、下滑和较大抖动也不能被当作点击。
+function moveTouch(event: UniTouchEvent) {
+  if (!dragging.value) return
+  if (event.touches.length != 1 || event.touches[0].identifier != touchId || taskNotifications.current?.key != gestureKey) { cancelTouch(); return }
+  const dx = event.touches[0].clientX - startX
+  const dy = event.touches[0].clientY - startY
+  if (Math.max(Math.abs(dx), Math.abs(dy)) >= 8) { gestureMoved = true; ignoreClickUntil = Date.now() + 350 }
+  dragOffset.value = dy < 0 && Math.abs(dy) > Math.abs(dx) ? Math.max(-(top.value + cardHeight.value + 12), dy) : 0
+}
+
+// 松手时向上超过 32px 且方向明确才划走；轻微移动会平滑回弹，不重置原倒计时。
+function finishTouch(event: UniTouchEvent) {
+  if (!dragging.value) return
+  if (event.changedTouches.length != 1 || event.changedTouches[0].identifier != touchId) { cancelTouch(); return }
+  const dx = event.changedTouches[0].clientX - startX
+  const dy = event.changedTouches[0].clientY - startY
+  const key = gestureKey
+  if (gestureMoved || Math.max(Math.abs(dx), Math.abs(dy)) >= 8) ignoreClickUntil = Date.now() + 350
+  dragging.value = false; dragOffset.value = 0; gestureKey = ''; touchId = -1; gestureMoved = false
+  if (dy <= -32 && Math.abs(dy) > Math.abs(dx) * 1.25) dismissTaskNotice(key)
+}
+
+// 页面切换、通知换条或系统取消触摸时复位，屏蔽旧手势随后合成的点击。
+function cancelTouch() {
+  if (dragging.value) ignoreClickUntil = Date.now() + 350
+  dragging.value = false; dragOffset.value = 0; gestureKey = ''; touchId = -1; gestureMoved = false
+}
+
+// 浏览器可能在触摸结束后合成 click；上滑绝不能顺带打开会话或下一条卡片。
+function openNotice() { if (dragging.value || Date.now() < ignoreClickUntil || taskNotifications.phase != 'visible') return; const notice = taskNotifications.current; if (notice != null) openTaskNotice(notice, props.hostId, props.threadId) }
 </script>
 
 <style>
 .task-notice { position: fixed; left: 12px; right: 12px; z-index: 100; min-height: 64px; padding: 12px 16px; flex-direction: row; align-items: center; border-radius: 26px; border-width: 1px; border-style: solid; border-color: rgba(112, 123, 113, 0.24); background-color: rgba(252, 253, 248, 0.96); box-shadow: 0 5px 18px rgba(28, 42, 32, 0.12); opacity: 0; transform: translateY(-8px); transition-property: opacity, transform; transition-duration: 200ms; }
 .task-notice-visible { opacity: 1; transform: translateY(0px); }
+.task-notice-dragging { transition-duration: 0ms; }
 .task-notice-copy { flex: 1; min-width: 0; margin-right: 12px; }
 .task-notice-title { color: #202c28; font-size: 15px; line-height: 22px; font-weight: bold; lines: 1; text-overflow: ellipsis; }
 .task-notice-subtitle { color: #788177; font-size: 13px; line-height: 19px; lines: 1; text-overflow: ellipsis; }
 .task-notice-hit { position: absolute; left: 0; right: 0; top: 0; bottom: 0; margin: 0; padding: 0; border-radius: 26px; background-color: transparent; }
 /* #ifdef WEB */
 .task-notice { backdrop-filter: blur(16px); }
+.task-notice-hit { touch-action: none; }
 .task-notice-title, .task-notice-subtitle { display: block; overflow: hidden; white-space: nowrap; }
 /* #endif */
 </style>

@@ -49,6 +49,13 @@ export function startTaskNotifications() {
 
 export function pendingTaskNotice(key: string): TaskNotice | null { return navigationNotice?.key == key ? navigationNotice : null }
 
+// 手动划走只改变通知展示，不导航、不处理待办；排队项在离场后继续显示。
+export function dismissTaskNotice(key: string): boolean {
+  if (!center.swipeDismiss(key, Date.now())) return false
+  publishNotice()
+  return true
+}
+
 function focusNotice(notice: TaskNotice) { taskNotifications.focus = notice; taskNotifications.focusRevision++ }
 
 // 显式点击才导航电脑；旧页面先卸载，再打开新目标，避免清理旧订阅时误清新快照。
