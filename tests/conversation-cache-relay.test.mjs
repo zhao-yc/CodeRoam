@@ -187,3 +187,25 @@ test('压缩回执只替代发起该请求的标签页事件，其他详情订�
   assert.equal((await f.response(f.phone, compact)).result.seq, 8);
   assert.equal(f.phone.all.some(message => message.type === 'event'), false);
 });
+
+test('等待紧凑回执只过滤同版本的异步首帧，正文变化及回执后的增量仍送达', async t => {
+  const f = await fixture(t), sibling = await f.connect('phone'), threadId = 'synthetic-chat';
+  const hostId = 'computer~' + randomUUID(), generation = randomUUID(), newer = 'content:' + '2'.repeat(64);
+  f.host.send({ type: 'host.instances', instances: [{ id: hostId, generation, label: '合成实例', online: true }] });
+  await Promise.all([f.phone, sibling].map(connection => connection.next(message => message.type === 'hosts' && message.hosts.some(row => row.id === hostId && row.online))));
+  const regular = envelope('thread.watch', { threadId }, hostId); sibling.send(regular);
+  const first = await f.host.next(message => message.requestId === regular.requestId);
+  f.reply(first); await f.response(sibling, regular);
+  const compact = envelope('thread.watch', { threadId, contentRevision: revision }, hostId); f.phone.send(compact);
+  const second = await f.host.next(message => message.requestId === compact.requestId);
+  const snapshot = { v: 1, type: 'event', kind: 'snapshot', hostId, generation, threadId, seq: 8, contentRevision: revision, snapshot: { threadId, messages: [] } };
+  f.host.send(snapshot);
+  assert.equal((await sibling.next(message => message.type === 'event')).seq, 8);
+  f.host.send({ ...snapshot, seq: 9, contentRevision: newer });
+  assert.equal((await f.phone.next(message => message.type === 'event')).seq, 9);
+  f.reply(second, { snapshot: { threadId }, seq: 9, contentBaseRevision: revision, contentRevision: newer });
+  f.host.send({ v: 1, type: 'event', kind: 'delta', hostId, generation, threadId, seq: 10, baseSeq: 9, contentRevision: newer });
+  assert.equal((await f.response(f.phone, compact)).result.seq, 9);
+  assert.equal((await f.phone.next(message => message.type === 'event')).baseSeq, 9);
+  assert.deepEqual(f.phone.all.flatMap(message => message.type === 'event' ? [message.seq] : message.requestId === compact.requestId ? ['回执'] : []), [9, '回执', 10]);
+});

@@ -59,6 +59,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
     pending.delete(transportId);
     return entry;
   };
+  /** 紧凑回执和实时事件必须属于同一台电脑、会话和实例代次。 */
+  const sameThreadWatch = (entry, host, hostId, event) => entry?.method === 'thread.watch' && entry.host === host && entry.hostId === hostId && entry.threadId === event.threadId && entry.generation === event.generation;
   /** 只统计在途请求；日志上下文由脱敏器生成，绝不输出完整协议消息。 */
   const counts = (mobile, host) => ({ pendingTotal: pending.size,
     pendingMobile: [...pending.values()].filter(entry => entry.mobile === mobile).length,
@@ -235,8 +237,16 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           // 压缩回执只替代发起该请求的连接，其余观察者仍需要完整的事件序列。
           const { excludeTransportId, ...event } = message;
           const request = pending.get(excludeTransportId);
-          const excluded = request?.compactWatch && request.host === socket && request.hostId === hostId && request.threadId === message.threadId && request.generation === message.generation ? request.mobile : null;
-          for (const mobile of mobiles) if (mobile !== excluded && instances.authorized(mobile.identity.hostIds, hostId) && mobile.watches.has(`${hostId}:${message.threadId}`)) send(mobile, { ...event, hostId });
+          const excluded = request?.contentRevision !== undefined && sameThreadWatch(request, socket, hostId, event) ? request.mobile : null;
+          const awaiting = event.kind === 'snapshot' && typeof event.contentRevision === 'string' ? new Map() : null;
+          if (awaiting) {
+            // 桌面可能先异步广播同版本首帧。只为仍在等待的最新请求跳过这份重复正文。
+            for (const entry of pending.values()) if (sameThreadWatch(entry, socket, hostId, event)) awaiting.set(entry.mobile, entry.contentRevision);
+          }
+          for (const mobile of mobiles) {
+            if (mobile === excluded || awaiting && awaiting.get(mobile) === event.contentRevision) continue;
+            if (instances.authorized(mobile.identity.hostIds, hostId) && mobile.watches.has(`${hostId}:${event.threadId}`)) send(mobile, { ...event, hostId });
+          }
         }
         return;
       }
@@ -294,8 +304,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           if (entry?.cacheRoute) cacheRoutes.release(entry.cacheRoute);
           if (entry) { recordEnd('request.timeout', entry, { errorCode: 'REQUEST_TIMEOUT', outcomeUnknown: WRITE_METHODS.has(message.method) }); fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method))); }
         }, message.method === 'thread.delete' ? Math.max(60000, requestTimeoutMs) : message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
-        const compactWatch = message.method === 'thread.watch' && message.params.contentRevision !== undefined;
-        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, cacheRoute, compactWatch, timer, diagnostic });
+        const contentRevision = message.method === 'thread.watch' ? message.params.contentRevision : undefined;
+        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, cacheRoute, contentRevision, timer, diagnostic });
         const params = cacheRoute ? { ...message.params, subscriptionId: cacheRoute.upstreamId } : message.params;
         const delivered = send(host, { ...message, params, deviceId: identity.id, transportId, ...(generation ? { generation } : {}) });
         diagnostics?.record('request.forwarded', diagnostic, { ...counts(socket, host), connection: socket.diagnosticId, delivered, bufferedBytes: host.bufferedAmount });
