@@ -8,7 +8,8 @@ import { stripTypeScriptTypes } from 'node:module';
 /** 执行实际页面方法，验证异步设置与上传的会话归属和错误恢复。 */
 function fixture() {
   const source = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
-  const methods = source.slice(source.indexOf('function onDraftBlur()'), source.indexOf('\nwatch((): string => connection.hostId', source.indexOf('function onDraftBlur()')));
+  const focus = source.match(/^function focusComposerInput\(\) \{[\s\S]*?^\}/m)[0];
+  const methods = focus+'\n'+source.slice(source.indexOf('function onDraftBlur()'), source.indexOf('\nwatch((): string => connection.hostId', source.indexOf('function onDraftBlur()')));
   const files = new Map(), calls = [], pending = [];
   const context = componentContext({
     predictionFocus: { value: false }, inputFocused: { value: false }, pageVisible: { value: true }, composerBlurTimer: 0, nextTick: run => Promise.resolve().then(run), composerMenu: { value: '' }, menuHeight: { value: 200 }, keyboardInset: { value: 0 },

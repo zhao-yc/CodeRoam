@@ -8,7 +8,7 @@ import { readDraftThreadMentions, saveDraftThreadMentions } from './composer.uts
 import { NativeDraftState, nativeDraftState, watchNativeDraft, readNativeDraft, assertNativeDraftReady, updateNativeDraft, sendNativeDraft, acknowledgeNativeDraftPromotion } from './native-draft.uts'
 
 export type NewProject = { id: string, label: string, cwd: string }
-export type NewDraftChoices = { model?: string, effort?: string, serviceTier?: string, mode?: string, permissionMode?: string, confirmedFullAccess?: boolean }
+export type NewDraftChoices = { model?: string, effort?: string | null, serviceTier?: string, mode?: string, permissionMode?: string, confirmedFullAccess?: boolean }
 export type NewDraft = { hostId: string, projectId: string, cacheNamespace: string, choices: NewDraftChoices, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], threadMentions: SelectedThreadMention[], threadMentionRevision: number, attachmentDraftId: string, threadId: string, pendingAction: string, pendingCommandId: string }
 const drafts = reactive<NewDraft[]>([])
 const submitting = new Set<string>()
@@ -56,7 +56,7 @@ async function applyNewDraftChoices(state: NativeDraftState, choices: NewDraftCh
   if (choices.serviceTier != null && (changes['model'] != null || choices.serviceTier != settings.serviceTier)) changes['serviceTier'] = choices.serviceTier
   if (choices.mode != null && choices.mode != settings.mode) changes['mode'] = choices.mode
   if (choices.permissionMode != null && choices.permissionMode != state.snapshot!.permissions.mode) changes['permissionMode'] = choices.permissionMode
-  if (Object.keys(changes).length > 0) await updateNativeDraft(state, changes, choices.confirmedFullAccess == true)
+  if (changes['model'] != null || changes['effort'] != null || changes['serviceTier'] != null || changes['mode'] != null || changes['permissionMode'] != null) await updateNativeDraft(state, changes, choices.confirmedFullAccess == true)
 }
 
 // 上传期间桌面仍可能更改选项；以实际发送版本核对，任何不一致都保留手机草稿。

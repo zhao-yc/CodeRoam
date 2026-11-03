@@ -5,7 +5,7 @@ import { cacheEntryKey, cacheHeaderKey, cacheHeader, cacheBodyKeys, cacheEntryFr
 import type { ChatMessage, Conversation, ConversationTurn, LatestTurn } from './bridge.uts'
 import type { HistoryPage } from './history.uts'
 
-export type CachedConversation = { contentRevision?: string, latestTurn?: LatestTurn, hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
+export type CachedConversation = { contentRevision?: string | null, latestTurn?: LatestTurn, hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
 type CacheStore = { version: number, namespace: string, entries: CachedConversation[] }
 type CacheState = { namespace: string, index: Map<string, CachedConversation>, headers: Map<string, CacheHeader>, loaded: Set<string>, previews: Map<string, CachedConversation>, bodyReads: Map<string, Promise<CachedConversation | null>>, sizes: Map<string, number>, committed: Map<string, CachedConversation>, dirty: Map<string, number>, bodyChanges: Set<string>, preserveOlder: Set<string>, blockedHosts: Set<string>, allowedHosts: string[] | null, revision: string, serial: number, legacyRaw: string, timer: number, ready: boolean, retired: boolean, loading: Promise<void> | null, writing: Promise<void> | null }
 const CACHE_KEY = 'codex-mobile-conversation-cache-v1'
@@ -15,7 +15,8 @@ const TOTAL_BYTES = 3 * 1024 * 1024
 let invalidationRevision = 0
 let activeCache: CacheState | null = null
 const retiredCacheNamespaces = new Set<string>()
-export const conversationCacheChanges = reactive({ revision: 0, members: 0 })
+type CacheChanges = { revision: number, members: number }
+export const conversationCacheChanges = reactive<CacheChanges>({ revision: 0, members: 0 })
 
 function markDirty(state: CacheState, key: string) { state.dirty.set(key, ++state.serial) }
 function cacheBytes(entry: CachedConversation): number { return JSON.stringify(entry).length * 2 }
@@ -119,7 +120,8 @@ function cacheState(namespace: string): CacheState | null {
           if (!validEntry(entry)) return
           // 迁移也经过展示白名单，旧结构中的附加字段不能进入数据库。
           const latestTurn = entry.latestTurn
-          const clean = { hostId: entry.hostId, threadId: entry.threadId, title: entry.title, cwd: entry.cwd, savedAt: entry.savedAt, accessedAt: entry.accessedAt, contentRevision: entry.contentRevision, latestTurn: latestTurn == null ? undefined : { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn, messages: cacheMessages(entry.messages), turns: cacheTurns(entry.turns), olderMessages: cacheMessages(entry.olderMessages), olderTurns: cacheTurns(entry.olderTurns) } as CachedConversation
+          const clean = { hostId: entry.hostId, threadId: entry.threadId, title: entry.title, cwd: entry.cwd, savedAt: entry.savedAt, accessedAt: entry.accessedAt, contentRevision: entry.contentRevision, messages: cacheMessages(entry.messages), turns: cacheTurns(entry.turns), olderMessages: cacheMessages(entry.olderMessages), olderTurns: cacheTurns(entry.olderTurns) } as CachedConversation
+          if (latestTurn != null) clean.latestTurn = { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn
           const key = cacheEntryKey(clean.hostId, clean.threadId)
           const size = cacheBytes(clean)
           if (size <= ENTRY_BYTES) { state.index.set(key, clean); state.sizes.set(key, size); state.loaded.add(key) }
@@ -214,7 +216,7 @@ function hydrateCache(state: CacheState): Promise<void> {
     adoptCacheHeaders(state, data, true)
     state.ready = true
     if (!state.retired && (state.legacyRaw.length > 0 || state.dirty.size > 0)) scheduleCacheStorage(state)
-  }).catch((_error: Error) => {}).finally(() => { state.loading = null })
+  }).catch(() => {}).then(() => { state.loading = null })
   state.loading = loading
   return loading
 }
@@ -255,6 +257,13 @@ async function loadCacheBody(state: CacheState, key: string, preview: boolean): 
   return null
 }
 
+// 读取完成或失败时都释放同一聊天的合并查询，允许后续重新读取。
+async function settleCacheBody(state: CacheState, key: string, preview: boolean, readKey: string): Promise<CachedConversation | null> {
+  try { return await loadCacheBody(state, key, preview) }
+  catch (_) { return null }
+  finally { state.bodyReads.delete(readKey) }
+}
+
 function requestCacheBody(namespace: string, hostId: string, threadId: string, preview: boolean): Promise<CachedConversation | null> {
   const state = cacheState(namespace)
   if (state == null) return Promise.resolve(null)
@@ -264,7 +273,7 @@ function requestCacheBody(namespace: string, hostId: string, threadId: string, p
   const readKey = (preview ? 'preview:' : 'full:') + key
   const pending = state.bodyReads.get(readKey)
   if (pending != null) return pending
-  const reading = loadCacheBody(state, key, preview).catch((_error: Error): CachedConversation | null => null).finally(() => { state.bodyReads.delete(readKey) })
+  const reading = settleCacheBody(state, key, preview, readKey)
   state.bodyReads.set(readKey, reading)
   return reading
 }
@@ -380,7 +389,7 @@ function flushCacheState(state: CacheState): Promise<void> {
   clearTimeout(state.timer); state.timer = 0
   if (state.writing != null) return state.writing!
   const serial = state.serial
-  const writing = persistCache(state).catch((_error: Error) => {}).finally(() => {
+  const writing = persistCache(state).catch(() => {}).then(() => {
     state.writing = null
     if (state.serial > serial && state.dirty.size > 0) scheduleCacheStorage(state)
   })
@@ -415,7 +424,7 @@ function trimCacheEntry(entry: CachedConversation): number {
   let size = cacheBytes(entry)
   while (size > ENTRY_BYTES) {
     if (entry.olderMessages.length > 0) entry.olderMessages.shift()
-    else if (entry.messages.length > 0) { entry.messages.shift(); entry.contentRevision = undefined }
+    else if (entry.messages.length > 0) { entry.messages.shift(); entry.contentRevision = null }
     else return 0
     entry.olderTurns = entry.olderTurns.filter((turn: ConversationTurn): boolean => entry.olderMessages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
     if (entry.contentRevision == null) entry.turns = entry.turns.filter((turn: ConversationTurn): boolean => (turn.status == 'failed' && turn.turnId == entry.latestTurn?.turnId) || entry.messages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
@@ -436,7 +445,8 @@ export function saveConversationCache(namespace: string, hostId: string, snapsho
   const turns = cacheTurns(snapshot.turns ?? [] as ConversationTurn[])
   const olderMessages = cacheMessages((history?.messages ?? prior?.olderMessages ?? [] as ChatMessage[]).filter((message: ChatMessage): boolean => !messages.some((current: ChatMessage): boolean => current.id == message.id)))
   const latestTurn = snapshot.latestTurn
-  const entry = { latestTurn: latestTurn == null ? undefined : { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn, hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: cacheTurns(history?.turns ?? prior?.olderTurns ?? [] as ConversationTurn[]), savedAt: now, accessedAt: now } as CachedConversation
+  const entry = { hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: cacheTurns(history?.turns ?? prior?.olderTurns ?? [] as ConversationTurn[]), savedAt: now, accessedAt: now } as CachedConversation
+  if (latestTurn != null) entry.latestTurn = { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn
   if (contentRevision.length > 0) entry.contentRevision = contentRevision
   const size = trimCacheEntry(entry)
   if (size == 0) return false

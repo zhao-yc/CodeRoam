@@ -15,5 +15,5 @@ export function copyPluginSelection(plugins: SelectedPlugin[]): SelectedPlugin[]
 
 // 用户消息保留可读插件标签；引用仅作展示，不把内部协议链接交给浏览器打开。
 export function pluginMessageText(text: string): string {
-  return text.replace(/\[@((?:\\.|[^\\\]])+)\]\(plugin:\/\/[a-zA-Z0-9][a-zA-Z0-9._@-]{0,199}\)/g, (_match: string, label: string): string => '@' + label.replace(/\\([\\\[\]])/g, '$1'))
+  return text.replace(/\[@((?:\\.|[^\\\]])+)\]\(plugin:\/\/[a-zA-Z0-9][a-zA-Z0-9._@-]{0,199}\)/g, (_match: string, label: string, _offset: number, _source: string): string => '@' + label.replace(/\\([\\\[\]])/g, '$1'))
 }

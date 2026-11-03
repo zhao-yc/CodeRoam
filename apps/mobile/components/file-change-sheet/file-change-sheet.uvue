@@ -51,7 +51,7 @@ function loadFile(id: string, manual: boolean = false) {
   if (detailFor(id) == null) {
     const cached = readFileReportCache(namespace, props.hostId, props.threadId, props.report.reportId)
     const detail = cached?.report?.revision == props.report.revision ? cached?.details.find((file: FileReportDetail): boolean => file.id == id) ?? null : null
-    if (detail != null) loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) })
+    if (detail != null) loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) } as LoadedFile)
   }
   if (!props.connected || refreshedIds.value.indexOf(id) >= 0 || pendingIds.value.indexOf(id) >= 0) return
   const version = generation
@@ -60,14 +60,14 @@ function loadFile(id: string, manual: boolean = false) {
   bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.report.reportId, fileId: id }).then((result: UTSJSONObject) => {
     if (!alive || version != generation || identity != cacheIdentity()) return
     pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id)
-    if (result.getString('revision') != props.report.revision) { loaded.value = loaded.value.filter((file: LoadedFile): boolean => file.id != id); errors.value.push({ id, message: '这份报告已更新，请关闭后重新打开' }); return }
+    if (result.getString('revision') != props.report.revision) { loaded.value = loaded.value.filter((file: LoadedFile): boolean => file.id != id); errors.value.push({ id, message: '这份报告已更新，请关闭后重新打开' } as FileFailure); return }
     const detail = JSON.parse<FileReportDetail>(JSON.stringify(result['file']))
-    if (detail == null || detail.id != id) { errors.value.push({ id, message: '文件差异暂不可用' }); return }
+    if (detail == null || detail.id != id) { errors.value.push({ id, message: '文件差异暂不可用' } as FileFailure); return }
     loaded.value = loaded.value.filter((file: LoadedFile): boolean => file.id != id)
-    loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) })
+    loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) } as LoadedFile)
     refreshedIds.value.push(id)
     saveFileReportDetailCache(namespace, props.hostId, props.threadId, props.report, detail)
-  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message }) })
+  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message } as FileFailure) })
 }
 function toggle(id: string) { const index = expandedIds.value.indexOf(id); if (index >= 0) expandedIds.value.splice(index, 1); else { expandedIds.value.push(id); loadFile(id) } }
 // 重新打开面板、切换配对或报告版本后，恢复当前报告的已读差异。

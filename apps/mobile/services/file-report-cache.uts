@@ -7,14 +7,18 @@ const FILE_REPORT_CACHE_BYTES = 1024 * 1024
 const FILE_REPORT_ENTRY_BYTES = 256 * 1024
 
 function validFileCount(value: number): boolean { return typeof value == 'number' && Number.isFinite(value) && value >= 0 && Math.floor(value) == value }
+// 文件摘要与详情使用同一套字段校验，避免在 UTS 中跨类型强制转换。
+function validChangedFileFields(id: string, path: string, kind: string, binary: boolean, additions: number, deletions: number): boolean {
+  return typeof id == 'string' && id.length > 0 && typeof path == 'string' && typeof kind == 'string' && typeof binary == 'boolean' && validFileCount(additions) && validFileCount(deletions)
+}
 function validChangedFile(file: ChangedFile): boolean {
-  return file != null && typeof file.id == 'string' && file.id.length > 0 && typeof file.path == 'string' && typeof file.kind == 'string' && typeof file.binary == 'boolean' && validFileCount(file.additions) && validFileCount(file.deletions)
+  return file != null && validChangedFileFields(file.id, file.path, file.kind, file.binary, file.additions, file.deletions)
 }
 function validFileReport(report: FileReport, reportId: string): boolean {
   return report != null && report.reportId == reportId && typeof report.revision == 'string' && report.revision.length > 0 && Array.isArray(report.files) && report.files.length == report.fileCount && report.files.every((file: ChangedFile): boolean => validChangedFile(file)) && validFileCount(report.additions) && validFileCount(report.deletions)
 }
 function validFileDetail(detail: FileReportDetail, report: FileReport): boolean {
-  if (!validChangedFile(detail) || !Array.isArray(detail.diffs) || !detail.diffs.every((diff: string): boolean => typeof diff == 'string')) return false
+  if (detail == null || !validChangedFileFields(detail.id, detail.path, detail.kind, detail.binary, detail.additions, detail.deletions) || !Array.isArray(detail.diffs) || !detail.diffs.every((diff: string): boolean => typeof diff == 'string')) return false
   return report.files.some((file: ChangedFile): boolean => file.id == detail.id && file.path == detail.path && file.kind == detail.kind && file.binary == detail.binary && file.additions == detail.additions && file.deletions == detail.deletions)
 }
 

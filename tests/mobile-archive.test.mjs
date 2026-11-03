@@ -8,7 +8,7 @@ import { stripTypeScriptTypes } from 'node:module';
 /** 执行页面实际归档方法，检查弹窗取消、跨页回执和未知结果恢复。 */
 function fixture() {
   const source = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
-  const methods = source.slice(source.indexOf('// 归档只在原生回执'), source.indexOf('// 首次打开沿用自动定位'));
+  const methods = source.match(/^let archivePromptOpen = .*$/m)[0]+'\n'+source.slice(source.indexOf('// 归档只在原生回执'), source.indexOf('// 首次打开沿用自动定位'));
   const json = value => Object.assign(value, { getString(key) { return this[key] ?? null; }, getBoolean(key) { return this[key] ?? null; } });
   const context = { operationError: { value: '' }, pageHostId: { value: 'pc' }, pageThreadId: { value: 'thread' }, pageVisible: { value: true }, canWrite: { value: true }, busy: { value: false }, pendingAction: { value: '' }, activeTurnId: { value: '' }, approvalCount: { value: 0 }, connection: { connected: true, hostId: 'pc', activeThreadId: 'thread', snapshot: { status: 'idle' }, threads: [{ id: 'thread' }, { id: 'other' }], pendingCommandId: '', error: '', epoch: 'epoch', sequence: 5 }, calls: [], notices: [], returned: 0, draft: '保留的草稿' };
   let modal, respond, reject;
@@ -33,7 +33,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 /** 在独立页面上下文执行列表的实际生命周期，模拟详情卸载后列表仍然存活。 */
 function homeFixture(consumeArchiveSuccessNotice, consumeDeleteSuccessNotice = () => false) {
   const source = fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue', 'utf8');
-  const lifecycle = source.slice(source.indexOf('// 归档反馈由列表页显示'), source.indexOf('// 列表状态来自实际读取结果'));
+  const lifecycle = source.slice(source.indexOf('// 归档反馈由列表页显示'), source.indexOf('// 更新时间使用真实时间戳'));
   const renders = [], toasts = [], callbacks = {};
   const context = { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice, archiveToastRequest: 0, pageVisible: { value: false }, clearMenu() {}, editingNewConversation: { value: false }, statusTimer: 0, restoreThreadScroll() {}, updateClock() {}, closeComputerMenu() {}, clearInterval() {}, setInterval: () => 1, nextTick: callback => renders.push(callback), uni: { showToast: options => toasts.push(options) }, onShow: callback => { callbacks.show = callback; }, onHide: callback => { callbacks.hide = callback; }, onUnload: callback => { callbacks.unload = callback; } };
   vm.runInNewContext(stripTypeScriptTypes(lifecycle, { mode: 'transform' }), componentScope(context));

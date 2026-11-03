@@ -1,7 +1,7 @@
 <template>
   <view class="chat-workspace" :class="{ 'workspace-wide': wide }">
     <view v-if="!props.detailRoute || wide || (mode == 'list' && !openingRouteDetail)" v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? '340px' : '100%' }">
-      <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :wide="wide" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="openNewConversation" />
+      <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :wide="wide" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="createFromList" />
     </view>
     <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
       <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
@@ -118,6 +118,15 @@ function closeConversation() {
   mode.value = 'list'; detailMounted.value = false; selected.value = null
 }
 
+function closeNewConversation() {
+  if (creating.value) return
+  switchRevision++; newReady.value = false; uni.hideKeyboard()
+  if (selected.value != null && selected.value!.cacheNamespace == connection.cacheNamespace && connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)) {
+    try { bridge.selectComputer(selected.value!.hostId); bridge.watch(selected.value!.threadId); mode.value = 'conversation'; return } catch (_) {}
+  }
+  selected.value = null; detailMounted.value = false; mode.value = 'list'
+}
+
 // 新建时保留旧详情节点和阅读位置，但暂停订阅，不能让旧页面自动切回电脑。
 async function openNewConversation(hostId: string = '') {
   if (creating.value || mode.value == 'new') return
@@ -129,14 +138,6 @@ async function openNewConversation(hostId: string = '') {
   if (selected.value != null && connection.hostId == selected.value!.hostId) bridge.cancelOpen(selected.value!.threadId)
   try { if (hostId.length > 0) bridge.selectComputer(hostId); newReady.value = true }
   catch (reason) { closeNewConversation(); uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
-}
-function closeNewConversation() {
-  if (creating.value) return
-  switchRevision++; newReady.value = false; uni.hideKeyboard()
-  if (selected.value != null && selected.value!.cacheNamespace == connection.cacheNamespace && connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)) {
-    try { bridge.selectComputer(selected.value!.hostId); bridge.watch(selected.value!.threadId); mode.value = 'conversation'; return } catch (_) {}
-  }
-  selected.value = null; detailMounted.value = false; mode.value = 'list'
 }
 function onNewConversationBusy(value: boolean) { creating.value = value }
 function onConversationCreated(id: string): Promise<boolean> {
@@ -164,7 +165,10 @@ function handleBack(): boolean {
 }
 defineExpose({ handleBack })
 // 刷新直达聊天时，握手回包填充授权列表后再校验；已有授权记录时仍支持离线缓存。
-watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? null), props.active, connection.connected, connection.cacheNamespace]), () => {
+// 列表传入已选电脑，保留带默认值的新建入口供页面内部调用。
+function createFromList(hostId: string) { openNewConversation(hostId) }
+
+watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? null), props.active.toString(), connection.connected.toString(), connection.cacheNamespace]), () => {
   const target = props.initialTarget ?? null
   if (target == null) { handledInitialTarget = ''; openingRouteDetail.value = false; return }
   const key = workspaceTargetKey(target)
@@ -176,7 +180,7 @@ watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? nu
   openingRouteDetail.value = props.detailRoute
   selectConversation(target, false).then((_opened: boolean) => { openingRouteDetail.value = false })
 }, { immediate: true })
-watch((): string => props.active + ':' + wide.value, () => { syncNoticeNavigation() })
+watch((): string => props.active.toString() + ':' + wide.value.toString(), () => { syncNoticeNavigation() })
 watch((): string => connection.cacheNamespace + ':' + connection.computers.map((computer): string => computer.id).join('|'), () => {
   if (selected.value != null && (selected.value!.cacheNamespace != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)))) { switchRevision++; selected.value = null; detailMounted.value = false; mode.value = 'list' }
 })

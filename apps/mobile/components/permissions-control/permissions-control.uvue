@@ -29,9 +29,10 @@ const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelH
 let alive = true, request = 0
 // 新建权限不依赖已有会话订阅；展开、联网及电脑在线状态均参与请求失效判断。
 const isNative = computed((): boolean => props.nativeDraft == true || (props.draftId ?? '').length > 0 || props.nativeState != null)
+const available = computed((): boolean => props.active && connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (isNative.value ? (props.draftId ?? '').length > 0 && props.nativeState != null && props.nativeStatus == 'ready' : props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
+
 const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + props.draftId + ':' + props.nativeStatus + ':' + (props.nativeState?.revision ?? '') + ':' + (props.threadId.length > 0 ? connection.subscriptionRevision.toString() : '') + ':' + connection.connected.toString() + ':' + props.active.toString() + ':' + available.value.toString())
 const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : (props.draftId ?? '').length > 0 ? props.draftId! : 'new'))
-const available = computed((): boolean => props.active && connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (isNative.value ? (props.draftId ?? '').length > 0 && props.nativeState != null && props.nativeStatus == 'ready' : props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
 const mode = computed((): string => isNative.value ? props.nativeState?.mode ?? 'unknown' : props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
 const label = computed((): string => loading.value ? '正在读取电脑权限…' : permissionLabel(mode.value))
 const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0)

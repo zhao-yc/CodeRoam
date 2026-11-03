@@ -101,14 +101,14 @@ class MobileBridge {
   socket: SocketTask | null = null
   pending = new Map<string, PendingReply>()
   foreground = true
-  backgroundNotifications = false
+  backgroundNotificationsEnabled = false
   cacheEventHandler: ((event: UTSJSONObject) => void) | null = null
 
   // 仅 Web 通知服务就绪并获得授权后允许后台保持传输；原生默认仍随前后台断开。
-  shouldMaintainConnection(): boolean { return this.foreground || this.backgroundNotifications }
+  shouldMaintainConnection(): boolean { return this.foreground || this.backgroundNotificationsEnabled }
   setBackgroundNotifications(allowed: boolean) {
-    if (this.backgroundNotifications == allowed) return
-    this.backgroundNotifications = allowed
+    if (this.backgroundNotificationsEnabled == allowed) return
+    this.backgroundNotificationsEnabled = allowed
     if (!this.foreground) { if (allowed) this.connect(); else { this.disconnect(); connection.status = '返回后恢复连接' } }
   }
   connecting = false
@@ -199,7 +199,7 @@ class MobileBridge {
   }
 
   resume() { this.foreground = true; if (this.config != null && !connection.connected) this.connect() }
-  background() { this.foreground = false; if (!this.backgroundNotifications) { this.disconnect(); connection.status = '返回后恢复连接' } }
+  background() { this.foreground = false; if (!this.backgroundNotificationsEnabled) { this.disconnect(); connection.status = '返回后恢复连接' } }
 
   connect() {
     const config = this.config
@@ -718,7 +718,7 @@ class MobileBridge {
     this.watch(threadId, connection.supportsConversationCache)
   }
 
-  async watch(threadId: string, forceFull: boolean = false) {
+  async watch(threadId: string, forceFull: boolean = false): Promise<void> {
     const hostId = connection.hostId
     if (this.syncingThread == threadId) return
     this.syncingThread = threadId
@@ -735,21 +735,22 @@ class MobileBridge {
     const base = forceFull ? null : this.conversationContentBase(hostId, threadId)
     const params: UTSJSONObject = { threadId, epoch: connection.epoch, afterSeq: connection.sequence }
     if (base != null) params['contentRevision'] = base.revision
-    return this.request('thread.watch', params).then((result: UTSJSONObject) => {
-      // 不同电脑可能出现同名会话编号，旧响应不能覆盖当前会话或清除新同步锁。
-      if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return
-      if (this.syncingThread == threadId) this.syncingThread = ''
-      if (this.applySnapshot(result, hostId, threadId, base) === false) {
-        if (!forceFull) return this.watch(threadId, true)
-        connection.conversationError = '聊天正文同步失败，请重试'
-      }
-    }, (error: Error) => {
+    let result: UTSJSONObject
+    try { result = await this.request('thread.watch', params) }
+    catch (reason) {
       if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return
       if (this.syncingThread == threadId) this.syncingThread = ''
       // 等待回执期间已收到当前内容时，迟到的超时不能重新显示旧读取错误。
-      if (this.conversationUpdateRevision != updateRevision) return
-      connection.conversationError = error.message
-    })
+      if (this.conversationUpdateRevision == updateRevision) connection.conversationError = (reason as Error).message
+      return
+    }
+    // 不同电脑可能出现同号会话，旧响应不能覆盖当前订阅或解除新同步锁。
+    if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return
+    if (this.syncingThread == threadId) this.syncingThread = ''
+    if (this.applySnapshot(result, hostId, threadId, base) === false) {
+      if (!forceFull) await this.watch(threadId, true)
+      else connection.conversationError = '聊天正文同步失败，请重试'
+    }
   }
 
 }

@@ -95,6 +95,8 @@ export function cacheEntryFromRows(rows: Map<string, string>, key: string, heade
     const messages = readCacheMessages(rows, key, preview ? header.older.concat(header.recent).slice(-8) : header.recent, known)
     const olderMessages = preview ? [] as ChatMessage[] : readCacheMessages(rows, key, header.older, known)
     if (messages == null || olderMessages == null) return null
-    return { hostId: header.hostId, threadId: header.threadId, title: header.title, cwd: header.cwd, savedAt: header.savedAt, accessedAt: header.accessedAt, contentRevision: preview ? undefined : header.contentRevision, latestTurn: header.latestTurn, turns: preview ? header.olderTurns.concat(header.turns) : header.turns, olderTurns: preview ? [] as ConversationTurn[] : header.olderTurns, messages, olderMessages } as CachedConversation
+    const entry = { hostId: header.hostId, threadId: header.threadId, title: header.title, cwd: header.cwd, savedAt: header.savedAt, accessedAt: header.accessedAt, latestTurn: header.latestTurn, turns: preview ? header.olderTurns.concat(header.turns) : header.turns, olderTurns: preview ? [] as ConversationTurn[] : header.olderTurns, messages, olderMessages } as CachedConversation
+    if (!preview) entry.contentRevision = header.contentRevision
+    return entry
   } catch (_) { return null }
 }

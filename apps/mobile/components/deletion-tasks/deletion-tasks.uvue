@@ -13,7 +13,11 @@
 import { computed } from 'vue'
 import { connection, Computer, ThreadSummary } from '../../services/bridge.uts'
 import { threadList, ComputerThreads } from '../../services/thread-list.uts'
-import { deletionTasks, DeleteTask, deletionLabel, checkDeletion, dismissDeletion } from '../../services/delete-tasks.uts'
+import { deletionTasks, DeleteTask, deletionLabel as formatDeletionLabel, checkDeletion as verifyDeletion, dismissDeletion as removeDeletionTask } from '../../services/delete-tasks.uts'
+// Android 模板通过本地方法调用服务层。
+function deletionLabel(task: DeleteTask): string { return formatDeletionLabel(task) }
+function checkDeletion(task: DeleteTask) { verifyDeletion(task) }
+function dismissDeletion(task: DeleteTask) { removeDeletionTask(task) }
 const props = defineProps<{ visibleThreadKeys: string[] }>()
 // 正常删除只使用当前列表行的状态；异常或列表之外的任务保留独立处理入口。
 const visibleTasks = computed((): DeleteTask[] => deletionTasks.tasks.filter((task: DeleteTask): boolean => task.state != 'running' || props.visibleThreadKeys.indexOf(task.hostId + ':' + task.threadId) < 0))

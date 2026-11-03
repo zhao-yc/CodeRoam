@@ -29,7 +29,7 @@
         <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得聊天内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步聊天。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
         <view v-for="entry in renderedTimeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
-            <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
+            <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
             <!-- 注释入口先于正文显示，方便先查看引用再阅读补充文字。 -->
             <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-before-text' : '']">
@@ -37,10 +37,10 @@
               <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
             </view>
             <plan-preview v-if="entry.role == 'assistant' && entry.kind == 'planImplementation'" :source="planSource(entry.id, entry.text)" @open="openPlan(entry.id, entry.text)" />
-            <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
-            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? threadMentionMessageText(pluginMessageText(entry.text)) : entry.text }}</text>
-            <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
-            <file-change-summary v-if="(entry.reportId ?? '').length > 0 && (connection.snapshot?.supportsFileReports == true || showingCachedContent)" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected && !showingCachedContent" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
+            <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" @reading="markdownReading" />
+            <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? userMessageText(entry.text) : entry.text }}</text>
+            <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
+            <file-change-summary v-if="(entry.reportId ?? '').length > 0 && (connection.snapshot?.supportsFileReports == true || showingCachedContent)" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected && !showingCachedContent" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
           </template>
           <view v-else-if="entry.role == 'failure'" class="turn-failure-card" aria-label="任务失败">
             <app-icon class="turn-failure-icon" name="alert-circle" :size="16" tone="warning" />
@@ -126,7 +126,7 @@
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected && !showingCachedContent" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
     <plan-sheet v-if="selectedPlanId.length > 0" :source="selectedPlanSource" @close="closePlan" />
-    <thread-mention-picker v-if="mentionOpen && pageVisible && connection.snapshot?.supportsThreadMentions == true" :host-id="pageHostId" :thread-id="pageThreadId" :scope-id="pageThreadId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draftMentions" @confirm="selectThreadMentions" @close="closeThreadMentions" />
+    <thread-mention-picker v-if="mentionOpen && pageVisible && connection.snapshot?.supportsThreadMentions == true" :host-id="pageHostId" :thread-id="pageThreadId" :scope-id="pageThreadId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draftMentions" @confirm="selectThreadMentions" @close="closeThreadMentions()" />
     <plugin-picker v-if="pluginOpen && pageVisible" :host-id="pageHostId" :thread-id="pageThreadId" project-id="" :plugins="draftPlugins" @confirm="selectPlugins" @close="pluginOpen = false" />
   </view>
 </template>
@@ -302,6 +302,12 @@ const scrollTarget = ref('')
 const selectedFileReport = ref<FileReport | null>(null)
 const selectedChangedFileId = ref('')
 // 文件面板独立于聊天滚动；关闭后保持原报告阅读位置。
+// 用户消息去除插件和聊天引用的协议标记后再展示。
+function userMessageText(text: string): string { return threadMentionMessageText(pluginMessageText(text)) }
+let timelineUserScrolling = false
+
+function pauseFollowing() { following.value = false; timelineUserScrolling = false; scrollTarget.value = '' }
+
 function openFileReport(report: FileReport, fileId: string) { pauseFollowing(); uni.hideKeyboard(); selectedFileReport.value = report; selectedChangedFileId.value = fileId }
 function closeFileReport() { selectedFileReport.value = null; selectedChangedFileId.value = '' }
 const selectedExecutionId = ref('')
@@ -397,6 +403,13 @@ function planSource(id: string, fallback: string): string {
   if (pendingPlan.value?.id == id) return pendingPlan.value!.text
   return displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == id)?.text ?? fallback
 }
+function closeActions() { actionsVisible.value = false }
+
+// 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
+function closeComposerMenu() { composerMenu.value = '' }
+
+function dismissGoal() { if (!goalBusy.value && goalExpanded.value) { goalCloseRequest.value++; goalExpanded.value = false } }
+
 // 详情位于页面根部，独立滚动且不改变聊天草稿和原时间线位置。
 function openPlan(id: string, source: string) {
   closeActions(); closeComposerMenu(); dismissGoal(); uni.hideKeyboard(); pauseFollowing()
@@ -453,6 +466,45 @@ const pendingRetryCommand = computed((): string => connection.pendingCommands.fi
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && subscriptionReady.value && goalHostOnline.value && !busy.value && connection.pendingCommandId.length == 0)
 
+function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
+
+function entryAnchor(entry: TimelineEntry): string { return 'message-' + entry.id.split(':').join('-') }
+type ReadingAnchor = { id: string, offset: number }
+type ReadingPosition = { anchors: ReadingAnchor[], top: number, gesture: number, height: number, bottom: number }
+let readingPosition: ReadingPosition | null = null
+let pendingReadingPosition: ReadingPosition | null = null
+let readingCorrectionRevision = 0
+let readingCorrectionPending = false
+// 锚点定位可能先于 scroll 回调完成，保位必须读取容器当前距离，不能只信任上次事件。
+function timelineScrollPosition(): number { return (uni.getElementById('conversation-timeline') as UniScrollViewElement | null)?.scrollTop ?? lastScrollTop }
+// 以消息编号和视口偏移保存后续候选；首条被移除时顺延，全部失效则保留滚动距离。
+function captureReadingPosition(entries: TimelineEntry[] = visibleTimeline.value): ReadingPosition | null {
+  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+  if (viewport == null || viewport.height <= 0) return null
+  const anchors = [] as ReadingAnchor[]
+  let visible = false
+  entries.forEach((entry: TimelineEntry) => {
+    const rect = uni.getElementById(entryAnchor(entry))?.getBoundingClientRect()
+    if (rect == null) return
+    if (rect.bottom > viewport.top) visible = true
+    if (visible) anchors.push({ id: entryAnchor(entry), offset: rect.top - viewport.top })
+  })
+  const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect()
+  return { anchors, top: timelineScrollPosition(), gesture: historyGesture, height: viewport.height, bottom: bottom == null ? 0 : bottom.bottom - viewport.top }
+}
+function rememberReadingPosition() { if (!readingCorrectionPending && !touchingTimeline) readingPosition = captureReadingPosition() }
+function cancelReadingCorrection() { readingCorrectionRevision++; readingCorrectionPending = false; pendingReadingPosition = null; readingPosition = null; cacheInitialPositioning = false }
+// 普通布局测量只管理按钮；真实手势到达底部才恢复跟随，缓存刷新不会自动解锁。
+function measureTimelinePosition(userScroll: boolean = false): boolean {
+  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+  const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect() ?? uni.getElementById('timeline-bottom')?.getBoundingClientRect()
+  if (viewport == null || bottom == null || viewport.height <= 0) return false
+  atTimelineBottom.value = bottom.bottom <= viewport.bottom + 36
+  if (userScroll && bottom.bottom <= viewport.bottom + 2) hasUnseenBelow.value = false
+  const scrollBottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect() ?? bottom
+  return userScroll && timelineUserScrolling && !touchingTimeline && !readingCorrectionPending && scrollBottom.bottom <= viewport.bottom + 2
+}
+
 let cacheWriteTimer = 0
 let cacheDirty = false
 // 缓存写入受页面、配对和授权共同约束；旧页面不能在清理后重新写回内容。
@@ -484,7 +536,7 @@ function presentCachedEntry(cached: CachedConversation | null, complete: boolean
     nextTick(() => {
       if (!isCurrentPage() || historyGesture != 0) return
       scrollTarget.value = 'timeline-bottom'
-      setTimeout(() => { if (isCurrentPage() && historyGesture == 0) { scrollTarget.value = ''; cacheInitialPositioning = false; updateTimelinePosition(); rememberReadingPosition() } }, 50)
+      setTimeout(() => { if (isCurrentPage() && historyGesture == 0) { scrollTarget.value = ''; cacheInitialPositioning = false; measureTimelinePosition(); rememberReadingPosition() } }, 50)
     })
   }
 }
@@ -492,75 +544,6 @@ function presentCachedEntry(cached: CachedConversation | null, complete: boolean
 function validCacheFill(revision: number, namespace: string): boolean {
   return pageAlive && revision == cacheFillRevision && namespace == pageCacheNamespace.value && namespace == connection.cacheNamespace
 }
-
-// 留出首帧时间再读单条会话的完整缓存，读取回执不会应用到已退出的面板。
-function scheduleCacheFill() {
-  if (!cacheFilling.value || !cachePreviewReady || !pageVisible.value || cacheFillTimer != 0) return
-  if (!timelinePaintReady()) return
-  const revision = cacheFillRevision
-  const namespace = pageCacheNamespace.value
-  cacheFillTimer = setTimeout(() => {
-    cacheFillTimer = 0
-    if (!validCacheFill(revision, namespace) || !pageVisible.value || !timelinePaintReady()) return
-    cachePreviewReady = false
-    primeConversationEntry(namespace, pageHostId.value, pageThreadId.value).then((entry: CachedConversation | null) => {
-      if (!validCacheFill(revision, namespace)) return
-      cacheFilling.value = false
-      if (entry != null) presentCachedEntry(readConversationCache(namespace, pageHostId.value, pageThreadId.value) ?? entry, true)
-      scheduleTimelineFill()
-      nextTick(() => { checkShortHistory() })
-    })
-  }, 120)
-}
-
-function cancelCacheFill() {
-  clearTimeout(cacheFillTimer); cacheFillTimer = 0; cacheFillRevision++; cacheFilling.value = false; cachePreviewReady = false
-}
-
-function restoreConversationCache() {
-  const namespace = connection.cacheNamespace ?? ''
-  pageCacheNamespace.value = namespace
-  if (namespace.length == 0) return
-  const full = readConversationCache(namespace, pageHostId.value, pageThreadId.value)
-  if (full != null) { presentCachedEntry(full, true); return }
-  const revision = ++cacheFillRevision
-  cacheFilling.value = true
-  presentCachedEntry(peekConversationPreview(namespace, pageHostId.value, pageThreadId.value), false)
-  primeConversationPreview(namespace, pageHostId.value, pageThreadId.value).then(() => {
-    if (!validCacheFill(revision, namespace)) return
-    const entry = readConversationCache(namespace, pageHostId.value, pageThreadId.value)
-    presentCachedEntry(entry ?? peekConversationPreview(namespace, pageHostId.value, pageThreadId.value), entry != null)
-    cacheFilling.value = entry == null
-    cachePreviewReady = true
-    nextTick(() => { scheduleCacheFill() })
-  })
-}
-watch(liveConversation, () => { scheduleConversationCache() })
-watch(historyPage, () => { scheduleConversationCache() })
-// 在实时订阅确认前，详情也能呈现后台刚收到的正文。额外历史和阅读位置留在原面板。
-watch((): number => conversationCacheChanges.revision, () => {
-  if (pageCacheNamespace.value.length == 0 || pageCacheNamespace.value != connection.cacheNamespace) return
-  const entry = peekConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
-  presentCachedEntry(entry ?? peekConversationPreview(pageCacheNamespace.value, pageHostId.value, pageThreadId.value), entry != null)
-})
-// 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
-watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
-  if (pageCacheNamespace.value.length == 0) return
-  if (pageCacheNamespace.value != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value))) {
-    clearTimeout(cacheWriteTimer); cacheWriteTimer = 0; cacheDirty = false
-    cancelCacheFill(); cachedDetail.value = null; historyPage.value = null; historyRequest++
-  }
-})
-onPaneShow(() => { nextTick(() => { scheduleCacheFill(); scheduleTimelineFill() }) })
-onPaneHide(() => { flushConversationCache(); clearTimeout(cacheFillTimer); cacheFillTimer = 0; clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
-onUnmounted(() => { flushConversationCache(); clearTimeout(cacheWriteTimer); cancelCacheFill(); clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
-
-onMounted(() => {
-  baseWindowHeight = uni.getWindowInfo().windowHeight
-  if (pageThreadId.value.length > 0) restoreConversationCache()
-  if (pageThreadId.value.length > 0 && props.active) bridge.watch(pageThreadId.value)
-  scheduleConversationCache()
-})
 
 // 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
 const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && draftPlugins.value.length == 0 && draftMentions.value.length == 0 && !mentionOpen.value && pendingQuestionCount.value == 0 && approvalCount.value == 0)
@@ -596,21 +579,9 @@ function acceptPrediction(focus: boolean = true) {
 }
 onUnmounted(() => { resetPrediction() })
 
-// 回车先采纳占位预测；已有草稿才提交，空输入不会触发停止任务。
-function applyComposerEnter() {
-  if (!canWrite.value || imageBusy.value || !filesReady.value) return
-  if (draft.value.length == 0 && visiblePrediction.value.length > 0) { acceptPrediction(false); return }
-  if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send()
-}
 
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 // 原页面卸载后仍结算提交记录，但异步回执不再修改首页提示或重新同步。
-onUnmounted(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; cancelReadingCorrection(); settingsRequest++; clearTimeout(settingsRetryTimer); if (connection.hostId == pageHostId.value) bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
-function isCurrentPage(): boolean { return pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
-// 自定义返回入口先收起键盘，系统返回仍保留框架行为及按会话保存的草稿。
-function closeComposerMenu() { composerMenu.value = '' }
-function goBack() { if (handleBack()) return; uni.hideKeyboard(); emit('close') }
-function closeActions() { actionsVisible.value = false }
 function showActions() { dismissGoal(); closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
 // 重试仅恢复电脑导航，草稿不会被发送。
@@ -711,6 +682,8 @@ watch(pageDeletionRevision, () => {
   }
 }, { flush: 'sync' })
 
+let archivePromptOpen = false
+
 function deleteFromMenu() {
   closeActions()
   if (!canWrite.value || deletePromptOpen || archivePromptOpen) return
@@ -752,7 +725,6 @@ function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, com
   }
   return true
 }
-let archivePromptOpen = false
 let archiveLoading = false
 // 仅关闭本页发起的归档加载框，避免迟到回执关闭其他页面的提示。
 function hideArchiveLoading() { if (!archiveLoading) return; archiveLoading = false; uni.hideLoading() }
@@ -786,7 +758,7 @@ function scrollLatest() {
     if (!isCurrentPage() || !following.value || touchingTimeline || gesture != historyGesture) return
     scrollTarget.value = 'timeline-bottom'
     // 原生滚动和 Web 锚点定位可能晚于 Vue 提交，完成后再测量按钮，迟到测量不能解锁跟随。
-    setTimeout(() => { if (isCurrentPage() && following.value && gesture == historyGesture) { updateTimelinePosition(); rememberReadingPosition() } }, 80)
+    setTimeout(() => { if (isCurrentPage() && following.value && gesture == historyGesture) { measureTimelinePosition(); rememberReadingPosition() } }, 80)
   })
 }
 function resumeFollowing(explicit: boolean = false) {
@@ -794,7 +766,6 @@ function resumeFollowing(explicit: boolean = false) {
   if (!explicit) { if (following.value) scrollLatest(); return }
   historyGesture++; historyFollowRevision++; cancelReadingCorrection(); touchingTimeline = false; timelineUserScrolling = false; readingFloor.value = 0; hasUnseenBelow.value = false; following.value = true; scrollLatest()
 }
-function pauseFollowing() { following.value = false; timelineUserScrolling = false; scrollTarget.value = '' }
 // 面板不插入时间线，阅读期间暂停自动跟随；关闭时保持原来的消息位置和草稿。
 function openAnnotations(messageId: string) {
   if (!messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == messageId && message.annotations.length > 0)) return
@@ -807,49 +778,16 @@ onUnmounted(() => { closeAnnotations() })
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { closeAnnotations() })
 watch((): boolean => selectedAnnotationId.value.length > 0 && !messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value), (missing: boolean) => { if (missing) closeAnnotations() })
 // 新手势先取消待执行的布局补偿，不能让迟到回调抢回滚动位置。
-let timelineUserScrolling = false
 function beginTimelineTouch() { historyGesture++; touchingTimeline = true; cancelReadingCorrection(); pauseFollowing(); timelineUserScrolling = true; readingFloor.value = 0 }
+// 只有真实滚动触底才恢复跟随。
+function updateTimelinePosition(userScroll: boolean = false) {
+  if (measureTimelinePosition(userScroll)) resumeFollowing(true)
+}
 function onTimelineWheel() {
   beginTimelineTouch(); touchingTimeline = false
   const gesture = historyGesture
   // 滚轮事件先于浏览器默认滚动；等本轮滚动完成后再判断是否真正触底。
   setTimeout(() => { if (isCurrentPage() && gesture == historyGesture && !touchingTimeline) { rememberReadingPosition(); updateTimelinePosition(true) } }, 80)
-}
-function entryAnchor(entry: TimelineEntry): string { return 'message-' + entry.id.split(':').join('-') }
-type ReadingAnchor = { id: string, offset: number }
-type ReadingPosition = { anchors: ReadingAnchor[], top: number, gesture: number, height: number, bottom: number }
-let readingPosition: ReadingPosition | null = null
-let pendingReadingPosition: ReadingPosition | null = null
-let readingCorrectionRevision = 0
-let readingCorrectionPending = false
-// 锚点定位可能先于 scroll 回调完成，保位必须读取容器当前距离，不能只信任上次事件。
-function timelineScrollPosition(): number { return (uni.getElementById('conversation-timeline') as UniScrollViewElement | null)?.scrollTop ?? lastScrollTop }
-// 以消息编号和视口偏移保存后续候选；首条被移除时顺延，全部失效则保留滚动距离。
-function captureReadingPosition(entries: TimelineEntry[] = visibleTimeline.value): ReadingPosition | null {
-  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
-  if (viewport == null || viewport.height <= 0) return null
-  const anchors = [] as ReadingAnchor[]
-  let visible = false
-  entries.forEach((entry: TimelineEntry) => {
-    const rect = uni.getElementById(entryAnchor(entry))?.getBoundingClientRect()
-    if (rect == null) return
-    if (rect.bottom > viewport.top) visible = true
-    if (visible) anchors.push({ id: entryAnchor(entry), offset: rect.top - viewport.top })
-  })
-  const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect()
-  return { anchors, top: timelineScrollPosition(), gesture: historyGesture, height: viewport.height, bottom: bottom == null ? 0 : bottom.bottom - viewport.top }
-}
-function rememberReadingPosition() { if (!readingCorrectionPending && !touchingTimeline) readingPosition = captureReadingPosition() }
-function cancelReadingCorrection() { readingCorrectionRevision++; readingCorrectionPending = false; pendingReadingPosition = null; readingPosition = null; cacheInitialPositioning = false }
-// 普通布局测量只管理按钮；真实手势到达底部才恢复跟随，缓存刷新不会自动解锁。
-function updateTimelinePosition(userScroll: boolean = false) {
-  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
-  const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect() ?? uni.getElementById('timeline-bottom')?.getBoundingClientRect()
-  if (viewport == null || bottom == null || viewport.height <= 0) return
-  atTimelineBottom.value = bottom.bottom <= viewport.bottom + 36
-  if (userScroll && bottom.bottom <= viewport.bottom + 2) hasUnseenBelow.value = false
-  const scrollBottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect() ?? bottom
-  if (userScroll && timelineUserScrolling && !touchingTimeline && !readingCorrectionPending && scrollBottom.bottom <= viewport.bottom + 2) resumeFollowing(true)
 }
 // 布局前锁住当前有效滚动范围，防止内容缩短时浏览器先强制回弹。
 function beforeMarkdownLayout(entries: TimelineEntry[] = visibleTimeline.value) {
@@ -901,30 +839,6 @@ function cancelTimelinePaintWait() {
   // #endif
 }
 
-// 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
-function scheduleTimelineFill() {
-  if (timelineFillTimer != 0 || timelineFilled.value || !pageVisible.value || !isCurrentPage()) return
-  const entries = timeline.value
-  const start = timelineStart.value
-  if (entries.length == 0) return
-  if (timelineBoundary.value.length == 0) timelineBoundary.value = entries[start].id
-  if (start == 0) { if (!cacheFilling.value) timelineFilled.value = true; return }
-  if (!timelinePaintReady()) return
-  timelineFillTimer = setTimeout(() => {
-    timelineFillTimer = 0
-    if (!pageVisible.value || !isCurrentPage()) return
-    if (touchingTimeline || cacheInitialPositioning || readingCorrectionPending) { scheduleTimelineFill(); return }
-    const current = timeline.value
-    const earlier = Math.max(0, timelineStart.value - 6)
-    if (current.length == 0) return
-    beforeMarkdownLayout()
-    timelineBoundary.value = current[earlier].id
-    timelineFilled.value = earlier == 0 && !cacheFilling.value
-    timelineFillStarted = true
-    afterMarkdownLayout()
-    nextTick(() => { scheduleTimelineFill(); checkShortHistory() })
-  }, timelineFillStarted ? 48 : 150)
-}
 
 function localTimelineHasMore(): boolean { return cacheFilling.value || timelineStart.value > 0 }
 // 所有异步布局共用一条补偿链；布局完成后只保留维持原位置所需的最小尾部空间。
@@ -997,13 +911,6 @@ function loadOlder(preserveFollowing: boolean = false) {
   loadingHistory.value = true; historyError.value = ''
   readOlderPage(++historyRequest, preserveFollowing, 8)
 }
-function onHistoryTop() {
-  if (lastHistoryGesture == historyGesture || (!touchingTimeline && following.value)) return
-  if (localTimelineHasMore()) { scheduleTimelineFill(); return }
-  const delay = layoutUntil - Date.now()
-  if (delay > 0) { clearTimeout(historyTopTimer); historyTopTimer = setTimeout(() => { if (isCurrentPage() && pageVisible.value) onHistoryTop() }, delay + 16); return }
-  lastHistoryGesture = historyGesture; loadOlder()
-}
 // 短会话没有可滚动距离，首个稳定布局自动检查一次，不关闭跟随最新消息。
 function checkShortHistory() {
   if (localTimelineHasMore() || !following.value || initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
@@ -1013,6 +920,110 @@ function checkShortHistory() {
   initialHistoryChecked = true
   if (bottom.bottom <= viewport.bottom + 1) { lastHistoryGesture = historyGesture; loadOlder(true) }
 }
+// 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
+function scheduleTimelineFill() {
+  if (timelineFillTimer != 0 || timelineFilled.value || !pageVisible.value || !isCurrentPage()) return
+  const entries = timeline.value
+  const start = timelineStart.value
+  if (entries.length == 0) return
+  if (timelineBoundary.value.length == 0) timelineBoundary.value = entries[start].id
+  if (start == 0) { if (!cacheFilling.value) timelineFilled.value = true; return }
+  if (!timelinePaintReady()) return
+  timelineFillTimer = setTimeout(() => {
+    timelineFillTimer = 0
+    if (!pageVisible.value || !isCurrentPage()) return
+    if (touchingTimeline || cacheInitialPositioning || readingCorrectionPending) { scheduleTimelineFill(); return }
+    const current = timeline.value
+    const earlier = Math.max(0, timelineStart.value - 6)
+    if (current.length == 0) return
+    beforeMarkdownLayout()
+    timelineBoundary.value = current[earlier].id
+    timelineFilled.value = earlier == 0 && !cacheFilling.value
+    timelineFillStarted = true
+    afterMarkdownLayout()
+    nextTick(() => { scheduleTimelineFill(); checkShortHistory() })
+  }, timelineFillStarted ? 48 : 150)
+}
+
+function onHistoryTop() {
+  if (lastHistoryGesture == historyGesture || (!touchingTimeline && following.value)) return
+  if (localTimelineHasMore()) { scheduleTimelineFill(); return }
+  const delay = layoutUntil - Date.now()
+  if (delay > 0) { clearTimeout(historyTopTimer); historyTopTimer = setTimeout(() => { if (isCurrentPage() && pageVisible.value) onHistoryTop() }, delay + 16); return }
+  lastHistoryGesture = historyGesture; loadOlder()
+}
+
+// 留出首帧时间再读单条会话的完整缓存，读取回执不会应用到已退出的面板。
+function scheduleCacheFill() {
+  if (!cacheFilling.value || !cachePreviewReady || !pageVisible.value || cacheFillTimer != 0) return
+  if (!timelinePaintReady()) return
+  const revision = cacheFillRevision
+  const namespace = pageCacheNamespace.value
+  cacheFillTimer = setTimeout(() => {
+    cacheFillTimer = 0
+    if (!validCacheFill(revision, namespace) || !pageVisible.value || !timelinePaintReady()) return
+    cachePreviewReady = false
+    primeConversationEntry(namespace, pageHostId.value, pageThreadId.value).then((entry: CachedConversation | null) => {
+      if (!validCacheFill(revision, namespace)) return
+      cacheFilling.value = false
+      if (entry != null) presentCachedEntry(readConversationCache(namespace, pageHostId.value, pageThreadId.value) ?? entry, true)
+      scheduleTimelineFill()
+      nextTick(() => { checkShortHistory() })
+    })
+  }, 120)
+}
+
+function cancelCacheFill() {
+  clearTimeout(cacheFillTimer); cacheFillTimer = 0; cacheFillRevision++; cacheFilling.value = false; cachePreviewReady = false
+}
+
+function restoreConversationCache() {
+  const namespace = connection.cacheNamespace ?? ''
+  pageCacheNamespace.value = namespace
+  if (namespace.length == 0) return
+  const full = readConversationCache(namespace, pageHostId.value, pageThreadId.value)
+  if (full != null) { presentCachedEntry(full, true); return }
+  const revision = ++cacheFillRevision
+  cacheFilling.value = true
+  presentCachedEntry(peekConversationPreview(namespace, pageHostId.value, pageThreadId.value), false)
+  primeConversationPreview(namespace, pageHostId.value, pageThreadId.value).then(() => {
+    if (!validCacheFill(revision, namespace)) return
+    const entry = readConversationCache(namespace, pageHostId.value, pageThreadId.value)
+    presentCachedEntry(entry ?? peekConversationPreview(namespace, pageHostId.value, pageThreadId.value), entry != null)
+    cacheFilling.value = entry == null
+    cachePreviewReady = true
+    nextTick(() => { scheduleCacheFill() })
+  })
+}
+watch(liveConversation, () => { scheduleConversationCache() })
+watch(historyPage, () => { scheduleConversationCache() })
+// 在实时订阅确认前，详情也能呈现后台刚收到的正文。额外历史和阅读位置留在原面板。
+watch((): number => conversationCacheChanges.revision, () => {
+  if (pageCacheNamespace.value.length == 0 || pageCacheNamespace.value != connection.cacheNamespace) return
+  const entry = peekConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
+  presentCachedEntry(entry ?? peekConversationPreview(pageCacheNamespace.value, pageHostId.value, pageThreadId.value), entry != null)
+})
+// 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
+watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
+  if (pageCacheNamespace.value.length == 0) return
+  if (pageCacheNamespace.value != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value))) {
+    clearTimeout(cacheWriteTimer); cacheWriteTimer = 0; cacheDirty = false
+    cancelCacheFill(); cachedDetail.value = null; historyPage.value = null; historyRequest++
+  }
+})
+onPaneShow(() => { nextTick(() => { scheduleCacheFill(); scheduleTimelineFill() }) })
+onPaneHide(() => { flushConversationCache(); clearTimeout(cacheFillTimer); cacheFillTimer = 0; clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
+onUnmounted(() => { flushConversationCache(); clearTimeout(cacheWriteTimer); cancelCacheFill(); clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
+
+onMounted(() => {
+  baseWindowHeight = uni.getWindowInfo().windowHeight
+  if (pageThreadId.value.length > 0) restoreConversationCache()
+  if (pageThreadId.value.length > 0 && props.active) bridge.watch(pageThreadId.value)
+  scheduleConversationCache()
+})
+
+onUnmounted(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; cancelReadingCorrection(); settingsRequest++; clearTimeout(settingsRetryTimer); if (connection.hostId == pageHostId.value) bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
+
 function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); rememberReadingPosition(); updateTimelinePosition(true); scheduleTimelineFill() }
 // 内层列表结束触摸不恢复自动跟随，避免新输出打断阅读。
 function beginExecutionTouch() { beginTimelineTouch() }
@@ -1068,7 +1079,8 @@ watch(timeline, (entries: TimelineEntry[]) => {
   if (selectedExecutionId.value.length > 0 && selectedExecution.value == null) selectedExecutionId.value = ''
 })
 // 新问题自动展开；同步已有问题时保留手动收起，回答或失效后清理对应状态。
-watch(pendingQuestionGroups, (groups: QuestionGroup[], previousGroups: QuestionGroup[] = []) => {
+watch(pendingQuestionGroups, (groups: QuestionGroup[], previous: QuestionGroup[] | null) => {
+  const previousGroups = previous ?? [] as QuestionGroup[]
   expandedQuestionIds.value = expandedQuestionIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
   submittedGroupIds.value = submittedGroupIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
   const added = groups.filter((group: QuestionGroup): boolean => !previousGroups.some((previous: QuestionGroup): boolean => previous.id == group.id))
@@ -1126,8 +1138,21 @@ watch((): string => taskNotifications.focusRevision + ':' + pageVisible.value + 
 function showApprovals() { jumpTo('approvals-anchor') }
 function showQuestions() { const groups = pendingQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
 // 输入事件先保存正文，再捕获实际光标；选择器取消不改正文。
+// 恢复同一聊天的编辑焦点；不会采纳预测或发送草稿。
+function focusComposerInput() {
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  closeComposerMenu(); clearTimeout(composerBlurTimer)
+  inputFocused.value = true; predictionFocus.value = false
+  nextTick(() => {
+    if (!isCurrentPage() || pageHostId.value != hostId || pageThreadId.value != threadId || readOnly.value) return
+    predictionFocus.value = true
+  })
+}
+
 // 回车先同步原生输入框的最新值，避免节流回调尚未到达时发送旧正文。
 function syncComposerText(text: string) { if (canWrite.value && draft.value != text) { saveDraft(pageHostId.value, pageThreadId.value, text); mentionCursor.value = -1 } }
+function threadMentionContext(): string { return [pageHostId.value, pageThreadId.value, connection.hostId, connection.configurationRevision.toString()].join(':') }
+
 function updateDraft(event: UniInputEvent) {
   saveDraft(pageHostId.value, pageThreadId.value, event.detail.value)
   mentionCursor.value = -1
@@ -1138,7 +1163,6 @@ function updateDraft(event: UniInputEvent) {
   mentionContext = threadMentionContext(); mentionSelection = JSON.stringify(draftMentions.value)
   closeComposerMenu(); pluginOpen.value = false; predictionFocus.value = false; uni.hideKeyboard(); mentionOpen.value = true
 }
-function threadMentionContext(): string { return [pageHostId.value, pageThreadId.value, connection.hostId, connection.configurationRevision.toString()].join(':') }
 function closeThreadMentions(restoreFocus: boolean = true) {
   const wasOpen = mentionOpen.value, trigger = mentionTrigger.value
   if (restoreFocus && trigger != null && draft.value == trigger.text && mentionSourceRevision == mentionDraftRevision) mentionCursor.value = trigger.end
@@ -1219,6 +1243,17 @@ function updateMenuHeight() {
 function changeComposerSection(section: string) { composerMenu.value = section; nextTick(() => { updateMenuHeight() }) }
 // 电脑快照是当前设置的来源；切换电脑、会话或断线后使迟到响应失效。
 function loadSettings() {
+  // 只重试读取两次；定时器绑定当前请求，断线、离页和设置写入后不能重放。
+  function settingsLoadFailed(message: string) {
+    settingsLoading.value = false; settingsError.value = message
+    if (settingsRetryCount >= 2) return
+    const request = settingsRequest
+    settingsRetryCount++
+    settingsRetryTimer = setTimeout(() => {
+      if (request == settingsRequest && isCurrentPage()) loadSettings()
+    }, settingsRetryCount * 1000)
+  }
+
   if (!isCurrentPage() || !connection.connected || readOnly.value || connection.snapshot?.supportsExecutionSettings != true || settingsBusy.value || settingsLoading.value) return
   clearTimeout(settingsRetryTimer)
   const request = ++settingsRequest
@@ -1238,16 +1273,6 @@ function loadSettings() {
   }, (error: Error) => { if (request == settingsRequest && isCurrentPage()) settingsLoadFailed(error.message) })
 }
 
-// 只重试读取两次；定时器绑定当前请求，断线、离页和设置写入后不能重放。
-function settingsLoadFailed(message: string) {
-  settingsLoading.value = false; settingsError.value = message
-  if (settingsRetryCount >= 2) return
-  const request = settingsRequest
-  settingsRetryCount++
-  settingsRetryTimer = setTimeout(() => {
-    if (request == settingsRequest && isCurrentPage()) loadSettings()
-  }, settingsRetryCount * 1000)
-}
 
 function openComposerMenu(section: string) {
   if (!canWrite.value) return
@@ -1380,6 +1405,13 @@ function removeFile(id: string) {
   saveDraftFiles(pageHostId.value, pageThreadId.value, draftFiles.value.filter((file: DraftFile): boolean => file.id != id))
   if (isCurrentPage() && connection.connected) bridge.request('attachment.abort', { threadId: pageThreadId.value, uploadId: id }).then((_: UTSJSONObject) => {}, (_: Error) => {})
 }
+function showGoal() {
+  closeActions(); closeComposerMenu()
+  if (connection.snapshot?.supportsGoals != true) { notify('请更新电脑端与连接服务以使用目标'); return }
+  if (connection.snapshot?.goal == null && (!canWrite.value || !goalHostOnline.value || connection.snapshot?.supportsGoalControl != true)) { notify(goalUnavailableReason.value.length > 0 ? goalUnavailableReason.value : '当前暂不能新建目标'); return }
+  uni.hideKeyboard(); goalOpenRequest.value++
+}
+
 function composerAction(action: string) {
   if (!canWrite.value) return
   if (action == 'plugin') { closeComposerMenu(); predictionFocus.value = false; uni.hideKeyboard(); pluginOpen.value = true; return }
@@ -1389,16 +1421,6 @@ function composerAction(action: string) {
   if (action == 'camera' || action == 'album') {
     if (modelSupportsImages.value) chooseImages(action); else notify('当前模型不支持图片，请切换模型')
   } else if (action == 'file') chooseFiles()
-}
-// 恢复同一聊天的编辑焦点；不会采纳预测或发送草稿。
-function focusComposerInput() {
-  const hostId = pageHostId.value, threadId = pageThreadId.value
-  closeComposerMenu(); clearTimeout(composerBlurTimer)
-  inputFocused.value = true; predictionFocus.value = false
-  nextTick(() => {
-    if (!isCurrentPage() || pageHostId.value != hostId || pageThreadId.value != threadId || readOnly.value) return
-    predictionFocus.value = true
-  })
 }
 // 面板挂载期间固定会话归属，关闭页面或切换电脑后不保留旧面板。
 function selectPlugins(plugins: SelectedPlugin[]) { if (!canWrite.value) return; saveDraftPlugins(pageHostId.value, pageThreadId.value, plugins); pluginOpen.value = false; focusComposerInput() }
@@ -1420,6 +1442,16 @@ watch((): string => JSON.stringify(connection.snapshot?.executionSettings ?? nul
 })
 
 
+// 布局稳定后更新菜单锚点；用户阅读历史时不强制滚到消息末尾。
+function updateComposerGeometry() {
+  nextTick(() => {
+    if (!pageAlive) return
+    if (composerMenu.value.length > 0) updateMenuHeight()
+    if (following.value) scrollLatest()
+    else updateTimelinePosition()
+  })
+}
+
 // 占位预测使用独立测量值，原生空输入行高事件不能覆盖预测的实际高度。
 function onDraftLineChange(event: UniTextareaLineChangeEvent) {
   if (draft.value.length > 0) draftHeight.value = Math.max(64, Math.min(144, event.detail.height))
@@ -1437,15 +1469,6 @@ function settleComposerAnimation() {
     if (!pageAlive || revision != composerAnimationRevision) return
     updateComposerGeometry()
   }, 220)
-}
-// 布局稳定后更新菜单锚点；用户阅读历史时不强制滚到消息末尾。
-function updateComposerGeometry() {
-  nextTick(() => {
-    if (!pageAlive) return
-    if (composerMenu.value.length > 0) updateMenuHeight()
-    if (following.value) scrollLatest()
-    else updateTimelinePosition()
-  })
 }
 // 按真实可用宽度测量自然折行，代次校验阻止旧会话或旧预测的测量写回。
 function measureComposerPrediction() {
@@ -1545,6 +1568,13 @@ function send() {
   rememberSubmission(hostId, threadId, commandId, text)
   request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(steer ? '已追加到当前任务' : result['queued'] == true ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
+// 回车先采纳占位预测；已有草稿才提交，空输入不会触发停止任务。
+function applyComposerEnter() {
+  if (!canWrite.value || imageBusy.value || !filesReady.value) return
+  if (draft.value.length == 0 && visiblePrediction.value.length > 0) { acceptPrediction(false); return }
+  if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send()
+}
+
 // 追加和取消都指向电脑保存的同一条消息，避免手机重传正文形成重复指令。
 function operateQueuedMessage(id: string, action: string) {
   if (!canWrite.value || connection.snapshot?.supportsMessageQueue != true) return
@@ -1606,16 +1636,9 @@ function reply(id: string, turnId: string, decision: string) {
 }
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
-function dismissGoal() { if (!goalBusy.value && goalExpanded.value) { goalCloseRequest.value++; goalExpanded.value = false } }
 // 聚焦只展开编辑面板并收起目标表单，不采纳或发送预测。
 function onComposerFocus() { clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
 function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
-function showGoal() {
-  closeActions(); closeComposerMenu()
-  if (connection.snapshot?.supportsGoals != true) { notify('请更新电脑端与连接服务以使用目标'); return }
-  if (connection.snapshot?.goal == null && (!canWrite.value || !goalHostOnline.value || connection.snapshot?.supportsGoalControl != true)) { notify(goalUnavailableReason.value.length > 0 ? goalUnavailableReason.value : '当前暂不能新建目标'); return }
-  uni.hideKeyboard(); goalOpenRequest.value++
-}
 function operateGoal(action: string, objective: string, revision: string) {
   if (!canWrite.value || !goalHostOnline.value || goalBusy.value || connection.snapshot?.supportsGoalControl != true) return
   busy.value = true; goalBusy.value = true; pendingAction.value = action; operationError.value = ''
@@ -1649,6 +1672,8 @@ function syncPaneVisibility(active: boolean) {
   if (active && connection.hostId == pageHostId.value && connection.activeThreadId != pageThreadId.value) bridge.watch(pageThreadId.value)
   if (!active) { resetPrediction(); inputFocused.value = false; predictionFocus.value = false; closeActions(); closeComposerMenu(); dismissGoal() }
 }
+function goBack() { if (handleBack()) return; uni.hideKeyboard(); emit('close') }
+
 defineExpose({ handleBack, goBack })
 onMounted(() => { syncPaneVisibility(props.active) })
 watch((): boolean => props.active, (active: boolean) => { syncPaneVisibility(active) })

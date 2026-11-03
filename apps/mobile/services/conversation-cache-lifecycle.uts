@@ -12,7 +12,7 @@ export function startConversationCacheLifecycle() {
     if (previous.length > 0) clearConversationCache(previous)
     primeConversationCache(next)
   }, { flush: 'sync' })
-  watch((): string => connection.connected + ':' + connection.cacheNamespace + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
+  watch((): string => connection.connected.toString() + ':' + connection.cacheNamespace + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
     if (!connection.connected || connection.cacheNamespace.length == 0) return
     // 授权全集由 welcome/hosts 提供，不依据截断的最近会话列表删除缓存。
     const namespace = connection.cacheNamespace

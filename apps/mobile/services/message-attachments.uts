@@ -42,7 +42,7 @@ function validMetadata(line: string): boolean {
   for (let index = 0; index < stringPrefixes.length; index++) {
     const prefix = stringPrefixes[index]
     if (!line.startsWith(prefix)) continue
-    try { const value = JSON.parse<string>(line.slice(prefix.length)); return typeof value == 'string' && value.length > 0 } catch (_) { return false }
+    try { const value = JSON.parse<string>(line.slice(prefix.length)); return value != null && typeof value == 'string' && value.length > 0 } catch (_) { return false }
   }
   const objectPrefixes = ['Library file metadata: ', 'Shared thread metadata: ']
   for (let index = 0; index < objectPrefixes.length; index++) {

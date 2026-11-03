@@ -58,8 +58,6 @@ async function load(more: boolean = false) {
 function scheduleSearch() { revision++; manualAction.value = ''; clearTimeout(timer); loading.value = true; error.value = ''; options.value = [] as ThreadMentionOption[]; hasMore.value = false; timer = setTimeout(() => { load() }, 250) }
 // 自动触底保留列表加载提示，按钮只跟踪显式提交的分页或重试。
 function loadNextPage() { if (error.value.length == 0) load(true) }
-function loadMore() { runManualLoad('more') }
-function retry() { runManualLoad('retry') }
 async function runManualLoad(action: string) {
   if (loading.value) return
   manualAction.value = action
@@ -67,6 +65,10 @@ async function runManualLoad(action: string) {
   try { await load(action == 'more' || options.value.length > 0) }
   finally { if (alive && !closed && revision == request) manualAction.value = '' }
 }
+
+function loadMore() { runManualLoad('more') }
+
+function retry() { runManualLoad('retry') }
 function isSelected(id: string): boolean { return selected.value.some((item: SelectedThreadMention): boolean => item.id == id) }
 function remove(id: string) { selected.value = selected.value.filter((item: SelectedThreadMention): boolean => item.id != id) }
 function toggle(thread: ThreadMentionOption) {

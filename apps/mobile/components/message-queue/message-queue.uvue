@@ -18,8 +18,10 @@
 </template>
 <script setup lang="uts">
 import ThreadMentionChips from '../thread-mention-chips/thread-mention-chips.uvue'
-import { threadMentionMessageText } from '../../services/thread-mentions.uts'
+import { threadMentionMessageText as mentionDisplayText } from '../../services/thread-mentions.uts'
 import { QueuedMessage, queuedMessageLabel } from '../../services/message-queue.uts'
+// 保持模板仅调用组件方法，兼容 Android 函数绑定。
+function threadMentionMessageText(text: string): string { return mentionDisplayText(text) }
 const props = defineProps<{ messages: QueuedMessage[], disabled: boolean, running: boolean, editable: boolean, pendingAction?: string }>()
 const emit = defineEmits<{ (event: 'steer', id: string): void; (event: 'cancel', id: string): void; (event: 'edit', id: string): void }>()
 function statusLabel(state: string): string { return queuedMessageLabel(state) }

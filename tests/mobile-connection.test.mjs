@@ -122,23 +122,23 @@ function respond(f,request,result={},error=null){
 
 test('图片读取就绪只来自当前聊天订阅回执，旧快照和旧电脑响应不能提前放行',async()=>{
   const f=connectedFixture();f.connection.snapshot={threadId:'thread',messages:[]};
-  assert.equal(f.connection.subscribedThreadId,'');f.bridge.watch('thread');assert.equal(f.connection.subscribedThreadId,'');
-  respond(f,f.sent[0],{snapshot:{threadId:'thread',messages:[],readOnly:true},epoch:'current',seq:1});await Promise.resolve();
+  assert.equal(f.connection.subscribedThreadId,'');const first=f.bridge.watch('thread');assert.equal(f.connection.subscribedThreadId,'');
+  respond(f,f.sent[0],{snapshot:{threadId:'thread',messages:[],readOnly:true},epoch:'current',seq:1});await first;
   assert.equal(f.connection.subscribedHostId,'pc');assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(f.connection.subscriptionRevision,1);
   f.bridge.disconnect();assert.equal(f.connection.subscribedHostId,'');assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.snapshot.threadId,'thread','旧快照保留阅读但不代表订阅仍有效');
-  f.connection.connected=true;f.bridge.socket={send:options=>f.sent.push(JSON.parse(options.data)),close(){}};f.bridge.watch('thread');assert.equal(f.connection.subscribedThreadId,'');
-  respond(f,f.sent.at(-1),{snapshot:{threadId:'thread',messages:[]},epoch:'reconnected',seq:1});await Promise.resolve();assert.equal(f.connection.subscribedThreadId,'thread');
+  f.connection.connected=true;f.bridge.socket={send:options=>f.sent.push(JSON.parse(options.data)),close(){}};const reconnected=f.bridge.watch('thread');assert.equal(f.connection.subscribedThreadId,'');
+  respond(f,f.sent.at(-1),{snapshot:{threadId:'thread',messages:[]},epoch:'reconnected',seq:1});await reconnected;assert.equal(f.connection.subscribedThreadId,'thread');
   f.bridge.watch('next');assert.equal(f.connection.subscribedThreadId,'');
   f.bridge.applySnapshot(utsObject({snapshot:{threadId:'next'},epoch:'old',seq:1}),'other-pc','next');assert.equal(f.connection.subscribedThreadId,'');
 });
 
 test('快速从A切到B再返回A时，第一轮A的迟到回执不能恢复图片就绪或结束新订阅',async()=>{
   for(const failed of [false,true]){
-    const f=connectedFixture();f.connection.activeThreadId='';f.bridge.watch('A');f.bridge.watch('B');f.bridge.watch('A');
+    const f=connectedFixture();f.connection.activeThreadId='';const old=f.bridge.watch('A');f.bridge.watch('B');const current=f.bridge.watch('A');
     const reads=f.sent.filter(request=>request.method==='thread.watch');assert.equal(reads.length,3);
-    respond(f,reads[0],{snapshot:{threadId:'A',title:'旧订阅'},epoch:'old',seq:1},failed?{message:'旧订阅读取失败'}:null);await Promise.resolve();
+    respond(f,reads[0],{snapshot:{threadId:'A',title:'旧订阅'},epoch:'old',seq:1},failed?{message:'旧订阅读取失败'}:null);await old;
     assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.bridge.syncingThread,'A');assert.equal(f.connection.conversationError,'');assert.equal(f.connection.snapshot,null);
-    respond(f,reads[2],{snapshot:{threadId:'A',title:'新订阅'},epoch:'current',seq:2});await Promise.resolve();
+    respond(f,reads[2],{snapshot:{threadId:'A',title:'新订阅'},epoch:'current',seq:2});await current;
     assert.equal(f.connection.subscribedThreadId,'A');assert.equal(f.connection.snapshot.title,'新订阅');assert.equal(f.bridge.syncingThread,'');
     f.bridge.disconnect();
   }
@@ -312,12 +312,12 @@ test('切换电脑后，旧电脑的延迟列表错误不会污染当前连接�
 
 test('切换电脑后同号会话的旧响应不覆盖快照、错误或清除新同步锁',async()=>{
   for(const failed of [false,true]){
-    const f=connectedFixture();f.connection.activeThreadId='';f.bridge.watch('same-thread');
-    f.connection.hostId='other-pc';f.bridge.syncingThread='';f.bridge.watch('same-thread');
+    const f=connectedFixture();f.connection.activeThreadId='';const old=f.bridge.watch('same-thread');
+    f.connection.hostId='other-pc';f.bridge.syncingThread='';const current=f.bridge.watch('same-thread');
     f.connection.snapshot={threadId:'same-thread',title:'当前电脑缓存'};f.connection.error='当前电脑的提示';
-    respond(f,f.sent[0],{snapshot:{threadId:'same-thread',title:'旧电脑内容'},epoch:'old',seq:1},failed?{message:'旧电脑读取失败'}:null);await Promise.resolve();
+    respond(f,f.sent[0],{snapshot:{threadId:'same-thread',title:'旧电脑内容'},epoch:'old',seq:1},failed?{message:'旧电脑读取失败'}:null);await old;
     assert.equal(f.connection.snapshot.title,'当前电脑缓存');assert.equal(f.connection.error,'当前电脑的提示');assert.equal(f.bridge.syncingThread,'same-thread');
-    respond(f,f.sent[1],{snapshot:{threadId:'same-thread',title:'当前电脑内容'},epoch:'current',seq:2});await Promise.resolve();
+    respond(f,f.sent[1],{snapshot:{threadId:'same-thread',title:'当前电脑内容'},epoch:'current',seq:2});await current;
     assert.equal(f.connection.snapshot.title,'当前电脑内容');assert.equal(f.connection.epoch,'current');assert.equal(f.connection.sequence,2);assert.equal(f.bridge.syncingThread,'');
   }
 });
@@ -350,7 +350,7 @@ test('重连刷新会话与列表不查询操作账本、不自动重发消息�
   f.bridge.receive(utsObject({type:'welcome',hosts:[{id:'pc',online:true}]}));f.bridge.refreshThreads();
   const refreshed=f.sent.slice(count);assert.deepEqual(refreshed.map(r=>r.method),['thread.watch','threads.list']);
   respond(f,refreshed[0],{snapshot:{threadId:'thread',messages:[{role:'user',text:'消息'}]},epoch:'new',seq:1});
-  respond(f,refreshed[1],{threads:[{id:'thread',title:'消息'}]});await Promise.resolve();
+  respond(f,refreshed[1],{threads:[{id:'thread',title:'消息'}]});await new Promise(setImmediate);
   assert.equal(f.connection.snapshot.messages[0].text,'消息');assert.equal(f.connection.threads[0].id,'thread');assert.equal(f.connection.pendingCommandId,'');
   assert.equal(f.sent.some(r=>r.method==='command.status'),false);assert.equal(f.sent.filter(r=>r.method==='turn.send').length,1);
   const retry=f.bridge.request('turn.send',{threadId:'thread',text:'用户决定再发送'},true);respond(f,f.sent.at(-1),{});await retry;

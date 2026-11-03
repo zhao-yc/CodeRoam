@@ -14,7 +14,7 @@ function fixture(){
   c.reloading=ref(false);
   const dimensions=component.split(/\r?\n/).filter(line=>/^const (editorContentHeight|visibleInputHeight|visibleContentHeight) =/.test(line)).join('\n');
   // 通过实际函数定位生命周期，中文说明修改不会改变需要执行的范围。
-  const lifecycle=component.slice(component.indexOf('function syncEditorVisibility('),component.indexOf('let unbindImagePaste'));
+  const lifecycle=component.slice(component.indexOf('function settleEditorLayout('),component.indexOf('let unbindImagePaste'));
   const methods=['showDraftInput','onLineChange','onKeyboardChange','expandEditor'].map(name=>component.split(/\r?\n/).find(line=>line.startsWith('function '+name+'('))).join('\n');
   vm.runInNewContext(stripTypeScriptTypes(dimensions+'\n'+methods+'\n'+lifecycle+';globalThis.ui={syncEditorVisibility,settleEditorLayout,visibleInputHeight,visibleContentHeight,onLineChange,onKeyboardChange,expandEditor};',{mode:'transform'}),c);
   return {c,calls,timers,ui:c.ui,flush(){while(frames.length)frames.shift()();},expand(value){c.props.expanded=value;c.ui.syncEditorVisibility(value);},unmount(){unmounts.forEach(fn=>fn());}};
@@ -46,7 +46,7 @@ test('收起、快速重开及卸载阻止旧聚焦和旧动画回写，保留�
 
 test('收起状态的常驻组件不发起项目或模型读取',()=>{
   const settings=component.slice(component.indexOf('async function loadSettings('),component.indexOf('// 项目来自电脑'));
-  const projects=component.slice(component.indexOf('function loadProjects()'),component.indexOf('function chooseComputer('));
+  const projects=component.slice(component.indexOf('async function loadProjects()'),component.indexOf('function chooseComputer('));
   const c={props:{expanded:false}};
   vm.runInNewContext(stripTypeScriptTypes(settings+projects+';loadSettings();loadProjects();',{mode:'transform'}),c);
 });

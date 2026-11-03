@@ -16,7 +16,7 @@ export default {
     bridge.restore()
   },
   onShow() { resumeDeletionTasks(); bridge.resume(); resumeConversationPrefetch() },
-  onHide() { backgroundConversationPrefetch(); backgroundDeletionTasks(); if (!bridge.backgroundNotifications) resetTaskNotifications(); bridge.background() }
+  onHide() { backgroundConversationPrefetch(); backgroundDeletionTasks(); if (!bridge.backgroundNotificationsEnabled) resetTaskNotifications(); bridge.background() }
 }
 </script>
 

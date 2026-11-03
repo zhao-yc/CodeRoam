@@ -14,12 +14,12 @@ export class TaskNotificationCenter {
   durationMs = 5000
   visibleHostId = ''
   visibleThreadId = ''
-  presentationActive = true
+  canPresentNotices = true
   detected = [] as TaskNotice[]
 
   // 后台只识别事件，不积压页面卡片；恢复前台也不重放已送达的事件。
   setPresentationActive(active: boolean) {
-    this.presentationActive = active
+    this.canPresentNotices = active
     if (!active) { this.queue = [] as TaskNotice[]; this.current = null; this.phase = 'idle'; this.deadline = 0 }
   }
 
@@ -77,7 +77,7 @@ export class TaskNotificationCenter {
     const notice = { key, hostId, generation, threadId: thread.id, threadTitle: thread.title, turnId, kind, targetId } as TaskNotice
     this.detected.push(notice)
     // 已在聊天内看到的事件也记为已读，离开页面后不补发同一事项。
-    if (!this.presentationActive || this.isVisibleThread(hostId, thread.id)) return
+    if (!this.canPresentNotices || this.isVisibleThread(hostId, thread.id)) return
     this.queue.push(notice)
   }
 

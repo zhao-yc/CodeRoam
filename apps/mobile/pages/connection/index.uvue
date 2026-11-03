@@ -48,6 +48,8 @@ const connectionAnchor = ref('')
 const noticeDurationLabel = computed((): string => taskNoticeDurationLabel(taskNotifications.durationMs))
 const fileChangesLabel = computed((): string => fileChangePreferences.expanded ? '展开' : '收起')
 
+function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
+
 // 显示偏好保存在当前客户端，返回聊天后立即按新选择显示。
 function chooseFileChangesDisplay() {
   uni.hideKeyboard()
@@ -71,7 +73,6 @@ function chooseNoticeDuration() {
 onLoad((options) => { if (options['add'] == 'true') connectionAnchor.value = 'connection-config' })
 const currentComputerIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId) ?? null))
 function iconForComputer(computer: Computer): string { return computerIcon(computer) }
-function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 const hasPendingCommands = computed((): boolean => bridge.hasPendingCommands())
 const currentComputerLabel = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)?.label ?? '我的电脑')
 const currentComputerOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online))

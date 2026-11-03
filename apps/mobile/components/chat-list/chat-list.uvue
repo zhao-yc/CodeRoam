@@ -77,7 +77,7 @@ import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, co
 import { readConversationCache } from '../../services/conversation-cache.uts'
 import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import DeletionTaskList from '../../components/deletion-tasks/deletion-tasks.uvue'
-import { deletionTask, deletionLabel } from '../../services/delete-tasks.uts'
+import { DeleteTask, deletionTask as findDeletionTask, deletionLabel as formatDeletionLabel } from '../../services/delete-tasks.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../composer-plus/composer-plus.uvue'
 import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvue'
@@ -91,6 +91,9 @@ import HomeMenu from '../../components/home-menu/home-menu.uvue'
 import { groupThreads, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
 
 const liquidGlass = useLiquidGlass()
+// 列表模板通过本地方法读取删除任务。
+function deletionTask(hostId: string, threadId: string): DeleteTask | null { return findDeletionTask(hostId, threadId) }
+function deletionLabel(task: DeleteTask): string { return formatDeletionLabel(task) }
 const props = withDefaults(defineProps<{ active: boolean, wide?: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean }>(), { wide: false, selectedHostId: '', selectedThreadId: '', busy: false })
 const emit = defineEmits<{ open: [thread: ComputerThread], create: [hostId: string] }>()
 const paneShowCallbacks = [] as (() => void)[]
@@ -141,6 +144,9 @@ function openMenu() {
   })
 }
 
+// 已取消的过渡不能关闭后续重新打开的菜单。
+function finishMenuClose() { if (menuClosing) clearMenu() }
+
 // 退场时保留遮罩来拦截点击；原生端按时长加渲染余量卸载。
 function closeMenu() {
   if (!menuMounted.value || menuClosing) return
@@ -159,8 +165,6 @@ function closeMenu() {
   })
 }
 
-// 已取消的过渡不能关闭后续重新打开的菜单。
-function finishMenuClose() { if (menuClosing) clearMenu() }
 
 // 标题文字和箭头共用菜单开关，按钮的点击只触发一次。
 function toggleMenu(event: UniPointerEvent) {
@@ -182,11 +186,6 @@ function restoreListPreferences() {
   } catch (_) { listSort.value = 'project'; recentFirst.value = false; recentThreads.value = [] as RecentThread[] }
 }
 function saveListPreferences() { try { uni.setStorageSync('codex-mobile-list-preferences', JSON.stringify({ sort: listSort.value, recentFirst: recentFirst.value })) } catch (_) { uni.showToast({ title: '当前选择已生效，暂无法保存偏好', icon: 'none' }) } }
-// 列表偏好即时生效，不等菜单退场。
-function selectSort(value: string) { if (!menuVisible.value || ['priority', 'project', 'time'].indexOf(value) < 0) return; closeMenu(); listSort.value = value; saveListPreferences(); resetThreadScroll() }
-function toggleRecent() { if (!menuVisible.value) return; closeMenu(); recentFirst.value = !recentFirst.value; saveListPreferences(); resetThreadScroll() }
-// 添加连接直接定位接入配置，设置入口保留当前连接概览。
-function openMenuConnection(adding: boolean) { if (!menuVisible.value || creatingConversation.value) return; closeMenu(); uni.navigateTo({ url: '/pages/connection/index' + (adding ? '?add=true' : '') }) }
 restoreListPreferences()
 const search = ref('')
 const searchVisible = ref(false)
@@ -238,6 +237,13 @@ let archiveToastRequest = 0
 const selectedComputers = computed((): ComputerThreads[] => threadList.computers.filter((entry: ComputerThreads): boolean => selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value))
 const allVisibleThreads = computed((): ComputerThread[] => visibleComputerThreads(selectedComputerId.value, ''))
 type ComputerIndicator = { hostId: string, state: string }
+// 列表状态来自实际读取结果，当前订阅会话优先采用实时快照。
+function threadState(thread: ComputerThread): string {
+  const snapshot = connection.snapshot
+  if (connection.hostId == thread.hostId && snapshot?.threadId == thread.id) return threadIndicator(conversationTaskState(snapshot, thread.online), snapshot?.hasUnreadTurn ?? null)
+  return threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? [], thread.latestTurn?.status ?? ''), thread.hasUnreadTurn ?? null)
+}
+
 // 汇总各电脑完整列表，与会话行共用状态判断；筛选和搜索不能隐藏其他电脑的提醒。
 const computerIndicators = computed((): ComputerIndicator[] => {
   const threads = visibleComputerThreads('', '')
@@ -246,6 +252,7 @@ const computerIndicators = computed((): ComputerIndicator[] => {
     return { hostId: computer.id, state: states.indexOf('running') >= 0 ? 'running' : states.indexOf('unread') >= 0 ? 'unread' : 'idle' } as ComputerIndicator
   })
 })
+
 // 运行优先于未读；空列表、已读、等待操作及离线均不生成常驻在线圆点。
 function computerIndicator(hostId: string): string { return computerIndicators.value.find((entry: ComputerIndicator): boolean => entry.hostId == hostId)?.state ?? 'idle' }
 const selectedComputerOnline = computed((): boolean => connection.connected && selectedComputers.value.some((entry: ComputerThreads): boolean => entry.online))
@@ -332,12 +339,6 @@ onPaneShow(() => {
 onPaneHide(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
 onUnmounted(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
 
-// 列表状态来自实际读取结果，当前订阅会话优先采用实时快照。
-function threadState(thread: ComputerThread): string {
-  const snapshot = connection.snapshot
-  if (connection.hostId == thread.hostId && snapshot?.threadId == thread.id) return threadIndicator(conversationTaskState(snapshot, thread.online), snapshot?.hasUnreadTurn ?? null)
-  return threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? [], thread.latestTurn?.status ?? ''), thread.hasUnreadTurn ?? null)
-}
 
 // 更新时间使用真实时间戳，缺少时间时留空，不伪造最近活动。
 function updatedLabel(value: number): string {
@@ -376,6 +377,12 @@ function reloadThreads() { loadFromListButton('reload') }
 // 离线时允许查看对应配对和电脑的缓存，不触发桌面导航。
 function openThread(thread: ComputerThread) { emit('open', thread) }
 function resetThreadScroll() { savedThreadScrollTop = 0; threadScrollTop.value = -1; nextTick(() => { threadScrollTop.value = 0 }) }
+
+// 列表偏好即时生效，不等菜单退场。
+function selectSort(value: string) { if (!menuVisible.value || ['priority', 'project', 'time'].indexOf(value) < 0) return; closeMenu(); listSort.value = value; saveListPreferences(); resetThreadScroll() }
+function toggleRecent() { if (!menuVisible.value) return; closeMenu(); recentFirst.value = !recentFirst.value; saveListPreferences(); resetThreadScroll() }
+// 添加连接直接定位接入配置，设置入口保留当前连接概览。
+function openMenuConnection(adding: boolean) { if (!menuVisible.value || creatingConversation.value) return; closeMenu(); uni.navigateTo({ url: '/pages/connection/index' + (adding ? '?add=true' : '') }) }
 function openSearch() { searchVisible.value = true; nextTick(() => { searchFocused.value = true }) }
 function closeSearch() { search.value = ''; searchFocused.value = false; searchVisible.value = false; uni.hideKeyboard() }
 function chooseComputerFilter(id: string) { if (editingComputerId.value.length > 0 || Date.now() < suppressComputerClickUntil) return; if (id.length > 0 && !connection.computers.some((computer: Computer): boolean => computer.id == id)) return; selectedComputerId.value = id; resetThreadScroll(); refreshComputerThreads(id) }

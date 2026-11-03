@@ -130,7 +130,7 @@ function pageFixture() {
   c.draftMentions = computed(() => c.readDraftThreadMentions(c.pageHostId.value, c.pageThreadId.value));
   c.draftPlugins = computed(() => c.readDraftPlugins('pc', 'current')); c.draftImages = computed(() => c.readDraftImages('pc', 'current')); c.draftFiles = computed(() => c.readDraftFiles('pc', 'current'));
   const save = c.saveDraft; c.saveDraft = (...args) => { save(...args); c.mentionDraftRevision++; };
-  vm.runInContext(compile(between(page, 'function resetThreadMention(', '// 只在会话页可见时') + between(page, 'function updateDraft(', '// 选图完成后')), c);
+  vm.runInContext(compile(between(page, 'function resetThreadMention(', '// 只在会话页可见时') + between(page, 'function threadMentionContext(', '// 选图完成后')), c);
   vm.runInContext(compile(between(page, 'function send() {', '// 追加和取消都指向')), c);
   vm.runInContext(compile(between(page, 'function editQueuedMessage(', 'let stopPromptOpen')), c);
   return { c, calls, pending, notices };
@@ -223,7 +223,7 @@ test('新建输入同样保留光标后正文，取消不删触发片段，迟�
     Object.assign(c, { ref, props: { expanded: true }, busy: ref(false), focused: ref(false), mentionOpen: ref(false), mentionCursor: ref(-1), mentionTrigger: ref(null), mentionDraftRevision: 0, mentionSourceRevision: 0, mentionContext: '', mentionSelectionRevision: 0, projectId: ref('project'), watch: (_, run) => watches.push(run), notify() {}, focusDraftInput() {}, closeMenus() {} });
     c.connection.configurationRevision = 1; c.uni.hideKeyboard = () => {};
     c.draft = computed(() => c.newDraft('pc', c.projectId.value)); c.native = computed(() => c.nativeDraftState('pc', c.projectId.value));
-    vm.runInContext(compile(between(newEditor, 'function updateText(', '// 附件和长文本')), c);
+    vm.runInContext(compile(between(newEditor, 'function threadMentionContext(', 'function closeMenus(') + between(newEditor, 'function updateText(', '// 附件和长文本')), c);
     const text = '开始 @检索 保留结尾'; c.updateText({ detail: { value: text, cursor: text.indexOf(' 保留结尾') } }); assert.equal(c.mentionOpen.value, true);
     if (action === 'cancel') { c.closeThreadMentions(); assert.equal(c.draft.value.text, text); assert.equal(c.mentionCursor.value, text.indexOf(' 保留结尾')); continue; }
     if (action === 'changed' || action === 'reverted') { c.draft.value.text = '异步正文'; watches[0](); if (action === 'reverted') { c.draft.value.text = text; watches[0](); } }

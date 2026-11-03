@@ -27,6 +27,12 @@ const noticeTransform = computed((): string => 'translateY(' + (taskNotification
 const noticeOpacity = computed((): number => taskNotifications.phase == 'visible' ? Math.max(0.25, 1 + dragOffset.value / 180) : 0)
 // 实测标题栏底边，适应不同页面、状态栏和横竖屏，不占用正文布局。
 function measureTop() { nextTick(() => { const rect = uni.getElementById(props.headerId)?.getBoundingClientRect(); if (rect != null) top.value = rect.bottom + 8; const card = uni.getElementById('task-notice-' + props.headerId)?.getBoundingClientRect(); if (card != null) cardHeight.value = card.height }) }
+// 页面切换、通知换条或系统取消触摸时复位，屏蔽旧手势随后合成的点击。
+function cancelTouch() {
+  if (dragging.value) ignoreClickUntil = Date.now() + 350
+  dragging.value = false; dragOffset.value = 0; gestureKey = ''; touchId = -1; gestureMoved = false
+}
+
 onMounted(() => { measureTop() })
 watch((): string => props.active.toString() + ':' + (taskNotifications.current?.key ?? ''), () => { cancelTouch(); if (props.active) measureTop() })
 watch((): string => props.paneWidth + ':' + props.headerId, () => { if (props.active) measureTop() })
@@ -63,11 +69,6 @@ function finishTouch(event: UniTouchEvent) {
   if (dy <= -32 && Math.abs(dy) > Math.abs(dx) * 1.25) dismissTaskNotice(key)
 }
 
-// 页面切换、通知换条或系统取消触摸时复位，屏蔽旧手势随后合成的点击。
-function cancelTouch() {
-  if (dragging.value) ignoreClickUntil = Date.now() + 350
-  dragging.value = false; dragOffset.value = 0; gestureKey = ''; touchId = -1; gestureMoved = false
-}
 
 // 浏览器可能在触摸结束后合成 click；上滑绝不能顺带打开会话或下一条卡片。
 function openNotice() { if (dragging.value || Date.now() < ignoreClickUntil || taskNotifications.phase != 'visible') return; const notice = taskNotifications.current; if (notice != null) openTaskNotice(notice, props.hostId, props.threadId) }

@@ -135,7 +135,7 @@ export function startDeletionTasks() {
   if (installed) return
   installed = true
   watch((): string => connection.cacheNamespace, () => { restoreTasks(); reconcileTasks() }, { immediate: true, flush: 'sync' })
-  watch((): string => connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
+  watch((): string => connection.connected.toString() + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online.toString() + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
     if (!connection.connected) { clearTimeout(pollTimer); deletionTasks.tasks.forEach((task: DeleteTask) => { task.checking = false; if (task.state == 'running') { task.state = 'unknown'; task.error = '连接已中断，返回后核对删除结果' } }); saveQuietly() }
     else reconcileTasks()
   })

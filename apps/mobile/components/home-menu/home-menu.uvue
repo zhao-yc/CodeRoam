@@ -71,6 +71,32 @@ function finishTransition() {
   // #endif
 }
 
+// 分页固定为只读归档查询；旧服务不提供归档确认标记时拒绝显示普通列表。
+function loadArchives(entry: MenuComputer, more: boolean = false) {
+  if (!props.visible || entry.loading) return
+  if (!entry.online) { entry.archiveError = '电脑离线，恢复连接后重试'; return }
+  const version = revision, pageVersion = archiveRevision
+  entry.loading = true; entry.loadingMore = more; entry.archiveError = ''
+  bridge.readComputerMenu(entry.hostId, { archived: true, limit: 30, offset: entry.threads.length }).then((result: UTSJSONObject) => {
+    if (version != revision || pageVersion != archiveRevision) return
+    entry.loading = false; entry.loadingMore = false
+    if (result['archived'] != true) { entry.archiveError = '请更新电脑连接服务后查看归档任务'; return }
+    const rows = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[]
+    entry.threads = entry.threads.concat(rows); entry.loaded = true; entry.more = rows.length == 30 && entry.threads.length < 10000
+  }, (_reason: Error) => { if (version == revision && pageVersion == archiveRevision) { entry.loading = false; entry.loadingMore = false; entry.archiveError = '暂无法读取，请刷新重试' } })
+}
+// 刷新先作废所有归档在途回执，防止旧分页重新混入新列表。
+function refreshArchives() { if (!props.visible) return; archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.loadingMore = false; entry.more = false; loadArchives(entry) }) }
+
+const archiveRefreshing = ref(false)
+// 首次进入归档区维持列表提示，只有点刷新时才在按钮上转圈。
+function refreshFromButton() {
+  if (archiveRefreshing.value) return
+  refreshArchives()
+  archiveRefreshing.value = entries.value.some((entry: MenuComputer): boolean => entry.loading)
+}
+watch((): boolean => entries.value.some((entry: MenuComputer): boolean => entry.loading), (pending: boolean) => { if (!pending) archiveRefreshing.value = false })
+watch((): boolean => props.visible && section.value == 'archives', (visible: boolean) => { if (!visible) archiveRefreshing.value = false })
 // 筛选、断线与授权变化立即作废旧结果，额度只在打开菜单时读取。
 function syncEntries() {
   const version = ++revision
@@ -91,31 +117,7 @@ function syncEntries() {
   })
   if (section.value == 'archives') refreshArchives()
 }
-// 分页固定为只读归档查询；旧服务不提供归档确认标记时拒绝显示普通列表。
-function loadArchives(entry: MenuComputer, more: boolean = false) {
-  if (!props.visible || entry.loading) return
-  if (!entry.online) { entry.archiveError = '电脑离线，恢复连接后重试'; return }
-  const version = revision, pageVersion = archiveRevision
-  entry.loading = true; entry.loadingMore = more; entry.archiveError = ''
-  bridge.readComputerMenu(entry.hostId, { archived: true, limit: 30, offset: entry.threads.length }).then((result: UTSJSONObject) => {
-    if (version != revision || pageVersion != archiveRevision) return
-    entry.loading = false; entry.loadingMore = false
-    if (result['archived'] != true) { entry.archiveError = '请更新电脑连接服务后查看归档任务'; return }
-    const rows = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[]
-    entry.threads = entry.threads.concat(rows); entry.loaded = true; entry.more = rows.length == 30 && entry.threads.length < 10000
-  }, (_reason: Error) => { if (version == revision && pageVersion == archiveRevision) { entry.loading = false; entry.loadingMore = false; entry.archiveError = '暂无法读取，请刷新重试' } })
-}
-const archiveRefreshing = ref(false)
-// 首次进入归档区维持列表提示，只有点刷新时才在按钮上转圈。
-function refreshFromButton() {
-  if (archiveRefreshing.value) return
-  refreshArchives()
-  archiveRefreshing.value = entries.value.some((entry: MenuComputer): boolean => entry.loading)
-}
-watch((): boolean => entries.value.some((entry: MenuComputer): boolean => entry.loading), (pending: boolean) => { if (!pending) archiveRefreshing.value = false })
-watch((): boolean => props.visible && section.value == 'archives', (visible: boolean) => { if (!visible) archiveRefreshing.value = false })
-// 刷新先作废所有归档在途回执，防止旧分页重新混入新列表。
-function refreshArchives() { if (!props.visible) return; archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.loadingMore = false; entry.more = false; loadArchives(entry) }) }
+
 function showArchives() { if (!props.visible) return; section.value = 'archives'; refreshArchives() }
 function projectName(cwd: string): string { const parts = cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0); return parts.length > 0 ? parts[parts.length - 1] : cwd }
 // 退场期间冻结菜单内容，并作废额度和归档的在途回执。

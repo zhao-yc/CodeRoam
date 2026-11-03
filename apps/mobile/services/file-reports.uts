@@ -17,7 +17,7 @@ export function fileDiffRows(diffs: string[]): DiffRow[] {
       const id = patchIndex.toString() + ':' + index.toString()
       const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
       if (match != null) {
-        oldLine = parseInt(match[1]); newLine = parseInt(match[2]); inHunk = true
+        oldLine = parseInt(match[1] ?? ''); newLine = parseInt(match[2] ?? ''); inHunk = true
         result.push({ id, kind: 'hunk', oldLine: '', newLine: '', text: (diffs.length > 1 ? '修改 ' + (patchIndex + 1) + ' · ' : '') + line })
       } else if (inHunk && line.startsWith('+')) {
         result.push({ id, kind: 'add', oldLine: '', newLine: newLine.toString(), text: line.slice(1) }); newLine++

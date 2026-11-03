@@ -47,7 +47,7 @@ function watchCacheHost(hostId: string, generation: string, threads: string[], v
   })
   bridge.watchConversationCache(hostId, id, targets, verify).then((result: UTSJSONObject) => {
     if (result.getBoolean('ok') != true) throw new Error('聊天缓存订阅回执无效')
-  }).catch((_error: Error) => {
+  }).catch(() => {
     if (subscriptions.get(hostId) !== subscription) return
     fallbackHosts.set(hostId, generation)
     releaseCacheSubscription(subscription)
@@ -88,12 +88,12 @@ function observeCacheSubscriptions(hosts: ComputerThreads[]) {
     const generation = host.instanceGeneration ?? ''
     if (!host.online || fallbackHosts.get(host.id) == generation) return
     const threads = selected.filter((candidate: CacheCandidate): boolean => candidate.hostId == host.id).map((candidate: CacheCandidate): string => candidate.threadId)
-    threads.sort(compareCacheIds)
+    threads.sort((a: string, b: string): number => compareCacheIds(a, b))
     const active = detailOwnsContent(host.id, connection.activeThreadId) ? connection.activeThreadId : ''
     const verify = cachedConversationThreadIds(connection.cacheNamespace, host.id).filter((id: string): boolean => id != active && threads.indexOf(id) < 0)
     if (active.length > 0) verify.unshift(active)
     const checks = verify.slice(0, 20)
-    checks.sort(compareCacheIds)
+    checks.sort((a: string, b: string): number => compareCacheIds(a, b))
     const previous = subscriptions.get(host.id)
     if (threads.length == 0 && checks.length == 0) { if (previous != null) releaseCacheSubscription(previous); return }
     if (previous == null || previous.generation != generation || JSON.stringify(previous.threads) != JSON.stringify(threads) || JSON.stringify(previous.verify) != JSON.stringify(checks)) watchCacheHost(host.id, generation, threads, checks)
@@ -128,8 +128,9 @@ function receiveCacheEvent(event: UTSJSONObject, bodyReady: boolean = false) {
     if (pending != null || (full == null && previous == null && baseRevision.length > 0 && peekConversationCacheRevision(subscription.namespace, hostId, threadId) == baseRevision)) {
       // 冷索引可协商版本，只有实际收到变化时才读取这一条聊天的完整基线。
       const wait = pending ?? primeConversationEntry(subscription.namespace, hostId, threadId).then((_entry) => {})
-      const next = wait.then(() => { receiveCacheEvent(event, true) }).finally(() => { if (pendingCacheBodies.get(pendingKey) === next) pendingCacheBodies.delete(pendingKey) })
-      pendingCacheBodies.set(pendingKey, next)
+      const receiving = wait.then(() => { receiveCacheEvent(event, true) })
+      pendingCacheBodies.set(pendingKey, receiving)
+      receiving.finally(() => { if (pendingCacheBodies.get(pendingKey) === receiving) pendingCacheBodies.delete(pendingKey) })
       return
     }
   }

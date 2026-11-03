@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 
 const detail = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
 const windowSource = detail.slice(detail.indexOf("const timelineBoundary = ref('')"), detail.indexOf('const messagePresentations = computed('));
-const fillSource = detail.slice(detail.indexOf('function waitForTimelinePaint('), detail.indexOf('// 所有异步布局共用一条补偿链'));
+const fillSource = detail.slice(detail.indexOf('function waitForTimelinePaint('), detail.indexOf('// 所有异步布局共用一条补偿链')) + detail.match(/^function scheduleTimelineFill\(\) \{[\s\S]*?^\}/m)[0];
 const jumpSource = detail.slice(detail.indexOf('function jumpTo(anchor: string)'), detail.indexOf('// 点击通知后等待目标快照'));
 
 // 用真实页面窗口方法测试首次挂载和后续批次，布局锚点由现有页面钩子接手。

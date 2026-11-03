@@ -9,7 +9,7 @@
         <view v-else-if="error.length > 0 || manualRetry" class="plugin-empty"><text class="plugin-error">{{ error }}</text><view class="plugin-retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #536050; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新读取' : '重新读取'"></button></view></view>
         <template v-else>
           <view v-for="plugin in missing" :key="plugin.id" class="plugin-row plugin-unavailable action-frame"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text class="plugin-description">已不可用，请取消选择</text></view><app-icon name="check" :size="20" tone="muted" /><button class="action-hitbox" :aria-label="'取消不可用插件 ' + plugin.displayName" @click="toggle(plugin)"></button></view>
-          <view v-for="plugin in filtered" :key="plugin.id" class="plugin-row action-frame" :class="{ 'plugin-row-selected': isSelected(plugin.id) }"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text v-if="plugin.description.length > 0" class="plugin-description">{{ plugin.description }}</text></view><view class="plugin-check"><app-icon v-if="isSelected(plugin.id)" name="check" :size="20" /></view><button class="action-hitbox" role="checkbox" :aria-checked="isSelected(plugin.id)" :aria-label="(isSelected(plugin.id) ? '取消选择 ' : '选择插件 ') + plugin.displayName" @click="toggle(plugin)"></button></view>
+          <view v-for="plugin in filtered" :key="plugin.id" class="plugin-row action-frame" :class="{ 'plugin-row-selected': isSelected(plugin.id) }"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text v-if="plugin.description.length > 0" class="plugin-description">{{ plugin.description }}</text></view><view class="plugin-check"><app-icon v-if="isSelected(plugin.id)" name="check" :size="20" /></view><button class="action-hitbox" role="checkbox" :aria-checked="isSelected(plugin.id)" :aria-label="(isSelected(plugin.id) ? '取消选择 ' : '选择插件 ') + plugin.displayName" @click="toggleOption(plugin)"></button></view>
           <view v-if="filtered.length == 0" class="plugin-empty"><text class="plugin-note">{{ query.trim().length > 0 ? '没有匹配的插件' : '当前电脑和项目暂无可用插件' }}</text></view>
         </template>
       </scroll-view>
@@ -68,6 +68,8 @@ function toggle(plugin: SelectedPlugin) {
     selected.value.push({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin)
   }
 }
+// 目录记录和已选插件在 Android 上是不同类型。
+function toggleOption(plugin: PluginOption) { toggle({ id: plugin.id, displayName: plugin.displayName } as SelectedPlugin) }
 function clear() { selected.value = [] as SelectedPlugin[] }
 function close() { revision++; emit('close') }
 function confirm() { if (!loading.value && error.value.length == 0 && missing.value.length == 0) { revision++; emit('confirm', copyPluginSelection(selected.value)) } }

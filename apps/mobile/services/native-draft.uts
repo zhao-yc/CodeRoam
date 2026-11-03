@@ -50,7 +50,7 @@ function acceptNativeSnapshot(state: NativeDraftState, snapshot: NativeDraftSnap
   const previous = state.snapshot
   const oldRevision = previous?.revision
   if (previous?.status == 'promoted' && snapshot.status != 'promoted') return
-  if (typeof oldRevision == 'number' && typeof snapshot.revision == 'number' && snapshot.revision < oldRevision) return
+  if (typeof oldRevision == 'number' && typeof snapshot.revision == 'number' && (snapshot.revision as number) < (oldRevision as number)) return
   state.draftId = snapshot.draftId; state.snapshot = snapshot; state.version++
   state.error = snapshot.status == 'detached' ? '电脑已切换项目或离开草稿，同步已暂停，请手动重新连接' : ''
 }

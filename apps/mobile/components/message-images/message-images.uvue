@@ -21,12 +21,6 @@ let loadScheduled = false
 // 配对、电脑、聊天和消息共同隔离回执；图片只保留在当前组件内，不写入持久缓存。
 function imageIdentity(): string { return JSON.stringify([props.scopeId ?? '', props.hostId, props.threadId, props.messageId, props.count ?? 1, props.large == true]) }
 function imageRequestReady(): boolean { return alive && props.connected && props.ready != false && connection.hostId == props.hostId && connection.activeThreadId == props.threadId && (props.scopeId == null || props.scopeId == connection.cacheNamespace) }
-// 父页可能连续更新就绪标记与订阅代次；合并到下一次渲染后只发起一次读取。
-function scheduleImages() {
-  if (!alive || loadScheduled) return
-  loadScheduled = true
-  nextTick(() => { loadScheduled = false; if (alive && sources.value.length == 0) loadImages() })
-}
 // 占位、错误提示和缩略图替换均通知父页；图片解码完成沿用同一位置保持链。
 function beforeImageLayout() { emit('beforelayout'); nextTick(() => { if (alive) emit('layout') }) }
 // 大图按片读取，避免设计稿超过中转单条消息上限；离页或断线立即停止后续请求。
@@ -73,6 +67,13 @@ function loadImages(manual: boolean = false) {
     loading = false; manualRetry.value = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
   })
 }
+// 父页可能连续更新就绪标记与订阅代次；合并到下一次渲染后只发起一次读取。
+function scheduleImages() {
+  if (!alive || loadScheduled) return
+  loadScheduled = true
+  nextTick(() => { loadScheduled = false; if (alive && sources.value.length == 0) loadImages() })
+}
+
 // 仅点击缩略图时打开当前消息的图片组。
 function preview(source: string) { uni.previewImage({ urls: sources.value, current: source }) }
 // 异步图片出现后由会话页维护滚动位置。
