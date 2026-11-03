@@ -1,10 +1,32 @@
 import { parseMarkdown, MarkdownBlock } from './markdown.uts'
+import { codeRanges, CodeRange } from './annotations.uts'
 
 export type PlanPresentation = { title: string, excerpt: string }
 
+// 在解析 Markdown 和裁切之前移除完整的文件引用，保留代码示例与转义后的字面内容。
+function planPreviewSource(source: string): string {
+  if (source.indexOf(':codex-file-citation{') < 0) return source
+  const ranges = codeRanges(source)
+  const citation = /:codex-file-citation\{[ \t]*[\w-]+="(?:\\[^\r\n]|[^"\\\r\n])*"(?:[ \t]+[\w-]+="(?:\\[^\r\n]|[^"\\\r\n])*")*[ \t]*\}/g
+  let cursor = 0
+  let result = ''
+  let match = citation.exec(source)
+  while (match != null) {
+    const start = match.index
+    let escape = start
+    while (escape > 0 && source.charAt(escape - 1) == '\\') escape--
+    if ((start - escape) % 2 == 0 && !ranges.some((range: CodeRange): boolean => range.start <= start && start < range.end)) {
+      result += source.slice(cursor, start)
+      cursor = start + (match[0] ?? '').length
+    }
+    match = citation.exec(source)
+  }
+  return result + source.slice(cursor)
+}
+
 // 预览只提取原方案的标题与开头正文；完整 Markdown 始终保留给详情面板。
 export function planPresentation(source: string): PlanPresentation {
-  const blocks = parseMarkdown(source)
+  const blocks = parseMarkdown(planPreviewSource(source))
   let title = '实施方案'
   let start = 0
   if (blocks.length > 0 && blocks[0].kind == 'heading') {

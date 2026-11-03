@@ -8,12 +8,13 @@ import { normalizeConversation } from '../apps/bridge/conversation.mjs';
 
 /** 执行实际 UTS 解析与页面选择方法，避免预览裁切影响详情原文。 */
 function presentation() {
-  const context = componentContext({});
-  for (const file of ['markdown', 'plan-presentation', 'executions']) {
+  const storage = new Map();
+  const context = componentContext({uni:{getStorageSync:key=>storage.get(key),setStorageSync:(key,value)=>storage.set(key,value)}});
+  for (const file of ['annotations', 'markdown', 'plan-presentation', 'message-attachments', 'message-presentations', 'executions', 'history', 'conversation-cache']) {
     const source = fs.readFileSync('apps/mobile/services/' + file + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
     vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }), context);
   }
-  vm.runInContext('globalThis.api = { planPresentation, executionTimeline, reportTimeline }', context);
+  vm.runInContext('globalThis.api = { planPresentation, executionTimeline, reportTimeline, presentConversationMessages, mergeHistoryMessages, saveConversationCache, readConversationCache }', context);
   return context.api;
 }
 
@@ -23,6 +24,58 @@ test('预览从真实标题和正文生成，去掉 Markdown 语法且不改写�
   assert.equal(result.title, '合成方案');assert.equal(result.excerpt, '保留 完整正文，支持 示例链接。 第一步 第二步');
   assert.ok(source.includes('**完整正文**'));
   assert.equal(f.planPresentation('没有标题的正文').title, '实施方案');assert.equal(f.planPresentation('').excerpt, '');
+});
+
+test('摘要先清除完整文件引用再裁切，保留代码和转义的引用示例', () => {
+  const f = presentation();
+  const citation = ':codex-file-citation{path="' + '示例'.repeat(180) + '}.xlsx" artifact_kind="workbook" purpose="source" sheet="示例" range="A1:B2"}';
+  const source = '# 合成方案\n\n引用前' + citation + '引用后' + citation + '最后一段';
+  assert.equal(f.planPresentation(source).excerpt, '引用前引用后最后一段');
+  assert.equal(f.planPresentation('`' + citation + '`').excerpt, citation.slice(0, 320));
+  assert.equal(f.planPresentation('```text\n' + citation + '\n```').excerpt, citation.slice(0, 320));
+  assert.equal(f.planPresentation('\\' + citation).excerpt, citation.slice(0, 320));
+  assert.equal(f.planPresentation('引用前 :codex-file-citation{path="示例.xlsx"').excerpt, '引用前 :codex-file-citation{path="示例.xlsx"');
+});
+
+test('新旧桥接的执行确认在快照、分页和缓存中简化，保留同步正文', () => {
+  const f = presentation();
+  const body = '# 合成方案\n\n' + '测试步骤'.repeat(2600);
+  const prefix = 'PLEASE IMPLEMENT THIS PLAN:\n';
+  const state = {id:'thread',turns:[{turnId:'turn',status:'completed',items:[
+    {id:'new',type:'userMessage',content:[{type:'text',text:prefix + body}]},
+  ]}]};
+  const live = normalizeConversation(state);
+  assert.equal(live.messages[0].kind, 'planImplementationRequest');
+  assert.equal(live.messages[0].text, body.slice(-10000));
+  const old = {id:'old',role:'user',kind:'userMessage',text:'PLEASE IMPLEMENT THIS PLAN:\r\n# 历史方案',turnId:'old-turn',status:'completed'};
+  assert.ok(f.saveConversationCache('scope', 'host', live, {messages:[old],turns:[]}));
+  const cache = f.readConversationCache('scope', 'host', 'thread');
+  const expectShort = messages => assert.deepEqual(Array.from(f.presentConversationMessages(messages), item=>item.text), Array.from(messages, ()=>'是的，执行此计划'));
+  expectShort(live.messages);
+  expectShort(f.mergeHistoryMessages([old], live.messages));
+  expectShort(f.mergeHistoryMessages(cache.olderMessages, cache.messages));
+  assert.equal(cache.olderMessages[0].text, old.text);
+  assert.equal(cache.messages[0].text, live.messages[0].text);
+});
+
+test('普通消息、修改意见、代码和携带图片的记录保持原文', () => {
+  const f = presentation();
+  const base = {id:'user',role:'user',kind:'userMessage',turnId:'turn',status:'completed'};
+  const prefix = 'PLEASE IMPLEMENT THIS PLAN:\n';
+  const messages = [
+    {...base,text:'请调整测试顺序'},
+    {...base,text:prefix+' \n'},
+    {...base,text:'```text\n'+prefix+'示例\n```'},
+    {...base,text:'请翻译：'+prefix+'示例'},
+    {...base,text:prefix+'图片说明',imageCount:1},
+    {...base,text:prefix+'审批回答',kind:'userInputResponse'},
+    {...base,text:prefix+'回复示例',role:'assistant',kind:'agentMessage'},
+  ];
+  assert.deepEqual(Array.from(f.presentConversationMessages(messages), item=>item.text), messages.map(item=>item.text));
+  const attachment = {...base,text:prefix+'附带测试材料\n\n# 用户附带的文件\n## 示例.txt: /example/示例.txt'};
+  const presented = f.presentConversationMessages([attachment])[0];
+  assert.equal(presented.text, prefix+'附带测试材料');
+  assert.equal(presented.attachments[0].name, '示例.txt');
 });
 
 test('长预览有界，代码和表格仍能预览，时间线保留方案类型和正文', () => {

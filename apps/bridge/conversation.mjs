@@ -87,7 +87,10 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       const images=String(item.id)===imageMessageId?readMessageImages(imageParts,imageIndex):[];
       // 方案及与其原文完全相同的最终回复保留全文，供展示层准确去重；总预算仍有效。
       const preservePlan = ['plan','planImplementation'].includes(item.type) || (role === 'assistant' && item.phase === 'final_answer' && planContents.has(text.trim()));
-      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind:item.type==='plan'?'planImplementation':item.type, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
+      // 长消息可能截掉执行确认的开头，先标记展示类型，仍沿用普通消息的正文预算。
+      const planRequest = item.type === 'userMessage' && imageParts.length === 0 && /^PLEASE IMPLEMENT THIS PLAN:[ \t]*\r?\n\s*\S/.test(text);
+      const kind = planRequest ? 'planImplementationRequest' : item.type === 'plan' ? 'planImplementation' : item.type;
+      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }
   // 先给提问和最终报告预留空间，避免长任务的命令记录挤掉所有早期对话。
