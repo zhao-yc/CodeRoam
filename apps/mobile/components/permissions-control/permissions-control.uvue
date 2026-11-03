@@ -22,7 +22,7 @@ import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
 const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false })
-const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean], refresh: [] }>()
+const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
 const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
 let alive = true, request = 0
@@ -77,12 +77,14 @@ async function choose(value: string) {
     if (!confirmed || !current(key, id) || props.disabled || props.nativeBusy || !available.value || state.value?.revision != revision) return
   }
   if (isNative.value || props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }
+  let applied = false
   busy.value = true; emit('busy', true); error.value = ''
   try {
     const result = await bridge.request('thread.permissions.update', { threadId: props.threadId, mode: value, expectedRevision: revision, confirmedFullAccess: value == 'full-access' }, true)
-    if (current(key, id)) { state.value = JSON.parse<PermissionState>(JSON.stringify(result)); opened.value = false }
+    if (current(key, id)) { state.value = JSON.parse<PermissionState>(JSON.stringify(result)); opened.value = false; applied = true }
   } catch (reason) { if (current(key, id)) error.value = (reason as Error).message }
-  finally { if (current(key, id)) { busy.value = false; emit('busy', false) } }
+  // 成功事件在父级操作锁释放后发出，仅当前电脑与聊天可以恢复编辑焦点。
+  finally { if (current(key, id)) { busy.value = false; emit('busy', false); if (applied) emit('applied', connection.hostId, props.threadId) } }
 }
 // 菜单打开时保持父级输入区展开，避免键盘失焦卸载菜单。
 watch(opened, (value: boolean) => { emit('visibility', value) })

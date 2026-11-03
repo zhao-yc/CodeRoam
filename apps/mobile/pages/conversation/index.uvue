@@ -107,7 +107,7 @@
           </view>
           <!-- 两端操作始终使用同一节点，展开时只增加上方的编辑空间。 -->
           <view class="composer-add"><view class="add-image action-frame" :style="{ opacity: !canWrite ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!canWrite" aria-label="添加附件、插件、计划模式或追求目标" @click="openComposerMenu('add')"></button></view></view>
-          <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view></view>
+          <view v-show="composerExpanded" class="composer-actions"><permissions-control :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" @applied="onPermissionApplied" /><view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: activeTurnId.length > 0 || connection.snapshot?.status == 'active' ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'" aria-label="关闭计划模式" @click="togglePlan"></button></view><view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" aria-label="选择模型、推理强度和速度" @click="openComposerMenu('settings')"></button></view></view>
           <view class="composer-send"><view class="primary-action action-frame" :style="{ opacity: (!primaryAvailable) ? 0.4 : 1 }"><app-icon :name="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? 'stop' : 'send'" :size="22" tone="light" /><button class="action-hitbox" :disabled="!primaryAvailable" :aria-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? '停止任务' : '发送指令'" @click="primaryAction"></button></view></view>
         </view>
       </view>
@@ -1080,6 +1080,10 @@ function selectSetting(key: string, value: string): boolean {
 // 权限写入期间沿用详情页操作锁，防止首条消息抢在设置确认之前发送。
 // 原生组件事件显式声明布尔类型，避免模板把载荷推断为 Any。
 function onPermissionBusy(value: boolean) { busy.value = value }
+// 权限已确认写入且当前页面仍可编辑时，才将光标交回同一聊天。
+function onPermissionApplied(hostId: string, threadId: string) {
+  if (pageVisible.value && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && canWrite.value) focusComposerInput()
+}
 function togglePlan() { selectSetting('mode', planEnabled.value ? 'default' : 'plan') }
 // 附件变更始终写回原电脑和会话，不将系统选择器的迟到结果放进其他草稿。
 function updateFile(hostId: string, threadId: string, file: DraftFile) {

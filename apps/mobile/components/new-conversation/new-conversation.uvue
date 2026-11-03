@@ -171,13 +171,13 @@ async function selectSetting(key: string, value: string) {
 }
 async function changeNativeSettings(changes: UTSJSONObject, confirmed: boolean = false, focusAfter: boolean = false) {
   const state = native.value, hostId = connection.hostId, id = projectId.value
-  // 只在原草稿确认成功且仍展开时恢复焦点，不影响权限切换和错误提示。
+  // 只在原草稿确认成功且仍展开时恢复焦点，失败继续保留错误提示。
   try { settingsError.value = ''; await updateNativeDraft(state, changes, confirmed); if (alive && hostId == connection.hostId && id == projectId.value) { error.value = ''; closeMenus(); if (focusAfter && props.expanded) focusDraftInput() } }
   catch (reason) { if (alive && hostId == connection.hostId && id == projectId.value) { settingsError.value = (reason as Error).message; error.value = (reason as Error).message } }
 }
 function imageId(): string { return Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2) }
 // 完整访问的确认来自权限组件，权限与模型使用同一个原生草稿版本。
-function selectPermission(mode: string, confirmed: boolean) { if (nativeReady.value && !busy.value) changeNativeSettings({ permissionMode: mode }, confirmed) }
+function selectPermission(mode: string, confirmed: boolean) { if (nativeReady.value && !busy.value) changeNativeSettings({ permissionMode: mode }, confirmed, true) }
 function remaining(): number { return Math.max(0, 3 - draft.value.images.length - draft.value.files.length) }
 async function acceptImages(target: NewDraft, paths: string[]) {
   imageBusy.value = true

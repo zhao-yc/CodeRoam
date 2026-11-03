@@ -24,7 +24,7 @@ function fixture({ initialProps = {}, mode = 'default', request: read } = {}){
  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={load,choose,state,mode,label,loading,error,opened,openMenu};',ctx);
  return{...ctx.subject,props,connection,calls,events,data,sync,unmount:()=>unmounts.forEach(fn=>fn()),answer:v=>{answer=v},defer:()=>{confirm={};return confirm}};
 }
-test('完整访问取消不写入，确认后携带权限版本和确认标记',async()=>{const f=fixture();await f.load();await f.choose('full-access');assert.equal(f.calls.length,1);f.answer({confirm:true});await f.choose('full-access');assert.equal(f.calls[1].method,'thread.permissions.update');assert.equal(f.calls[1].params.confirmedFullAccess,true);assert.equal(f.calls[1].params.expectedRevision,'a'.repeat(64));assert.deepEqual(f.events,[['busy',true],['busy',false]]);});
+test('完整访问取消不写入，确认后携带权限版本和确认标记',async()=>{const f=fixture();await f.load();await f.choose('full-access');assert.equal(f.calls.length,1);f.answer({confirm:true});await f.choose('full-access');assert.equal(f.calls[1].method,'thread.permissions.update');assert.equal(f.calls[1].params.confirmedFullAccess,true);assert.equal(f.calls[1].params.expectedRevision,'a'.repeat(64));assert.deepEqual(f.events,[['busy',true],['busy',false],['applied','pc','thread']]);});
 test('确认期间切换电脑和只读历史均不写入',async()=>{const f=fixture();await f.load();const deferred=f.defer(),pending=f.choose('full-access');f.connection.hostId='other';deferred.resolve({confirm:true});await pending;assert.equal(f.calls.length,1);f.connection.hostId='pc';f.connection.snapshot.readOnly=true;await f.choose('read-only');assert.equal(f.calls.length,1);});
 test('新建只修改当前草稿选择，不调用权限写接口',async()=>{const f=fixture();f.props.threadId='';f.props.projectId='project';await f.load();await f.choose('read-only');assert.equal(f.calls[0].method,'thread.create.permissions');assert.equal(f.calls.length,1);assert.deepEqual(f.events,[['select','read-only',false]]);});
 
@@ -138,4 +138,31 @@ test('新建权限跟随原生状态及展开状态，只在用户select后更�
  assert.equal(f.mode.value, 'full-access'); assert.equal(f.props.selectedMode, ''); assert.deepEqual(f.calls, []); assert.deepEqual(f.events, []);
  f.props.nativeState = { ...f.props.nativeState, mode: 'read-only', revision: 'native-permission-2' }; f.sync();
  assert.equal(f.mode.value, 'read-only'); assert.equal(f.props.selectedMode, ''); assert.deepEqual(f.calls, []); assert.deepEqual(f.events, []);
+});
+
+// 权限写入沿用原确认链，只增加成功通知，不把取消或迟到结果当成成功。
+test('已有聊天权限在成功前不通知聚焦，失败保留菜单且不发成功事件', async () => {
+  let resolve,reject;
+  const f=fixture({request:(method,_params,data)=>method==='thread.permissions.update'?new Promise((yes,no)=>{resolve=yes;reject=no;}):data});
+  await f.load(); f.opened.value=true; const pending=f.choose('read-only');
+  assert.deepEqual(f.events,[['busy',true]]); reject(new Error('权限更新失败')); await pending;
+  assert.equal(f.opened.value,true); assert.equal(f.error.value,'权限更新失败');
+  assert.equal(f.events.some(event=>event[0]==='applied'),false);
+  const retried=f.choose('read-only'); resolve({...f.data,mode:'read-only'}); await retried;
+  assert.deepEqual(f.events.slice(-2),[['busy',false],['applied','pc','thread']]);
+});
+test('取消完整访问、切换电脑或收起组件后不发权限成功事件', async () => {
+  const canceled=fixture(); await canceled.load(); await canceled.choose('full-access');
+  assert.equal(canceled.events.some(event=>event[0]==='applied'),false);
+  for(const change of ['电脑','聊天','收起','卸载']) {
+    let resolve;
+    const f=fixture({request:(method,_params,data)=>method==='thread.permissions.update'?new Promise(yes=>{resolve=yes;}):data});
+    await f.load(); const pending=f.choose('read-only');
+    if(change==='电脑') f.connection.hostId='other';
+    if(change==='聊天') f.props.threadId='other';
+    if(change==='收起') f.props.active=false;
+    if(change==='卸载') f.unmount(); else f.sync();
+    resolve({...f.data,mode:'read-only'}); await pending;
+    assert.equal(f.events.some(event=>event[0]==='applied'),false,change);
+  }
 });
