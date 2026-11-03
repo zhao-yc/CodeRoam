@@ -66,7 +66,7 @@
     <view v-else-if="!liquidGlass" class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
     <view class="list-safe-area"></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
-    <home-menu v-if="menuMounted" :visible="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="closeMenu" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
+    <home-menu v-if="menuMounted" :visible="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="closeMenu" @closed="finishMenuClose" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
   </view>
 </template>
 
@@ -140,7 +140,7 @@ function openMenu() {
   })
 }
 
-// 退场时保留遮罩来拦截点击，等 140 毫秒过渡绘制完毕再卸载。
+// 退场时保留遮罩来拦截点击；原生端按时长加渲染余量卸载。
 function closeMenu() {
   if (!menuMounted.value || menuClosing) return
   if (!menuVisible.value || reduceMenuMotion()) { clearMenu(); return }
@@ -149,9 +149,17 @@ function closeMenu() {
   menuVisible.value = false
   nextTick(() => {
     if (revision != menuRevision) return
-    menuTimer = setTimeout(() => { if (revision == menuRevision) clearMenu() }, 160)
+    // Web 优先等真实过渡结束；没有过渡事件时仍能卸载。
+    let delay = 180
+    // #ifdef WEB
+    delay = 240
+    // #endif
+    menuTimer = setTimeout(() => { if (revision == menuRevision) finishMenuClose() }, delay)
   })
 }
+
+// 已取消的过渡不能关闭后续重新打开的菜单。
+function finishMenuClose() { if (menuClosing) clearMenu() }
 
 // 标题文字和箭头共用菜单开关，按钮的点击只触发一次。
 function toggleMenu(event: UniPointerEvent) {

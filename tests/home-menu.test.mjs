@@ -39,6 +39,24 @@ test('菜单退场时忽略旧额度和归档回执，不再读取或刷新内�
   assert.equal(f.entries.value[0].accountLabel,'');
   assert.equal(f.entries.value[0].threads.length,0);
 });
+test('返回键取消待展开菜单，退场期间再次返回仍由菜单消费',()=>{
+  const source=fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue','utf8');
+  const transitions=source.slice(source.indexOf('const menuMounted'),source.indexOf('const listSort'));
+  const back=source.slice(source.indexOf('function handleBack'),source.indexOf('// 打开成功后更新最近'));
+  const renders=[], timers=new Map();
+  let timer=0;
+  const context=vm.createContext({ref:value=>({value}),window:{matchMedia:()=>({matches:false})},nextTick:callback=>renders.push(callback),setTimeout:callback=>{timers.set(++timer,callback);return timer;},clearTimeout:id=>timers.delete(id),editingComputerId:{value:''},searchVisible:{value:false}});
+  vm.runInContext(stripTypeScriptTypes(transitions+back,{mode:'transform'})+';globalThis.api={menuMounted,menuVisible,openMenu,handleBack,finishMenuClose};',context);
+  const f=context.api, render=()=>renders.splice(0).forEach(fn=>fn());
+  f.openMenu();assert.equal(f.handleBack(),true);render();
+  assert.equal(timers.size,0);assert.equal(f.menuMounted.value,false);
+  f.openMenu();render();const show=timers.values().next().value;timers.clear();show();
+  assert.equal(f.menuVisible.value,true);
+  assert.equal(f.handleBack(),true);assert.equal(f.handleBack(),true);
+  assert.equal(f.menuMounted.value,true);assert.equal(f.menuVisible.value,false);
+  f.finishMenuClose();render();
+  assert.equal(f.menuMounted.value,false);assert.equal(f.handleBack(),false);
+});
 test('查询参数限制布尔值和分页范围，不能透传任意目录或命令',()=>{
   const request=params=>({v:1,type:'request',requestId:'synthetic-request-123',method:'threads.list',params});
   assert.doesNotThrow(()=>validateRequest(request({archived:true,includeUsage:true,limit:30,offset:30})));

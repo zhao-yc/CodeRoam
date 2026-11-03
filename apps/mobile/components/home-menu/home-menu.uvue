@@ -1,6 +1,6 @@
 <template>
   <view class="menu-overlay" :class="{ 'menu-overlay-visible': visible }" @click="emit('dismiss')">
-    <view class="menu-panel" :class="{ 'menu-panel-visible': visible }" :style="{ width: panelWidth + 'px' }" @click.stop>
+    <view class="menu-panel" :class="{ 'menu-panel-visible': visible }" :style="{ width: panelWidth + 'px' }" @click.stop @transitionend="finishTransition">
       <template v-if="section == 'main'">
         <scroll-view direction="vertical" class="menu-main-scroll" :style="mainScrollStyle" :show-scrollbar="false">
           <view v-for="option in options" :key="option.id" class="menu-row"><view class="check-slot"><app-icon v-if="sort == option.id" name="check" :size="17" /></view><app-icon :name="option.icon" :size="22" /><text class="menu-label">{{ option.label }}</text><button class="menu-hitbox" :disabled="!visible" :aria-label="option.label" :aria-pressed="sort == option.id" hover-class="menu-pressed" @click="emit('sort', option.id)"></button></view>
@@ -44,7 +44,7 @@ import AppIcon from '../app-icon/app-icon.uvue'
 type UsageWindow = { label: string, remainingPercent: number }
 type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, usageNote: string, accountLabel: string, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loaded: boolean, more: boolean, archiveError: string }
 const props = defineProps<{ visible: boolean, sort: string, recentFirst: boolean, computerId: string }>()
-const emit = defineEmits<{ dismiss: [], sort: [value: string], recent: [], connection: [adding: boolean] }>()
+const emit = defineEmits<{ dismiss: [], closed: [], sort: [value: string], recent: [], connection: [adding: boolean] }>()
 const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'project', label: '按项目', icon: 'folder' }, { id: 'time', label: '按时间倒序排列', icon: 'clock' }]
 const section = ref('main')
 const entries = ref([] as MenuComputer[])
@@ -63,6 +63,14 @@ const mainScrollStyle = computed((): UTSJSONObject => {
 const archiveHeight = Math.max(120, Math.min(440, uni.getWindowInfo().windowHeight - 160))
 let revision = 0
 let archiveRevision = 0
+// Web 等过渡完成并交付最后一帧，避免渲染延迟时提前撤下遮罩。
+function finishTransition() {
+  // #ifdef WEB
+  if (props.visible) return
+  window.requestAnimationFrame(() => { if (!props.visible) emit('closed') })
+  // #endif
+}
+
 // 筛选、断线与授权变化立即作废旧结果，额度只在打开菜单时读取。
 function syncEntries() {
   const version = ++revision
