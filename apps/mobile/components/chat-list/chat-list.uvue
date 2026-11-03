@@ -44,7 +44,7 @@
         <view v-for="group in renderedGroups" :key="group.key" class="thread-group">
           <text class="group-title">{{ group.title }}</text>
           <view v-for="thread in group.threads" :key="thread.key" :class="['thread', props.selectedHostId == thread.hostId && props.selectedThreadId == thread.id ? 'thread-selected' : '']" @click="openThread(thread)">
-            <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><draft-indicator :host-id="thread.hostId" :thread-id="thread.id" /><text v-if="deletionTask(thread.hostId, thread.id) != null" class="thread-deleting">{{ deletionLabel(deletionTask(thread.hostId, thread.id)!) }}</text><task-status v-else-if="threadState(thread) == 'failed'" class="thread-failure" state="failed" /><task-status v-else-if="threadState(thread) != 'failed' && (threadState(thread) != 'question' || (thread.unansweredQuestionCount ?? 0) == 0)" :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" /></view>
+            <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><draft-indicator :host-id="thread.hostId" :thread-id="thread.id" /><text v-if="deletionTask(thread.hostId, thread.id) != null" class="thread-deleting">{{ deletionLabel(deletionTask(thread.hostId, thread.id)!) }}</text><task-status v-else-if="threadState(thread) == 'failed'" class="thread-failure" state="failed" /><task-status v-else-if="showsThreadStatus(thread)" :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="threadState(thread) != 'running' || pageVisible" /></view>
             <!-- 状态放在标题右侧，时间放在项目右侧；保留待回答数量和原有显示条件。 -->
             <view class="thread-meta">
               <view v-if="selectedComputerId.length == 0 && displayComputers.length > 1" class="thread-computer-meta"><app-icon class="thread-meta-icon" :name="iconForThread(thread)" :size="16" tone="muted" /><text class="thread-computer">{{ thread.hostLabel }}</text></view>
@@ -260,6 +260,12 @@ const computerIndicators = computed((): ComputerIndicator[] => {
 
 // 运行优先于未读；空列表、已读、等待操作及离线均不生成常驻在线圆点。
 function computerIndicator(hostId: string): string { return computerIndicators.value.find((entry: ComputerIndicator): boolean => entry.hostId == hostId)?.state ?? 'idle' }
+// 空闲和未知状态没有可见内容，免去为普通列表行挂载空组件。
+function showsThreadStatus(thread: ComputerThread): boolean {
+  const state = threadState(thread)
+  return state != 'idle' && state != 'unknown' && (state != 'question' || (thread.unansweredQuestionCount ?? 0) == 0)
+}
+
 const selectedComputerOnline = computed((): boolean => connection.connected && selectedComputers.value.some((entry: ComputerThreads): boolean => entry.online))
 const showThreadLoading = computed((): boolean => computerThreadsLoading(selectedComputerId.value))
 const listUnavailable = computed((): boolean => selectedComputers.value.length > 0 && selectedComputers.value.every((entry: ComputerThreads): boolean => !entry.online || entry.error.length > 0))
@@ -336,9 +342,18 @@ const visibleDeletionThreadKeys = computed((): string[] => {
 
 // 返回首页和跨日时更新分组；隐藏页面后停止时钟与运行状态动画。
 function updateClock() {
-  currentTime.value = Date.now()
-  const now = new Date(currentTime.value)
-  dayStart.value = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const time = Date.now()
+  const now = new Date(time)
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  if (dayStart.value == today && time >= currentTime.value && time - currentTime.value < 60000) return
+  dayStart.value = today
+  currentTime.value = time
+}
+// 短暂离开后沿用原刷新截止时间，避免反复返回使「刚刚」长期不更新。
+function scheduleClock() {
+  clearTimeout(statusTimer)
+  const remaining = 60000 - (Date.now() - currentTime.value)
+  statusTimer = setTimeout(() => { updateClock(); scheduleClock() }, Math.max(1, Math.min(60000, remaining)))
 }
 // 显隐期间原生滚动容器可能收紧最大偏移，恢复时显式回到用户离开的位置。
 function restoreThreadScroll() { restoringThreadScroll = true; nextTick(() => { threadScrollTop.value = savedThreadScrollTop; nextTick(() => { restoringThreadScroll = false }) }) }
@@ -366,11 +381,10 @@ onPaneShow(() => {
   showDeleteSuccessNotice()
   restoreThreadScroll()
   updateClock()
-  clearInterval(statusTimer)
-  statusTimer = setInterval(() => { updateClock() }, 60000)
+  scheduleClock()
 })
-onPaneHide(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
-onUnmounted(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
+onPaneHide(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearTimeout(statusTimer); statusTimer = 0 })
+onUnmounted(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearTimeout(statusTimer); statusTimer = 0 })
 
 
 // 更新时间使用真实时间戳，缺少时间时留空，不伪造最近活动。

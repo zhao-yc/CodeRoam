@@ -1,5 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" /><title>掌上 Codex</title></head>
+  <head>
+    <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" /><title>掌上 Codex</title>
+    <style>
+      /* 离屏行保留内容高度，内边距和边框仍由行自身占位。 */
+      @supports (content-visibility: auto) and (contain-intrinsic-block-size: auto 48px) {
+        #home-page .thread-list .thread { content-visibility: auto; contain-intrinsic-block-size: auto 48px; }
+      }
+    </style>
+  </head>
   <body><div id="app"></div><script type="module" src="/main.uts"></script></body>
 </html>
