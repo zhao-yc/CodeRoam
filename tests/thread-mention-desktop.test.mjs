@@ -104,7 +104,7 @@ test('无引用时返回能力探测，未知能力为 false，非空引用明�
 });
 
 test('读取期间实例、所有者、订阅或端口变化丢弃结果', async () => {
-  for (const change of [f => f.adapter.client.instance.generation = 'two', f => f.entry.owner.clientId = 'changed', f => f.entry.watchers.clear(), f => f.adapter.client.instance.port = 12346, f => f.adapter.client.instance = { ...f.adapter.client.instance }]) {
+  for (const change of [f => f.adapter.client.instance.generation = 'two', f => f.adapter.client.instance.startedAt = 2000, f => f.entry.owner.clientId = 'changed', f => f.entry.watchers.clear(), f => f.adapter.client.instance.port = 12346, f => f.adapter.client.instance = { ...f.adapter.client.instance }]) {
     const f = desktopFixture({ evaluate: () => { change(f); return { supported: true, references: refs, contextText: format(refs) }; } });
     try { await assert.rejects(f.reader.prepare(f.adapter, { threadId: currentId, deviceId: 'phone', ids: [otherId] }), { code: 'THREAD_MENTION_CHANGED' }); } finally { f.reader.close(); }
   }

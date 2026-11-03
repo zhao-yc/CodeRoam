@@ -117,7 +117,7 @@ export class InstanceHub extends EventEmitter {
       const rows = await (this.macVerification ??= this.discover().finally(() => { this.macVerification = null; }));
       const matches = rows.filter(row => row.ipcSocketPath === instance.ipcSocketPath);
       const current = matches[0];
-      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
+      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData', 'port'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
     } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Mac 实例身份已变化或配置目录被共用，请在电脑核对后重连'); }
   }
   /** 导航与后台发现共用一次身份复核，不能并发重写客户端集合。 */
