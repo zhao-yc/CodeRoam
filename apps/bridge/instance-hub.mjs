@@ -53,7 +53,8 @@ export class InstanceHub extends EventEmitter {
     });
     socket.on('error', () => this.emit('warning', { code: 'RELAY_UNAVAILABLE', message: '中转暂时不可用，正在重连' }));
     socket.on('close', code => {
-      clearInterval(timer); this.supported = false; this.emit('disconnected');
+      // 只上报标准关闭码，不把服务端原因中的潜在配置或路径写入日志。
+      clearInterval(timer); this.supported = false; this.emit('disconnected', { code });
       for (const runtime of this.runtimes.values()) { runtime.agent.threadListFeed.devices.clear(); runtime.agent.threadListFeed.stop(); }
       if (!this.stopped && code !== 4001) this.reconnect = setTimeout(() => this.connect(), Math.min(15000, 500 * 2 ** Math.min(this.retries++, 5)));
     });
