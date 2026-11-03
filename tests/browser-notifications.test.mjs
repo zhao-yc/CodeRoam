@@ -27,11 +27,11 @@ function workerFixture() {
 }
 
 /** 模拟浏览器能力和 Worker 消息，运行真实 UTS 服务的授权及清理流程。 */
-function browserFixture({ permission = 'default', enabled = false, auto = false, permissionResult: initialResult = 'granted', requestError = false, permissionUnchanged = false, deferPermission = false, secure = true, supported = true, failed = false } = {}) {
+function browserFixture({ permission = 'default', enabled, deferPermission = false, secure = true, supported = true, failed = false } = {}) {
   const events = {}, storage = new Map(), messages = [], transports = [], opened = [], visibility = [];
-  if (!auto) storage.set('codex-mobile-browser-notifications-enabled', enabled);
-  let focused = true, permissionRequests = 0, permissionResult = initialResult, resolvePermission;
-  const Notification = { get permission() { return permission; }, async requestPermission() { permissionRequests++; if (requestError) throw Error('合成浏览器要求用户手势'); if (deferPermission) await new Promise(resolve => { resolvePermission = resolve; }); if (!permissionUnchanged) permission = permissionResult; return permissionResult; } };
+  if (enabled !== undefined) storage.set('codex-mobile-browser-notifications-enabled', enabled);
+  let focused = true, permissionRequests = 0, permissionResult = 'granted', resolvePermission;
+  const Notification = { get permission() { return permission; }, async requestPermission() { permissionRequests++; if (deferPermission) await new Promise(resolve => { resolvePermission = resolve; }); permission = permissionResult; return permissionResult; } };
   const worker = { state: 'activated', postMessage(data, ports) { messages.push(data); ports[0].postMessage({ ok: !failed }); } };
   const context = vm.createContext({ URL, TextEncoder, Uint8Array, MessageChannel, crypto: webcrypto, setTimeout, clearTimeout, reactive: value => value, taskNoticeTitle: kind => '合成事件：' + kind,
     document: { baseURI: 'https://example.com/mobile/', visibilityState: 'visible', hasFocus: () => focused, addEventListener: (type, listener) => { events[type] = listener; } },
@@ -43,10 +43,10 @@ function browserFixture({ permission = 'default', enabled = false, auto = false,
   const api = context.api;
   api.startBrowserNotifications(value => opened.push(value), value => transports.push(value), value => visibility.push(value));
   api.syncBrowserNotificationContext('synthetic-pair', [JSON.stringify(['host', 'generation'])]);
-  return { ...api, events, storage, messages, transports, opened, visibility, get permissionRequests() { return permissionRequests; }, resolvePermission: () => resolvePermission(), setRequestError: value => { requestError = value; }, setPermission: value => { permission = value; }, setPermissionResult: value => { permissionResult = value; }, background() { focused = false; events.blur(); }, foreground() { focused = true; events.focus(); } };
+  return { ...api, events, storage, messages, transports, opened, visibility, get permissionRequests() { return permissionRequests; }, resolvePermission: () => resolvePermission(), setPermission: value => { permission = value; }, setPermissionResult: value => { permissionResult = value; }, background() { focused = false; events.blur(); }, foreground() { focused = true; events.focus(); } };
 }
 
-test('手动关闭时不自动申请权限；手动允许后就绪，前台不投递，后台五类事件均投递且仅带标题', async () => {
+test('手动允许后就绪，前台不投递，后台五类事件均投递且仅带标题', async () => {
   const f = browserFixture(); assert.equal(f.permissionRequests, 0); assert.equal(f.browserNotificationLabel(), '未授权');
   await f.enableBrowserNotifications(); assert.equal(f.browserNotifications.ready, true); assert.equal(f.transports.at(-1), true);
   await f.deliverBrowserTaskNotice(notice('completed')); assert.equal(f.messages.length, 0);
@@ -59,37 +59,31 @@ test('手动关闭时不自动申请权限；手动允许后就绪，前台不�
   f.foreground(); assert.equal(f.messages.length, 5, '回前台不重放');
 });
 
-test('首次进入自动尝试授权，配对上下文初始化不撤销已授予的权限', async () => {
-  const f = browserFixture({ auto: true }); assert.equal(f.permissionRequests, 1);
-  await settle(); assert.equal(f.browserNotifications.enabled, true); assert.equal(f.browserNotifications.ready, true); assert.equal(f.transports.at(-1), true);
-  f.foreground(); f.background(); f.foreground(); assert.equal(f.permissionRequests, 1, '焦点变化不重复申请');
-});
-
-test('已有授权直接自动开启，不再次申请；手动关闭的偏好跨进入保留', async () => {
-  const f = browserFixture({ auto: true, permission: 'granted' }); await settle(); assert.equal(f.permissionRequests, 0); assert.equal(f.browserNotifications.ready, true);
-  const disabled = browserFixture({ permission: 'granted', enabled: false }); await settle(); disabled.foreground(); assert.equal(disabled.permissionRequests, 0); assert.equal(disabled.browserNotifications.enabled, false); assert.equal(disabled.browserNotifications.ready, false);
-});
-
-test('自动申请被浏览器拦截后只在真实操作时补试一次，失败不反复打扰', async () => {
-  for (const options of [{ permissionResult: 'default' }, { requestError: true }, { permissionResult: 'denied', permissionUnchanged: true }]) {
-    const f = browserFixture({ auto: true, ...options }); await settle(); assert.equal(f.permissionRequests, 1); assert.equal(f.browserNotifications.enabled, false);
-    f.foreground(); f.events.click({ isTrusted: false }); assert.equal(f.permissionRequests, 1);
-    f.setRequestError(false); f.setPermissionResult('default'); f.events.click({ isTrusted: true }); await settle(); assert.equal(f.permissionRequests, 2);
-    f.foreground(); f.events.click({ isTrusted: true }); f.events.keydown({ isTrusted: true }); assert.equal(f.permissionRequests, 2);
+test('页面加载、焦点切换及普通操作均不申请权限', async () => {
+  for (const options of [{}, { permission: 'granted' }, { enabled: true }, { enabled: false, permission: 'granted' }]) {
+    const f = browserFixture(options);
+    f.background(); f.foreground(); f.events.visibilitychange();
+    f.events.click?.({ isTrusted: true }); f.events.keydown?.({ isTrusted: true });
+    await settle();
+    assert.equal(f.permissionRequests, 0);
+    assert.equal(f.browserNotifications.enabled, options.enabled === true);
+    assert.equal(f.browserNotifications.ready, false);
+    await f.enableBrowserNotifications();
+    assert.equal(f.permissionRequests, options.permission === 'granted' ? 0 : 1);
+    assert.equal(f.browserNotifications.ready, true);
   }
 });
 
-test('首次真实操作可完成授权，手动关闭和跨标签关闭均废弃等待中的自动授权', async () => {
-  const retry = browserFixture({ auto: true, permissionResult: 'default' }); await settle(); retry.setPermissionResult('granted'); retry.events.keydown({ isTrusted: true }); await settle(); assert.equal(retry.browserNotifications.ready, true);
+test('手动关闭和跨标签关闭均废弃等待中的权限申请', async () => {
   for (const crossTab of [false, true]) {
-    const f = browserFixture({ auto: true, deferPermission: true });
+    const f = browserFixture({ deferPermission: true });
+    const enabling = f.enableBrowserNotifications();
     if (crossTab) { f.storage.set('codex-mobile-browser-notifications-enabled', false); f.events.storage(); } else f.disableBrowserNotifications();
-    f.resolvePermission(); await settle(); assert.equal(f.browserNotifications.enabled, false); assert.equal(f.browserNotifications.ready, false); f.foreground(); assert.equal(f.permissionRequests, 1);
+    f.resolvePermission(); await enabling;
+    assert.equal(f.browserNotifications.enabled, false);
+    assert.equal(f.browserNotifications.ready, false);
+    f.foreground(); assert.equal(f.permissionRequests, 1);
   }
-});
-
-test('已拒绝、不安全来源和不支持时进入页面不触发自动授权', async () => {
-  for (const options of [{ permission: 'denied' }, { secure: false }, { supported: false }]) { const f = browserFixture({ auto: true, ...options }); await settle(); f.foreground(); assert.equal(f.permissionRequests, 0); assert.equal(f.browserNotifications.ready, false); }
 });
 
 test('取消、拒绝、不安全来源和缺失 API 不会被当成开启', async () => {

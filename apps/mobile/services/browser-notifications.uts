@@ -12,8 +12,6 @@ let installed = false
 let revision = 0
 let preferenceRevision = 0
 let explicitlyDisabled = false
-let automaticAttempted = false
-let retryAfterInteraction = false
 let namespace = ''
 let hosts = [] as string[]
 let openNotice: ((notice: TaskNotice) => void) | null = null
@@ -86,19 +84,6 @@ function closeTags(tags: string[]) {
 }
 function clearRecords() { const tags = Array.from(records.keys()); records.clear(); closeTags(tags) }
 
-// 每次加载只自动尝试一次；浏览器拦截无手势申请时，留到下一次真实操作再试。
-function attemptAutomaticBrowserNotifications() {
-  if (automaticAttempted || explicitlyDisabled || !browserNotifications.supported || !browserNotifications.foreground || browserNotifications.permission == 'denied') return
-  automaticAttempted = true
-  if (browserNotifications.enabled && browserNotifications.permission == 'granted') return
-  enableBrowserNotifications().then(() => {
-    if (!explicitlyDisabled && !browserNotifications.ready && Notification.permission == 'default') {
-      retryAfterInteraction = true
-      browserNotifications.error = '浏览器需要点击后才能授权，将在下次操作时再试，也可点击开启浏览器通知'
-    }
-  })
-}
-
 // 点击映射留在页面内存；Worker 及通知持久化数据只保留不透明票据和来源窗口编号。
 export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, onKeepAlive: (allowed: boolean) => void, onVisibility: (active: boolean) => void) {
   if (installed) return
@@ -108,7 +93,6 @@ export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, 
     refreshCapability()
     if (browserNotifications.permission != 'granted') clearRecords()
     if (browserNotifications.enabled && browserNotifications.supported && browserNotifications.permission == 'granted' && !browserNotifications.ready) initializeWorker()
-    attemptAutomaticBrowserNotifications()
   }
   document.addEventListener('visibilitychange', refreshed)
   window.addEventListener('focus', refreshed); window.addEventListener('blur', refreshed)
@@ -119,13 +103,6 @@ export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, 
     } catch (_) {}
     refreshed()
   })
-  const interaction = (event: Event) => {
-    if (!retryAfterInteraction || (event as any).isTrusted != true || explicitlyDisabled || browserNotifications.busy || !isForeground()) return
-    retryAfterInteraction = false
-    enableBrowserNotifications()
-  }
-  document.addEventListener('click', interaction)
-  document.addEventListener('keydown', interaction)
   if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
     const data = event.data as UTSJSONObject
     if (data == null || data['type'] != 'codex-notice-click' || event.origin != location.origin) return
@@ -149,14 +126,13 @@ export function syncBrowserNotificationContext(currentNamespace: string, current
   closeTags(removed)
 }
 
-// 已授权直接开启；未授权允许进入页面时尝试，受限浏览器仍可在真实点击链中申请。
+// 仅由设置按钮调用。已有授权时直接开启，未授权时由这次点击发起申请。
 export async function enableBrowserNotifications() {
   if (browserNotifications.busy) return
   refreshCapability()
   if (!browserNotifications.supported) return
   if (Notification.permission == 'denied') { browserNotifications.error = '通知权限已被拒绝，请在浏览器的站点设置中允许通知'; return }
   browserNotifications.busy = true
-  retryAfterInteraction = false
   revision++
   const expected = ++preferenceRevision
   try {
@@ -171,10 +147,10 @@ export async function enableBrowserNotifications() {
   finally { browserNotifications.busy = false; transportChanged() }
 }
 
-// 手动关闭优先于自动开启，等待中的权限回调及其他标签页也不能撤销此选择。
+// 关闭时废弃等待中的权限回调，并通知其他标签页同步设置。
 export function disableBrowserNotifications() {
   try { uni.setStorageSync(preferenceKey, false) } catch (_) { browserNotifications.error = '无法保存通知设置，请检查本地存储权限'; return }
-  revision++; preferenceRevision++; explicitlyDisabled = true; retryAfterInteraction = false; browserNotifications.enabled = false; browserNotifications.ready = false; browserNotifications.error = ''; clearRecords(); transportChanged()
+  revision++; preferenceRevision++; explicitlyDisabled = true; browserNotifications.enabled = false; browserNotifications.ready = false; browserNotifications.error = ''; clearRecords(); transportChanged()
 }
 
 // SHA-256 标签包含配对命名空间和完整事件身份，不把身份或令牌直接写入通知持久化数据。
