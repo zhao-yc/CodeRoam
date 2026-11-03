@@ -129,8 +129,8 @@ async function openThread(thread: ComputerThread) {
 
 function closeConversation() {
   switchRevision++; uni.hideKeyboard()
+  if (!wide.value && props.detailRoute && getCurrentPages().length > 1) { uni.navigateBack(); return }
   mode.value = 'list'; detailMounted.value = false; selected.value = null
-  if (!wide.value && props.detailRoute && getCurrentPages().length > 1) uni.navigateBack()
 }
 
 // 联网后仍保持只读，用户确认后重新走正常的实时入口。
@@ -214,7 +214,10 @@ watch((): string => connection.cacheNamespace + ':' + connection.computers.map((
   const target = selected.value
   if (target == null) return
   if (target.cacheOnly == true) {
-    if (!isCachedThreadScopeAllowed(target.cacheNamespace, target.hostId, target.threadId, target.cacheGeneration ?? '')) closeConversation()
+    if (!isCachedThreadScopeAllowed(target.cacheNamespace, target.hostId, target.threadId, target.cacheGeneration ?? '')) {
+      detailMounted.value = false; selected.value = null
+      closeConversation()
+    }
   } else if (target.cacheNamespace != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer): boolean => computer.id == target.hostId))) { switchRevision++; selected.value = null; detailMounted.value = false; mode.value = 'list' }
 })
 onMounted(() => { syncNoticeNavigation() })

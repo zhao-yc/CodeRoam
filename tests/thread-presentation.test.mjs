@@ -10,7 +10,7 @@ function subject(){
   const states=bridge.slice(bridge.indexOf('export function taskState'),bridge.indexOf('type TextAppend'));
   const source=fs.readFileSync('apps/mobile/services/thread-presentation.uts','utf8').replace(/^import .*\r?\n/gm,'');
   const context=vm.createContext({});
-  vm.runInContext(stripTypeScriptTypes((states+'\n'+source).replace(/\bexport /g,''),{mode:'transform'})+';globalThis.api={groupThreads,normalizeListPreferences,rememberRecentThread};',context);
+  vm.runInContext(stripTypeScriptTypes((states+'\n'+source).replace(/\bexport /g,''),{mode:'transform'})+';globalThis.api={groupThreads,limitThreadGroups,normalizeListPreferences,rememberRecentThread};',context);
   return context.api;
 }
 const plain=value=>JSON.parse(JSON.stringify(value));
@@ -39,4 +39,13 @@ test('最近访问去重置顶、限定当前结果且不影响原排序；时�
   const groups=s.groupThreads(rows,'time',true,recent,50);
   assert.deepEqual(plain(groups.map(g=>g.title)),['最近','今天']);assert.deepEqual(plain(groups.flatMap(g=>g.threads.map(t=>t.id))),['old','new']);
   assert.equal(s.groupThreads(rows,'time',false,recent,50)[0].title,'今天');
+});
+
+test('大列表首批跨组保留原顺序与键，补齐时保持完整分组',()=>{
+  const s=subject();
+  const rows=Array.from({length:150},(_,index)=>row(`t${index}`,`/work/project${Math.floor(index/20)}`,150-index));
+  const groups=s.groupThreads(rows,'project',false,[],0), first=s.limitThreadGroups(groups,28);
+  assert.deepEqual(plain(first.map(group=>[group.key,group.threads.length])),[[groups[0].key,20],[groups[1].key,8]]);
+  assert.equal(first[0],groups[0]);assert.equal(groups[1].threads.length,20);
+  assert.equal(s.limitThreadGroups(groups,-1),groups);assert.equal(groups.flatMap(group=>group.threads).length,150);
 });

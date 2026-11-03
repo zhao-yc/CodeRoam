@@ -41,7 +41,7 @@
           <button v-if="search.trim().length > 0" class="empty-action button-secondary" @click="search = ''">清除搜索</button>
           <view v-else class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'sync'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">重新同步</text><button class="inline-progress-hitbox" @click="refreshThreads" :disabled="manualListRefresh == 'sync'" :aria-label="(manualListRefresh == 'sync') ? '正在重新同步' : '重新同步'"></button></view>
         </view>
-        <view v-for="group in groups" :key="group.key" class="thread-group">
+        <view v-for="group in renderedGroups" :key="group.key" class="thread-group">
           <text class="group-title">{{ group.title }}</text>
           <view v-for="thread in group.threads" :key="thread.key" :class="['thread', props.selectedHostId == thread.hostId && props.selectedThreadId == thread.id ? 'thread-selected' : '']" @click="openThread(thread)">
             <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><draft-indicator :host-id="thread.hostId" :thread-id="thread.id" /><text v-if="deletionTask(thread.hostId, thread.id) != null" class="thread-deleting">{{ deletionLabel(deletionTask(thread.hostId, thread.id)!) }}</text><task-status v-else-if="threadState(thread) == 'failed'" class="thread-failure" state="failed" /><task-status v-else-if="threadState(thread) != 'failed' && (threadState(thread) != 'question' || (thread.unansweredQuestionCount ?? 0) == 0)" :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" /></view>
@@ -89,7 +89,7 @@ import { useManualReconnect } from '../../services/manual-reconnect.uts'
 import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
-import { groupThreads, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
+import { groupThreads, limitThreadGroups, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
 
 const liquidGlass = useLiquidGlass()
 // 列表模板通过本地方法读取删除任务。
@@ -299,6 +299,34 @@ const groups = computed((): ThreadGroup[] => {
   return groupThreads(threads, listSort.value, recentFirst.value, recentThreads.value, dayStart.value)
 })
 
+// 大列表先挂载足够覆盖视口的行，首帧后补齐；返回列表继续复用已有节点。
+const initialListRows = 28
+const listRowLimit = ref(initialListRows)
+const renderedGroups = computed((): ThreadGroup[] => limitThreadGroups(groups.value, listRowLimit.value))
+let listFillTimer = 0
+// #ifdef WEB
+let listFillFrame = 0
+// #endif
+function cancelListFill() {
+  clearTimeout(listFillTimer); listFillTimer = 0
+  // #ifdef WEB
+  if (listFillFrame != 0) window.cancelAnimationFrame(listFillFrame)
+  listFillFrame = 0
+  // #endif
+}
+function revealAllThreadRows() { cancelListFill(); listRowLimit.value = -1 }
+watch((): boolean => props.active && listRowLimit.value >= 0 && allVisibleThreads.value.length > initialListRows, (shouldFill: boolean) => {
+  cancelListFill()
+  if (!shouldFill) return
+  // #ifdef WEB
+  listFillFrame = window.requestAnimationFrame(() => { listFillFrame = 0; listFillTimer = setTimeout(() => { revealAllThreadRows() }, 0) })
+  // #endif
+  // #ifndef WEB
+  listFillTimer = setTimeout(() => { revealAllThreadRows() }, 32)
+  // #endif
+}, { immediate: true })
+onUnmounted(() => { cancelListFill() })
+
 // 按当前电脑和搜索筛选后的实际列表去重，目标不在列表时仍可处理删除任务。
 const visibleDeletionThreadKeys = computed((): string[] => {
   const keys = [] as string[]
@@ -357,7 +385,7 @@ function updatedLabel(value: number): string {
 // 低频接入与设备管理只在独立页面中提供。
 function openConnection() { if (!creatingConversation.value) uni.navigateTo({ url: '/pages/connection/index' }) }
 // 列表与新建编辑区共用页面，保留搜索、列表节点及其滚动位置。
-function onThreadListScroll(event: UniScrollEvent) { if (!restoringThreadScroll) savedThreadScrollTop = event.detail.scrollTop }
+function onThreadListScroll(event: UniScrollEvent) { if (!restoringThreadScroll) savedThreadScrollTop = event.detail.scrollTop; if (event.detail.scrollTop > 0 && listRowLimit.value >= 0) revealAllThreadRows() }
 // 两种布局共用同一个新建入口，将当前筛选的电脑交给工作区。
 function openNewConversation() { emit('create', selectedComputerId.value) }
 // 只有首条消息确认发送成功后才进入现有会话页。
@@ -395,7 +423,7 @@ function chooseComputerFilter(id: string) { if (editingComputerId.value.length >
 watch((): string => displayComputers.value.map((computer: Computer): string => computer.id).join('|'), () => {
   if (selectedComputerId.value.length > 0 && !displayComputers.value.some((computer: Computer): boolean => computer.id == selectedComputerId.value)) selectedComputerId.value = ''
 })
-watch(search, () => { resetThreadScroll() })
+watch(search, () => { revealAllThreadRows(); resetThreadScroll() })
 
 // 列表仅展示末级项目名，完整路径仍可搜索并在详情中查看。
 function projectName(cwd: string): string {

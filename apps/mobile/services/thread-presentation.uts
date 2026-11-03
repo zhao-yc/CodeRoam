@@ -5,6 +5,19 @@ export type ThreadGroup = { key: string, title: string, threads: ComputerThread[
 export type ListPreferences = { sort: string, recentFirst: boolean }
 export type RecentThread = { key: string, viewedAt: number }
 
+// 首批按现有分组顺序取可见行，保留分组键以便绘制后接续挂载。
+export function limitThreadGroups(groups: ThreadGroup[], limit: number): ThreadGroup[] {
+  if (limit < 0) return groups
+  const result = [] as ThreadGroup[]
+  let remaining = limit
+  for (let index = 0; index < groups.length && remaining > 0; index++) {
+    const group = groups[index]
+    result.push(group.threads.length <= remaining ? group : { key: group.key, title: group.title, threads: group.threads.slice(0, remaining) } as ThreadGroup)
+    remaining -= group.threads.length
+  }
+  return result
+}
+
 // 未设置偏好或存储内容无效时，统一按项目排列。
 export function normalizeListPreferences(value: ListPreferences | null): ListPreferences {
   return { sort: value != null && ['priority', 'project', 'time'].indexOf(value.sort) >= 0 ? value.sort : 'project', recentFirst: value?.recentFirst == true } as ListPreferences

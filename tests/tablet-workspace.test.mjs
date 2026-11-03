@@ -88,6 +88,7 @@ test('宽屏通知使用同一工作区，关闭优先处理浮层；窄屏独�
   f.detailPane.value={handleBack:()=>true};assert.equal(f.handleBack(),true);assert.equal(f.mode.value,'conversation');
   f.detailPane.value={handleBack:()=>false};assert.equal(f.handleBack(),true);assert.equal(f.mode.value,'list');
   const narrow=workspaceFixture({props:{windowWidth:390,detailRoute:true}});await narrow.selectConversation(narrow.target(),false);narrow.closeConversation();assert.ok(narrow.calls.some(row=>row[0]==='back'));
+  assert.equal(narrow.mode.value,'conversation','返回上一页期间不在详情路由重复挂载聊天列表');
   narrow.onConversationRemoved('archive');assert.equal(narrow.calls.some(row=>row[0]==='archive-notice'),false);
 });
 
