@@ -183,17 +183,45 @@ function Assert-ThreadContext {
   $documents = @(Get-Controls ([Windows.Automation.ControlType]::Document) | Where-Object { $_.Current.AutomationId -eq 'RootWebArea' })
   if (!$script:inputData.title -or $documents.Count -ne 1 -or $documents[0].Current.Name -ne $script:inputData.title) { throw 'GOAL_UI_THREAD_CHANGED' }
 }
-# 主标签必须唯一，并通过原生选中状态证明当前内容属于主会话。
+# 标签存在时必须唯一；单聊天布局没有标签栏，只允许一个可见输入框。
+function Resolve-MainThreadTab($Tabs, [string]$Title, [int]$TabListCount, [int]$ComposerCount) {
+  if ([string]::IsNullOrWhiteSpace($Title)) { throw 'GOAL_UI_THREAD_CHANGED' }
+  if (@($Tabs).Count -eq 0) {
+    if ($TabListCount -gt 0 -or $ComposerCount -eq 0) { throw 'GOAL_UI_LAYOUT_LOADING' }
+    if ($ComposerCount -ne 1) { throw 'GOAL_UI_SIDECHAT_ACTIVE' }
+    return $null
+  }
+  $matches = @($Tabs | Where-Object { $_.Current.Name -eq $Title })
+  if ($matches.Count -ne 1) { throw 'GOAL_UI_THREAD_CHANGED' }
+  return $matches[0]
+}
+# 这里只收集原生结构；标题、前台窗口和目标原文仍由调用方逐次复核。
 function Get-MainThreadTab {
   $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::TabItem)
-  $tabs = @($script:root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition) | Where-Object { $_.Current.Name -eq $script:inputData.title })
-  if ($tabs.Count -ne 1) { throw 'GOAL_UI_THREAD_CHANGED' }
-  return $tabs[0]
+  $tabs = @($script:root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition))
+  $tabListCount = 0; $composerCount = 0
+  if ($tabs.Count -eq 0) {
+    $tabListCount = @(Get-Controls ([Windows.Automation.ControlType]::Tab)).Count
+    $composerCount = @(Find-Named ([Windows.Automation.ControlType]::Edit) @('和 Codex 一起工作', 'Work with Codex', '向 Codex 发送消息', 'Message Codex')).Count
+  }
+  return (Resolve-MainThreadTab $tabs ([string]$script:inputData.title) $tabListCount $composerCount)
+}
+# 原生导航返回时标签可能尚未挂载；只在进入目标操作前有限等待，不重放导航。
+function Wait-ThreadView {
+  $limit = [Math]::Min([long]$script:inputData.deadline - 1000, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 8000)
+  do {
+    try { Assert-ThreadContext; [void](Get-MainThreadTab); return }
+    catch { if ($_.Exception.Message -notin @('GOAL_UI_THREAD_CHANGED', 'GOAL_UI_LAYOUT_LOADING')) { throw } }
+    Start-Sleep -Milliseconds 120
+  } while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $limit)
+  Assert-ThreadContext
+  [void](Get-MainThreadTab)
 }
 # 只切换视图，不关闭侧边聊天，不发送任务，也不修改目标。
 function Select-MainThreadTab {
   Assert-ThreadContext
   $tab = Get-MainThreadTab
+  if ($null -eq $tab) { return }
   $selection = $null
   if (!$tab.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selection)) { throw 'GOAL_UI_TAB_UNSUPPORTED' }
   if ($selection.Current.IsSelected) { return }
@@ -204,6 +232,7 @@ function Select-MainThreadTab {
   do {
     Assert-ThreadContext
     $tab = Get-MainThreadTab
+    if ($null -eq $tab) { return }
     $selection = $tab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
     if ($selection.Current.IsSelected) { return }
     if (!$clicked -and [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge $fallbackAt) { Click-ThreadControl $tab; $clicked = $true }
@@ -215,6 +244,7 @@ function Select-MainThreadTab {
 function Assert-MainThreadTab {
   Assert-ThreadContext
   $tab = Get-MainThreadTab
+  if ($null -eq $tab) { return }
   $selection = $tab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
   if (!$selection.Current.IsSelected) { throw 'GOAL_UI_SIDECHAT_ACTIVE' }
 }
@@ -259,6 +289,7 @@ try {
   if (![GoalDesktop]::Focus([IntPtr]$script:root.Current.NativeWindowHandle)) { throw 'GOAL_UI_FOREGROUND_CHANGED' }
   Start-Sleep -Milliseconds 250
   $script:phase = 'select-main-thread'
+  Wait-ThreadView
   Select-MainThreadTab
   $script:phase = 'wait-goal-ui'
   Wait-CurrentGoal
