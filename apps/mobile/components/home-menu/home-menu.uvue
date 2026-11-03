@@ -2,7 +2,7 @@
   <view class="menu-overlay" @click="emit('dismiss')">
     <view class="menu-panel" :style="{ width: panelWidth + 'px' }" @click.stop>
       <template v-if="section == 'main'">
-        <scroll-view direction="vertical" class="menu-main-scroll" :style="{ maxHeight: mainMaxHeight + 'px' }" :show-scrollbar="false">
+        <scroll-view direction="vertical" class="menu-main-scroll" :style="mainScrollStyle" :show-scrollbar="false">
           <view v-for="option in options" :key="option.id" class="menu-row"><view class="check-slot"><app-icon v-if="sort == option.id" name="check" :size="17" /></view><app-icon :name="option.icon" :size="22" /><text class="menu-label">{{ option.label }}</text><button class="menu-hitbox" :aria-label="option.label" :aria-pressed="sort == option.id" hover-class="menu-pressed" @click="emit('sort', option.id)"></button></view>
           <view class="menu-separator"></view>
           <view class="menu-row"><view class="check-slot"><app-icon v-if="recentFirst" name="check" :size="17" /></view><app-icon name="recent" :size="22" /><text class="menu-label">优先显示“最近”</text><button class="menu-hitbox" aria-label="优先显示最近" :aria-pressed="recentFirst" hover-class="menu-pressed" @click="emit('recent')"></button></view>
@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="uts">
-import { ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { bridge, connection, Computer, ThreadSummary } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type UsageWindow = { label: string, remainingPercent: number }
@@ -49,8 +49,17 @@ const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'pr
 const section = ref('main')
 const entries = ref([] as MenuComputer[])
 const panelWidth = Math.min(276, uni.getWindowInfo().windowWidth - 32)
-// 主菜单随实际内容收缩，仅在超过可用屏幕高度时滚动，避免估算账号行高产生底部留白。
 const mainMaxHeight = Math.max(0, uni.getWindowInfo().windowHeight - 82)
+// iOS 原生滚动容器需要确定的可视高度，长账号和多个电脑的用量仍可滚动查看。
+const mainScrollStyle = computed((): UTSJSONObject => {
+  // #ifdef APP-IOS
+  const menuHeight = entries.value.length > 0 ? 492 : 404
+  return { height: Math.min(mainMaxHeight, menuHeight) + 'px' }
+  // #endif
+  // #ifndef APP-IOS
+  return { maxHeight: mainMaxHeight + 'px' }
+  // #endif
+})
 const archiveHeight = Math.max(120, Math.min(440, uni.getWindowInfo().windowHeight - 160))
 let revision = 0
 let archiveRevision = 0

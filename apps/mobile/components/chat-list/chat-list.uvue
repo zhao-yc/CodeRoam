@@ -6,8 +6,15 @@
         <view class="header-button action-frame"><app-icon name="close" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭搜索" @click="closeSearch"></button></view>
       </template>
       <template v-else>
-        <!-- 标题和箭头共用点击区域。 -->
-        <view class="list-title"><view class="list-title-trigger action-frame"><text class="list-title-text">掌上Codex</text><app-icon name="chevron-down" :size="18" /><button class="action-hitbox" aria-label="掌上Codex列表菜单" :aria-expanded="menuVisible" hover-class="action-pressed" @click="menuVisible = !menuVisible"></button></view></view>
+        <view class="list-title">
+          <view class="list-title-trigger action-frame" hover-class="action-pressed" @click="toggleMenu">
+            <text class="list-title-text">掌上Codex</text><app-icon name="chevron-down" :size="18" />
+            <!-- iOS 由可见的标题和箭头所在容器接收点击，避免透明按钮的触摸范围塌陷。 -->
+            <!-- #ifndef APP-IOS -->
+            <button class="action-hitbox" aria-label="掌上Codex列表菜单" :aria-expanded="menuVisible" hover-class="action-pressed" @click="toggleMenu"></button>
+            <!-- #endif -->
+          </view>
+        </view>
         <view class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="电脑连接设置" @click="openConnection"></button></view></view>
       </template>
     </view>
@@ -79,6 +86,11 @@ const paneHideCallbacks = [] as (() => void)[]
 function onPaneShow(callback: () => void) { paneShowCallbacks.push(callback) }
 function onPaneHide(callback: () => void) { paneHideCallbacks.push(callback) }
 const menuVisible = ref(false)
+// 标题文字和箭头共用菜单开关，按钮的点击只触发一次。
+function toggleMenu(event: UniPointerEvent) {
+  event.stopPropagation()
+  menuVisible.value = !menuVisible.value
+}
 const listSort = ref('project')
 const recentFirst = ref(false)
 const recentThreads = ref([] as RecentThread[])
