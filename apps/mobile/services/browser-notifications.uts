@@ -10,6 +10,10 @@ let registration: ServiceWorkerRegistration | null = null
 let initialization: Promise<void> | null = null
 let installed = false
 let revision = 0
+let preferenceRevision = 0
+let explicitlyDisabled = false
+let automaticAttempted = false
+let retryAfterInteraction = false
 let namespace = ''
 let hosts = [] as string[]
 let openNotice: ((notice: TaskNotice) => void) | null = null
@@ -82,25 +86,46 @@ function closeTags(tags: string[]) {
 }
 function clearRecords() { const tags = Array.from(records.keys()); records.clear(); closeTags(tags) }
 
+// 每次加载只自动尝试一次；浏览器拦截无手势申请时，留到下一次真实操作再试。
+function attemptAutomaticBrowserNotifications() {
+  if (automaticAttempted || explicitlyDisabled || !browserNotifications.supported || !browserNotifications.foreground || browserNotifications.permission == 'denied') return
+  automaticAttempted = true
+  if (browserNotifications.enabled && browserNotifications.permission == 'granted') return
+  enableBrowserNotifications().then(() => {
+    if (!explicitlyDisabled && !browserNotifications.ready && Notification.permission == 'default') {
+      retryAfterInteraction = true
+      browserNotifications.error = '浏览器需要点击后才能授权，将在下次操作时再试，也可点击开启浏览器通知'
+    }
+  })
+}
+
 // 点击映射留在页面内存；Worker 及通知持久化数据只保留不透明票据和来源窗口编号。
 export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, onKeepAlive: (allowed: boolean) => void, onVisibility: (active: boolean) => void) {
   if (installed) return
   installed = true; openNotice = onOpen; keepAlive = onKeepAlive; visibility = onVisibility
-  try { browserNotifications.enabled = uni.getStorageSync(preferenceKey) == true } catch (_) {}
+  try { const saved = uni.getStorageSync(preferenceKey); browserNotifications.enabled = saved == true; explicitlyDisabled = saved === false } catch (_) {}
   const refreshed = () => {
     refreshCapability()
     if (browserNotifications.permission != 'granted') clearRecords()
     if (browserNotifications.enabled && browserNotifications.supported && browserNotifications.permission == 'granted' && !browserNotifications.ready) initializeWorker()
+    attemptAutomaticBrowserNotifications()
   }
   document.addEventListener('visibilitychange', refreshed)
   window.addEventListener('focus', refreshed); window.addEventListener('blur', refreshed)
   window.addEventListener('storage', () => {
     try {
-      const enabled = uni.getStorageSync(preferenceKey) == true
-      if (enabled != browserNotifications.enabled) { revision++; browserNotifications.enabled = enabled; if (!enabled) { browserNotifications.ready = false; clearRecords() } }
+      const saved = uni.getStorageSync(preferenceKey), enabled = saved == true, disabled = saved === false
+      if (enabled != browserNotifications.enabled || disabled != explicitlyDisabled) { revision++; preferenceRevision++; explicitlyDisabled = disabled; browserNotifications.enabled = enabled; if (!enabled) { browserNotifications.ready = false; clearRecords() } }
     } catch (_) {}
     refreshed()
   })
+  const interaction = (event: Event) => {
+    if (!retryAfterInteraction || (event as any).isTrusted != true || explicitlyDisabled || browserNotifications.busy || !isForeground()) return
+    retryAfterInteraction = false
+    enableBrowserNotifications()
+  }
+  document.addEventListener('click', interaction)
+  document.addEventListener('keydown', interaction)
   if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
     const data = event.data as UTSJSONObject
     if (data == null || data['type'] != 'codex-notice-click' || event.origin != location.origin) return
@@ -124,28 +149,32 @@ export function syncBrowserNotificationContext(currentNamespace: string, current
   closeTags(removed)
 }
 
-// 权限申请直接发生在按钮点击链中；取消和拒绝不记录为开启。
+// 已授权直接开启；未授权允许进入页面时尝试，受限浏览器仍可在真实点击链中申请。
 export async function enableBrowserNotifications() {
   if (browserNotifications.busy) return
   refreshCapability()
   if (!browserNotifications.supported) return
   if (Notification.permission == 'denied') { browserNotifications.error = '通知权限已被拒绝，请在浏览器的站点设置中允许通知'; return }
   browserNotifications.busy = true
-  const expected = ++revision
+  retryAfterInteraction = false
+  revision++
+  const expected = ++preferenceRevision
   try {
-    const permission = await Notification.requestPermission()
-    if (expected != revision) return
+    if (Notification.permission != 'granted') await Notification.requestPermission()
+    if (expected != preferenceRevision) return
+    const permission = Notification.permission
     browserNotifications.permission = permission
     if (permission != 'granted') { browserNotifications.error = permission == 'denied' ? '通知权限已被拒绝，请在浏览器的站点设置中允许通知' : '尚未授权，点击开启可再次申请通知权限'; return }
-    uni.setStorageSync(preferenceKey, true); browserNotifications.enabled = true
+    uni.setStorageSync(preferenceKey, true); explicitlyDisabled = false; browserNotifications.enabled = true
     await initializeWorker()
   } catch (_) { browserNotifications.error = '无法开启浏览器通知，请检查站点权限和本地存储' }
   finally { browserNotifications.busy = false; transportChanged() }
 }
 
+// 手动关闭优先于自动开启，等待中的权限回调及其他标签页也不能撤销此选择。
 export function disableBrowserNotifications() {
   try { uni.setStorageSync(preferenceKey, false) } catch (_) { browserNotifications.error = '无法保存通知设置，请检查本地存储权限'; return }
-  revision++; browserNotifications.enabled = false; browserNotifications.ready = false; browserNotifications.error = ''; clearRecords(); transportChanged()
+  revision++; preferenceRevision++; explicitlyDisabled = true; retryAfterInteraction = false; browserNotifications.enabled = false; browserNotifications.ready = false; browserNotifications.error = ''; clearRecords(); transportChanged()
 }
 
 // SHA-256 标签包含配对命名空间和完整事件身份，不把身份或令牌直接写入通知持久化数据。

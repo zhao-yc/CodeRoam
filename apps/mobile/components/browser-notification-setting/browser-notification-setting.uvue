@@ -15,7 +15,7 @@
 import { computed } from 'vue'
 import { browserNotifications, browserNotificationLabel, enableBrowserNotifications, disableBrowserNotifications, testBrowserNotification } from '../../services/browser-notifications.uts'
 const status = computed((): string => browserNotificationLabel())
-// 权限申请保持在真实点击的调用链中，不在页面加载时请求。
+// 自动尝试被浏览器拦截或用户手动关闭后，仍保留真实点击授权入口。
 function enable() { enableBrowserNotifications() }
 function test() { testBrowserNotification().then(() => { uni.showToast({ title: '已请求显示测试通知，请查看系统通知', icon: 'none' }) }, (error: Error) => { uni.showToast({ title: error.message, icon: 'none' }) }) }
 </script>
