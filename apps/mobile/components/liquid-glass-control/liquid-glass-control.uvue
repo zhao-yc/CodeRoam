@@ -1,0 +1,43 @@
+<template>
+  <view class="glass-control">
+    <!-- #ifdef APP-IOS -->
+    <native-view class="glass-native" @init="initView" @glassactivate="activate" @glasssecondary="activateSecondary" />
+    <!-- #endif -->
+  </view>
+</template>
+
+<script setup lang="uts">
+// #ifdef APP-IOS
+import { watchEffect, onUnmounted } from 'vue'
+import { LiquidGlassControl } from '../../uni_modules/codex-liquid-glass'
+
+const props = withDefaults(defineProps<{
+  symbol?: string, label?: string, title?: string, prominent?: boolean, disabled?: boolean,
+  decorative?: boolean, secondarySymbol?: string, secondaryLabel?: string, secondaryDisabled?: boolean
+}>(), { symbol: '', label: '', title: '', prominent: false, disabled: false, decorative: false, secondarySymbol: '', secondaryLabel: '', secondaryDisabled: false })
+const emit = defineEmits<{ activate: [], secondary: [] }>()
+let control: LiquidGlassControl | null = null
+
+// 初始化和后续更新共用一套属性，避免界面状态变化时重建 UIKit 按钮。
+function update() {
+  const { symbol, label, title, prominent, disabled, secondarySymbol, secondaryLabel, secondaryDisabled } = props
+  control?.update(symbol, label, title, prominent, disabled, secondarySymbol, secondaryLabel, secondaryDisabled)
+}
+
+function initView(event: UniNativeViewInitEvent) {
+  control?.destroy()
+  control = new LiquidGlassControl(event.detail.element, props.decorative, props.secondarySymbol.length > 0)
+  update()
+}
+
+function activate() { if (!props.disabled) emit('activate') }
+function activateSecondary() { if (!props.secondaryDisabled) emit('secondary') }
+
+watchEffect(update)
+onUnmounted(() => { control?.destroy(); control = null })
+// #endif
+</script>
+
+<style scoped>
+.glass-control, .glass-native { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+</style>

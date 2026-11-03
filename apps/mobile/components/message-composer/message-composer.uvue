@@ -1,5 +1,6 @@
 <template>
-  <view :id="instanceId" class="composer-panel" :class="{ 'composer-compact': !expanded, 'composer-entry': entryOnly }" @click="emit('interact')">
+  <view :id="instanceId" class="composer-panel" :class="{ 'composer-compact': !expanded, 'composer-entry': entryOnly, 'composer-glass': liquidGlass && !expanded }" @click="emit('interact')">
+    <liquid-glass-control v-if="liquidGlass && !expanded" decorative />
     <slot name="feedback"></slot>
     <view class="composer-stage" :style="{ height: stageHeight + 'px' }">
       <!-- 展开与收起始终保留同一个原生输入节点。 -->
@@ -28,13 +29,19 @@
         </view>
       </scroll-view>
       <text v-if="entryOnly && !expanded" class="entry-placeholder">问问 Codex</text>
-      <view class="composer-add"><view class="add-action action-frame" :style="{ opacity: addDisabled ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!active || addDisabled" aria-label="添加附件、插件、计划模式或追求目标" @click="emit('add')"></button></view></view>
+      <view class="composer-add">
+        <liquid-glass-control v-if="liquidGlass && expanded" symbol="plus" label="添加附件、插件、计划模式或追求目标" :disabled="!active || addDisabled" @activate="activateGlassAdd" />
+        <view v-else class="add-action action-frame" :style="{ opacity: addDisabled ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!active || addDisabled" aria-label="添加附件、插件、计划模式或追求目标" @click="emit('add')"></button></view>
+      </view>
       <view v-show="expanded" class="composer-actions">
         <slot name="permissions"></slot>
         <view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: planDisabled ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!active || planDisabled" aria-label="关闭计划模式" @click="emit('toggleplan')"></button></view>
         <view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" aria-label="选择模型、推理强度和速度" @click="emit('settings')"></button></view>
       </view>
-      <view v-show="!entryOnly || expanded" class="composer-send"><view class="primary-action action-frame" :style="{ opacity: primaryDisabled ? 0.4 : 1 }"><app-icon :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled" :aria-label="primaryLabel" @click="emit('primary')"></button></view></view>
+      <view v-show="!entryOnly || expanded" class="composer-send">
+        <liquid-glass-control v-if="liquidGlass && expanded" :symbol="primaryIcon == 'stop' ? 'stop.fill' : 'arrow.up'" :label="primaryLabel" prominent :disabled="!active || primaryDisabled" @activate="activateGlassPrimary" />
+        <view v-else class="primary-action action-frame" :style="{ opacity: primaryDisabled ? 0.4 : 1 }"><app-icon :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled" :aria-label="primaryLabel" @click="emit('primary')"></button></view>
+      </view>
     </view>
     <button v-if="entryOnly && !expanded" class="action-hitbox entry-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="emit('expand')"></button>
   </view>
@@ -44,6 +51,8 @@
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import ComposerPlus from '../composer-plus/composer-plus.uvue'
+import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvue'
+import { useLiquidGlass } from '../../services/liquid-glass.uts'
 import PluginChips from '../plugin-chips/plugin-chips.uvue'
 import ThreadMentionChips from '../thread-mention-chips/thread-mention-chips.uvue'
 import type { DraftImage, DraftFile } from '../../services/composer.uts'
@@ -51,6 +60,7 @@ import type { SelectedPlugin } from '../../services/plugins.uts'
 import type { SelectedThreadMention } from '../../services/thread-mentions.uts'
 import { fileSizeLabel } from '../../services/files.uts'
 
+const liquidGlass = useLiquidGlass()
 const props = withDefaults(defineProps<{
   instanceId: string, resetKey: string, active: boolean, text: string, expanded: boolean, inputHeight: number,
   images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], mentions: SelectedThreadMention[],
@@ -71,6 +81,10 @@ const visibleContentHeight = computed((): number => !props.expanded ? 24 : props
 const stageHeight = computed((): number => props.expanded ? visibleContentHeight.value + 58 : 44)
 let alive = true, layoutRevision = 0, layoutTimer = 0
 let synchronizedText: string | null = null
+
+// 原生按钮单独派发事件，保留原点击冒泡所触发的编辑区交互。
+function activateGlassAdd() { emit('add'); emit('interact') }
+function activateGlassPrimary() { emit('primary'); emit('interact') }
 
 // 键盘只通知业务层提交；空草稿、预测、停止和重试由调用方分别判断。
 function requestSubmit() { if (alive && props.active && !props.disabled) emit('submit') }
@@ -140,6 +154,7 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .composer-panel { position: relative; flex-shrink: 0; border-radius: 24px; padding: 6px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; transition-property: border-radius; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-glass { background-color: transparent; border-color: transparent; }
 .composer-compact { border-radius: 30px; }
 .composer-entry { padding: 2px 3px; }
 .composer-entry.composer-compact { border-radius: 25px; }

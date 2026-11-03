@@ -3,7 +3,8 @@
     <view id="home-header" class="header">
       <template v-if="searchVisible">
         <view class="search-field header-search"><app-icon name="search" :size="20" tone="muted" /><input v-model="search" class="search-input" :focus="searchFocused" placeholder="搜索聊天或项目" :maxlength="100" confirm-type="search" @blur="searchFocused = false" /></view>
-        <view class="header-button action-frame"><app-icon name="close" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭搜索" @click="closeSearch"></button></view>
+        <view v-if="liquidGlass" class="header-glass-close"><liquid-glass-control symbol="xmark" label="关闭搜索" @activate="closeSearch" /></view>
+        <view v-else class="header-button action-frame"><app-icon name="close" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭搜索" @click="closeSearch"></button></view>
       </template>
       <template v-else>
         <view class="list-title">
@@ -15,10 +16,13 @@
             <!-- #endif -->
           </view>
         </view>
-        <view class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="电脑连接设置" @click="openConnection"></button></view></view>
+        <view v-if="liquidGlass" class="header-glass-group">
+          <liquid-glass-control symbol="magnifyingglass" label="搜索聊天" secondary-symbol="gearshape" secondary-label="电脑连接设置" :secondary-disabled="creatingConversation" @activate="openSearch" @secondary="openConnection" />
+        </view>
+        <view v-else class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="电脑连接设置" @click="openConnection"></button></view></view>
       </template>
     </view>
-    <view class="list-shell">
+    <view class="list-shell" :class="{ 'list-shell-glass': liquidGlass }">
     <deletion-task-list :visible-thread-keys="visibleDeletionThreadKeys" />
     <view v-if="connection.computers.length > 1" class="computer-tabs">
       <view :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
@@ -47,15 +51,19 @@
             </view>
           </view>
         </view>
-        <view class="list-bottom"></view>
+        <!-- 为悬浮按钮保留末行滚动空间，滚动中列表仍从玻璃下方经过。 -->
+        <view class="list-bottom" :class="{ 'list-bottom-glass': liquidGlass }"></view>
       </view>
     </scroll-view>
+    <view v-if="liquidGlass" class="list-new-glass">
+      <liquid-glass-control symbol="plus" :title="props.wide ? '新聊天' : '问问 Codex'" :label="props.wide ? '新聊天' : '问问 Codex，开启新聊天'" :disabled="creatingConversation" @activate="openNewConversation" />
     </view>
-    <view v-if="props.wide" class="list-new-button action-frame">
+    </view>
+    <view v-if="!liquidGlass && props.wide" class="list-new-button action-frame">
       <composer-plus /><text class="list-new-button-label">新聊天</text>
       <button class="action-hitbox" hover-class="action-pressed" aria-label="新聊天" :disabled="creatingConversation" @click="openNewConversation"></button>
     </view>
-    <view v-else class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
+    <view v-else-if="!liquidGlass" class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
     <view class="list-safe-area"></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
     <home-menu v-if="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="menuVisible = false" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
@@ -72,6 +80,8 @@ import DeletionTaskList from '../../components/deletion-tasks/deletion-tasks.uvu
 import { deletionTask, deletionLabel } from '../../services/delete-tasks.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../composer-plus/composer-plus.uvue'
+import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvue'
+import { useLiquidGlass } from '../../services/liquid-glass.uts'
 import TaskStatus from '../../components/task-status/task-status.uvue'
 import DraftIndicator from '../../components/draft-indicator/draft-indicator.uvue'
 import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
@@ -79,6 +89,7 @@ import ConnectionEditor from '../../components/connection-editor/connection-edit
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
 import { groupThreads, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
 
+const liquidGlass = useLiquidGlass()
 const props = withDefaults(defineProps<{ active: boolean, wide?: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean }>(), { wide: false, selectedHostId: '', selectedThreadId: '', busy: false })
 const emit = defineEmits<{ open: [thread: ComputerThread], create: [hostId: string] }>()
 const paneShowCallbacks = [] as (() => void)[]
@@ -323,6 +334,8 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f8f8f3; }
 .header { height: 48px; padding: 2px 12px 2px 20px; flex-direction: row; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .header-button { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
+.header-glass-close, .header-glass-group { position: relative; height: 44px; width: 44px; flex-shrink: 0; }
+.header-glass-group { width: 88px; }
 .header-actions { flex-direction: row; flex-shrink: 0; }
 .header-search { flex: 1; min-width: 0; margin-right: 8px; }
 .page-title { flex: 1; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
@@ -370,6 +383,9 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .thread-project { flex: 1; min-width: 0; font-size: 13px; line-height: 20px; color: #7b827a; margin-left: 6px; lines: 1; text-overflow: ellipsis; }
 .thread-status { margin-left: 8px; flex-shrink: 0; }
 .list-bottom { height: 16px; }
+.list-bottom-glass { height: 70px; }
+.list-shell-glass { position: relative; }
+.list-new-glass { position: absolute; left: 16px; right: 16px; bottom: 12px; height: 46px; z-index: 1; }
 .empty { padding: 50px 0 28px; align-items: center; }
 .empty-title { color: #202c28; font-size: 18px; line-height: 28px; text-align: center; }
 .description { color: #7b827a; font-size: 14px; line-height: 23px; margin-top: 12px; text-align: center; }

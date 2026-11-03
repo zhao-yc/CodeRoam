@@ -1,0 +1,9 @@
+{
+  "id": "codex-liquid-glass",
+  "displayName": "iOS 液态玻璃",
+  "version": "1.0.0",
+  "description": "聊天导航和输入工具栏的 UIKit 液态玻璃控件",
+  "engines": { "HBuilderX": "^5.33.0" },
+  "dcloudext": { "type": "uts" },
+  "uni_modules": { "dependencies": [], "encrypt": [], "platforms": { "client": { "App": { "app-ios": "y" } } } }
+}

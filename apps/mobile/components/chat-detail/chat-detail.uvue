@@ -2,13 +2,15 @@
   <view id="conversation-page" class="page" :style="{ paddingBottom: keyboardInset + 'px' }">
     <view class="status-spacer"></view>
     <view id="conversation-header" class="conversation-header" @click="dismissGoal">
-      <view class="icon-button round-button action-frame"><app-icon :name="props.embedded ? 'close' : 'back'" :size="24" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="props.embedded ? '关闭聊天详情' : '返回聊天列表'" @click="goBack"></button></view>
+      <view v-if="liquidGlass" class="icon-button glass-header-action"><liquid-glass-control :symbol="props.embedded ? 'xmark' : 'chevron.backward'" :label="props.embedded ? '关闭聊天详情' : '返回聊天列表'" @activate="goBack" /></view>
+      <view v-else class="icon-button round-button action-frame"><app-icon :name="props.embedded ? 'close' : 'back'" :size="24" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="props.embedded ? '关闭聊天详情' : '返回聊天列表'" @click="goBack"></button></view>
       <view class="thread-capsule" @click="showConversationInfo">
         <!-- 状态紧跟标题，长标题省略时仍为状态保留完整宽度。 -->
         <view class="thread-heading"><text class="thread-title">{{ displayTitle }}</text><view v-if="connection.snapshot != null" class="title-status"><task-status :hide-running-label="true" :state="currentTaskState" :visible="pageVisible" /></view></view>
         <view class="thread-meta"><view v-if="connection.computers.length > 1" class="meta-computer"><app-icon class="meta-icon" :name="hostIcon" :size="14" tone="muted" /><text class="meta-host">{{ hostName }}</text></view><app-icon class="meta-icon" name="folder" :size="14" tone="muted" /><text class="meta-project">{{ projectName }}</text></view>
       </view>
-      <view class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
+      <view v-if="liquidGlass" class="icon-button glass-header-action"><liquid-glass-control symbol="ellipsis" label="聊天菜单" @activate="showActions" /></view>
+      <view v-else class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
     <view v-if="showingCachedContent && !cacheRefreshing" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><button v-if="!connection.connected || detailError.length > 0" class="cache-retry button-secondary" @click="refresh" aria-label="重试同步">重试</button></view>
     <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
@@ -86,7 +88,10 @@
         <view id="timeline-bottom" class="bottom-space"></view>
         </view>
       </scroll-view>
-      <view v-if="!atTimelineBottom || hasUnseenBelow" class="jump-latest"><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing(true)"></button></view>
+      <view v-if="!atTimelineBottom || hasUnseenBelow" class="jump-latest" :class="{ 'jump-latest-glass': liquidGlass }">
+        <liquid-glass-control v-if="liquidGlass" symbol="arrow.down" label="回到最新消息" @activate="resumeFollowing(true)" />
+        <template v-else><app-icon name="down" :size="20" /><button class="action-hitbox" hover-class="action-pressed" aria-label="回到最新消息" @click="resumeFollowing(true)"></button></template>
+      </view>
     </view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
@@ -172,6 +177,8 @@ import { taskNotifications, pendingTaskNotice, showTaskNoticeThread, hideTaskNot
 import { taskNoticeAnchor } from '../../services/task-notification-state.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import MessageComposer from '../message-composer/message-composer.uvue'
+import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvue'
+import { useLiquidGlass } from '../../services/liquid-glass.uts'
 import TaskStatus from '../../components/task-status/task-status.uvue'
 import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import GoalCard from '../../components/goal-card/goal-card.uvue'
@@ -180,6 +187,7 @@ import ComposerOptions from '../../components/composer-options/composer-options.
 import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel, mergeSettingsSnapshot, mergeSettingsRead, resolveSettingsEffort } from '../../services/execution-settings.uts'
 import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '../../services/files.uts'
 import type { WorkspaceTarget } from '../../services/workspace-layout.uts'
+const liquidGlass = useLiquidGlass()
 const props = withDefaults(defineProps<{ target: WorkspaceTarget, active: boolean, paneWidth: number, paneHeight: number, embedded?: boolean, paneLeft?: number }>(), { embedded: false, paneLeft: 0 })
 const emit = defineEmits<{ close: [], removed: [kind: string] }>()
 // 输入测量和粘贴按面板实例隔离，标识不包含电脑或聊天信息。
@@ -513,7 +521,7 @@ function isCurrentPage(): boolean { return pageAlive && connection.hostId == pag
 function closeComposerMenu() { composerMenu.value = '' }
 function goBack() { if (handleBack()) return; uni.hideKeyboard(); emit('close') }
 function closeActions() { actionsVisible.value = false }
-function showActions() { closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
+function showActions() { dismissGoal(); closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
 // 重试仅恢复电脑导航，草稿不会被发送。
 function retryDesktopOpen() { if (!isCurrentPage() || activating.value) return; activating.value = true; bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => { if (isCurrentPage()) activating.value = false }, (_: Error) => { if (isCurrentPage()) activating.value = false }) }
@@ -1478,6 +1486,7 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 .status-spacer { height: var(--status-bar-height); flex-shrink: 0; }
 .conversation-header { flex-direction: row; align-items: center; padding: 10px 8px; flex-shrink: 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
 .icon-button { width: 44px; height: 44px; padding: 0; margin: 0; align-items: center; justify-content: center; border-radius: 14px; background-color: transparent; border-width: 0; }
+.glass-header-action { position: relative; flex-shrink: 0; }
 .round-button { background-color: transparent; }
 .thread-capsule { flex: 1; min-width: 0; min-height: 44px; margin: 0 2px; padding: 0 6px; justify-content: center; }
 .thread-heading { flex-direction: row; align-items: center; }
@@ -1562,6 +1571,7 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 /* 浮钮独立定位，不能叠加会将原生position覆盖为relative的通用点击容器。 */
 /* 按聊天视口水平居中，44px 点击区域仍随输入区高度一起上移。 */
 .jump-latest { position: absolute; bottom: 8px; left: 50%; width: 44px; height: 44px; padding: 0; margin: 0; margin-left: -22px; border-radius: 22px; background-color: #f8f8f3; border-style: solid; border-width: 1px; border-color: #e3e5dc; align-items: center; justify-content: center; overflow: hidden; }
+.jump-latest-glass { background-color: transparent; border-width: 0; overflow: visible; }
 .composer-dock { position: relative; z-index: 10; flex-shrink: 0; padding: 12px 12px 8px; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 /* 图标由圆形容器居中，透明按钮保留原生点击与禁用行为，不再依赖文字基线。 */

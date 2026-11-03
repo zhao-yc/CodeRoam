@@ -1,0 +1,28 @@
+// 由 Swift 使用系统可用性检查，较早版本保留页面原控件。
+export function nativeGlassAvailable(): boolean {
+  return CodexLiquidGlassView.supportsGlass()
+}
+
+export class LiquidGlassControl {
+  private view: CodexLiquidGlassView
+
+  // 使用标准原生视图事件回传动作，点击和无障碍激活共用一次派发。
+  constructor(element: UniNativeViewElement, decorative: boolean, grouped: boolean) {
+    this.view = new CodexLiquidGlassView(decorative = decorative, grouped = grouped,
+      activate = () => { element.dispatchEvent(new UniNativeViewEvent('glassactivate')) },
+      activateSecondary = () => { element.dispatchEvent(new UniNativeViewEvent('glasssecondary')) })
+    element.bindIOSView(this.view)
+  }
+
+  // 动态属性在同一个原生视图上更新。
+  update(symbol: string, label: string, title: string, prominent: boolean, disabled: boolean, secondarySymbol: string, secondaryLabel: string, secondaryDisabled: boolean) {
+    this.view.update(symbol = symbol, label = label, title = title, prominent = prominent, disabled = disabled,
+      secondarySymbol = secondarySymbol, secondaryLabel = secondaryLabel, secondaryDisabled = secondaryDisabled)
+  }
+
+  // 原生视图解绑前先断开事件回调。
+  destroy() {
+    this.view.detach()
+    UTSiOS.destroyInstance(this)
+  }
+}

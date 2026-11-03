@@ -16,7 +16,7 @@ function fixture({web = true, id = 'composer-a', onSubmit = () => {}} = {}) {
     defineEmits: () => (name, ...args) => { events.push({name, args}); if (name === 'submit') onSubmit(); }, ref: value => ({value}),
     computed: read => ({get value() { return read(); }}), watch() {}, nextTick: fn => frames.push(fn),
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id),
-    onUnmounted: fn => unmounts.push(fn), fileSizeLabel: size => size + ' 字节',
+    onUnmounted: fn => unmounts.push(fn), fileSizeLabel: size => size + ' 字节', useLiquidGlass: () => false,
     uni: {getElementById: id => { reads.push(id); return {getBoundingClientRect: () => ({height: 134})}; }}};
   let code = source.split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\n/gm, '');
   code = code.replace(web ? /\/\/ #ifndef WEB[\s\S]*?\/\/ #endif/g : /\/\/ #ifdef WEB[\s\S]*?\/\/ #endif/g, '');

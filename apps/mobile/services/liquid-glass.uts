@@ -1,0 +1,14 @@
+// #ifdef APP-IOS
+import { nativeGlassAvailable } from '../uni_modules/codex-liquid-glass'
+// #endif
+
+// 平台和系统版本在当前进程内固定，统一决定是否启用原生分支。
+export function useLiquidGlass(): boolean {
+  // #ifdef APP-IOS
+  // 标准调试基座尚未加载插件时，保留现有控件供页面正常使用。
+  try { return nativeGlassAvailable() == true } catch (_) { return false }
+  // #endif
+  // #ifndef APP-IOS
+  return false
+  // #endif
+}

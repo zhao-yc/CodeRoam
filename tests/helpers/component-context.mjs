@@ -16,6 +16,8 @@ export function componentScope(scope) {
   scope.onPaneResize ??= scope.onResize ?? (() => {});
   scope.showTaskNoticeThread ??= () => 0;
   scope.hideTaskNoticeThread ??= () => {};
+  // Node 中执行组件脚本时使用跨平台后备控件。
+  scope.useLiquidGlass ??= () => false;
   const watch = scope.watch;
   if (watch != null) scope.watch = (source, callback, options) => {
     if (typeof source === 'function' && /props\.active/.test(source.toString())) {
