@@ -1448,10 +1448,15 @@ function syncPaneVisibility(active: boolean) {
 defineExpose({ handleBack, goBack })
 onMounted(() => { syncPaneVisibility(props.active) })
 watch((): boolean => props.active, (active: boolean) => { syncPaneVisibility(active) })
-watch((): string => props.paneWidth + ':' + props.paneHeight, () => {
-  beforeMarkdownLayout()
+// 视口已改变时 DOM 可能提前重排，必须使用最后一次稳定阅读锚点，不能重测为新位置。
+function resizeConversationPane() {
+  if (!cacheInitialPositioning && !following.value && !touchingTimeline && readingPosition != null) {
+    pendingReadingPosition = readingPosition; readingCorrectionPending = true
+    readingFloor.value = Math.max(readingFloor.value, readingPosition!.top + readingPosition!.height)
+  } else beforeMarkdownLayout()
   nextTick(() => { paneResizeCallbacks.forEach((callback: () => void) => { callback() }); afterMarkdownLayout() })
-})
+}
+watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConversationPane() })
 </script>
 
 <style scoped>
