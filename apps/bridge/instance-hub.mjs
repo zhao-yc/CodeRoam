@@ -53,7 +53,8 @@ export class InstanceHub extends EventEmitter {
     });
     socket.on('error', () => this.emit('warning', { code: 'RELAY_UNAVAILABLE', message: '中转暂时不可用，正在重连' }));
     socket.on('close', code => {
-      clearInterval(timer); this.supported = false; this.emit('disconnected');
+      // 只上报标准关闭码，不把服务端原因中的潜在配置或路径写入日志。
+      clearInterval(timer); this.supported = false; this.emit('disconnected', { code });
       for (const runtime of this.runtimes.values()) { runtime.agent.threadListFeed.devices.clear(); runtime.agent.threadListFeed.stop(); }
       if (!this.stopped && code !== 4001) this.reconnect = setTimeout(() => this.connect(), Math.min(15000, 500 * 2 ** Math.min(this.retries++, 5)));
     });
@@ -117,7 +118,7 @@ export class InstanceHub extends EventEmitter {
       const rows = await (this.macVerification ??= this.discover().finally(() => { this.macVerification = null; }));
       const matches = rows.filter(row => row.ipcSocketPath === instance.ipcSocketPath);
       const current = matches[0];
-      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
+      if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData', 'port'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
     } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Mac 实例身份已变化或配置目录被共用，请在电脑核对后重连'); }
   }
   /** 导航与后台发现共用一次身份复核，不能并发重写客户端集合。 */

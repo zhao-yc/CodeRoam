@@ -24,7 +24,7 @@ try {
     const hub=new InstanceHub({config,dataPath});
     const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
-    hub.on('disconnected',()=>status(false));
+    hub.on('disconnected',detail=>{status(false);console.log(`中转连接已断开（代码 ${detail.code}）`);});
     hub.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
     let closing=false;const close=async()=>{if(closing)return;closing=true;try{await hub.close();}finally{releaseBridgeLock();}};
     process.on('SIGINT',close);process.on('SIGTERM',close);hub.start();

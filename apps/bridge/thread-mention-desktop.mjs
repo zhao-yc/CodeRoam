@@ -27,7 +27,7 @@ export class ThreadMentionDesktop extends ComposerPredictionReader {
       this.connections?.retain(new Set()); this.discover = async () => [];
       throw unavailable();
     }
-    const key = instance ? JSON.stringify([instance.pid, instance.port, instance.executable, instance.generation]) : 'default';
+    const key = instance ? JSON.stringify([instance.pid, instance.startedAt, instance.port, instance.executable, instance.generation]) : 'default';
     if (this.endpointBinding?.instance === instance && this.endpointBinding.key === key) return this.endpointBinding;
     const binding = { instance, key };
     this.endpointBinding = binding;
@@ -37,7 +37,7 @@ export class ThreadMentionDesktop extends ComposerPredictionReader {
     await this.discovery?.catch(() => {});
     if (this.endpointBinding !== binding || this.closed) throw changed();
     this.ports = []; this.discoveredAt = null;
-    this.discover = instance ? async () => this.endpointBinding === binding && instance.alive === true && JSON.stringify([instance.pid, instance.port, instance.executable, instance.generation]) === key ? [{ pid: instance.pid, port: instance.port, executable: instance.executable }] : [] : this.defaultDiscover;
+    this.discover = instance ? async () => this.endpointBinding === binding && instance.alive === true && JSON.stringify([instance.pid, instance.startedAt, instance.port, instance.executable, instance.generation]) === key ? [{ pid: instance.pid, port: instance.port, executable: instance.executable }] : [] : this.defaultDiscover;
     return binding;
   }
 
@@ -62,12 +62,13 @@ export class ThreadMentionDesktop extends ComposerPredictionReader {
       const pid = instance?.pid ?? adapter?.native?.processId;
       if (!Number.isInteger(pid) || pid <= 0) throw unavailable();
       const endpointBinding = await this.bindEndpoints(instance);
-      const portNumber = instance?.port, executable = instance?.executable;
+      // PID 即使被复用也不能沿用旧页面结果，启动时间和运行代次一起约束本次读取。
+      const portNumber = instance?.port, executable = instance?.executable, startedAt = instance?.startedAt;
       const entry = threadId ? adapter.subscribed(threadId, deviceId) : null;
       const ownerHostId = entry?.owner?.hostId, ownerClientId = entry?.owner?.clientId;
       if (threadId && (!['local', 'durable'].includes(ownerHostId) || typeof ownerClientId !== 'string')) throw unavailable();
       const current = () => {
-        if (this.closed || this.endpointBinding !== endpointBinding || instance && (instance.alive !== true || instance.generation !== generation || instance.pid !== pid || instance.port !== portNumber || instance.executable !== executable)) return false;
+        if (this.closed || this.endpointBinding !== endpointBinding || instance && (instance.alive !== true || instance.generation !== generation || instance.pid !== pid || instance.startedAt !== startedAt || instance.port !== portNumber || instance.executable !== executable)) return false;
         if ((this.instance ?? adapter?.client?.instance ?? adapter?.native?.instance) !== instance) return false;
         if (!instance && adapter?.native?.processId !== pid) return false;
         if (threadId && (adapter.conversations.get(threadId) !== entry || !entry.watchers.has(deviceId) || entry.owner?.hostId !== ownerHostId || entry.owner?.clientId !== ownerClientId)) return false;

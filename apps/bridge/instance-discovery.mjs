@@ -9,6 +9,8 @@ export async function discoverInstances() {
   if (process.platform === 'darwin') {
     const { stdout } = await execute('/usr/bin/python3', [fileURLToPath(new URL('./macos-instances.py', import.meta.url))], { timeout: 20000, maxBuffer: 65536, env: { ...process.env, LC_ALL: 'C' } });
     const rows = JSON.parse(stdout);
+    // Mac 的可选调试端口由系统发现器核验 PID 与回环监听；缺失时继续保留 IPC 能力。
+    if (Array.isArray(rows) && rows.some(row => row.port != null && (!Number.isSafeInteger(row.port) || row.port < 1 || row.port > 65535))) throw new Error('Mac 实例端点核对不完整');
     if (!Array.isArray(rows) || rows.length > 16 || rows.some(row => row.platform !== 'darwin' || !Number.isSafeInteger(row.pid) || row.pid <= 0 || !Number.isSafeInteger(row.startedAt) || row.startedAt <= 0 || !/^\/private\/tmp\/codex-app-tools\/[0-9a-f-]{36}\.sock$/i.test(row.nativePipe) || !path.isAbsolute(row.codexHome) || row.ipcSocketPath !== path.join(row.codexHome, 'ipc/ipc.sock') || row.userData != null && !path.isAbsolute(row.userData))) throw new Error('Mac 实例身份核对不完整');
     return rows;
   }

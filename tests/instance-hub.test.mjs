@@ -3,8 +3,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import { WebSocketServer } from 'ws';
 import { InstanceHub } from '../apps/bridge/instance-hub.mjs';
+
+test('中转拒绝连接时保留关闭码，错误原因及私有配置不进入状态事件', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-close-code-'));
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(server, 'listening');
+  const hub = new InstanceHub({ config: { hostId: 'synthetic', codexHome: root, relayUrl: `ws://127.0.0.1:${server.address().port}`, token: 'synthetic-test' }, dataPath: root, discover: async () => [] });
+  t.after(async () => { await hub.close(); for (const socket of server.clients) socket.terminate(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
+  server.on('connection', socket => {
+    socket.send(JSON.stringify({ type: 'welcome', capabilities: { hostInstances: true } }));
+    socket.once('message', () => socket.close(1011, '合成私有错误，禁止上报正文'));
+  });
+  const disconnected = once(hub, 'disconnected'); hub.start();
+  assert.deepEqual((await disconnected)[0], { code: 1011 });
+});
 
 test('实例退出、PID 复用和管道换代只替换对应上下文，默认账本位置保持不变', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-hub-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
