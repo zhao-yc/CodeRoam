@@ -1,15 +1,15 @@
 <template>
-  <view class="menu-overlay" @click="emit('dismiss')">
-    <view class="menu-panel" :style="{ width: panelWidth + 'px' }" @click.stop>
+  <view class="menu-overlay" :class="{ 'menu-overlay-visible': visible }" @click="emit('dismiss')">
+    <view class="menu-panel" :class="{ 'menu-panel-visible': visible }" :style="{ width: panelWidth + 'px' }" @click.stop>
       <template v-if="section == 'main'">
         <scroll-view direction="vertical" class="menu-main-scroll" :style="mainScrollStyle" :show-scrollbar="false">
-          <view v-for="option in options" :key="option.id" class="menu-row"><view class="check-slot"><app-icon v-if="sort == option.id" name="check" :size="17" /></view><app-icon :name="option.icon" :size="22" /><text class="menu-label">{{ option.label }}</text><button class="menu-hitbox" :aria-label="option.label" :aria-pressed="sort == option.id" hover-class="menu-pressed" @click="emit('sort', option.id)"></button></view>
+          <view v-for="option in options" :key="option.id" class="menu-row"><view class="check-slot"><app-icon v-if="sort == option.id" name="check" :size="17" /></view><app-icon :name="option.icon" :size="22" /><text class="menu-label">{{ option.label }}</text><button class="menu-hitbox" :disabled="!visible" :aria-label="option.label" :aria-pressed="sort == option.id" hover-class="menu-pressed" @click="emit('sort', option.id)"></button></view>
           <view class="menu-separator"></view>
-          <view class="menu-row"><view class="check-slot"><app-icon v-if="recentFirst" name="check" :size="17" /></view><app-icon name="recent" :size="22" /><text class="menu-label">优先显示“最近”</text><button class="menu-hitbox" aria-label="优先显示最近" :aria-pressed="recentFirst" hover-class="menu-pressed" @click="emit('recent')"></button></view>
+          <view class="menu-row"><view class="check-slot"><app-icon v-if="recentFirst" name="check" :size="17" /></view><app-icon name="recent" :size="22" /><text class="menu-label">优先显示“最近”</text><button class="menu-hitbox" :disabled="!visible" aria-label="优先显示最近" :aria-pressed="recentFirst" hover-class="menu-pressed" @click="emit('recent')"></button></view>
           <view class="menu-separator"></view><text class="menu-caption">管理</text>
-          <view class="menu-row"><view class="check-slot"></view><app-icon name="archive" :size="22" /><text class="menu-label">已归档任务</text><button class="menu-hitbox" aria-label="已归档任务" hover-class="menu-pressed" @click="showArchives"></button></view>
-          <view class="menu-row"><view class="check-slot"></view><app-icon name="link" :size="22" /><text class="menu-label">添加连接</text><button class="menu-hitbox" aria-label="添加连接" hover-class="menu-pressed" @click="emit('connection', true)"></button></view>
-          <view class="menu-row"><view class="check-slot"></view><app-icon name="settings" :size="22" /><text class="menu-label">设置</text><button class="menu-hitbox" aria-label="设置" hover-class="menu-pressed" @click="emit('connection', false)"></button></view>
+          <view class="menu-row"><view class="check-slot"></view><app-icon name="archive" :size="22" /><text class="menu-label">已归档任务</text><button class="menu-hitbox" :disabled="!visible" aria-label="已归档任务" hover-class="menu-pressed" @click="showArchives"></button></view>
+          <view class="menu-row"><view class="check-slot"></view><app-icon name="link" :size="22" /><text class="menu-label">添加连接</text><button class="menu-hitbox" :disabled="!visible" aria-label="添加连接" hover-class="menu-pressed" @click="emit('connection', true)"></button></view>
+          <view class="menu-row"><view class="check-slot"></view><app-icon name="settings" :size="22" /><text class="menu-label">设置</text><button class="menu-hitbox" :disabled="!visible" aria-label="设置" hover-class="menu-pressed" @click="emit('connection', false)"></button></view>
           <view class="menu-separator"></view><text class="menu-caption">剩余用量</text>
           <text v-if="entries.length == 0" class="menu-note">连接电脑后查看</text>
           <view class="usage-list">
@@ -27,10 +27,10 @@
         </scroll-view>
       </template>
       <template v-else>
-        <view class="archive-heading"><view class="back-action"><app-icon name="back" :size="20" /><button class="menu-hitbox" aria-label="返回列表菜单" @click="section = 'main'"></button></view><text class="archive-title">已归档任务</text><view class="back-action"><app-icon name="refresh" :size="19" /><button class="menu-hitbox" aria-label="刷新归档列表" @click="refreshArchives"></button></view></view>
+        <view class="archive-heading"><view class="back-action"><app-icon name="back" :size="20" /><button class="menu-hitbox" :disabled="!visible" aria-label="返回列表菜单" @click="section = 'main'"></button></view><text class="archive-title">已归档任务</text><view class="back-action"><app-icon name="refresh" :size="19" /><button class="menu-hitbox" :disabled="!visible" aria-label="刷新归档列表" @click="refreshArchives"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: archiveHeight + 'px' }">
           <text v-if="entries.length == 0" class="menu-note">连接电脑后查看已归档任务</text>
-          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading" class="menu-note">正在读取…</text><button v-else-if="entry.more && entry.archiveError.length == 0" class="load-more" @click="loadArchives(entry)">加载更多</button></view>
+          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading" class="menu-note">正在读取…</text><button v-else-if="entry.more && entry.archiveError.length == 0" class="load-more" :disabled="!visible" @click="loadArchives(entry)">加载更多</button></view>
         </scroll-view><text class="archive-footnote">归档列表仅供查看</text>
       </template>
     </view>
@@ -43,7 +43,7 @@ import { bridge, connection, Computer, ThreadSummary } from '../../services/brid
 import AppIcon from '../app-icon/app-icon.uvue'
 type UsageWindow = { label: string, remainingPercent: number }
 type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, usageNote: string, accountLabel: string, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loaded: boolean, more: boolean, archiveError: string }
-const props = defineProps<{ sort: string, recentFirst: boolean, computerId: string }>()
+const props = defineProps<{ visible: boolean, sort: string, recentFirst: boolean, computerId: string }>()
 const emit = defineEmits<{ dismiss: [], sort: [value: string], recent: [], connection: [adding: boolean] }>()
 const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'project', label: '按项目', icon: 'folder' }, { id: 'time', label: '按时间倒序排列', icon: 'clock' }]
 const section = ref('main')
@@ -85,7 +85,7 @@ function syncEntries() {
 }
 // 分页固定为只读归档查询；旧服务不提供归档确认标记时拒绝显示普通列表。
 function loadArchives(entry: MenuComputer) {
-  if (entry.loading) return
+  if (!props.visible || entry.loading) return
   if (!entry.online) { entry.archiveError = '电脑离线，恢复连接后重试'; return }
   const version = revision, pageVersion = archiveRevision
   entry.loading = true; entry.archiveError = ''
@@ -98,16 +98,22 @@ function loadArchives(entry: MenuComputer) {
   }, (_reason: Error) => { if (version == revision && pageVersion == archiveRevision) { entry.loading = false; entry.archiveError = '暂无法读取，请刷新重试' } })
 }
 // 刷新先作废所有归档在途回执，防止旧分页重新混入新列表。
-function refreshArchives() { archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.more = false; loadArchives(entry) }) }
-function showArchives() { section.value = 'archives'; refreshArchives() }
+function refreshArchives() { if (!props.visible) return; archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.more = false; loadArchives(entry) }) }
+function showArchives() { if (!props.visible) return; section.value = 'archives'; refreshArchives() }
 function projectName(cwd: string): string { const parts = cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0); return parts.length > 0 ? parts[parts.length - 1] : cwd }
-watch((): string => props.computerId + ':' + connection.configurationRevision + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.label + ':' + computer.online).join('|'), () => { syncEntries() }, { immediate: true })
+// 退场期间冻结菜单内容，并作废额度和归档的在途回执。
+watch((): string => props.visible.toString() + ':' + props.computerId + ':' + connection.configurationRevision + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.label + ':' + computer.online).join('|'), () => {
+  if (props.visible) syncEntries()
+  else { revision++; archiveRevision++ }
+}, { immediate: true, flush: 'sync' })
 onUnmounted(() => { revision++ })
 </script>
 
 <style>
-.menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 50; padding-top: var(--status-bar-height); padding-left: 16px; background-color: rgba(32, 44, 40, 0.04); }
-.menu-panel { margin-top: 50px; border-radius: 20px; padding: 6px 6px; background-color: #fcfcf9; border-style: solid; border-width: 1px; border-color: #dedfd8; overflow: hidden; }
+.menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 50; padding-top: var(--status-bar-height); padding-left: 16px; background-color: rgba(32, 44, 40, 0); transition-property: background-color; transition-duration: 140ms; transition-timing-function: ease-in; }
+.menu-overlay-visible { background-color: rgba(32, 44, 40, 0.08); transition-duration: 200ms; transition-timing-function: ease-out; }
+.menu-panel { margin-top: 50px; border-radius: 20px; padding: 6px 6px; background-color: #fcfcf9; border-style: solid; border-width: 1px; border-color: #dedfd8; overflow: hidden; opacity: 0; transform: translateY(-8px); transition-property: opacity, transform; transition-duration: 140ms; transition-timing-function: ease-in; }
+.menu-panel-visible { opacity: 1; transform: translateY(0px); transition-duration: 200ms; transition-timing-function: ease-out; }
 .menu-main-scroll { height: auto; flex-shrink: 1; }
 .menu-row { position: relative; min-height: 42px; flex-direction: row; align-items: center; padding-right: 10px; border-radius: 14px; }
 .check-slot { width: 26px; align-items: center; flex-shrink: 0; }
@@ -142,5 +148,8 @@ onUnmounted(() => { revision++ })
 .menu-panel { box-shadow: 0 12px 40px rgba(32, 44, 40, 0.14); }
 .menu-hitbox::after { border: 0; }
 .usage-account { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+@media (prefers-reduced-motion: reduce) {
+  .menu-overlay, .menu-overlay-visible, .menu-panel, .menu-panel-visible { transition-duration: 0ms; }
+}
 /* #endif */
 </style>

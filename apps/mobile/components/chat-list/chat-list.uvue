@@ -9,7 +9,7 @@
       <template v-else>
         <view class="list-title">
           <view class="list-title-trigger action-frame" hover-class="action-pressed" @click="toggleMenu">
-            <text class="list-title-text">掌上Codex</text><app-icon name="chevron-down" :size="18" />
+            <text class="list-title-text">掌上Codex</text><view class="list-menu-arrow" :class="{ 'list-menu-arrow-open': menuVisible }"><app-icon name="chevron-down" :size="18" /></view>
             <!-- iOS 由可见的标题和箭头所在容器接收点击，避免透明按钮的触摸范围塌陷。 -->
             <!-- #ifndef APP-IOS -->
             <button class="action-hitbox" aria-label="掌上Codex列表菜单" :aria-expanded="menuVisible" hover-class="action-pressed" @click="toggleMenu"></button>
@@ -66,7 +66,7 @@
     <view v-else-if="!liquidGlass" class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
     <view class="list-safe-area"></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
-    <home-menu v-if="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="menuVisible = false" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
+    <home-menu v-if="menuMounted" :visible="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="closeMenu" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
   </view>
 </template>
 
@@ -96,11 +96,68 @@ const paneShowCallbacks = [] as (() => void)[]
 const paneHideCallbacks = [] as (() => void)[]
 function onPaneShow(callback: () => void) { paneShowCallbacks.push(callback) }
 function onPaneHide(callback: () => void) { paneHideCallbacks.push(callback) }
+const menuMounted = ref(false)
 const menuVisible = ref(false)
+let menuClosing = false
+let menuTimer = 0
+let menuRevision = 0
+
+// Web 跟随系统的减少动态效果偏好，直接切换显示状态。
+function reduceMenuMotion(): boolean {
+  // #ifdef WEB
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  // #endif
+  // #ifndef WEB
+  return false
+  // #endif
+}
+
+// 取消待执行的过渡，也让已经排队的渲染回调失效。
+function cancelMenuTransition(): number {
+  clearTimeout(menuTimer)
+  menuTimer = 0
+  return ++menuRevision
+}
+
+// 离开列表时立即卸载，回到页面不会看到上次的遮罩。
+function clearMenu() {
+  cancelMenuTransition()
+  menuClosing = false
+  menuVisible.value = false
+  menuMounted.value = false
+}
+
+// 先提交初始样式，再在下一帧之后让面板、遮罩和箭头一起过渡。
+function openMenu() {
+  const revision = cancelMenuTransition()
+  menuMounted.value = true
+  if (reduceMenuMotion()) { menuVisible.value = true; return }
+  nextTick(() => {
+    if (revision != menuRevision) return
+    menuTimer = setTimeout(() => {
+      if (revision == menuRevision) { menuTimer = 0; menuVisible.value = true }
+    }, 32)
+  })
+}
+
+// 退场时保留遮罩来拦截点击，等 140 毫秒过渡绘制完毕再卸载。
+function closeMenu() {
+  if (!menuMounted.value || menuClosing) return
+  if (!menuVisible.value || reduceMenuMotion()) { clearMenu(); return }
+  const revision = cancelMenuTransition()
+  menuClosing = true
+  menuVisible.value = false
+  nextTick(() => {
+    if (revision != menuRevision) return
+    menuTimer = setTimeout(() => { if (revision == menuRevision) clearMenu() }, 160)
+  })
+}
+
 // 标题文字和箭头共用菜单开关，按钮的点击只触发一次。
 function toggleMenu(event: UniPointerEvent) {
   event.stopPropagation()
-  menuVisible.value = !menuVisible.value
+  if (menuMounted.value) closeMenu()
+  else openMenu()
 }
 const listSort = ref('project')
 const recentFirst = ref(false)
@@ -116,10 +173,11 @@ function restoreListPreferences() {
   } catch (_) { listSort.value = 'project'; recentFirst.value = false; recentThreads.value = [] as RecentThread[] }
 }
 function saveListPreferences() { try { uni.setStorageSync('codex-mobile-list-preferences', JSON.stringify({ sort: listSort.value, recentFirst: recentFirst.value })) } catch (_) { uni.showToast({ title: '当前选择已生效，暂无法保存偏好', icon: 'none' }) } }
-function selectSort(value: string) { if (['priority', 'project', 'time'].indexOf(value) < 0) return; listSort.value = value; saveListPreferences(); menuVisible.value = false; resetThreadScroll() }
-function toggleRecent() { recentFirst.value = !recentFirst.value; saveListPreferences(); menuVisible.value = false; resetThreadScroll() }
+// 列表偏好即时生效，不等菜单退场。
+function selectSort(value: string) { if (!menuVisible.value || ['priority', 'project', 'time'].indexOf(value) < 0) return; closeMenu(); listSort.value = value; saveListPreferences(); resetThreadScroll() }
+function toggleRecent() { if (!menuVisible.value) return; closeMenu(); recentFirst.value = !recentFirst.value; saveListPreferences(); resetThreadScroll() }
 // 添加连接直接定位接入配置，设置入口保留当前连接概览。
-function openMenuConnection(adding: boolean) { if (creatingConversation.value) return; menuVisible.value = false; uni.navigateTo({ url: '/pages/connection/index' + (adding ? '?add=true' : '') }) }
+function openMenuConnection(adding: boolean) { if (!menuVisible.value || creatingConversation.value) return; closeMenu(); uni.navigateTo({ url: '/pages/connection/index' + (adding ? '?add=true' : '') }) }
 restoreListPreferences()
 const search = ref('')
 const searchVisible = ref(false)
@@ -262,8 +320,8 @@ onPaneShow(() => {
   clearInterval(statusTimer)
   statusTimer = setInterval(() => { updateClock() }, 60000)
 })
-onPaneHide(() => { pageVisible.value = false; menuVisible.value = false; archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
-onUnmounted(() => { pageVisible.value = false; menuVisible.value = false; archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
+onPaneHide(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
+onUnmounted(() => { pageVisible.value = false; clearMenu(); archiveToastRequest++; closeComputerMenu(); clearInterval(statusTimer); statusTimer = 0 })
 
 // 列表状态来自实际读取结果，当前订阅会话优先采用实时快照。
 function threadState(thread: ComputerThread): string {
@@ -312,7 +370,7 @@ function projectName(cwd: string): string {
   return parts[parts.length - 1].length > 0 ? parts[parts.length - 1] : normalized
 }
 function handleBack(): boolean {
-  const handle = (): boolean => { if (menuVisible.value) { menuVisible.value = false; return true }; if (editingComputerId.value.length > 0) { if (!connectionEditorBusy.value) closeComputerMenu(); return true }; if (searchVisible.value) { closeSearch(); return true }; return false }
+  const handle = (): boolean => { if (menuMounted.value) { closeMenu(); return true }; if (editingComputerId.value.length > 0) { if (!connectionEditorBusy.value) closeComputerMenu(); return true }; if (searchVisible.value) { closeSearch(); return true }; return false }
   return handle()
 }
 
@@ -342,6 +400,13 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .list-title { flex: 1; flex-direction: row; align-items: center; }
 .list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding-right: 8px; border-radius: 12px; }
 .list-title-text { flex-shrink: 0; margin-right: 6px; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
+.list-menu-arrow { flex-shrink: 0; width: 18px; height: 18px; transform: rotate(0deg); transition-property: transform; transition-duration: 140ms; transition-timing-function: ease-in; }
+.list-menu-arrow-open { transform: rotate(180deg); transition-duration: 200ms; transition-timing-function: ease-out; }
+/* #ifdef WEB */
+@media (prefers-reduced-motion: reduce) {
+  .list-menu-arrow, .list-menu-arrow-open { transition-duration: 0ms; }
+}
+/* #endif */
 .new-page-title { flex: 1; text-align: center; }
 .list-shell { flex: 1; height: 0; min-height: 0; }
 /* 全部标签固定，电脑标签在剩余宽度内横向滚动。 */

@@ -8,7 +8,7 @@ import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';
 
 /** 运行真实菜单数据逻辑，控制网络回执以覆盖旧服务、分页及授权撤回。 */
 function fixture(){
-  const requests=[],watchers=[],props={sort:'project',recentFirst:false,computerId:''},connection={configurationRevision:1,connected:true,computers:[{id:'pc',label:'合成电脑',online:true}]};
+  const requests=[],watchers=[],props={visible:true,sort:'project',recentFirst:false,computerId:''},connection={configurationRevision:1,connected:true,computers:[{id:'pc',label:'合成电脑',online:true}]};
   const context=vm.createContext({defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),computed:fn=>({get value(){return fn();}}),watch:(_read,callback)=>{watchers.push(callback);callback();},onUnmounted:()=>{},uni:{getWindowInfo:()=>({windowWidth:390,windowHeight:844})},connection,bridge:{readComputerMenu(hostId,params){return new Promise((resolve,reject)=>requests.push({hostId,params,resolve,reject}));}}});
   const source=fs.readFileSync('apps/mobile/components/home-menu/home-menu.uvue','utf8').split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.api={entries,section,showArchives,refreshArchives,loadArchives};',context);
@@ -28,6 +28,16 @@ test('归档分页只读、刷新及撤权忽略旧回执，独立额度请求�
   assert.equal(f.entries.value[0].threads.length,30);assert.equal(f.entries.value[0].windows[0].remainingPercent,48);
   f.loadArchives(f.entries.value[0]);assert.equal(f.requests[3].params.offset,30);assert.equal(f.requests[3].params.archived,true);
   f.connection.computers=[];f.sync();f.requests[3].resolve({archived:true,threads:[{id:'withdrawn'}]});await settle();assert.equal(f.entries.value.length,0);
+});
+test('菜单退场时忽略旧额度和归档回执，不再读取或刷新内容',async()=>{
+  const f=fixture();f.showArchives();
+  f.props.visible=false;f.sync();
+  f.connection.configurationRevision++;f.sync();f.refreshArchives();
+  assert.equal(f.requests.length,2);
+  f.requests[0].resolve({usage:{available:true,accountLabel:'stale@example.com',windows:[]}});
+  f.requests[1].resolve({archived:true,threads:[{id:'stale'}]});await settle();
+  assert.equal(f.entries.value[0].accountLabel,'');
+  assert.equal(f.entries.value[0].threads.length,0);
 });
 test('查询参数限制布尔值和分页范围，不能透传任意目录或命令',()=>{
   const request=params=>({v:1,type:'request',requestId:'synthetic-request-123',method:'threads.list',params});
