@@ -21,6 +21,10 @@ public final class CodexLiquidGlassView: UIView {
         super.init(frame: .zero)
         guard #available(iOS 26, *) else { return }
 
+        // 原生视图宿主会裁切外部阴影，按胶囊轮廓裁切以消除矩形边缘。
+        cornerConfiguration = .capsule()
+        clipsToBounds = true
+
         if decorative || grouped {
             let effect = UIGlassEffect(style: .regular)
             effect.isInteractive = grouped
