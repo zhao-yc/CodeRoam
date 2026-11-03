@@ -1075,8 +1075,8 @@ function selectSetting(key: string, value: string): boolean {
     if (snapshotRevision == settingsSnapshotRevision) settings.value = response.settings
     models.value = response.models
     closeComposerMenu()
-    // 模型、强度或速度切换确认后恢复编辑，隐藏页面或失败响应不争抢输入焦点。
-    if (['model', 'effort', 'serviceTier'].indexOf(key) >= 0 && pageVisible.value) focusComposerInput()
+    // 模型、强度、速度或计划模式确认后恢复编辑，隐藏页面或失败响应不争抢输入焦点。
+    if (['model', 'effort', 'serviceTier', 'mode'].indexOf(key) >= 0 && pageVisible.value) focusComposerInput()
     refresh()
   }, (error: Error) => {
     busy.value = false; settingsBusy.value = false
@@ -1180,13 +1180,13 @@ function composerAction(action: string) {
   if (!canWrite.value) return
   if (action == 'plugin') { closeComposerMenu(); predictionFocus.value = false; uni.hideKeyboard(); pluginOpen.value = true; return }
   if (action == 'goal') { showGoal(); return }
-  if (action == 'plan') { if (selectSetting('mode', planEnabled.value ? 'default' : 'plan')) focusComposerInput(); return }
+  if (action == 'plan') { togglePlan(); return }
   closeComposerMenu()
   if (action == 'camera' || action == 'album') {
     if (modelSupportsImages.value) chooseImages(action); else notify('当前模型不支持图片，请切换模型')
   } else if (action == 'file') chooseFiles()
 }
-// 菜单选择后立即恢复编辑，焦点不等待电脑端回执；不会采纳预测或发送草稿。
+// 恢复同一聊天的编辑焦点；不会采纳预测或发送草稿。
 function focusComposerInput() {
   const hostId = pageHostId.value, threadId = pageThreadId.value
   closeComposerMenu(); clearTimeout(composerBlurTimer)

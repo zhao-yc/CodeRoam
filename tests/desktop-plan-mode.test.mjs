@@ -21,7 +21,7 @@ function page(){
  const send=source.slice(source.indexOf('function send() {'),source.indexOf('\nfunction stop() {'));
  const watchStart=source.indexOf('watch((): string => JSON.stringify(connection.snapshot?.executionSettings');
  const watch=source.slice(watchStart,source.indexOf('\nfunction onDraftLineChange',watchStart));
- Object.assign(context,{settingsRetryTimer:0,settingsRetryCount:0,setTimeout:()=>1,clearTimeout(){}});
+ Object.assign(context,{pageVisible:{value:true},focusComposerInput(){},settingsRetryTimer:0,settingsRetryCount:0,setTimeout:()=>1,clearTimeout(){}});
  const helpers=fs.readFileSync('apps/mobile/services/execution-settings.uts','utf8').replace(/\bexport /g,'');
  vm.runInContext(stripTypeScriptTypes([helpers,derived,read,write,send,watch].join('\n'),{mode:'transform'})+'\nglobalThis.f={planEnabled,loadSettings,selectSetting,send,steerQueuedMessage,cancelQueuedMessage};',context);
  return {context,pending,calls,settled,notices,...context.f,desktop(value){context.connection.snapshot={...context.connection.snapshot,executionSettings:setting(value)};watchers[0].changed();}};

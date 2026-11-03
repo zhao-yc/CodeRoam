@@ -217,8 +217,9 @@ function composerAction(action: string) {
   if (action == 'goal') { closeMenus(); uni.showModal({ title: '追求目标', content: '请先发送消息创建聊天，再从加号菜单设置目标。', showCancel: false, confirmText: '知道了' }); return }
   if (action == 'plan') {
     if (!nativeReady.value || settings.value == null) return
-    changeNativeSettings({ mode: settings.value!.mode == 'plan' ? 'default' : 'plan' })
-    closeMenus(); focusDraftInput(); return
+    // 开启和关闭都等待电脑确认，失败或目标切换时不抢回输入焦点。
+    changeNativeSettings({ mode: settings.value!.mode == 'plan' ? 'default' : 'plan' }, false, true)
+    return
   }
   closeMenus(); if (action == 'camera' || action == 'album') chooseImages(action); else if (action == 'file') chooseFiles()
 }
