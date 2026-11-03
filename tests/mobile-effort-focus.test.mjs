@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,13 +7,13 @@ import { stripTypeScriptTypes } from 'node:module';
 
 /** 执行真实设置与聚焦方法，确认迟到响应不能将焦点带到其他聊天。 */
 function fixture(newDraft = false) {
-  const source = fs.readFileSync(newDraft ? 'apps/mobile/components/new-conversation/new-conversation.uvue' : 'apps/mobile/pages/conversation/index.uvue', 'utf8');
+  const source = fs.readFileSync(newDraft ? 'apps/mobile/components/new-conversation/new-conversation.uvue' : 'apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
   const method = name => {
     const header = source.match(new RegExp('^(?:async )?function ' + name + '\\([^\\r\\n]*', 'm'))[0];
     return header.trimEnd().endsWith('}') ? header : source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'))[0];
   };
   const pending = [], ticks = [], calls = [], ref = value => ({ value });
-  const context = vm.createContext({
+  const context = componentContext({
     busy: ref(false), nativeReady: ref(true), native: ref({}), alive: true, props: { expanded: true },
     connection: { hostId: 'computer', activeThreadId: 'thread', snapshot: {} },
     pageHostId: ref('computer'), pageThreadId: ref('thread'), projectId: ref('project'), pageVisible: ref(true),

@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 
 const read = path => fs.readFileSync(path, 'utf8');
 const service = name => read(`apps/mobile/services/${name}.uts`);
-const page = read('apps/mobile/pages/conversation/index.uvue');
+const page = read('apps/mobile/components/chat-detail/chat-detail.uvue');
 const newEditor = read('apps/mobile/components/new-conversation/new-conversation.uvue');
 const plain = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -19,7 +20,7 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 
 /** 只执行真实 UTS 模块，所有候选和正文均为独立合成数据。 */
 function helpers(extra = '') {
-  const context = vm.createContext({ reactive: value => value });
+  const context = componentContext({ reactive: value => value });
   vm.runInContext(compile(service('thread-mentions') + '\n' + service('composer') + '\n' + extra), context);
   return context;
 }
@@ -67,7 +68,7 @@ function pickerFixture() {
   let clock = 0;
   const props = { hostId: 'pc', threadId: 'current', scopeId: 'current', initialQuery: '', mentions: [] };
   const connection = { hostId: 'pc', configurationRevision: 1, connected: true };
-  const c = vm.createContext({ props, connection, ref, computed, defineProps: () => props, defineEmits: () => (...args) => emitted.push(args),
+  const c = componentContext({ props, connection, ref, computed, defineProps: () => props, defineEmits: () => (...args) => emitted.push(args),
     setTimeout: (run, ms) => { assert.equal(ms, 250); timers.set(++clock, run); return clock; }, clearTimeout: id => timers.delete(id),
     watch: (_, run) => watches.push(run), onUnmounted: run => unmounts.push(run),
     uni: { getWindowInfo: () => ({ windowHeight: 740 }), showToast: value => notices.push(value.title) },
@@ -210,7 +211,7 @@ function newFixture() {
     },
     async openThread(threadId) { calls.push({ method: 'thread.watch', params: { threadId } }); },
   };
-  const c = vm.createContext({ reactive: value => value, connection, bridge, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), removeStorageSync: key => storage.delete(key) }, readFileBase64: async () => '', FILE_CHUNK_BYTES: 3 });
+  const c = componentContext({ reactive: value => value, connection, bridge, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), removeStorageSync: key => storage.delete(key) }, readFileBase64: async () => '', FILE_CHUNK_BYTES: 3 });
   vm.runInContext(compile(['thread-mentions', 'composer', 'native-draft', 'new-conversation'].map(service).join('\n')), c);
   return { c, calls, snapshots, setSendHook: run => { sendHook = run; }, async open() { await c.watchNativeDraft('pc', 'project'); return c.newDraft('pc', 'project'); } };
 }
@@ -289,7 +290,7 @@ test('页面将标签计入展开及预测抑制，队列展示和增量快照�
 test('聊天查询公开封装限定已授权在线电脑和只读白名单，通用请求仍为私有', async () => {
   const source = service('bridge'), method = source.match(/  readThreadMentions\([^]*?\n  \}/)[0];
   const calls = [], connection = { computers: [{ id: 'pc', online: true }, { id: 'offline', online: false }] };
-  const c = vm.createContext({ connection });
+  const c = componentContext({ connection });
   vm.runInContext(compile('class Subject {\n' + method + '\n}\nglobalThis.subject = new Subject();'), c);
   c.subject.requestForComputer = (...args) => { calls.push(plain(args)); return Promise.resolve({}); };
   await assert.rejects(c.subject.readThreadMentions('other', {}), /取消授权/); await assert.rejects(c.subject.readThreadMentions('offline', {}), /离线/); assert.equal(calls.length, 0);

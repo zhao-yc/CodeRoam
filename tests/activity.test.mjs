@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -54,7 +55,7 @@ test('没有新增消息时动作仍通过元数据增量更新，任务结束�
   }
   const uts=fs.readFileSync('apps/mobile/services/bridge.uts','utf8');
   const statement=uts.split(/\r?\n/).find(line=>line.includes('connection.snapshot = { threadId: update.threadId'));
-  const context=vm.createContext({connection:{snapshot:{}},ordered:[],update:{threadId:'t',activity:'正在编译手机界面'}});
+  const context=componentContext({connection:{snapshot:{}},ordered:[],update:{threadId:'t',activity:'正在编译手机界面'}});
   vm.runInContext(stripTypeScriptTypes(statement,{mode:'transform'}),context);assert.equal(context.connection.snapshot.activity,'正在编译手机界面');
   delete context.update.activity;vm.runInContext(stripTypeScriptTypes(statement,{mode:'transform'}),context);assert.equal(context.connection.snapshot.activity,'');
 });
@@ -63,12 +64,12 @@ test('具体动作只在底部运行态显示，等待、离线和结束时状�
   const component=fs.readFileSync('apps/mobile/components/task-status/task-status.uvue','utf8');
   const lines=component.split(/\r?\n/).filter(line=>line.startsWith('const showDetail =')||line.startsWith('const label =')).join('\n');
   const props={state:'running',detail:'正在测试接口'};
-  const context=vm.createContext({props,computed:get=>({get value(){return get();}})});
+  const context=componentContext({props,computed:get=>({get value(){return get();}})});
   vm.runInContext(stripTypeScriptTypes(lines)+';globalThis.result={label,showDetail};',context);
   assert.equal(context.result.label.value,'正在测试接口');
   for(const [state,label]of [['question','需要用户输入'],['approval','需要审批'],['offline','状态未同步'],['idle','已空闲'],['unknown','状态未知']]){props.state=state;assert.equal(context.result.label.value,label);assert.equal(context.result.showDetail.value,false);}
   props.state='running';props.detail='';assert.equal(context.result.label.value,'进行中');
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const statuses=page.match(/<task-status\b[^>]*>/g);
   assert.equal(statuses.length,2);assert.equal(statuses[0].includes(':detail='),false);assert.equal(statuses[1].includes(':detail='),true);
 });

@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import {stripTypeScriptTypes} from 'node:module';
 
 /** 直接执行实际 UTS 模块，不复制分组或状态同步实现。 */
 function fixture(){
-  const context=vm.createContext({});
+  const context=componentContext({});
   const source=fs.readFileSync('apps/mobile/services/executions.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={executionTimeline,executionGroupLabel,executionTitle,executionGroupExpanded,retainExpandedExecutions,toggleExecutionGroup,reportTimeline,reportTurnIds,reportProcessLabel}',context);
   return context.subject;
@@ -73,8 +74,8 @@ test('页面打开列表暂停跟随，详情关闭不收起列表，同步裁�
   const f=fixture(),watches=[],calls=[];
   let bottom=400;
   const connection={snapshot:{messages:[message('c'),message('f','fileChange')],approvals:[],questionGroups:[],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
-  const context=vm.createContext({...f,setTimeout:()=>0,conversationWithHistory:snapshot=>snapshot,executionRecordTitle:f.executionTitle,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',nextTick:callback=>callback(),uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{height:600,bottom:700}:{bottom}}),getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>calls.push('收起键盘')}});
-  const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
+  const context=componentContext({...f,setTimeout:()=>0,conversationWithHistory:snapshot=>snapshot,executionRecordTitle:f.executionTitle,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',nextTick:callback=>callback(),uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{height:600,bottom:700}:{bottom}}),getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>calls.push('收起键盘')}});
+  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   // 注释展示与执行记录共用时间线，回归时一并加载真实展示解析器。
   for (const module of ['turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pageHostId,pageThreadId,atTimelineBottom,updateTimelinePosition,beginTimelineTouch,endTimelineTouch,timeline,following,scrollTarget,expandedExecutionIds,selectedExecutionId,selectedExecution,toggleExecutions,toggleExecution,closeExecution,beginExecutionTouch,endExecutionTouch}',context);

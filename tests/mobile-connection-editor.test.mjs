@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +10,7 @@ function editorFixture() {
   const props = { computer: { id: 'pc', label: '原名', icon: 'laptop', hostname: 'example-pc', profileRevision: 2 }, anchorLeft: 290, anchorTop: 100, releaseAt: Date.now() - 1000 };
   const events = [], requests = [], lifecycle = [];
   const connection = { connected: true, supportsHostProfiles: true };
-  const context = vm.createContext({ defineProps: () => props, defineEmits: () => (...event) => events.push(event), ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }), onUnmounted: fn => lifecycle.push(fn), connection, computerIcon: computer => computer?.icon ?? 'laptop', bridge: { updateComputerProfile(...args) { return new Promise((resolve, reject) => requests.push({ args, resolve, reject })); } }, uni: { getWindowInfo: () => ({ windowWidth: 320, windowHeight: 600 }), hideKeyboard() {}, showToast() {} } });
+  const context = componentContext({ defineProps: () => props, defineEmits: () => (...event) => events.push(event), ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }), onUnmounted: fn => lifecycle.push(fn), connection, computerIcon: computer => computer?.icon ?? 'laptop', bridge: { updateComputerProfile(...args) { return new Promise((resolve, reject) => requests.push({ args, resolve, reject })); } }, uni: { getWindowInfo: () => ({ windowWidth: 320, windowHeight: 600 }), hideKeyboard() {}, showToast() {} } });
   const source = fs.readFileSync('apps/mobile/components/connection-editor/connection-editor.uvue', 'utf8').split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\r?\n/gm, '');
   vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + ';globalThis.subject={beginEditing,displayName,icon,canSave,save,dismiss,saving,error,menuLeft,menuWidth,onKeyboardChange,sheetHeight};', context);
   return { ...context.subject, props, events, requests, connection, unmount: () => lifecycle.forEach(fn => fn()) };
@@ -40,14 +41,14 @@ test('旧中转及断网禁用保存，卸载后的回执不再触发提示或�
 });
 
 test('首页长按及关闭后的释放点击不筛选，正常点击保持原筛选行为', () => {
-  const source = fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8');
+  const source = fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue', 'utf8');
   const methods = source.split(/\r?\n/).filter(line => line.startsWith('function chooseComputerFilter(')).join('\n');
   let refreshes = 0;
   const context = { editingComputerId: { value: 'pc' }, suppressComputerClickUntil: 0, Date, connection: { computers: [{ id: 'pc' }] }, selectedComputerId: { value: '' }, resetThreadScroll() {}, refreshComputerThreads() { refreshes++; } };
-  vm.runInNewContext(stripTypeScriptTypes(methods) + ";chooseComputerFilter('pc');", context); assert.equal(refreshes, 0);
+  vm.runInNewContext(stripTypeScriptTypes(methods) + ";chooseComputerFilter('pc');", componentScope(context)); assert.equal(refreshes, 0);
   context.editingComputerId.value = ''; context.suppressComputerClickUntil = Date.now() + 500;
-  vm.runInNewContext("chooseComputerFilter('pc');", context); assert.equal(refreshes, 0);
-  context.suppressComputerClickUntil = 0; vm.runInNewContext("chooseComputerFilter('pc');", context); assert.equal(refreshes, 1); assert.equal(context.selectedComputerId.value, 'pc');
+  vm.runInNewContext("chooseComputerFilter('pc');", componentScope(context)); assert.equal(refreshes, 0);
+  context.suppressComputerClickUntil = 0; vm.runInNewContext("chooseComputerFilter('pc');", componentScope(context)); assert.equal(refreshes, 1); assert.equal(context.selectedComputerId.value, 'pc');
 });
 
 test('长按尚未松手和松手后的合成点击不会关闭菜单，后续遮罩点击正常关闭', () => {
@@ -57,11 +58,11 @@ test('长按尚未松手和松手后的合成点击不会关闭菜单，后续�
 });
 
 test('含实例分隔符的设备长按使用可查询且无碰撞的元素编号，编辑目标仍为原设备', () => {
-  const source = fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8');
+  const source = fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue', 'utf8');
   const methods = ['computerTabElementId', 'openComputerMenu'].map(name => source.match(new RegExp('function ' + name + '\\([^]*?\\n}'))?.[0]).join('\n');
   const ids = ['pc', 'pc~00000000-0000-4000-8000-000000000001', 'pc_7e_', 'pc~', 'pc.1:second', '合成设备'];
   const queries = [], target = ids[1];
-  const context = vm.createContext({ editingNewConversation: { value: false }, editingComputerId: { value: '' }, connectionMenuLeft: { value: 0 }, connectionMenuTop: { value: 0 }, connectionReleaseAt: { value: 1 }, suppressComputerClickUntil: 0, Date, uni: { getElementById(id) {
+  const context = componentContext({ editingNewConversation: { value: false }, editingComputerId: { value: '' }, connectionMenuLeft: { value: 0 }, connectionMenuTop: { value: 0 }, connectionReleaseAt: { value: 1 }, suppressComputerClickUntil: 0, Date, uni: { getElementById(id) {
     assert.match(id, /^[A-Za-z][A-Za-z0-9_-]*$/); queries.push(id);
     return { getBoundingClientRect: () => id === 'home-page' ? { top: 20 } : { left: 180, bottom: 120 } };
   } } });

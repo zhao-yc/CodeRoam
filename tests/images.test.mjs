@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import {stripTypeScriptTypes} from 'node:module';
 import {validateImages,MAX_IMAGE_BYTES} from '../packages/protocol/images.mjs';import {MAX_MESSAGE_BYTES,validateRequest} from '../packages/protocol/contracts.mjs';import {normalizeConversation} from '../apps/bridge/conversation.mjs';
 const image='data:image/png;base64,'+fs.readFileSync('apps/mobile/static/icons/check-dark.png').toString('base64');
@@ -20,17 +21,17 @@ test('图片消息同步可点击数量，不把图片内容或电脑文件路�
 });
 
 test('旧电脑没有图片能力标记时，页面发送保护保留草稿且不调用请求',()=>{
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const method=page.slice(page.indexOf('function send() {'),page.indexOf('\nfunction stop() {'));
   const calls=[],context={draft:{value:'消息'},draftImages:{value:[{id:'i',src:image}]},canWrite:{value:true},planResetRequired:{value:false},settings:{value:null},imageBusy:{value:false},filesReady:{value:true},draftFiles:{value:[]},modelSupportsImages:{value:true},connection:{snapshot:{}},notify:message=>calls.push(message),bridge:{request:()=>{throw new Error('不应调用');}}};
-  vm.runInNewContext(stripTypeScriptTypes(method,{mode:'transform'})+'\nsend();',context);assert.match(calls[0],/更新电脑连接服务/);assert.equal(context.draftImages.value.length,1);
+  vm.runInNewContext(stripTypeScriptTypes(method,{mode:'transform'})+'\nsend();', componentScope(context));assert.match(calls[0],/更新电脑连接服务/);assert.equal(context.draftImages.value.length,1);
 });
 
 test('Web实际图片模块等比压缩并在过大或读取失败时给出明确错误',async()=>{
   const draws=[];let oversized=false;
   class Image {naturalWidth=3200;naturalHeight=2400;set src(value){queueMicrotask(()=>value==='bad'?this.onerror():this.onload());}}
   const canvas={width:0,height:0,getContext(){return {fillRect(){},drawImage(_image,_x,_y,width,height){draws.push([width,height]);}};},toDataURL(){return oversized?'x'.repeat(500000):image;}};
-  const context=vm.createContext({Image,document:{createElement:()=>canvas},queueMicrotask});
+  const context=componentContext({Image,document:{createElement:()=>canvas},queueMicrotask});
   let source=fs.readFileSync('apps/mobile/services/images.uts','utf8').replace(/\/\/ #ifndef WEB[\s\S]*?\/\/ #endif/g,'').replace(/\bexport /g,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={prepareImage};',context);
   assert.equal(await context.subject.prepareImage('valid'),image);assert.deepEqual(draws[0],[1600,1200]);

@@ -1,10 +1,11 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 
-const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
 const helpers=stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/composer-layout.uts','utf8').replace(/\bexport /g,''),{mode:'transform'});
 
 /** 执行实际页面的布局、测量和焦点方法，使用可控布局帧复现迟到回调。 */
@@ -16,7 +17,7 @@ function fixture(){
   const layout=page.slice(page.indexOf('// 占位预测使用独立测量值'),page.indexOf('// 键盘由输入区处理'));
   const blur=page.slice(page.indexOf('function onDraftBlur()'),page.indexOf('function updateMenuHeight()'));
   const focus=page.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0];
-  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}),c);
+  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}), componentScope(c));
   return {c,ui:c.ui,watches,unloads,timers,flush(){while(frames.length)frames.shift()();},blur(){for(const [id,fn] of [...timers]){timers.delete(id);fn();}}};
 }
 

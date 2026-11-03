@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
@@ -39,12 +40,12 @@ test('列表探测失败只返回未知，不清空手机订阅及模型设置�
 
 /** 执行真实页面监听：桥接重启后能力字段相同，也要重新读取设置并清除旧错误。 */
 test('桥接重启的新快照会重新读取设置，消除抢先读取留下的加载提示',async()=>{
-  const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const method=source.slice(source.indexOf('function loadSettings()'),source.indexOf('\nfunction openComposerMenu('));
   const start=source.indexOf('watch((): string => connection.hostId +');
   const watchers=source.slice(start,source.indexOf('\nfunction onDraftLineChange',start));
   const subscriptions=[],pending=[];
-  const context=vm.createContext({settingsRequest:0,settingsSnapshotRevision:0,settingsRetryTimer:0,settingsRetryCount:0,setTimeout:()=>1,clearTimeout(){},settings:{value:null},models:{value:[]},settingsLoading:{value:false},settingsBusy:{value:false},settingsError:{value:''},readOnly:{value:false},composerMenu:{value:''},
+  const context=componentContext({settingsRequest:0,settingsSnapshotRevision:0,settingsRetryTimer:0,settingsRetryCount:0,setTimeout:()=>1,clearTimeout(){},settings:{value:null},models:{value:[]},settingsLoading:{value:false},settingsBusy:{value:false},settingsError:{value:''},readOnly:{value:false},composerMenu:{value:''},
     connection:{hostId:'pc',activeThreadId:'thread',connected:true,epoch:'persistent-epoch',subscriptionRevision:0,snapshot:{supportsExecutionSettings:true}},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},
     isCurrentPage:()=>true,closeComposerMenu(){},confirmDefaultMode(){},updateMenuHeight(){},
     bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))},watch:(read,changed)=>subscriptions.push({read,changed})});
@@ -62,7 +63,7 @@ test('桥接重启的新快照会重新读取设置，消除抢先读取留下�
 
 test('只有当前会话的订阅确认推进恢复标记，较旧回执不能覆盖新消息',()=>{
   const source=fs.readFileSync('apps/mobile/services/bridge.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
-  const context=vm.createContext({reactive:value=>value});
+  const context=componentContext({reactive:value=>value});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={MobileBridge,connection};',context);
   const {MobileBridge,connection}=context.subject,bridge=new MobileBridge();
   Object.assign(connection,{hostId:'pc',activeThreadId:'thread',epoch:'persisted',sequence:10,snapshot:{threadId:'thread',title:'较新内容'}});

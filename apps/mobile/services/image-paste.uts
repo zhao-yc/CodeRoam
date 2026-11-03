@@ -1,9 +1,10 @@
 // 只处理用户在消息输入框内主动粘贴的图片，不主动读取剪贴板或加载网页链接。
-export function bindImagePaste(selector: string, accept: (sources: string[]) => Promise<void>): () => void {
+export function bindImagePaste(selector: string, accept: (sources: string[]) => Promise<void>, enabled: () => boolean = (): boolean => true): () => void {
   // #ifdef WEB
   const onPaste = async (event: ClipboardEvent) => {
     const target = event.target
-    if (event.defaultPrevented || !(target instanceof HTMLTextAreaElement) || target.disabled || target.closest(selector) == null) return
+    // 页面栈和分栏可能保留隐藏输入框，先检查激活状态，再接管粘贴事件。
+    if (!enabled() || event.defaultPrevented || !(target instanceof HTMLTextAreaElement) || target.disabled || target.closest(selector) == null) return
     const clipboard = event.clipboardData
     if (clipboard == null) return
     const images: File[] = []

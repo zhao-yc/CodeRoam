@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import {stripTypeScriptTypes} from 'node:module';
 
 /** 执行页面实际的自动连接入口与监听，不复制调度策略。 */
 function fixture(){
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const refs=['operationError','activating','autoConnectPending','pageVisible','pageHostId','pageThreadId'];
   const declarations=page.split(/\r?\n/).filter(line=>refs.some(name=>line.startsWith('const '+name+' ='))||line.startsWith('let activationRequest =')||line.startsWith('let pageAlive =')||line.startsWith('const readOnly =')||line.startsWith('const canWrite =')||line.startsWith('function isCurrentPage()')).join('\n');
   const begin=page.indexOf('function continueConversation()');
@@ -14,7 +15,7 @@ function fixture(){
   const hint=page.slice(page.indexOf('const conversationConnectionHint ='),page.indexOf('const openingTitle ='));
   const watches=[],requests=[],loaders=[];
   const connection={hostId:'pc',activeThreadId:'thread',epoch:'e',sequence:1,connected:true,pendingCommandId:'',error:'',computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',readOnly:true,messages:[]}};
-  const context=vm.createContext({connection,ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),busy:{value:false},checking:{value:false},bridge:{syncingThread:'',openThread:id=>{requests.push(id);return new Promise((resolve,reject)=>loaders.push({resolve,reject}));}}});
+  const context=componentContext({connection,ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),busy:{value:false},checking:{value:false},bridge:{syncingThread:'',openThread:id=>{requests.push(id);return new Promise((resolve,reject)=>loaders.push({resolve,reject}));}}});
   vm.runInContext(stripTypeScriptTypes(declarations+'\n'+hint+'\n'+methods,{mode:'transform'})+'\nglobalThis.subject={operationError,activating,autoConnectPending,pageVisible,pageHostId,pageThreadId,canWrite,conversationConnectionHint,tryAutoConnectConversation,continueConversation};',context);
   const f=context.subject;f.pageHostId.value='pc';f.pageThreadId.value='thread';f.pageVisible.value=true;
   return {page,context,connection,f,requests,loaders,tick:()=>watches[0].callback(watches[0].source(),'')};

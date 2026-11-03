@@ -25,7 +25,7 @@
       <text v-if="!props.expanded" class="new-entry-placeholder">问问 Codex</text>
       <!-- 加号共用同一节点，左右及底部边距在两种状态下保持一致。 -->
       <view class="new-composer-add"><view class="add-action action-frame" :style="{ opacity: (busy || imageBusy) ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="busy || imageBusy || !props.expanded" aria-label="添加附件、插件、计划模式或追求目标" @click="openOptions('add')"></button></view></view>
-      <view v-show="props.expanded" class="new-actions"><permissions-control :active="props.expanded" :project-id="projectId" :native-draft="true" :draft-id="native.draftId" :native-state="native.snapshot?.permissions ?? null" :native-status="native.snapshot?.status ?? ''" :native-busy="native.busy" :disabled="busy || creationPendingId.length > 0 || !nativeReady" @select="selectPermission" @refresh="loadSettings" /><view v-if="settings?.mode == 'plan'" class="plan-chip action-frame"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="busy || !nativeReady || creationPendingId.length > 0" aria-label="关闭计划模式" @click="composerAction('plan')"></button></view><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || !nativeReady || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view></view>
+      <view v-show="props.expanded" class="new-actions"><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded" :project-id="projectId" :native-draft="true" :draft-id="native.draftId" :native-state="native.snapshot?.permissions ?? null" :native-status="native.snapshot?.status ?? ''" :native-busy="native.busy" :disabled="busy || creationPendingId.length > 0 || !nativeReady" @select="selectPermission" @refresh="loadSettings" /><view v-if="settings?.mode == 'plan'" class="plan-chip action-frame"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="busy || !nativeReady || creationPendingId.length > 0" aria-label="关闭计划模式" @click="composerAction('plan')"></button></view><view class="model-trigger action-frame"><text class="model-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="busy || !nativeReady || models.length == 0" aria-label="选择模型、推理强度和速度" @click="openOptions('settings')"></button></view></view>
       <view v-show="props.expanded" class="new-composer-send"><view class="send-action action-frame" :style="{ opacity: canSend ? 1 : 0.4 }"><app-icon name="send" :size="22" tone="light" /><button class="action-hitbox" :disabled="!canSend" aria-label="发送并开启新聊天" @click="send"></button></view></view>
       </view>
       <button v-if="!props.expanded" class="action-hitbox new-entry-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="expandEditor"></button>
@@ -73,13 +73,13 @@ import { validateFile, fileSizeLabel } from '../../services/files.uts'
 // 展开只恢复原生草稿订阅，手机输入和插件选择始终按电脑、项目隔离。
 beginNewConversation()
 
-const props = withDefaults(defineProps<{ expanded?: boolean }>(), { expanded: false })
+const props = withDefaults(defineProps<{ expanded?: boolean, paneWidth?: number, paneLeft?: number }>(), { expanded: false, paneWidth: 0, paneLeft: 0 })
 const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadId: string], dismiss: [] }>()
 const projectId = ref(''), projects = ref<NewProject[]>([])
 const projectsLoading = ref(false), settingsLoading = ref(false)
 const error = ref(''), settingsError = ref(''), busy = ref(false), imageBusy = ref(false), progress = ref('')
 const focused = ref(false), draftHeight = ref(64), keyboardInset = ref(0), picker = ref(''), menu = ref('')
-const menuWidth = Math.min(330, uni.getWindowInfo().windowWidth - 28)
+const menuWidth = computed((): number => Math.min(330, (props.paneWidth > 0 ? props.paneWidth : uni.getWindowInfo().windowWidth) - 28))
 let baseWindowHeight = uni.getWindowInfo().windowHeight
 const currentWindowHeight = ref(baseWindowHeight)
 const contentTarget = ref('')
@@ -306,7 +306,7 @@ watch((): number => editorStageHeight.value, () => { settleEditorLayout() }, { f
 onUnmounted(() => { closeNativeDraft(connection.hostId, projectId.value); alive = false; editorRevision++; clearTimeout(editorLayoutTimer); projectRequest++; settingsRequest++ })
 
 let unbindImagePaste: () => void = () => {}
-onMounted(() => { unbindImagePaste = bindImagePaste('.new-input', pasteImages) })
+onMounted(() => { unbindImagePaste = bindImagePaste('.new-input', pasteImages, (): boolean => props.expanded) })
 onUnmounted(() => { unbindImagePaste() })
 
 // 连接变化使旧电脑的读取失效，未配置时输入的内容留给首次连接的电脑。

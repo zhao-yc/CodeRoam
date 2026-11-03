@@ -1,17 +1,12 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
 import test from 'node:test';
-import {stripTypeScriptTypes} from 'node:module';
+import {workspaceFixture} from './helpers/workspace-fixture.mjs';
 
-// 执行真实首页点击方法，用合成电脑和缓存验证离线入口。
+// 离线入口迁移到工作区，列表组件仅发出用户选择。
 function fixture(connected, online, cached) {
-  const source=fs.readFileSync('apps/mobile/pages/index/index.uvue','utf8');
-  const method=source.slice(source.indexOf('function openThread(thread:'),source.indexOf('\n',source.indexOf('function openThread(thread:')));
-  const calls=[];
-  const context=vm.createContext({connection:{connected,cacheNamespace:'pair'},readConversationCache:(...args)=>{calls.push(['cache',...args]);return cached?{}:null;},bridge:{selectComputer:id=>calls.push(['select',id]),openThread:id=>{calls.push(['open',id]);return Promise.resolve({});}},uni:{showToast:value=>calls.push(['toast',value.title]),navigateTo:value=>calls.push(['navigate',value.url])},encodeURIComponent,projectName:()=> '合成项目'});
-  vm.runInContext(stripTypeScriptTypes(method,{mode:'transform'})+`;openThread({id:'thread',hostId:'host',online:${online},title:'合成聊天',cwd:'',key:'host:thread'});`,context);
-  return calls;
+  const f=workspaceFixture({props:{windowWidth:390},connection:{connected,computers:[{id:'host',online}]},cached});
+  f.openThread({id:'thread',hostId:'host',online,title:'合成聊天',cwd:'',key:'host:thread'});
+  return f.calls;
 }
 test('电脑或中转离线时，有缓存仍进入详情且不触发桌面导航',()=>{
   for(const [connected,online] of [[true,false],[false,true],[false,false]]) {

@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import { normalizeConversation } from '../apps/bridge/conversation.mjs';
 
 /** 执行实际 UTS 解析与页面选择方法，避免预览裁切影响详情原文。 */
 function presentation() {
-  const context = vm.createContext({});
+  const context = componentContext({});
   for (const file of ['markdown', 'plan-presentation', 'executions']) {
     const source = fs.readFileSync('apps/mobile/services/' + file + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
     vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }), context);
@@ -34,9 +35,9 @@ test('长预览有界，代码和表格仍能预览，时间线保留方案类�
 });
 
 test('详情优先使用待确认方案完整原文，打开关闭不改变聊天草稿，切换聊天关闭面板', () => {
-  const page = fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8'), hooks = [], watches = [];
+  const page = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'), hooks = [], watches = [];
   const full = '# 完整方案\n' + '正文'.repeat(6000) + '\n结尾标记';
-  const context = vm.createContext({ref:value=>({value}),computed:read=>({get value(){return read();}}),watch:(read,change)=>watches.push(change),onHide:fn=>hooks.push(fn),onUnload:fn=>hooks.push(fn),pendingPlan:{value:{id:'plan',text:full}},timeline:{value:[]},displayConversation:{value:{messages:[{id:'plan',kind:'planImplementation',text:'窗口截取'}]}},pageHostId:{value:'host'},pageThreadId:{value:'thread'},connection:{hostId:'host',activeThreadId:'thread'},closeActions(){},closeComposerMenu(){},dismissGoal(){},uni:{hideKeyboard(){}},pauseFollowing(){},draft:{value:'聊天草稿'}});
+  const context = componentContext({ref:value=>({value}),computed:read=>({get value(){return read();}}),watch:(read,change)=>watches.push(change),onHide:fn=>hooks.push(fn),onUnload:fn=>hooks.push(fn),pendingPlan:{value:{id:'plan',text:full}},timeline:{value:[]},displayConversation:{value:{messages:[{id:'plan',kind:'planImplementation',text:'窗口截取'}]}},pageHostId:{value:'host'},pageThreadId:{value:'thread'},connection:{hostId:'host',activeThreadId:'thread'},closeActions(){},closeComposerMenu(){},dismissGoal(){},uni:{hideKeyboard(){}},pauseFollowing(){},draft:{value:'聊天草稿'}});
   const source = page.slice(page.indexOf('const pendingPlanOutsideTimeline ='),page.indexOf('const expandedQuestionIds ='));
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.api={openPlan,closePlan,selectedPlanId,selectedPlanSource,pendingPlanOutsideTimeline}',context);
   const f=context.api;assert.equal(f.pendingPlanOutsideTimeline.value,true);f.openPlan('plan','窗口截取');assert.equal(f.selectedPlanSource.value,full);assert.equal(context.draft.value,'聊天草稿');context.pendingPlan.value=null;assert.equal(f.selectedPlanSource.value,full);f.closePlan();assert.equal(f.selectedPlanId.value,'');

@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,7 +11,7 @@ const state = () => ({threadId:'thread', status:'idle', activeTurnId:'', latestT
 
 /** 使用真实 UTS 组装时间线，覆盖空轮次、历史顺序和不可重试边界。 */
 test('失败原文插在对应轮次末尾，无消息轮次仍显示且正常停止不生成卡片', () => {
-  const c = vm.createContext({});
+  const c = componentContext({});
   vm.runInContext(stripTypeScriptTypes(uts('turn-failure')) + ';globalThis.f={failureTimeline,retryTarget,latestFailureTurnId}', c);
   const s=state(); s.turns.unshift({turnId:'older',status:'failed',errorMessage:'Earlier failure'}); s.turns.push({turnId:'next',status:'inProgress'});
   const messages=[{id:'old',role:'assistant',turnId:'older',text:'已有记录'},{id:'new',role:'user',turnId:'next',text:'新要求'}];
@@ -26,10 +27,10 @@ test('失败原文插在对应轮次末尾，无消息轮次仍显示且正常�
 
 /** 执行详情页真实入口，验证空发送与重试共享占位且绝不消费草稿。 */
 function pageFixture() {
-  const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const start=source.indexOf('function retrySubmitting('), end=source.indexOf('// 仅在明确收到成功响应后清空草稿',start);
   let resolve,reject;const calls=[];
-  const c=vm.createContext({submittedRetryKey:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},retryTurnId:{value:'failed'},canWrite:{value:true},goalHostOnline:{value:true},liveConversation:{value:state()},operationError:{value:''},busy:{value:false},pendingAction:{value:''},pendingRetryCommand:{value:''},connection:{connected:true},isCurrentPage:()=>true,resumeFollowing(){},refresh(){},bridge:{request:(method,params)=>{calls.push({method,params});return new Promise((ok,bad)=>{resolve=ok;reject=bad;});},pendingCommand:()=>'',watch(){}}});
+  const c=componentContext({submittedRetryKey:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},retryTurnId:{value:'failed'},canWrite:{value:true},goalHostOnline:{value:true},liveConversation:{value:state()},operationError:{value:''},busy:{value:false},pendingAction:{value:''},pendingRetryCommand:{value:''},connection:{connected:true},isCurrentPage:()=>true,resumeFollowing(){},refresh(){},bridge:{request:(method,params)=>{calls.push({method,params});return new Promise((ok,bad)=>{resolve=ok;reject=bad;});},pendingCommand:()=>'',watch(){}}});
   vm.runInContext(stripTypeScriptTypes(source.slice(start,end))+';globalThis.f={retryTurn,canRetryTurn}',c);
   return {c,calls,...c.f,resolve:()=>resolve({ok:true}),reject:()=>reject(new Error('已拒绝'))};
 }
@@ -42,7 +43,7 @@ test('重试只提交目标轮次，回执前后禁止重复，明确拒绝后�
 });
 
 test('失败原因及最新轮次经过历史合并和缓存恢复，缓存不恢复重试能力', () => {
-  const storage=new Map(),c=vm.createContext({uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v)}});
+  const storage=new Map(),c=componentContext({uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v)}});
   vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+uts('conversation-cache'))+';globalThis.f={conversationWithHistory,saveConversationCache,readConversationCache,cachedConversationSnapshot}',c);
   const s={...state(),title:'合成会话',cwd:'/example/project',updatedAt:1};
   assert.equal(c.f.saveConversationCache('pair','pc',s,null),true);
@@ -55,7 +56,7 @@ test('失败原因及最新轮次经过历史合并和缓存恢复，缓存不�
 /** 直接运行连接服务，验证超时和重连只核对原编号，错误回执不能释放操作保护。 */
 function bridgeFixture(storage=new Map()) {
   const timers=new Map(),sent=[];let timer=0;
-  const c=vm.createContext({reactive:v=>v,uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id)});
+  const c=componentContext({reactive:v=>v,uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)},setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id)});
   vm.runInContext(stripTypeScriptTypes(uts('bridge'),{mode:'transform'})+';globalThis.f={MobileBridge,connection}',c);
   const {MobileBridge,connection}=c.f,bridge=new MobileBridge();
   Object.assign(connection,{connected:true,hostId:'pc',activeThreadId:'thread',snapshot:state(),computers:[{id:'pc',online:true}]});

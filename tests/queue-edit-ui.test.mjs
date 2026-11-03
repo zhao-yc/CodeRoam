@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +10,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture() {
   const drafts = new Map(), images = new Map(), files = new Map(), plugins = new Map(), mentions = new Map(), calls = [], pending = [], notices = [];
   const key = (host, thread) => host + ':' + thread;
-  const context = vm.createContext({ reactive: x => x,
+  const context = componentContext({ reactive: x => x,
     readDraft: (h, t) => drafts.get(key(h, t)) ?? '', readDraftImages: (h, t) => images.get(key(h, t)) ?? [], readDraftFiles: (h, t) => files.get(key(h, t)) ?? [],
     saveDraft: (h, t, x) => drafts.set(key(h, t), x), saveDraftImages: (h, t, x) => images.set(key(h, t), x), saveDraftFiles: (h, t, x) => files.set(key(h, t), x)
   });
@@ -18,7 +19,7 @@ function fixture() {
   const ref = value => ({ value });
   Object.assign(context, { canWrite: ref(true), imageBusy: ref(false), pageVisible: ref(true), pageHostId: ref('pc'), pageThreadId: ref('thread'), draftPlugins: ref([]), draftMentions: ref([]), connection: { hostId: 'pc', snapshot: { supportsQueueEditing: true } }, busy: ref(false), pendingAction: ref(''), operationError: ref(''), readDraftThreadMentions: (h, t) => mentions.get(key(h, t)) ?? [], saveDraftThreadMentions: (h, t, x) => mentions.set(key(h, t), x), readDraftPlugins: (h, t) => plugins.get(key(h, t)) ?? [], saveDraftPlugins: (h, t, x) => plugins.set(key(h, t), x), notify: x => notices.push(x), focusComposerInput: () => notices.push('输入框获得焦点'), bridge: { request(method, params, write) { calls.push({ method, params, write }); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } }, JSON: { ...JSON, parse: JSON.parse, stringify: JSON.stringify } });
   context.isCurrentPage = () => context.connection.hostId === context.pageHostId.value;
-  const page = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
+  const page = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
   const start = page.indexOf('function editQueuedMessage('), end = page.indexOf('let stopPromptOpen', start);
   vm.runInContext(stripTypeScriptTypes(page.slice(start, end), { mode: 'transform' }) + ';globalThis.edit=editQueuedMessage;', context);
   const response = draft => ({ draft, getBoolean: name => name === 'edited', getString: name => name === 'queueId' ? 'queue-id' : '' });

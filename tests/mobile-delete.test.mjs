@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -36,11 +37,12 @@ function fixture(storage = new Map()) {
     submitDeletion(threadId, commandId) { this.rememberCommand(commandId, c.connection.hostId, threadId, 'thread.delete'); return request('thread.delete', c.connection.hostId, commandId, { threadId }); },
     readCommandStatus: (hostId, commandId) => request('command.status', hostId, commandId, { commandId }),
   };
-  const context = vm.createContext(c);
+  const context = componentContext(c);
   const service = fs.readFileSync('apps/mobile/services/delete-tasks.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
   vm.runInContext(stripTypeScriptTypes(service, { mode: 'transform' }) + '\nglobalThis.manager={deletionTasks,startDeletionTasks,startDeletion,checkDeletion,reconcileTasks,backgroundDeletionTasks,resumeDeletionTasks,deletionPending,acceptReceipt};', context);
   c.manager.startDeletionTasks();
-  const page = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
+  c.emit = () => { c.uni.navigateBack(); };
+  const page = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
   const methods = page.slice(page.indexOf('// 永久删除必须完成两次独立确认'), page.indexOf('// 归档只在原生回执'));
   vm.runInContext(stripTypeScriptTypes(methods, { mode: 'transform' }) + '\nglobalThis.page={deleteFromMenu,answerDeleteFinal,deleteFinalVisible,deleteFinalContent};', context);
   return { c, ...c.manager, ...c.page, storage, calls, removed, drafts, caches, notices, modals, life, timers, tick,
@@ -93,7 +95,7 @@ test('刷新恢复及目标不在列表时仍保留原编号核对入口', async
   const first = fixture(), call = first.begin(), reopened = fixture(first.storage);
   assert.equal(reopened.calls.some(e => e.method === 'thread.delete'), false);
   const check = reopened.calls.at(-1); assert.equal(check.method, 'command.status'); assert.equal(check.commandId, call.commandId); check.resolve(json({ state: 'not_found' })); await flush();
-  assert.equal(reopened.deletionTasks.tasks[0].state, 'unknown'); assert.equal(reopened.deletionPending('pc', 'root'), true); assert.match(fs.readFileSync('apps/mobile/pages/index/index.uvue', 'utf8'), /<deletion-task-list/);
+  assert.equal(reopened.deletionTasks.tasks[0].state, 'unknown'); assert.equal(reopened.deletionPending('pc', 'root'), true); assert.match(fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue', 'utf8'), /<deletion-task-list/);
 });
 
 test('存储失败不发送，重新配对后旧回执不清理新配对', async () => {

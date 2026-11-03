@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,9 +11,9 @@ const message=(id,text=id)=>({id,text,role:'assistant',turnId:'turn',phase:'comm
 function fixture(){
  const ticks=[],watches=[],unloads=[],rects=new Map([['message-a',{top:-20,bottom:80}],['message-b',{top:100,bottom:600}]]);
  const state={bottom:600,scrollTop:undefined},connection={hostId:'pc',activeThreadId:'thread',connected:true,snapshot:{threadId:'thread',messages:[message('a'),message('b')],turns:[],approvals:[],questionGroups:[],activeTurnId:'turn'}};
- const c=vm.createContext({setTimeout,clearTimeout,connection,bridge:{cancelOpen(){}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),nextTick:fn=>ticks.push(fn),onLoad(){},onShow(){},onHide(){},onResize(){},onBackPress(){},onUnload:fn=>unloads.push(fn),readDraft:()=>'',uni:{getWindowInfo:()=>({windowWidth:390}),getElementById:id=>{const rect=id==='conversation-timeline'?{top:0,bottom:500,height:500}:id==='timeline-bottom'||id==='timeline-message-end'?{top:state.bottom,bottom:state.bottom}:rects.get(id);return rect?{getBoundingClientRect:()=>rect,...(id==='conversation-timeline'?{scrollTop:state.scrollTop}:{})}:null;}}});
+ const c=componentContext({setTimeout,clearTimeout,connection,bridge:{cancelOpen(){}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),nextTick:fn=>ticks.push(fn),onLoad(){},onShow(){},onHide(){},onResize(){},onBackPress(){},onUnload:fn=>unloads.push(fn),readDraft:()=>'',uni:{getWindowInfo:()=>({windowWidth:390}),getElementById:id=>{const rect=id==='conversation-timeline'?{top:0,bottom:500,height:500}:id==='timeline-bottom'||id==='timeline-message-end'?{top:state.bottom,bottom:state.bottom}:rects.get(id);return rect?{getBoundingClientRect:()=>rect,...(id==='conversation-timeline'?{scrollTop:state.scrollTop}:{})}:null;}}});
  for(const name of ['history','turn-failure','annotations','message-attachments','message-presentations','executions'])vm.runInContext(stripTypeScriptTypes(uts(name),{mode:'transform'}),c);
- const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
+ const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.p={pageHostId,pageThreadId,pageVisible,following,hasUnseenBelow,atTimelineBottom,readingFloor,historyScrollTop,scrollTarget,displayConversation,expandedReportIds,beforeMarkdownLayout,afterMarkdownLayout,beginTimelineTouch,endTimelineTouch,onTimelineScroll,updateTimelinePosition,resumeFollowing,rememberReadingPosition};',c);
  const p=c.p;p.pageHostId.value='pc';p.pageThreadId.value='thread';p.pageVisible.value=true;p.following.value=false;
  const flush=()=>{let limit=100;while(ticks.length){if(--limit===0)throw Error('布局链未收敛');ticks.shift()();}};

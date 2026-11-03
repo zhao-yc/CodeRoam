@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,7 +9,7 @@ import {stripTypeScriptTypes} from 'node:module';
 function fixture() {
   const props={group:{id:'g',turnId:'t',state:'pending',questions:[{id:'a',title:'题一',options:[{label:'甲'},{label:'乙'}],answer:''},{id:'b',title:'题二',options:[],answer:''}]},busy:false,disabled:false,submitted:false};
   const emitted=[],watches=[];
-  const context=vm.createContext({props,defineProps:()=>props,defineEmits:()=> (...args)=>emitted.push(args),ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(_source,callback)=>{watches.push(callback);callback(props.group);}});
+  const context=componentContext({props,defineProps:()=>props,defineEmits:()=> (...args)=>emitted.push(args),ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(_source,callback)=>{watches.push(callback);callback(props.group);}});
   let source=fs.readFileSync(new URL('../apps/mobile/components/question-card/question-card.uvue',import.meta.url),'utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={drafts,complete,choose,chooseOther,submit};',context);
   return {...context.subject,props,emitted,sync:()=>watches.forEach(callback=>callback(props.group))};
@@ -29,8 +30,8 @@ test('离线、提交中、结果未知和已提交均阻止修改选择与重�
 /** 执行页面实际计算与监听，供问题提醒及状态清理回归共用。 */
 function pageFixture() {
   const watches=[],connection={snapshot:{messages:[],approvals:[],questionGroups:[{id:'answered',state:'answered'},{id:'pending',state:'pending'},{id:'expired',state:'expired'},{id:'other',state:'pending'}],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
-  const context=vm.createContext({setTimeout:()=>0,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
-  const pageSource=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const context=componentContext({setTimeout:()=>0,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
+  const pageSource=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const source=pageSource.match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pendingQuestionGroups,pendingQuestionCount,expandedQuestionIds,submittedGroupIds,showQuestions,scrollTarget,following,pageVisible,pageHostId,pageThreadId};',context);
   context.subject.pageHostId.value='pc';context.subject.pageThreadId.value='thread';connection.hostId='pc';

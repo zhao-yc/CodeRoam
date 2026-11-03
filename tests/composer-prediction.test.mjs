@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -38,14 +39,14 @@ test('固定表达式按所选标签和目标会话过滤，内容使用内存�
 
 /** 执行手机页面实际预测方法，验证异步回执、过期状态与采纳行为。 */
 function mobile(){
-  const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const code=source.slice(source.indexOf('const predictionAllowed ='),source.indexOf('function notify(message: string)'));
   const ref=value=>({value});const pending=[],saved=[],timers=[];let sends=0;
   const c={dismissGoal(){},imageBusy:ref(false),filesReady:ref(true),send:()=>{sends++;},ref,computed:fn=>({get value(){return fn();}}),pageVisible:ref(true),canWrite:ref(true),goalHostOnline:ref(true),connection:{epoch:'e',subscriptionRevision:1,snapshot:{supportsComposerPrediction:true,predictionTurnId:'turn-1'}},activeTurnId:ref(''),currentTaskState:ref('idle'),draft:ref(''),draftPlugins:ref([]),draftMentions:ref([]),mentionOpen:ref(false),draftImages:ref([]),draftFiles:ref([]),pendingQuestionCount:ref(0),approvalCount:ref(0),pageHostId:ref('host'),pageThreadId:ref('thread-1'),predictionText:ref(''),predictionFocus:ref(false),inputFocused:ref(false),composerBlurTimer:0,pageAlive:true,predictionRevision:0,predictionTimer:0,predictionExpiryTimer:0,predictionDeadline:0,Date,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},watch(){},onUnload(){},nextTick:fn=>fn(),saveDraft:(host,thread,text)=>{saved.push({host,thread,text});c.draft.value=text;},bridge:{request:(method,params)=>{assert.equal(method,'thread.prediction.read');return new Promise(resolve=>pending.push(resolve));}}};
-  vm.runInNewContext(stripTypeScriptTypes(code+source.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0]+';globalThis.ui={pollPrediction,acceptPrediction,resetPrediction,visiblePrediction,applyComposerEnter,onComposerKeydown};'),c);
+  vm.runInNewContext(stripTypeScriptTypes(code+source.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0]+';globalThis.ui={pollPrediction,acceptPrediction,resetPrediction,visiblePrediction,applyComposerEnter,onComposerKeydown};'), componentScope(c));
   const result=p=>({getString:k=>p?.[k]??null});
   const textarea=source.match(/<textarea\b[^>]*class="draft"[^]*?<\/textarea>/)[0];
-  const click=()=>{for(const event of ['focus','click']){const expression=textarea.match(new RegExp('@'+event+'=\"([^\"]+)\"'))?.[1];if(expression)vm.runInNewContext(expression,c);}};
+  const click=()=>{for(const event of ['focus','click']){const expression=textarea.match(new RegExp('@'+event+'=\"([^\"]+)\"'))?.[1];if(expression)vm.runInNewContext(expression, componentScope(c));}};
   return {c,pending,saved,click,get sends(){return sends;},resolve:p=>pending.shift()({prediction:result(p)}),ui:c.ui};
 }
 test('手机采纳仅填入草稿，保留空格换行且不自动发送',async()=>{const m=mobile();m.ui.pollPrediction(0);m.resolve(prediction);await Promise.resolve();m.ui.acceptPrediction();assert.equal(m.saved[0].text,prediction.text);assert.equal(m.c.predictionText.value,'');assert.equal(m.pending.length,0);});

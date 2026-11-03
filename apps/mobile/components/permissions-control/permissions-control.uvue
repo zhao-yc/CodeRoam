@@ -2,7 +2,7 @@
   <view class="permission-control">
     <!-- 常规权限入口与加号、清空图标共用深色，完全访问保留警示色。 -->
     <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || !available || busy || loading ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'dark'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
-    <view v-if="opened" class="permission-overlay" @click="closeMenu">
+    <view v-if="opened" class="permission-overlay" :style="{ left: paneLeft + 'px', right: paneWidth > 0 ? 'auto' : '0px', width: paneWidth > 0 ? paneWidth + 'px' : 'auto' }" @click="closeMenu">
       <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
         <view class="permission-heading"><text class="permission-title">{{ label }}</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: panelHeight + 'px' }">
@@ -21,7 +21,7 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
-const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false })
+const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
 const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
 const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
@@ -57,8 +57,9 @@ async function load() {
 function openMenu() {
   if (props.disabled || props.nativeBusy || !available.value) return
   const info = uni.getWindowInfo(), rect = uni.getElementById(triggerId.value)?.getBoundingClientRect()
-  panelWidth.value = Math.min(340, info.windowWidth - 28)
-  panelLeft.value = Math.max(14, Math.min(rect?.left ?? 14, info.windowWidth - panelWidth.value - 14))
+  const width = props.paneWidth > 0 ? props.paneWidth : info.windowWidth
+  panelWidth.value = Math.min(340, width - 28)
+  panelLeft.value = Math.max(14, Math.min((rect?.left ?? props.paneLeft + 14) - props.paneLeft, width - panelWidth.value - 14))
   panelBottom.value = Math.max(12, info.windowHeight - (rect?.top ?? info.windowHeight - 110) + 8)
   panelHeight.value = Math.max(100, Math.min(390, info.windowHeight - panelBottom.value - 100))
   opened.value = true
@@ -87,6 +88,8 @@ async function choose(value: string) {
   finally { if (current(key, id)) { busy.value = false; emit('busy', false); if (applied) emit('applied', connection.hostId, props.threadId) } }
 }
 // 菜单打开时保持父级输入区展开，避免键盘失焦卸载菜单。
+// 面板尺寸变化时关闭旧坐标的菜单，避免旋转后遮住另一栏。
+watch((): string => props.paneLeft + ':' + props.paneWidth, () => { opened.value = false })
 watch(opened, (value: boolean) => { emit('visibility', value) })
 // 同步失效旧请求，避免快速收起再展开或切回原目标后，旧结果重新变为有效。
 watch(context, () => {

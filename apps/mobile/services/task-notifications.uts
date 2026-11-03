@@ -17,6 +17,13 @@ let displayTimer = 0
 let configuration = -1
 let navigationRevision = 0
 let navigationNotice: TaskNotice | null = null
+let workspaceNoticeNavigation: ((notice: TaskNotice) => Promise<boolean>) | null = null
+
+// 宽屏只由当前可见工作区接管打开动作；旧页面的清理不能撤掉新页面入口。
+export function bindWorkspaceNoticeNavigation(open: (notice: TaskNotice) => Promise<boolean>): () => void {
+  workspaceNoticeNavigation = open
+  return () => { if (workspaceNoticeNavigation == open) workspaceNoticeNavigation = null }
+}
 let visibleThreadRevision = 0
 const durationStorageKey = 'codex-mobile-notice-duration-ms'
 
@@ -109,6 +116,11 @@ export function openTaskNotice(notice: TaskNotice, hostId: string = '', threadId
   if (hostId == notice.hostId && threadId == notice.threadId) { focusNotice(notice); return }
   const revision = ++navigationRevision
   navigationNotice = notice
+  const openInWorkspace = workspaceNoticeNavigation
+  if (openInWorkspace != null) {
+    openInWorkspace(notice).then((opened: boolean) => { if (opened && revision == navigationRevision) focusNotice(notice) }, (_: Error) => { uni.showToast({ title: '无法打开聊天，请从列表重试', icon: 'none' }) })
+    return
+  }
   const pages = getCurrentPages()
   const currentRoute = pages.length > 0 ? pages[pages.length - 1].route : ''
   const url = '/pages/conversation/index?threadId=' + encodeURIComponent(notice.threadId) + '&title=' + encodeURIComponent(notice.threadTitle) + '&noticeKey=' + encodeURIComponent(notice.key)

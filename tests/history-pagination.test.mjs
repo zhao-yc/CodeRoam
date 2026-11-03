@@ -1,9 +1,10 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import vm from 'node:vm';import {stripTypeScriptTypes} from 'node:module';
 import {readHistoricalPage} from '../apps/bridge/history-pager.mjs';import {normalizeConversation} from '../apps/bridge/conversation.mjs';import {validateRequest} from '../packages/protocol/contracts.mjs';
 import {readHistoricalSnapshot} from '../apps/bridge/history-reader.mjs';
 
 const message=(id,text=id)=>({id,role:'assistant',kind:'agentMessage',text,turnId:'turn',status:'completed',phase:'final_answer'});
-function historyFunctions(){const context=vm.createContext({});const source=fs.readFileSync('apps/mobile/services/history.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={mergeHistoryMessages,conversationWithHistory}',context);return context.subject;}
+function historyFunctions(){const context=componentContext({});const source=fs.readFileSync('apps/mobile/services/history.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={mergeHistoryMessages,conversationWithHistory}',context);return context.subject;}
 const plain=value=>JSON.parse(JSON.stringify(value));
 
 test('长任务不会再挤掉此前提问与报告，仍遵守消息与正文大小限制',()=>{
@@ -78,8 +79,8 @@ test('页面读取早期历史不覆盖实时状态，重复点击不重复请�
  const functions=historyFunctions(),requests=[],unloads=[],watches=[];
  const live={threadId:'thread',title:'标题',cwd:'',status:'idle',activeTurnId:'',messages:[message('current')],turns:[],approvals:[],questionGroups:[],updatedAt:1,supportsHistoryPages:true};
  const connection={snapshot:live,connected:true,hostId:'pc',activeThreadId:'thread',computers:[]};
- const context=vm.createContext({hideTaskNoticeThread:()=>{},setTimeout,clearTimeout,...functions,connection,bridge:{cancelOpen(){},request(method,params){return new Promise((resolve,reject)=>requests.push({method,params,resolve,reject}));}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:callback=>unloads.push(callback),onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',readDraftImages:()=>[],reportTimeline:snapshot=>snapshot.messages.map(item=>({...item,executions:[],label:''})),nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393})}});
- const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
+ const context=componentContext({hideTaskNoticeThread:()=>{},setTimeout,clearTimeout,...functions,connection,bridge:{cancelOpen(){},request(method,params){return new Promise((resolve,reject)=>requests.push({method,params,resolve,reject}));}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:callback=>unloads.push(callback),onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',readDraftImages:()=>[],reportTimeline:snapshot=>snapshot.messages.map(item=>({...item,executions:[],label:''})),nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393})}});
+ const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
  // 历史回归同时执行真实注释展示层，确保补页不会因缺少页面依赖而失败。
  for (const module of ['turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={loadOlder,historyPage,loadingHistory,historyError,displayConversation,pageHostId,pageThreadId,following,scrollTarget,beginTimelineTouch,endTimelineTouch};',context);

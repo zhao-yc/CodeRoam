@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,10 +7,10 @@ import { stripTypeScriptTypes } from 'node:module';
 
 // 执行页面真实计算逻辑，覆盖初次加载、切换会话和旧服务的能力判断。
 test('会话加载期间不误报升级，收到当前会话后恢复真实模型状态', () => {
-  const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
+  const source = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
   const start = source.indexOf('const executionSettingsUnavailable =');
   const end = source.indexOf('const modelSupportsImages =', start);
-  const context = vm.createContext({
+  const context = componentContext({
     computed: fn => ({ get value() { return fn(); } }),
     connection: { connected: true, snapshot: null }, pageThreadId: { value: 'current' },
     settingsBusy: { value: false }, settings: { value: null }, models: { value: [] },

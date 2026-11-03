@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +10,7 @@ const settle=()=>new Promise(setImmediate);
 function fixture(options={}){
   const props={hostId:'host',threadId:'thread',messageId:'image',connected:true,ready:false,subscriptionRevision:0,scopeId:'pairing-a',count:1,...options};
   const connection={hostId:'host',activeThreadId:'thread',cacheNamespace:'pairing-a'},requests=[],watches=[],previews=[];let dispose;
-  const context=vm.createContext({connection,defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),nextTick:fn=>Promise.resolve().then(fn),watch(get,callback,config){if(typeof get!=='function')return;const entry={get,callback,value:get()};watches.push(entry);if(config?.immediate)callback(entry.value);},onUnmounted:fn=>dispose=fn,uni:{previewImage:params=>previews.push(params)},bridge:{request(method,params){return new Promise((resolve,reject)=>requests.push({method,params,resolve,reject}));}}});
+  const context=componentContext({connection,defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),nextTick:fn=>Promise.resolve().then(fn),watch(get,callback,config){if(typeof get!=='function')return;const entry={get,callback,value:get()};watches.push(entry);if(config?.immediate)callback(entry.value);},onUnmounted:fn=>dispose=fn,uni:{previewImage:params=>previews.push(params)},bridge:{request(method,params){return new Promise((resolve,reject)=>requests.push({method,params,resolve,reject}));}}});
   const component=fs.readFileSync('apps/mobile/components/message-images/message-images.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(component,{mode:'transform'})+'\nglobalThis.api={sources,error,loadImages,preview};',context);
   const flush=()=>{for(const entry of watches){const value=entry.get();if(value!==entry.value){entry.value=value;entry.callback(value);}}};
@@ -60,8 +61,8 @@ test('父页分别同步就绪与订阅代次时，下一次渲染只发送一�
 });
 
 test('当前聊天已订阅才允许图片读取，缓存、后台页面和其他电脑同编号快照均不能冒充',()=>{
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8'),line=page.match(/const imagesReady = computed\([^\n]+/)[0];
-  const context=vm.createContext({computed:get=>({get value(){return get();}}),pageVisible:{value:true},pageHostId:{value:'host'},pageThreadId:{value:'thread'},liveConversation:{value:{readOnly:true}},connection:{connected:true,hostId:'host',activeThreadId:'thread',subscribedHostId:'',subscribedThreadId:''}});
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'),line=page.match(/const imagesReady = computed\([^\n]+/)[0];
+  const context=componentContext({computed:get=>({get value(){return get();}}),pageVisible:{value:true},pageHostId:{value:'host'},pageThreadId:{value:'thread'},liveConversation:{value:{readOnly:true}},connection:{connected:true,hostId:'host',activeThreadId:'thread',subscribedHostId:'',subscribedThreadId:''}});
   vm.runInContext(stripTypeScriptTypes(line,{mode:'transform'})+'\nglobalThis.ready=imagesReady',context);assert.equal(context.ready.value,false);
   context.connection.subscribedHostId='host';context.connection.subscribedThreadId='thread';assert.equal(context.ready.value,true,'已订阅的历史浏览也允许查看图片');
   context.liveConversation.value=null;assert.equal(context.ready.value,false);context.liveConversation.value={};context.connection.subscribedHostId='other-host';assert.equal(context.ready.value,false);

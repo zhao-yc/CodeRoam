@@ -1,10 +1,11 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 
-const page = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
+const page = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
 const helpers = fs.readFileSync('apps/mobile/services/execution-settings.uts', 'utf8').replace(/\bexport /g, '');
 const methods = page.slice(page.indexOf('function loadSettings()'), page.indexOf('// 选中即同步电脑输入框设置'));
 const watcherStart = page.indexOf('watch((): string => connection.hostId +');
@@ -18,7 +19,7 @@ function fixture() {
   const pending = [], subscriptions = [], timers = new Map();
   let timerId = 0;
   const ref = value => ({ value });
-  const context = vm.createContext({
+  const context = componentContext({
     settingsRequest: 0, settingsSnapshotRevision: 0, settingsRetryTimer: 0, settingsRetryCount: 0,
     settings: ref(null), models: ref([]), settingsLoading: ref(false), settingsBusy: ref(false), settingsError: ref(''),
     readOnly: ref(false), composerMenu: ref(''), actionsVisible: ref(false), canWrite: ref(true),

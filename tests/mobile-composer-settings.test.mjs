@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,10 +7,10 @@ import { stripTypeScriptTypes } from 'node:module';
 
 /** 执行实际页面方法，验证异步设置与上传的会话归属和错误恢复。 */
 function fixture() {
-  const source = fs.readFileSync('apps/mobile/pages/conversation/index.uvue', 'utf8');
+  const source = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
   const methods = source.slice(source.indexOf('function onDraftBlur()'), source.indexOf('\nwatch((): string => connection.hostId', source.indexOf('function onDraftBlur()')));
   const files = new Map(), calls = [], pending = [];
-  const context = vm.createContext({
+  const context = componentContext({
     predictionFocus: { value: false }, inputFocused: { value: false }, pageVisible: { value: true }, composerBlurTimer: 0, nextTick: run => Promise.resolve().then(run), composerMenu: { value: '' }, menuHeight: { value: 200 }, keyboardInset: { value: 0 },
     models: { value: [] }, settings: { value: { model: 'model-a', effort: 'high', mode: 'default', serviceTier: '' } }, settingsBusy: { value: false }, settingsLoading: { value: false }, settingsError: { value: '' }, busy: { value: false }, settingsRequest: 0, settingsSnapshotRevision: 0,
     canWrite: { get value() { return !context.busy.value; } }, readOnly: { value: false }, imageBusy: { value: false }, modelSupportsImages: { value: true },
@@ -108,7 +109,7 @@ test('上传期间移除附件后，迟到读取不会重新添加附件或发�
 });
 
 test('文件草稿只随所属提交成功清理，失败、未知和发送后新增附件继续保留', () => {
-  const context = vm.createContext({ reactive: value => value });
+  const context = componentContext({ reactive: value => value });
   const source = fs.readFileSync('apps/mobile/services/composer.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
   vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={readDraftFiles,saveDraftFiles,rememberSubmission,settleSubmission};', context);
   const f = context.subject;

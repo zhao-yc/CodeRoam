@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import {stripTypeScriptTypes} from 'node:module';
 
 /** 执行真实展示链路；合成协议不包含真实任务、会话、设备或指令。 */
 function fixture(){
-  const context=vm.createContext({});
+  const context=componentContext({});
   for(const module of ['annotations','message-attachments','message-presentations','history']){
     const source=fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
     vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'}),context);
@@ -62,7 +63,7 @@ test('流式包装先等待完整通知，不闪现协议；结束后仍损坏�
 test('复制最新回复与屏幕使用同一份展示正文，任务包装和注释标记均不进入剪贴板',()=>{
   const f=fixture(),copied=[],messages=[message('prompt','user',input('合成指令')),message('answer','assistant',output('只复制这句通知。'))];
   Object.assign(f.context,{closeActions(){},displayConversation:{value:{messages}},messagePresentations:{value:f.presentConversationMessages(messages)},copyText:value=>copied.push(value),notify(){}});
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8'),method=page.match(/function copyLatestReply\(\) \{[^\n]+/)[0];
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'),method=page.match(/function copyLatestReply\(\) \{[^\n]+/)[0];
   vm.runInContext(stripTypeScriptTypes(method,{mode:'transform'})+'\ncopyLatestReply();',f.context);
   assert.deepEqual(copied,['只复制这句通知。']);assert.equal(messages[1].text,output('只复制这句通知。'));
 });

@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ const uts=file=>fs.readFileSync('apps/mobile/services/'+file+'.uts','utf8').repl
 function fixture(storage=new Map()) {
   let now=1000;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)};
-  const c=vm.createContext({uni,Date:{now:()=>++now}});
+  const c=componentContext({uni,Date:{now:()=>++now}});
   vm.runInContext(stripTypeScriptTypes(uts('file-report-cache')+'\n'+uts('conversation-cache'),{mode:'transform'})+';globalThis.subject={readConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts};',c);
   return {c,uni,storage,...c.subject};
 }
@@ -72,14 +73,16 @@ test('应用级清理保留离线电脑内容，welcome 完成后才核对完整
 function pageFixture(finishInitial = true) {
   const f=fixture(),watchers=[],loads=[],hides=[],unloads=[],timers=new Map(),calls=[];let timer=0;
   f.c.deletedThread=()=>false;
+  f.c.props={active:true};
   const connection={configured:true,cacheNamespace:'pair',configurationRevision:1,hostId:'pc',activeThreadId:'thread',snapshot:null,connected:true,error:'',conversationError:'',epoch:'',sequence:0,subscriptionRevision:0,pendingCommandId:'',pendingCommands:[],computers:[{id:'pc',online:true}]};
   f.saveConversationCache('pair','pc',snapshot([message('recent','旧正文')]),{messages:[message('older','更早正文')],turns:[],cursor:'old-cursor',hasMore:false});
   Object.assign(f.c,{connection,hideTaskNoticeThread:()=>{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watchers.push({source,callback}),onLoad:fn=>loads.push(fn),onShow:()=>{},onHide:fn=>hides.push(fn),onUnload:fn=>unloads.push(fn),onResize:()=>{},onBackPress:()=>{},nextTick:fn=>fn(),setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),readDraft:()=>'',bridge:{watch:()=>calls.push('watch'),cancelOpen:()=>{connection.snapshot=null;},resume:()=>calls.push('resume')},reportTimeline:current=>(current?.messages??[]).map(item=>({...item,executions:[],label:''})),taskNotifications:{focusRevision:0},pendingTaskNotice:()=>null,bindImagePaste:()=>()=>{}});
   const geometry={top:20};
   f.uni.getWindowInfo=()=>({windowWidth:390,windowHeight:800});
   f.uni.getElementById=id=>id==='conversation-timeline'?{getBoundingClientRect:()=>({top:0,bottom:500,height:500})}:id==='message-older'?{getBoundingClientRect:()=>({top:geometry.top,bottom:geometry.top+40})}:null;
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,refresh};',f.c);
+  vm.runInContext('paneHideCallbacks.forEach(onHide);',f.c);
   const p=f.c.page;loads.forEach(fn=>fn({threadId:'thread',title:'列表标题'}));
   if(finishInitial)for(const [id,timer] of timers)if(timer.delay===50){timers.delete(id);timer.fn();}
   let previous=p.displayConversation.value;

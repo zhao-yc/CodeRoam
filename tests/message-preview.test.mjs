@@ -1,3 +1,4 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -23,7 +24,7 @@ test('指定消息按需返回内嵌图片，日常同步只有数量且纯图�
   assert.equal(JSON.stringify(normal).includes(image),false);
   const selected=normalizeConversation(source,{imageMessageId:'picture'});
   assert.deepEqual(selected.messages[0].images,[image,image]);assert.equal(selected.messages[1].images,undefined);
-  const context=vm.createContext({});
+  const context=componentContext({});
   const uts=fs.readFileSync('apps/mobile/services/executions.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
   vm.runInContext(stripTypeScriptTypes(uts,{mode:'transform'})+'\nglobalThis.timeline=executionTimeline;',context);
   assert.equal(context.timeline(normal.messages)[1].imageCount,1);
@@ -83,7 +84,7 @@ test('消息默认加载缩略图，点击才预览，重连可重试且卸载�
   const source=component.match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   const calls=[],requests=[],watches=[];let resolve,reject,dispose;
   const props={hostId:'host',threadId:'thread',messageId:'picture',connected:true};
-  const context=vm.createContext({connection:{hostId:'host',activeThreadId:'thread',cacheNamespace:''},nextTick:fn=>Promise.resolve().then(fn),defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),watch:(get,callback,options)=>{watches.push({get,callback});if(options?.immediate)callback(get());},onUnmounted:callback=>dispose=callback,uni:{previewImage:options=>calls.push(options)},bridge:{request:(...args)=>{requests.push(args);return new Promise((yes,no)=>{resolve=yes;reject=no;});}}});
+  const context=componentContext({connection:{hostId:'host',activeThreadId:'thread',cacheNamespace:''},nextTick:fn=>Promise.resolve().then(fn),defineProps:()=>props,defineEmits:()=>()=>{},ref:value=>({value}),watch:(get,callback,options)=>{watches.push({get,callback});if(options?.immediate)callback(get());},onUnmounted:callback=>dispose=callback,uni:{previewImage:options=>calls.push(options)},bridge:{request:(...args)=>{requests.push(args);return new Promise((yes,no)=>{resolve=yes;reject=no;});}}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={sources,error,loadImages,preview};',context);
   const f=context.subject;
   await new Promise(setImmediate);
@@ -97,12 +98,12 @@ test('消息默认加载缩略图，点击才预览，重连可重试且卸载�
   props.connected=false;watches[1].callback(false);f.loadImages();assert.equal(requests.length,2);
   props.connected=true;watches[1].callback(true);await new Promise(setImmediate);assert.equal(requests.length,3);
   dispose();resolve({images:[image]});await new Promise(setImmediate);assert.equal(f.sources.value.length,0);
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   assert.match(page,/<message-images v-if=/);assert.doesNotMatch(page,/查看图片|previewedMessageId/);
 });
 
 test('助手图片入口不打断正文与用户文字的互斥渲染',()=>{
-  const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   assert.match(page,/<markdown-body[^\n]+\n\s*<text v-else-if=/);
   assert.match(page,/<text v-else-if=[^\n]+\n\s*<message-images v-if="entry.role == 'assistant'/);
 });

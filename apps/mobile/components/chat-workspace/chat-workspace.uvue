@@ -1,0 +1,160 @@
+<template>
+  <view class="chat-workspace" :class="{ 'workspace-wide': wide }">
+    <view v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? '340px' : '100%' }">
+      <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="openNewConversation" />
+    </view>
+    <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
+      <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
+      <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" />
+      <view v-show="mode == 'new'" class="workspace-new">
+        <view class="workspace-status-space"></view>
+        <view id="new-conversation-header" class="workspace-new-header"><view class="workspace-header-button"><app-icon :name="wide ? 'close' : 'back'" :size="23" /><button class="workspace-hitbox" :disabled="creating" aria-label="关闭新聊天" @click="closeNewConversation"></button></view><text class="workspace-new-title">新聊天</text><view class="workspace-header-button"></view></view>
+        <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
+      </view>
+    </view>
+    <task-notice :active="props.active" :header-id="mode == 'conversation' ? 'conversation-header' : mode == 'new' ? 'new-conversation-header' : 'home-header'" :host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" :pane-left="wide && mode != 'list' ? 341 : 0" :pane-width="wide && mode == 'list' ? 340 : wide ? detailWidth : props.windowWidth" />
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import ChatList from '../chat-list/chat-list.uvue'
+import ChatDetail from '../chat-detail/chat-detail.uvue'
+import NewConversation from '../new-conversation/new-conversation.uvue'
+import TaskNotice from '../task-notice/task-notice.uvue'
+import AppIcon from '../app-icon/app-icon.uvue'
+import { bridge, connection } from '../../services/bridge.uts'
+import type { ComputerThread } from '../../services/thread-list.uts'
+import { readConversationCache } from '../../services/conversation-cache.uts'
+import { bindWorkspaceNoticeNavigation } from '../../services/task-notifications.uts'
+import type { TaskNotice as TaskNoticeTarget } from '../../services/task-notification-state.uts'
+import { workspaceIsWide, workspaceDetailWidth, workspaceTarget, workspaceTargetKey, WorkspaceTarget } from '../../services/workspace-layout.uts'
+
+const props = withDefaults(defineProps<{ initialTarget?: WorkspaceTarget | null, active: boolean, windowWidth: number, windowHeight: number, detailRoute?: boolean }>(), { initialTarget: null, detailRoute: false })
+const wide = computed((): boolean => workspaceIsWide(props.windowWidth))
+const detailWidth = computed((): number => workspaceDetailWidth(props.windowWidth))
+const selected = ref<WorkspaceTarget | null>(null)
+const selectedKey = computed((): string => workspaceTargetKey(selected.value))
+const mode = ref('list')
+const detailMounted = ref(false)
+const creating = ref(false)
+const newReady = ref(false)
+const listPane = ref<ChatListComponentPublicInstance | null>(null)
+const detailPane = ref<ChatDetailComponentPublicInstance | null>(null)
+let switchRevision = 0
+let alive = true
+let unbindNotices: (() => void) | null = null
+
+// 所有入口先检查离线缓存和目标归属，拒绝时保留原面板。
+function canOpen(target: WorkspaceTarget, online: boolean): boolean {
+  if (creating.value) { uni.showToast({ title: '操作正在提交，请稍后切换聊天', icon: 'none' }); return false }
+  if (target.cacheNamespace != connection.cacheNamespace || !connection.computers.some((computer): boolean => computer.id == target.hostId)) { uni.showToast({ title: '这台电脑不在当前授权范围内', icon: 'none' }); return false }
+  if ((!connection.connected || !online) && readConversationCache(target.cacheNamespace, target.hostId, target.threadId) == null) { uni.showToast({ title: '此聊天暂无本地缓存，请恢复连接后查看', icon: 'none' }); return false }
+  return true
+}
+
+// 先卸载旧面板，等缓存和订阅清理完成再切换，避免旧清理误取消新订阅。
+async function selectConversation(target: WorkspaceTarget, activate: boolean): Promise<boolean> {
+  const online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
+  if (!canOpen(target, online)) return false
+  if (mode.value == 'conversation' && detailMounted.value && selectedKey.value == workspaceTargetKey(target)) return true
+  const revision = ++switchRevision
+  newReady.value = false; mode.value = 'list'; detailMounted.value = false
+  await nextTick()
+  if (!alive || revision != switchRevision || target.cacheNamespace != connection.cacheNamespace) return false
+  try {
+    bridge.selectComputer(target.hostId)
+    selected.value = target; mode.value = 'conversation'
+    if (activate && connection.connected && online) bridge.openThread(target.threadId).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    detailMounted.value = true
+    listPane.value?.rememberOpened(target.hostId + ':' + target.threadId)
+    return true
+  } catch (reason) { mode.value = 'list'; selected.value = null; uni.showToast({ title: (reason as Error).message, icon: 'none' }); return false }
+}
+
+function openThread(thread: ComputerThread) {
+  const project = thread.cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0).pop() ?? '未指定项目'
+  const target = workspaceTarget(thread.hostId, thread.id, thread.title, project, connection.cacheNamespace)
+  if (!canOpen(target, thread.online)) return
+  if (wide.value) { selectConversation(target, true); return }
+  try {
+    bridge.selectComputer(thread.hostId)
+    if (connection.connected && thread.online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&hostId=' + encodeURIComponent(thread.hostId) + '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(project), success: (_) => { listPane.value?.rememberOpened(thread.key) } })
+  } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
+}
+
+function closeConversation() {
+  switchRevision++; uni.hideKeyboard()
+  if (!wide.value && props.detailRoute && getCurrentPages().length > 1) { uni.navigateBack(); return }
+  mode.value = 'list'; detailMounted.value = false; selected.value = null
+}
+
+// 新建时保留旧详情节点和阅读位置，但暂停订阅，不能让旧页面自动切回电脑。
+async function openNewConversation(hostId: string = '') {
+  if (creating.value || mode.value == 'new') return
+  const revision = ++switchRevision
+  newReady.value = false; mode.value = 'new'; uni.hideKeyboard()
+  await nextTick()
+  if (!alive || revision != switchRevision || mode.value != 'new') return
+  if (selected.value != null && connection.hostId == selected.value!.hostId) bridge.cancelOpen(selected.value!.threadId)
+  try { if (hostId.length > 0) bridge.selectComputer(hostId); newReady.value = true }
+  catch (reason) { closeNewConversation(); uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
+}
+function closeNewConversation() {
+  if (creating.value) return
+  switchRevision++; newReady.value = false; uni.hideKeyboard()
+  if (selected.value != null && selected.value!.cacheNamespace == connection.cacheNamespace && connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)) {
+    try { bridge.selectComputer(selected.value!.hostId); bridge.watch(selected.value!.threadId); mode.value = 'conversation'; return } catch (_) {}
+  }
+  selected.value = null; detailMounted.value = false; mode.value = 'list'
+}
+function onNewConversationBusy(value: boolean) { creating.value = value }
+function onConversationCreated(id: string): Promise<boolean> {
+  creating.value = false
+  return selectConversation(workspaceTarget(connection.hostId, id, '', '', connection.cacheNamespace), false)
+}
+function onConversationRemoved(kind: string) {
+  const returningToPage = !wide.value && props.detailRoute && getCurrentPages().length > 1
+  closeConversation()
+  // 窄屏返回由原列表页消费提示，隐藏在详情路由内的列表不能提前取走结果。
+  if (returningToPage) return
+  nextTick(() => { if (kind == 'archive') listPane.value?.showArchiveSuccessNotice(); else listPane.value?.showDeleteSuccessNotice() })
+}
+
+// 仅当前可见的宽屏工作区接管通知；其他页面继续使用原有路由导航。
+function syncNoticeNavigation() {
+  unbindNotices?.(); unbindNotices = null
+  if (!props.active || !wide.value) return
+  unbindNotices = bindWorkspaceNoticeNavigation((notice: TaskNoticeTarget): Promise<boolean> => selectConversation(workspaceTarget(notice.hostId, notice.threadId, notice.threadTitle, '', connection.cacheNamespace), true))
+}
+function handleBack(): boolean {
+  if (mode.value == 'new') { closeNewConversation(); return true }
+  if (mode.value == 'conversation') { if (detailPane.value?.handleBack() == true) return true; if (!props.detailRoute || wide.value) { closeConversation(); return true }; return false }
+  return listPane.value?.handleBack() ?? false
+}
+defineExpose({ handleBack })
+watch((): WorkspaceTarget | null => props.initialTarget, (target: WorkspaceTarget | null) => { if (target != null && selected.value == null) selectConversation(target, false) }, { immediate: true })
+watch((): string => props.active + ':' + wide.value, () => { syncNoticeNavigation() })
+watch((): string => connection.cacheNamespace + ':' + connection.computers.map((computer): string => computer.id).join('|'), () => {
+  if (selected.value != null && (selected.value!.cacheNamespace != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)))) { switchRevision++; selected.value = null; detailMounted.value = false; mode.value = 'list' }
+})
+onMounted(() => { syncNoticeNavigation() })
+onUnmounted(() => { alive = false; switchRevision++; unbindNotices?.() })
+</script>
+
+<style scoped>
+.chat-workspace { position: relative; flex: 1; width: 100%; height: 100%; min-height: 0; flex-direction: row; overflow: hidden; background-color: #f8f8f3; }
+.workspace-list { flex-shrink: 0; height: 100%; min-height: 0; overflow: hidden; }
+.workspace-detail { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+.workspace-detail-wide { border-left-width: 1px; border-left-style: solid; border-left-color: #e3e5dc; }
+.workspace-empty { flex: 1; align-items: center; justify-content: center; padding: 28px; }
+.workspace-empty-title { margin-top: 18px; font-size: 20px; line-height: 28px; color: #42564a; font-weight: bold; }
+.workspace-empty-note { margin-top: 8px; font-size: 14px; line-height: 22px; color: #7b827a; }
+.workspace-new { position: relative; flex: 1; height: 100%; min-height: 0; }
+.workspace-status-space { height: var(--status-bar-height); flex-shrink: 0; }
+.workspace-new-header { height: 64px; padding: 0 8px; flex-shrink: 0; flex-direction: row; align-items: center; }
+.workspace-header-button { position: relative; width: 44px; height: 44px; align-items: center; justify-content: center; flex-shrink: 0; }
+.workspace-new-title { flex: 1; text-align: center; color: #202c28; font-size: 20px; font-weight: bold; }
+.workspace-hitbox { position: absolute; left: 0; right: 0; top: 0; bottom: 0; margin: 0; padding: 0; background-color: transparent; border-width: 0; }
+</style>

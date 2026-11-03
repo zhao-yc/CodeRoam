@@ -1,16 +1,18 @@
+import {componentContext, componentScope} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 
-const page=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8');
+const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
 // 直接运行页面面板入口，核对草稿、阅读位置、返回优先级和生命周期清理。
 function fixture() {
   const lifecycle={hide:[],unload:[],watches:[]},calls=[];
-  const context=vm.createContext({messagePresentations:{value:[{messageId:'user',annotations:[{index:1}]}]},selectedAnnotationId:{value:''},selectedFileReport:{value:null},closeFileReport:()=>{},closeActions:()=>calls.push('menu'),closeComposerMenu:()=>calls.push('composer'),dismissGoal:()=>calls.push('goal'),uni:{hideKeyboard:()=>calls.push('keyboard'),navigateBack:()=>calls.push('back')},getCurrentPages:()=>[{},{}],composerMenu:{value:''},selectedExecutionId:{value:''},following:{value:true},scrollTarget:{value:'timeline-bottom'},draft:{value:'未发送草稿'},historyScrollTop:{value:240},touchingTimeline:false,historyGesture:0,onHide:fn=>lifecycle.hide.push(fn),onUnload:fn=>lifecycle.unload.push(fn),watch:(source,callback)=>lifecycle.watches.push({source,callback}),connection:{hostId:'pc',activeThreadId:'thread'}});
+  const context=componentContext({messagePresentations:{value:[{messageId:'user',annotations:[{index:1}]}]},selectedAnnotationId:{value:''},selectedFileReport:{value:null},closeFileReport:()=>{},closeActions:()=>calls.push('menu'),closeComposerMenu:()=>calls.push('composer'),dismissGoal:()=>calls.push('goal'),uni:{hideKeyboard:()=>calls.push('keyboard'),navigateBack:()=>calls.push('back')},getCurrentPages:()=>[{},{}],composerMenu:{value:''},selectedExecutionId:{value:''},following:{value:true},scrollTarget:{value:'timeline-bottom'},draft:{value:'未发送草稿'},historyScrollTop:{value:240},touchingTimeline:false,historyGesture:0,onHide:fn=>lifecycle.hide.push(fn),onUnload:fn=>lifecycle.unload.push(fn),watch:(source,callback)=>lifecycle.watches.push({source,callback}),connection:{hostId:'pc',activeThreadId:'thread'}});
   const methods=page.slice(page.indexOf('function pauseFollowing()'),page.indexOf('function beginTimelineTouch()'));
-  const back=page.match(/function goBack\(\) \{[^\n]+/)[0];
+  const back=page.match(/function goBack\(\) \{[^\n]+/)[0]+'\n'+page.match(/function handleBack\(\): boolean \{[\s\S]*?\n\}/)[0];
+  Object.assign(context,{mentionOpen:{value:false},deleteFinalVisible:{value:false},selectedPlanId:{value:''},goalExpanded:{value:false},actionsVisible:{value:false},emit:()=>calls.push('back')});
   vm.runInContext(stripTypeScriptTypes(methods+'\n'+back,{mode:'transform'})+'\nglobalThis.subject={openAnnotations,closeAnnotations,goBack};',context);
   return {context,calls,lifecycle,f:context.subject};
 }
@@ -29,7 +31,7 @@ test('返回优先关闭注释，隐藏、卸载和切换会话均清理面板',
 });
 test('复制回复通过展示解析器清理标记，引用与评论按纯文本渲染',()=>{
   const method=page.match(/function copyLatestReply\(\) \{[^\n]+/)[0],copied=[];
-  const context=vm.createContext({closeActions(){},messagePresentations:{value:[]},displayConversation:{value:{messages:[{role:'assistant',text:'完成 :codex-annotation{index="1"}'}]}},parseAnnotationReferences:value=>({text:value.replace(/ :codex-annotation\{index="1"\}/,'')}),copyText:value=>copied.push(value),notify(){}});
+  const context=componentContext({closeActions(){},messagePresentations:{value:[]},displayConversation:{value:{messages:[{role:'assistant',text:'完成 :codex-annotation{index="1"}'}]}},parseAnnotationReferences:value=>({text:value.replace(/ :codex-annotation\{index="1"\}/,'')}),copyText:value=>copied.push(value),notify(){}});
   vm.runInContext(stripTypeScriptTypes(method,{mode:'transform'})+'\ncopyLatestReply();',context);assert.deepEqual(copied,['完成']);
   const sheet=fs.readFileSync('apps/mobile/components/annotation-sheet/annotation-sheet.uvue','utf8');
   assert.match(sheet,/class="annotation-text" selectable>\{\{ item.text \}\}/);assert.match(sheet,/annotation-comment" selectable>\{\{ item.comment \}\}/);assert.doesNotMatch(sheet,/v-html|rich-text|markdown-body/);
@@ -37,7 +39,7 @@ test('复制回复通过展示解析器清理标记，引用与评论按纯文�
 
 test('实际页面时间线只展示一处已有注释入口，折叠来源时保留可打开的回复入口',()=>{
   const source=fs.readFileSync('apps/mobile/services/annotations.uts','utf8').replace(/^import type .*\r?\n/gm,'').replace(/\bexport /g,'');
-  const context=vm.createContext({computed:fn=>({get value(){return fn();}}),displayConversation:{value:null},expandedReportIds:{value:[]}});
+  const context=componentContext({computed:fn=>({get value(){return fn();}}),displayConversation:{value:null},expandedReportIds:{value:[]}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'}),context);
   vm.runInContext(`
     const input = '# Response annotations:\\n说明\\n<response-annotations>\\n[{"text":"合成选文","annotation":"修改这里"}]\\n</response-annotations>\\n\\n## My request:\\n';

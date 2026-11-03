@@ -1,5 +1,5 @@
 <template>
-  <view v-if="active && taskNotifications.current != null" :id="'task-notice-' + headerId" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible', 'task-notice-dragging': dragging }" :style="{ top: top + 'px', transform: noticeTransform, opacity: noticeOpacity }" role="status" aria-live="polite">
+  <view v-if="active && taskNotifications.current != null" :id="'task-notice-' + headerId" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible', 'task-notice-dragging': dragging }" :style="{ top: top + 'px', left: paneLeft + 12 + 'px', right: paneWidth > 0 ? 'auto' : '12px', width: paneWidth > 0 ? Math.max(0, paneWidth - 24) + 'px' : 'auto', transform: noticeTransform, opacity: noticeOpacity }" role="status" aria-live="polite">
     <view class="task-notice-copy"><text class="task-notice-title">{{ title }}</text><text class="task-notice-subtitle">{{ taskNotifications.current!.threadTitle }}</text></view>
     <app-icon name="chevron-right" :size="20" />
     <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，点击打开聊天，向上滑动关闭'" @touchstart.stop="beginTouch" @touchmove.stop="moveTouch" @touchend.stop="finishTouch" @touchcancel.stop="cancelTouch" @click.stop="openNotice"></button>
@@ -11,7 +11,7 @@ import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { taskNotifications, openTaskNotice, dismissTaskNotice } from '../../services/task-notifications.uts'
 import { taskNoticeTitle } from '../../services/task-notification-state.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
-const props = withDefaults(defineProps<{ active: boolean, headerId: string, hostId?: string, threadId?: string }>(), { hostId: '', threadId: '' })
+const props = withDefaults(defineProps<{ active: boolean, headerId: string, hostId?: string, threadId?: string, paneLeft?: number, paneWidth?: number }>(), { hostId: '', threadId: '', paneLeft: 0, paneWidth: 0 })
 const top = ref(72)
 const cardHeight = ref(70)
 const dragging = ref(false)
@@ -29,6 +29,7 @@ const noticeOpacity = computed((): number => taskNotifications.phase == 'visible
 function measureTop() { nextTick(() => { const rect = uni.getElementById(props.headerId)?.getBoundingClientRect(); if (rect != null) top.value = rect.bottom + 8; const card = uni.getElementById('task-notice-' + props.headerId)?.getBoundingClientRect(); if (card != null) cardHeight.value = card.height }) }
 onMounted(() => { measureTop() })
 watch((): string => props.active.toString() + ':' + (taskNotifications.current?.key ?? ''), () => { cancelTouch(); if (props.active) measureTop() })
+watch((): string => props.paneWidth + ':' + props.headerId, () => { if (props.active) measureTop() })
 
 // 只接受当前卡片上的单指手势，普通轻点仍保留打开会话的行为。
 function beginTouch(event: UniTouchEvent) {
