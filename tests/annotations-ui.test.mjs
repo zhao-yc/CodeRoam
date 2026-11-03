@@ -55,7 +55,7 @@ test('实际页面时间线只展示一处已有注释入口，折叠来源时�
   assert.equal(vm.runInContext('timeline.value[1].text',context),'已完成');
   vm.runInContext("visibleIds = ['a'];",context);
   assert.equal(vm.runInContext('timeline.value[0].annotations[0].comment',context),'修改这里');
-  // 同时引用已知与缺失编号时，详情必须与去重后的入口数量一致。
+  // 原注释已经可见时，缺失编号不能单独生成一个空入口或空详情。
   vm.runInContext(`
     messagePresentations.value = presentAnnotatedMessages([
       {id:'u',role:'user',turnId:'turn',status:'completed',text:input},
@@ -65,7 +65,14 @@ test('实际页面时间线只展示一处已有注释入口，折叠来源时�
     const selectedAnnotationId = {value:'a'};
   `,context);
   vm.runInContext(stripTypeScriptTypes(page.match(/const selectedAnnotations = computed\([^\n]+/)[0],{mode:'transform'}),context);
-  assert.equal(vm.runInContext('timeline.value[1].annotations.length',context),1);
+  assert.equal(vm.runInContext('timeline.value[1].annotations.length',context),0);
+  assert.equal(vm.runInContext('selectedAnnotations.value.length',context),0);
+  vm.runInContext("visibleIds = ['a'];",context);
   assert.equal(vm.runInContext('selectedAnnotations.value.length',context),1);
-  assert.equal(vm.runInContext('selectedAnnotations.value[0].index',context),2);
+  assert.equal(vm.runInContext('selectedAnnotations.value[0].index',context),1);
+  // 复现截图：最终回复只有残留编号，没有用户注释来源。
+  vm.runInContext(`messagePresentations.value = presentAnnotatedMessages([{id:'a',role:'assistant',turnId:'old',status:'completed',text:'已完成 :codex-annotation{index="1"}'}]);`,context);
+  assert.equal(vm.runInContext('timeline.value[0].annotations.length',context),0);
+  assert.equal(vm.runInContext('selectedAnnotations.value.length',context),0);
+  assert.equal(vm.runInContext('timeline.value[0].text',context),'已完成');
 });

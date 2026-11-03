@@ -135,11 +135,11 @@ export function presentAnnotatedMessages(messages: ChatMessage[]): MessagePresen
   })
 }
 
-// 原注释已在时间线展示时，不在回复下重复生成入口；来源未加载或被过程折叠时保留入口。
+// 入口只展示有真实原文的注释；来源补齐后重新计算，原注释可见时不在回复下重复显示。
 export function annotationPresentationsForTimeline(presentations: MessagePresentation[], visibleMessageIds: string[]): MessagePresentation[] {
   return presentations.map((presentation: MessagePresentation): MessagePresentation => {
-    if ((presentation.annotationSourceId ?? '').length == 0 || visibleMessageIds.indexOf(presentation.annotationSourceId!) < 0) return presentation
-    // 未知编号仍需保留缺失提示，不能因同轮次存在其他注释而静默隐藏。
-    return { ...presentation, annotations: presentation.annotations.filter((annotation: MessageAnnotation): boolean => !annotation.available) }
+    const annotations = presentation.annotations.filter((annotation: MessageAnnotation): boolean => annotation.available && annotation.text.trim().length > 0)
+    if ((presentation.annotationSourceId ?? '').length == 0 || visibleMessageIds.indexOf(presentation.annotationSourceId!) < 0) return { ...presentation, annotations }
+    return { ...presentation, annotations: [] as MessageAnnotation[] }
   })
 }

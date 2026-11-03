@@ -86,19 +86,33 @@ test('用户注释已展示时，过程和最终回复不重复生成入口，�
   assert.equal(JSON.stringify(presentations),original);
 });
 
-test('来源未加载或被折叠时保留回复入口，补入可见历史后才去重，未知编号仍可查看缺失提示',()=>{
+test('来源未加载时隐藏入口，历史补齐后恢复，原文可见时去重，未知编号不展示',()=>{
   const reply=message('a','assistant','完成'+marker(1));
-  assert.equal(visible(present([reply]),['a'])[0].annotations[0].available,false);
+  const missing=visible(present([reply]),['a'])[0];
+  assert.deepEqual(missing.annotations,[]);assert.deepEqual(missing.referenceIndices,[1]);assert.equal(missing.text,'完成');
   const presentations=present([message('u','user',wrapper()),reply]);
   assert.equal(visible(presentations,['a'])[1].annotations[0].available,true);
   assert.equal(visible(presentations,['u','a'])[1].annotations.length,0);
   const unknown=visible(present([message('u','user',wrapper()),message('a','assistant',marker(1)+marker(2))]),['u','a']);
-  assert.deepEqual(unknown[1].annotations,[{index:2,text:'',comment:'',available:false}]);
+  assert.deepEqual(unknown[1].annotations,[]);
+  const folded=visible(present([message('u','user',wrapper()),message('a','assistant',marker(1)+marker(2))]),['a']);
+  assert.deepEqual(folded[1].annotations.map(annotation=>annotation.index),[1]);
 });
 
 test('注释去重按真实来源消息绑定，其他轮次或同轮次另一条注释不能互相隐藏',()=>{
   const presentations=present([message('u1','user',wrapper()),message('u2','user',wrapper([{text:'另一处合成选文'}])),message('a','assistant',marker(1)),message('other','assistant',marker(1),'other')]);
   const result=visible(presentations,['u1','a','other']);
   assert.equal(result[2].annotations[0].text,'另一处合成选文');
-  assert.equal(result[3].annotations[0].available,false);
+  assert.deepEqual(result[3].annotations,[]);
+});
+
+test('旧展示模型中缺失或空白的原文不生成入口，过滤不修改原数据',()=>{
+  const input=[{messageId:'reply',text:'普通回复',referenceIndices:[1,2,3],annotations:[
+    {index:1,text:'',comment:'',available:false},
+    {index:2,text:' \n ',comment:'仅有评论不足以确认引用原文',available:true},
+    {index:3,text:'真实选文',comment:'',available:true},
+  ]}];
+  const before=JSON.stringify(input),result=visible(input,['reply']);
+  assert.deepEqual(result[0].annotations,[input[0].annotations[2]]);
+  assert.equal(JSON.stringify(input),before);
 });
