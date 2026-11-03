@@ -19,6 +19,18 @@ test('切换前卸载旧面板，下一帧后才打开目标；离开工作区�
   const pending=f.selectConversation(f.target('new'),true);assert.equal(f.detailMounted.value,false);assert.equal(f.calls.some(row=>row[0]==='open'),false);
   f.unmount();await f.flush();assert.equal(await pending,false);assert.equal(f.calls.some(row=>row[0]==='open'),false);
 });
+test('离线冷启动等待持久缓存恢复，之后打开不向电脑发送订阅请求',async()=>{
+  let hydrated;
+  const loading=new Promise(resolve=>{hydrated=resolve;});
+  const f=workspaceFixture({connection:{connected:false},prime:()=>loading});
+  const opened=f.selectConversation(f.target('saved'),true);
+  assert.equal(f.selected.value,null);
+  assert.deepEqual(f.calls,[]);
+  f.setCached(true);hydrated();
+  assert.equal(await opened,true);
+  assert.equal(f.selected.value.threadId,'saved');
+  assert.equal(f.calls.some(([kind])=>kind==='open'||kind==='toast'),false);
+});
 test('新聊天在右侧，取消恢复原聊天，提交期间阻止切换并保留当前编辑区',async()=>{
   const f=workspaceFixture();await f.selectConversation(f.target(),true);await f.openNewConversation();assert.equal(f.mode.value,'new');assert.equal(f.newReady.value,true);assert.equal(f.detailMounted.value,true);
   f.creating.value=true;assert.equal(await f.selectConversation(f.target('another'),true),false);f.closeNewConversation();assert.equal(f.mode.value,'new');

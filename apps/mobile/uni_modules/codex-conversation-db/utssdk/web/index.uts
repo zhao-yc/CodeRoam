@@ -1,0 +1,96 @@
+type CacheRow = { key: string, value: string }
+type StoredRow = { namespace: string, key: string, value: string }
+type CacheRevision = { namespace: string, revision: string }
+type CacheChanges = { put: CacheRow[], remove: string[], clear: boolean }
+type CacheRows = { revision: string, rows: CacheRow[] }
+
+const DATABASE_NAME = 'codex-mobile-conversation-cache'
+const ROWS = 'rows'
+const REVISIONS = 'revisions'
+const NAMESPACE = 'namespace'
+let database: IDBDatabase | null = null
+let opening: Promise<IDBDatabase> | null = null
+
+// 同一站点共用连接。升级或关闭时释放连接，后续操作可重新打开。
+function openDatabase(): Promise<IDBDatabase> {
+  const current = database
+  if (current != null) return Promise.resolve(current)
+  const pending = opening
+  if (pending != null) return pending
+  opening = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = window.indexedDB.open(DATABASE_NAME, 1)
+    let blocked = false
+    request.onblocked = () => {
+      blocked = true
+      reject(new Error('聊天缓存数据库正被其他页面占用'))
+    }
+    request.onerror = () => { reject(new Error('无法打开聊天缓存数据库')) }
+    request.onupgradeneeded = () => {
+      const db = request.result
+      db.createObjectStore(ROWS, { keyPath: [NAMESPACE, 'key'] }).createIndex(NAMESPACE, NAMESPACE)
+      db.createObjectStore(REVISIONS, { keyPath: NAMESPACE })
+    }
+    request.onsuccess = () => {
+      const db = request.result
+      if (blocked) { db.close(); return }
+      const release = () => { if (database === db) database = null }
+      db.onclose = release
+      db.onversionchange = () => { release(); db.close() }
+      database = db
+      resolve(db)
+    }
+  }).finally(() => { opening = null })
+  return opening!
+}
+
+// 版本和数据在同一个只读事务内读取，避免读到提交前后的混合内容。
+export async function readConversationCacheRows(namespace: string): Promise<string> {
+  const db = await openDatabase()
+  return new Promise<string>((resolve, reject) => {
+    const transaction = db.transaction([ROWS, REVISIONS], 'readonly')
+    const revision = transaction.objectStore(REVISIONS).get(namespace)
+    const entries = transaction.objectStore(ROWS).index(NAMESPACE).getAll(namespace)
+    transaction.onabort = () => { reject(new Error('无法读取聊天缓存数据库')) }
+    transaction.oncomplete = () => {
+      const marker = revision.result as CacheRevision | undefined
+      const rows = (entries.result as StoredRow[]).map((row: StoredRow): CacheRow => ({ key: row.key, value: row.value }))
+      resolve(JSON.stringify({ revision: marker?.revision ?? '', rows } as CacheRows))
+    }
+  })
+}
+
+// 先核对持久版本，再原子提交变更行与新版本。并行页面持有旧基线时可安全重读。
+export async function writeConversationCacheRows(namespace: string, expectedRevision: string, nextRevision: string, changes: string): Promise<boolean> {
+  const batch = JSON.parse<CacheChanges>(changes)
+  if (batch == null || !Array.isArray(batch.put) || !Array.isArray(batch.remove) || typeof batch.clear !== 'boolean' || nextRevision.length === 0) throw new Error('聊天缓存变更格式无效')
+  const db = await openDatabase()
+  return new Promise<boolean>((resolve, reject) => {
+    const transaction = db.transaction([ROWS, REVISIONS], 'readwrite')
+    const rows = transaction.objectStore(ROWS)
+    const revisions = transaction.objectStore(REVISIONS)
+    let matched = false
+    transaction.onabort = () => { reject(new Error('无法保存聊天缓存数据库')) }
+    transaction.oncomplete = () => { resolve(matched) }
+
+    // 清除时仍写入新版本，旧页面迟到的写入不能重新创建已清除的数据。
+    const apply = () => {
+      batch.remove.forEach((key: string) => { rows.delete([namespace, key]) })
+      batch.put.forEach((row: CacheRow) => { rows.put({ namespace, key: row.key, value: row.value } as StoredRow) })
+      revisions.put({ namespace, revision: nextRevision } as CacheRevision)
+    }
+    const marker = revisions.get(namespace)
+    marker.onsuccess = () => {
+      const current = marker.result as CacheRevision | undefined
+      if ((current?.revision ?? '') !== expectedRevision) return
+      matched = true
+      if (!batch.clear) { apply(); return }
+      const lookup = rows.index(NAMESPACE).openCursor(namespace)
+      lookup.onsuccess = () => {
+        const cursor = lookup.result
+        if (cursor == null) { apply(); return }
+        cursor.delete()
+        cursor.continue()
+      }
+    }
+  })
+}

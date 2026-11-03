@@ -1,0 +1,10 @@
+{
+  "id": "codex-conversation-db",
+  "displayName": "本地聊天缓存数据库",
+  "version": "1.0.0",
+  "description": "原生 SQLite 和 Web IndexedDB 聊天缓存事务",
+  "keywords": ["UTS", "SQLite", "IndexedDB"],
+  "engines": { "HBuilderX": "^5.34.0" },
+  "dcloudext": { "type": "uts" },
+  "uni_modules": { "dependencies": [], "encrypt": [], "platforms": { "client": { "App": { "app-android": "y", "app-ios": "y" }, "H5": { "mobile": "y", "pc": "y" } } } }
+}

@@ -1,0 +1,75 @@
+import type { CachedConversation } from './conversation-cache.uts'
+import type { ChatMessage, ConversationTurn, LatestTurn } from './bridge.uts'
+
+export type CacheRow = { key: string, value: string }
+export type CacheRowChanges = { put: CacheRow[], remove: string[], clear: boolean }
+type CacheRowRead = { revision: string, rows: CacheRow[] }
+type CacheHeader = { hostId: string, threadId: string, title: string, cwd: string, savedAt: number, accessedAt: number, contentRevision?: string, latestTurn?: LatestTurn, turns: ConversationTurn[], olderTurns: ConversationTurn[], recent: string[], older: string[] }
+export type CacheRead = { revision: string, entries: CachedConversation[] }
+
+// 会话和消息都用稳定身份寻址。消息从最近窗口移入历史时复用原记录。
+export function cacheEntryKey(hostId: string, threadId: string): string { return JSON.stringify([hostId, threadId]) }
+function cacheMessageKey(entryKey: string, messageId: string): string { return 'm:' + JSON.stringify([entryKey, messageId]) }
+function cacheHeaderKey(entryKey: string): string { return 'h:' + entryKey }
+
+function cacheHeader(entry: CachedConversation): CacheHeader {
+  return { hostId: entry.hostId, threadId: entry.threadId, title: entry.title, cwd: entry.cwd, savedAt: entry.savedAt, accessedAt: entry.accessedAt, contentRevision: entry.contentRevision, latestTurn: entry.latestTurn, turns: entry.turns, olderTurns: entry.olderTurns, recent: entry.messages.map((message: ChatMessage): string => message.id), older: entry.olderMessages.map((message: ChatMessage): string => message.id) } as CacheHeader
+}
+
+function sameCacheMessage(a: ChatMessage, b: ChatMessage): boolean {
+  return a === b || (a.id == b.id && a.role == b.role && a.kind == b.kind && a.summary == b.summary && a.phase == b.phase && a.imageCount == b.imageCount && a.text == b.text && a.turnId == b.turnId && a.status == b.status)
+}
+
+// 只把变化的消息序列化。顺序、轮次和版本与消息在同一事务更新。
+export function appendCacheChanges(changes: CacheRowChanges, key: string, before: CachedConversation | null, after: CachedConversation | null) {
+  const previous = new Map<string, ChatMessage>()
+  if (before != null) before.olderMessages.concat(before.messages).forEach((message: ChatMessage) => { previous.set(message.id, message) })
+  if (after == null) {
+    if (before != null) changes.remove.push(cacheHeaderKey(key))
+  } else {
+    const header = JSON.stringify(cacheHeader(after))
+    if (before == null || header != JSON.stringify(cacheHeader(before))) changes.put.push({ key: cacheHeaderKey(key), value: header } as CacheRow)
+    after.olderMessages.concat(after.messages).forEach((message: ChatMessage) => {
+      const old = previous.get(message.id)
+      if (old == null || !sameCacheMessage(old, message)) changes.put.push({ key: cacheMessageKey(key, message.id), value: JSON.stringify(message) } as CacheRow)
+      previous.delete(message.id)
+    })
+  }
+  previous.forEach((_message: ChatMessage, id: string) => { changes.remove.push(cacheMessageKey(key, id)) })
+}
+
+function readCacheMessages(rows: Map<string, string>, key: string, ids: string[]): ChatMessage[] | null {
+  const result = [] as ChatMessage[]
+  for (let index = 0; index < ids.length; index++) {
+    const id = ids[index]
+    const value = rows.get(cacheMessageKey(key, id))
+    if (typeof id != 'string' || value == null) return null
+    const message = JSON.parse<ChatMessage>(value)
+    if (message == null || message.id != id) return null
+    result.push(message)
+  }
+  return result
+}
+
+// 每个会话单独校验。缺失正文时整个会话回源，避免拿不完整窗口继续增量同步。
+export function decodeCacheRows(raw: string): CacheRead {
+  const data = JSON.parse<CacheRowRead>(raw)
+  if (data == null || typeof data.revision != 'string' || !Array.isArray(data.rows)) throw new Error('聊天缓存回执无效')
+  const rows = new Map<string, string>()
+  data.rows.forEach((row: CacheRow) => { if (row != null && typeof row.key == 'string' && typeof row.value == 'string') rows.set(row.key, row.value) })
+  const entries = [] as CachedConversation[]
+  rows.forEach((value: string, rowKey: string) => {
+    if (!rowKey.startsWith('h:')) return
+    try {
+      const header = JSON.parse<CacheHeader>(value)
+      if (header == null || typeof header.hostId != 'string' || typeof header.threadId != 'string' || !Array.isArray(header.recent) || !Array.isArray(header.older)) return
+      const key = cacheEntryKey(header.hostId, header.threadId)
+      if (rowKey != cacheHeaderKey(key)) return
+      const messages = readCacheMessages(rows, key, header.recent)
+      const olderMessages = readCacheMessages(rows, key, header.older)
+      if (messages == null || olderMessages == null) return
+      entries.push({ hostId: header.hostId, threadId: header.threadId, title: header.title, cwd: header.cwd, savedAt: header.savedAt, accessedAt: header.accessedAt, contentRevision: header.contentRevision, latestTurn: header.latestTurn, turns: header.turns, olderTurns: header.olderTurns, messages, olderMessages } as CachedConversation)
+    } catch (_) {}
+  })
+  return { revision: data.revision, entries } as CacheRead
+}

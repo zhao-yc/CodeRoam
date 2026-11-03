@@ -1,54 +1,80 @@
 import { reactive } from 'vue'
+import { readConversationCacheRows, writeConversationCacheRows } from '@/uni_modules/codex-conversation-db'
 import { clearFileReportCache } from './file-report-cache.uts'
+import { cacheEntryKey, appendCacheChanges, decodeCacheRows, CacheRead, CacheRow, CacheRowChanges } from './conversation-cache-rows.uts'
 import type { ChatMessage, Conversation, ConversationTurn, LatestTurn } from './bridge.uts'
 import type { HistoryPage } from './history.uts'
 
 export type CachedConversation = { contentRevision?: string, latestTurn?: LatestTurn, hostId: string, threadId: string, title: string, cwd: string, messages: ChatMessage[], turns: ConversationTurn[], olderMessages: ChatMessage[], olderTurns: ConversationTurn[], savedAt: number, accessedAt: number }
 type CacheStore = { version: number, namespace: string, entries: CachedConversation[] }
+type CacheState = { namespace: string, index: Map<string, CachedConversation>, sizes: Map<string, number>, committed: Map<string, CachedConversation>, dirty: Map<string, number>, blockedHosts: Set<string>, allowedHosts: string[] | null, revision: string, serial: number, legacyRaw: string, timer: number, ready: boolean, retired: boolean, loading: Promise<void> | null, writing: Promise<void> | null }
 const CACHE_KEY = 'codex-mobile-conversation-cache-v1'
 const ENTRY_BYTES = 512 * 1024
 const TOTAL_BYTES = 3 * 1024 * 1024
 
 let invalidationRevision = 0
-let storeMemory: CacheStore | null = null
-let storeIndex = new Map<string, CachedConversation>()
-let accessTimer = 0
+let activeCache: CacheState | null = null
+const retiredCacheNamespaces = new Set<string>()
 export const conversationCacheChanges = reactive({ revision: 0, members: 0 })
 
-// 用电脑与会话共同定位缓存，命中时无需重新解析所有聊天。
-function cacheEntryKey(hostId: string, threadId: string): string { return JSON.stringify([hostId, threadId]) }
+function markDirty(state: CacheState, key: string) { state.dirty.set(key, ++state.serial) }
+function cacheBytes(entry: CachedConversation): number { return JSON.stringify(entry).length * 2 }
+function allowedCacheHost(state: CacheState, hostId: string): boolean { return !state.blockedHosts.has(hostId) && (state.allowedHosts == null || state.allowedHosts!.indexOf(hostId) >= 0) }
+function copyCacheIndex(state: CacheState): Map<string, CachedConversation> {
+  const copy = new Map<string, CachedConversation>()
+  state.index.forEach((entry: CachedConversation, key: string) => { copy.set(key, entry) })
+  return copy
+}
 
-function indexStore(store: CacheStore) {
-  const previous = storeIndex
-  const next = new Map<string, CachedConversation>()
-  store.entries.forEach((entry: CachedConversation) => { next.set(cacheEntryKey(entry.hostId, entry.threadId), entry) })
-  storeMemory = store
-  storeIndex = next
-  if (previous.size != next.size || store.entries.some((entry: CachedConversation): boolean => !previous.has(cacheEntryKey(entry.hostId, entry.threadId)))) conversationCacheChanges.members++
+// 容量核对只计算新增或变更会话，避免每次扫描、序列化整份缓存。
+function boundCache(state: CacheState, preferred: string = '') {
+  let total = 0
+  state.sizes.forEach((size: number) => { total += size })
+  if (state.index.size <= 20 && total <= TOTAL_BYTES) return
+  const ranked = [] as CachedConversation[]
+  state.index.forEach((entry: CachedConversation) => { ranked.push(entry) })
+  ranked.sort((left: CachedConversation, right: CachedConversation): number => left.accessedAt - right.accessedAt)
+  for (let index = 0; index < ranked.length && (state.index.size > 20 || total > TOTAL_BYTES); index++) {
+    const entry = ranked[index]
+    const key = cacheEntryKey(entry.hostId, entry.threadId)
+    if (key == preferred) continue
+    total -= state.sizes.get(key) ?? 0
+    state.index.delete(key); state.sizes.delete(key); markDirty(state, key)
+  }
 }
 
 // 清理代次使所有在途预加载失效，即使目标聊天此前还没有缓存也不能迟到写回。
 export function conversationCacheRevision(): number { return invalidationRevision }
 
-// 应用恢复配对后提前建立内存索引，包括尚未建立网络连接的情况。
-export function primeConversationCache(namespace: string) { if (namespace.length > 0) loadStore(namespace) }
+// 应用恢复配对后异步建立内存索引，包括尚未建立网络连接的情况。
+export function primeConversationCache(namespace: string): Promise<void> {
+  if (namespace.length == 0) return Promise.resolve()
+  const state = cacheState(namespace)
+  return state == null ? Promise.resolve() : hydrateCache(state)
+}
 
 // 调度检查不冒充用户访问，也不为了读取版本而同步改写存储。
 export function peekConversationCache(namespace: string, hostId: string, threadId: string): CachedConversation | null {
   if (namespace.length == 0) return null
-  const store = loadStore(namespace)
-  return storeMemory === store ? storeIndex.get(cacheEntryKey(hostId, threadId)) ?? null : null
+  const state = cacheState(namespace)
+  return state?.index.get(cacheEntryKey(hostId, threadId)) ?? null
 }
 
 // 校验已经落过盘的目标，最近列表截断时也能识别原电脑确认移除的聊天。
 export function cachedConversationThreadIds(namespace: string, hostId: string): string[] {
   if (namespace.length == 0) return [] as string[]
-  return loadStore(namespace).entries.filter((entry: CachedConversation): boolean => entry.hostId == hostId).map((entry: CachedConversation): string => entry.threadId)
+  const result = [] as string[]
+  cacheState(namespace)?.index.forEach((entry: CachedConversation) => { if (entry.hostId == hostId) result.push(entry.threadId) })
+  return result
 }
 
 // 只保存显示正文所需字段，图片数据、协议游标、审批及能力信息均不落入缓存。
 function cacheMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message: ChatMessage): ChatMessage => ({ id: message.id, role: message.role, kind: message.kind, summary: message.summary, phase: message.phase, imageCount: message.imageCount, text: message.text, turnId: message.turnId, status: message.status }))
+}
+
+function cacheTurns(turns: ConversationTurn[]): ConversationTurn[] {
+  return turns.map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage }))
 }
 
 export function validCachedMessages(messages: ChatMessage[]): boolean {
@@ -59,81 +85,209 @@ function validEntry(entry: CachedConversation): boolean {
   return entry != null && typeof entry.hostId == 'string' && typeof entry.threadId == 'string' && typeof entry.title == 'string' && typeof entry.cwd == 'string' && typeof entry.savedAt == 'number' && typeof entry.accessedAt == 'number' && validCachedMessages(entry.messages) && validCachedMessages(entry.olderMessages) && Array.isArray(entry.turns) && Array.isArray(entry.olderTurns) && entry.turns.concat(entry.olderTurns).every((turn: ConversationTurn): boolean => turn != null && typeof turn.turnId == 'string' && typeof turn.status == 'string' && (turn.errorMessage == null || typeof turn.errorMessage == 'string')) && (entry.latestTurn == null || (typeof entry.latestTurn!.turnId == 'string' && typeof entry.latestTurn!.status == 'string'))
 }
 
-// 所有存储异常均静默降级；不把包含会话内容的异常写入日志或错误提示。
-function loadStore(namespace: string): CacheStore {
-  const empty = { version: 1, namespace, entries: [] as CachedConversation[] } as CacheStore
-  if (storeMemory != null) return storeMemory!.namespace == namespace ? storeMemory! : empty
-  let store = empty
+// 迁移期间先用已验证的旧数据显示。数据库可用后仅以持久提交为准清理旧键。
+function cacheState(namespace: string): CacheState | null {
+  if (namespace.length == 0 || retiredCacheNamespaces.has(namespace)) return null
+  if (activeCache != null) return activeCache!.namespace == namespace ? activeCache : null
+  const state = { namespace, index: new Map<string, CachedConversation>(), sizes: new Map<string, number>(), committed: new Map<string, CachedConversation>(), dirty: new Map<string, number>(), blockedHosts: new Set<string>(), allowedHosts: null, revision: '', serial: 0, legacyRaw: '', timer: 0, ready: false, retired: false, loading: null, writing: null } as CacheState
   try {
     const raw = uni.getStorageSync(CACHE_KEY)
     if (typeof raw == 'string' && raw.length > 0 && raw.length * 2 <= TOTAL_BYTES) {
       const loaded = JSON.parse<CacheStore>(raw)
-      if (loaded != null && loaded.version == 1 && Array.isArray(loaded.entries)) {
-        if (loaded.namespace != namespace) return empty
-        loaded.entries = loaded.entries.filter((entry: CachedConversation): boolean => validEntry(entry))
-        store = loaded
+      if (loaded != null && loaded.version == 1 && loaded.namespace == namespace && Array.isArray(loaded.entries)) {
+        state.legacyRaw = raw
+        loaded.entries.forEach((entry: CachedConversation) => {
+          if (!validEntry(entry)) return
+          // 迁移也经过展示白名单，旧结构中的附加字段不能进入数据库。
+          const latestTurn = entry.latestTurn
+          const clean = { hostId: entry.hostId, threadId: entry.threadId, title: entry.title, cwd: entry.cwd, savedAt: entry.savedAt, accessedAt: entry.accessedAt, contentRevision: entry.contentRevision, latestTurn: latestTurn == null ? undefined : { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn, messages: cacheMessages(entry.messages), turns: cacheTurns(entry.turns), olderMessages: cacheMessages(entry.olderMessages), olderTurns: cacheTurns(entry.olderTurns) } as CachedConversation
+          const key = cacheEntryKey(clean.hostId, clean.threadId)
+          const size = cacheBytes(clean)
+          if (size <= ENTRY_BYTES) { state.index.set(key, clean); state.sizes.set(key, size) }
+        })
+        boundCache(state)
       }
     }
   } catch (_) {}
-  indexStore(store)
-  return store
+  activeCache = state
+  hydrateCache(state)
+  return state
 }
 
-function writeStore(store: CacheStore): boolean {
-  try { uni.setStorageSync(CACHE_KEY, JSON.stringify(store)); return true } catch (_) { return false }
+function notifyCache(state: CacheState, previous: Map<string, CachedConversation>) {
+  if (activeCache !== state || state.retired) return
+  conversationCacheChanges.revision++
+  let membersChanged = previous.size != state.index.size
+  if (!membersChanged) state.index.forEach((_entry: CachedConversation, key: string) => { if (!previous.has(key)) membersChanged = true })
+  if (membersChanged) conversationCacheChanges.members++
 }
 
-// 访问时间低优先级合并落盘，打开详情不等待整个缓存序列化。
-export function flushConversationCacheStorage() {
-  if (accessTimer == 0) return
-  clearTimeout(accessTimer); accessTimer = 0
-  if (storeMemory != null && storeMemory!.entries.length > 0) writeStore(storeMemory!)
+function removeLegacyAfterCommit(state: CacheState) {
+  if (state.legacyRaw.length == 0) return
+  try {
+    if (uni.getStorageSync(CACHE_KEY) == state.legacyRaw) uni.removeStorageSync(CACHE_KEY)
+    state.legacyRaw = ''
+  } catch (_) {}
 }
 
-function scheduleCacheStorage() {
-  if (accessTimer == 0) accessTimer = setTimeout(() => { flushConversationCacheStorage() }, 500)
+function sameCacheContent(a: CachedConversation | null, b: CachedConversation | null): boolean {
+  if (a == null || b == null) return a == b
+  // 只在多窗口写入冲突时比较完整快照，访问时间变化不会抢走新的正文。
+  return a.contentRevision == b.contentRevision && JSON.stringify(a.messages) == JSON.stringify(b.messages) && JSON.stringify(a.olderMessages) == JSON.stringify(b.olderMessages) && JSON.stringify(a.turns) == JSON.stringify(b.turns) && JSON.stringify(a.olderTurns) == JSON.stringify(b.olderTurns)
+}
+
+// 合并加载期间的新数据。并发提交时，同一聊天以已提交版本为准，明确清理仍会重试。
+function adoptCacheRows(state: CacheState, data: CacheRead, initial: boolean) {
+  const previous = state.index
+  if (data.revision.startsWith('retired-')) {
+    // 其他标签页清除配对后，此命名空间的晚到请求不能重新创建数据。
+    state.index = new Map<string, CachedConversation>(); state.sizes.clear(); state.dirty.clear()
+    notifyCache(state, previous)
+    state.retired = true; retiredCacheNamespaces.add(state.namespace)
+    if (activeCache === state) activeCache = null
+    return
+  }
+  const persisted = new Map<string, CachedConversation>()
+  data.entries.forEach((entry: CachedConversation) => { if (validEntry(entry)) persisted.set(cacheEntryKey(entry.hostId, entry.threadId), entry) })
+  if (initial && data.revision.length == 0 && state.legacyRaw.length > 0) previous.forEach((_entry: CachedConversation, key: string) => { if (!state.dirty.has(key)) markDirty(state, key) })
+  const merged = new Map<string, CachedConversation>()
+  persisted.forEach((entry: CachedConversation, key: string) => {
+    if (allowedCacheHost(state, entry.hostId)) merged.set(key, entry)
+    else markDirty(state, key)
+  })
+  state.dirty.forEach((_serial: number, key: string) => {
+    const entry = previous.get(key)
+    if (entry == null || !allowedCacheHost(state, entry.hostId)) { merged.delete(key); return }
+    if (!initial && !sameCacheContent(state.committed.get(key) ?? null, persisted.get(key) ?? null)) { state.dirty.delete(key); return }
+    merged.set(key, entry)
+  })
+  state.index = merged; state.sizes = new Map<string, number>(); state.committed = persisted; state.revision = data.revision
+  state.index.forEach((entry: CachedConversation, key: string) => {
+    const size = cacheBytes(entry)
+    if (size > ENTRY_BYTES) { state.index.delete(key); markDirty(state, key) }
+    else state.sizes.set(key, size)
+  })
+  boundCache(state); notifyCache(state, previous)
+}
+
+// 同一配对共用一次启动读取。读取失败时仍可展示内存和尚未迁移的旧数据。
+function hydrateCache(state: CacheState): Promise<void> {
+  if (state.ready || state.retired) return Promise.resolve()
+  if (state.loading != null) return state.loading!
+  const loading = readConversationCacheRows(state.namespace).then((raw: string) => {
+    if (state.retired) return
+    const data = decodeCacheRows(raw)
+    adoptCacheRows(state, data, true)
+    state.ready = true
+    if (!state.retired && (state.legacyRaw.length > 0 || state.dirty.size > 0)) scheduleCacheStorage(state)
+  }).catch((_error: Error) => {}).finally(() => { state.loading = null })
+  state.loading = loading
+  return loading
+}
+
+function nextCacheRevision(): string { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) }
+
+// 一批数据只提交变化的记录。较新内存写入不随旧回执一起清除。
+async function persistCache(state: CacheState) {
+  await hydrateCache(state)
+  for (let attempt = 0; attempt < 3 && state.ready && !state.retired; attempt++) {
+    const changes = { put: [] as CacheRow[], remove: [] as string[], clear: false } as CacheRowChanges
+    const batch = new Map<string, CachedConversation | null>()
+    const serial = state.serial
+    state.dirty.forEach((_value: number, key: string) => {
+      const entry = state.index.get(key) ?? null
+      appendCacheChanges(changes, key, state.committed.get(key) ?? null, entry)
+      batch.set(key, entry)
+    })
+    if (changes.put.length > 0 || changes.remove.length > 0 || (state.revision.length == 0 && state.legacyRaw.length > 0)) {
+      const next = nextCacheRevision()
+      const applied = await writeConversationCacheRows(state.namespace, state.revision, next, JSON.stringify(changes))
+      if (state.retired) return
+      if (!applied) {
+        const data = decodeCacheRows(await readConversationCacheRows(state.namespace))
+        if (state.retired) return
+        adoptCacheRows(state, data, false)
+        continue
+      }
+      state.revision = next
+    }
+    batch.forEach((entry: CachedConversation | null, key: string) => {
+      if (entry == null) state.committed.delete(key)
+      else state.committed.set(key, entry)
+      if ((state.dirty.get(key) ?? 0) <= serial) state.dirty.delete(key)
+    })
+    if (state.revision.length > 0) removeLegacyAfterCommit(state)
+    if (state.serial == serial || state.dirty.size == 0) return
+  }
+}
+
+// 访问时间低优先级合并落盘，详情打开不等待数据库事务。
+function scheduleCacheStorage(state: CacheState) {
+  if (!state.retired && state.timer == 0) state.timer = setTimeout(() => { flushCacheState(state) }, 500)
+}
+
+function flushCacheState(state: CacheState): Promise<void> {
+  clearTimeout(state.timer); state.timer = 0
+  if (state.writing != null) return state.writing!
+  const serial = state.serial
+  const writing = persistCache(state).catch((_error: Error) => {}).finally(() => {
+    state.writing = null
+    if (state.serial > serial && state.dirty.size > 0) scheduleCacheStorage(state)
+  })
+  state.writing = writing
+  return writing
+}
+
+async function drainCacheState(state: CacheState) {
+  await flushCacheState(state)
+  if (!state.retired && state.dirty.size > 0) await flushCacheState(state)
+}
+
+export function flushConversationCacheStorage(): Promise<void> {
+  const state = activeCache
+  return state == null ? Promise.resolve() : drainCacheState(state)
 }
 
 // 同一电脑的同号会话才可命中；本地只恢复展示，不恢复任何实时连接状态。
 export function readConversationCache(namespace: string, hostId: string, threadId: string): CachedConversation | null {
   if (namespace.length == 0 || hostId.length == 0 || threadId.length == 0) return null
-  const entry = peekConversationCache(namespace, hostId, threadId)
-  if (entry == null) return null
-  entry.accessedAt = Date.now(); scheduleCacheStorage()
-  return entry
+  const state = cacheState(namespace)
+  const key = cacheEntryKey(hostId, threadId)
+  const entry = state?.index.get(key)
+  if (state == null || entry == null) return null
+  const visited = { ...entry, accessedAt: Date.now() } as CachedConversation
+  state.index.set(key, visited); markDirty(state, key); scheduleCacheStorage(state)
+  return visited
 }
 
 // 按最新快照拆分历史补充，旧快照的尾部绝不能再次拼回 PC 返回的新快照。
 export function saveConversationCache(namespace: string, hostId: string, snapshot: Conversation, history: HistoryPage | null, contentRevision: string = '', deferred: boolean = false): boolean {
   if (namespace.length == 0 || hostId.length == 0 || snapshot.threadId.length == 0) return false
+  const state = cacheState(namespace)
+  if (state == null || !allowedCacheHost(state, hostId)) return false
   const now = Date.now()
   const messages = cacheMessages(snapshot.messages)
-  const turns = (snapshot.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage }))
+  const turns = cacheTurns(snapshot.turns ?? [] as ConversationTurn[])
   const olderMessages = cacheMessages((history?.messages ?? [] as ChatMessage[]).filter((message: ChatMessage): boolean => !messages.some((current: ChatMessage): boolean => current.id == message.id)))
   const latestTurn = snapshot.latestTurn
-  const entry = { latestTurn: latestTurn == null ? undefined : { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn, hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: (history?.turns ?? [] as ConversationTurn[]).map((turn: ConversationTurn): ConversationTurn => ({ turnId: turn.turnId, status: turn.status, durationMs: turn.durationMs, errorMessage: turn.errorMessage })), savedAt: now, accessedAt: now } as CachedConversation
+  const entry = { latestTurn: latestTurn == null ? undefined : { turnId: latestTurn.turnId, status: latestTurn.status } as LatestTurn, hostId, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, messages, turns, olderMessages, olderTurns: cacheTurns(history?.turns ?? [] as ConversationTurn[]), savedAt: now, accessedAt: now } as CachedConversation
   if (contentRevision.length > 0) entry.contentRevision = contentRevision
   // 剔除最早完整消息和无引用轮次，不截断正文，不影响当前页面的完整内容。
-  while (JSON.stringify(entry).length * 2 > ENTRY_BYTES) {
+  let size = cacheBytes(entry)
+  while (size > ENTRY_BYTES) {
     if (entry.olderMessages.length > 0) entry.olderMessages.shift()
     else if (entry.messages.length > 0) { entry.messages.shift(); entry.contentRevision = undefined }
     else return false
     entry.olderTurns = entry.olderTurns.filter((turn: ConversationTurn): boolean => entry.olderMessages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
     if (entry.contentRevision == null) entry.turns = entry.turns.filter((turn: ConversationTurn): boolean => (turn.status == 'failed' && turn.turnId == entry.latestTurn?.turnId) || entry.messages.some((message: ChatMessage): boolean => message.turnId == turn.turnId))
+    size = cacheBytes(entry)
   }
-  const current = loadStore(namespace)
-  const store = { version: current.version, namespace, entries: current.entries.filter((item: CachedConversation): boolean => item.hostId != hostId || item.threadId != snapshot.threadId) } as CacheStore
-  store.entries.sort((left: CachedConversation, right: CachedConversation): number => right.accessedAt - left.accessedAt)
-  store.entries.unshift(entry)
-  while (store.entries.length > 20 || JSON.stringify(store).length * 2 > TOTAL_BYTES) store.entries.pop()
-  // 实际配额可能更低；先淘汰旧会话后重试，仍失败则保留联网加载能力。
-  if (deferred) scheduleCacheStorage()
-  else {
-    while (!writeStore(store)) { if (store.entries.length <= 1) return false; store.entries.pop() }
-    clearTimeout(accessTimer); accessTimer = 0
-  }
-  indexStore(store)
-  conversationCacheChanges.revision++
+  const previous = copyCacheIndex(state)
+  const key = cacheEntryKey(hostId, snapshot.threadId)
+  state.index.set(key, entry); state.sizes.set(key, size); markDirty(state, key)
+  boundCache(state, key); notifyCache(state, previous)
+  if (deferred) scheduleCacheStorage(state)
+  else flushCacheState(state)
   return true
 }
 
@@ -142,30 +296,83 @@ export function cachedConversationSnapshot(entry: CachedConversation): Conversat
   return { latestTurn: entry.latestTurn, threadId: entry.threadId, title: entry.title, cwd: entry.cwd, messages: entry.messages, turns: entry.turns, updatedAt: entry.savedAt, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], readOnly: true } as Conversation
 }
 
-// 清理只触及本应用的会话缓存；失败时旧命名空间也不能被新配对读取。
-export function clearConversationCache(namespace: string, hostId: string = '', threadIds: string[] | null = null) {
+// 明确清理时也清理旧格式副本，避免迁移失败后在离线重启时恢复被撤回的内容。
+function removeLegacyScope(namespace: string, hostId: string, threadIds: string[] | null) {
+  try {
+    const raw = uni.getStorageSync(CACHE_KEY)
+    if (typeof raw != 'string' || raw.length == 0) return
+    const store = JSON.parse<CacheStore>(raw)
+    if (store == null || store.namespace != namespace || !Array.isArray(store.entries)) return
+    if (hostId.length == 0) { uni.removeStorageSync(CACHE_KEY); return }
+    store.entries = store.entries.filter((entry: CachedConversation): boolean => entry.hostId != hostId || (threadIds != null && threadIds.indexOf(entry.threadId) < 0))
+    if (store.entries.length == 0) uni.removeStorageSync(CACHE_KEY)
+    else uni.setStorageSync(CACHE_KEY, JSON.stringify(store))
+  } catch (_) {}
+}
+
+// 旧配对使用独立事务清理，不能清空新配对的内存或数据库记录。
+async function purgeCacheScope(namespace: string, hostId: string, threadIds: string[] | null) {
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const data = decodeCacheRows(await readConversationCacheRows(namespace))
+      const changes = { put: [] as CacheRow[], remove: [] as string[], clear: hostId.length == 0 } as CacheRowChanges
+      if (!changes.clear) data.entries.forEach((entry: CachedConversation) => {
+        if (entry.hostId == hostId && (threadIds == null || threadIds.indexOf(entry.threadId) >= 0)) appendCacheChanges(changes, cacheEntryKey(hostId, entry.threadId), entry, null)
+      })
+      const revision = (changes.clear || data.revision.startsWith('retired-') ? 'retired-' : '') + nextCacheRevision()
+      if (await writeConversationCacheRows(namespace, data.revision, revision, JSON.stringify(changes))) return
+    }
+  } catch (_) {}
+}
+
+export function clearConversationCache(namespace: string, hostId: string = '', threadIds: string[] | null = null): Promise<void> {
   invalidationRevision++
   clearFileReportCache(namespace, hostId, threadIds)
-  if (namespace.length == 0) return
-  const store = loadStore(namespace)
-  if (storeMemory !== store) return
-  clearTimeout(accessTimer); accessTimer = 0
-  store.entries = store.entries.filter((entry: CachedConversation): boolean => hostId.length > 0 && (entry.hostId != hostId || (threadIds != null && threadIds.indexOf(entry.threadId) < 0)))
-  indexStore(store)
-  conversationCacheChanges.revision++
-  if (store.entries.length > 0) { writeStore(store); return }
-  try { uni.removeStorageSync(CACHE_KEY) } catch (_) { writeStore(store) }
-  storeMemory = null; storeIndex.clear()
+  if (namespace.length == 0) return Promise.resolve()
+  const state = activeCache?.namespace == namespace ? activeCache : null
+  if (hostId.length == 0) {
+    retiredCacheNamespaces.add(namespace)
+    if (state != null) {
+      state.retired = true; clearTimeout(state.timer); activeCache = null
+      conversationCacheChanges.revision++; conversationCacheChanges.members++
+    }
+    removeLegacyScope(namespace, hostId, threadIds)
+    return purgeCacheScope(namespace, hostId, threadIds)
+  }
+  removeLegacyScope(namespace, hostId, threadIds)
+  if (state == null) return purgeCacheScope(namespace, hostId, threadIds)
+  if (state.legacyRaw.length > 0) {
+    try { const raw = uni.getStorageSync(CACHE_KEY); state.legacyRaw = typeof raw == 'string' ? raw : '' } catch (_) {}
+  }
+  const previous = copyCacheIndex(state)
+  if (threadIds == null) {
+    state.blockedHosts.add(hostId)
+    state.index.forEach((entry: CachedConversation, key: string) => {
+      if (entry.hostId == hostId) { state.index.delete(key); state.sizes.delete(key); markDirty(state, key) }
+    })
+  } else threadIds.forEach((id: string) => {
+    const key = cacheEntryKey(hostId, id)
+    state.index.delete(key); state.sizes.delete(key); markDirty(state, key)
+  })
+  notifyCache(state, previous)
+  return drainCacheState(state)
 }
 
 // 中转给出完整授权电脑列表后，移除已经撤回授权的电脑内容。
 export function retainConversationCacheHosts(namespace: string, hostIds: string[]) {
   if (namespace.length == 0) return
-  const store = loadStore(namespace)
-  const retained = store.entries.filter((entry: CachedConversation): boolean => hostIds.indexOf(entry.hostId) >= 0)
-  if (retained.length == store.entries.length) return
-  invalidationRevision++
-  clearTimeout(accessTimer); accessTimer = 0
-  store.entries = retained; indexStore(store); writeStore(store)
-  conversationCacheChanges.revision++
+  const state = cacheState(namespace)
+  if (state == null) return
+  const previous = copyCacheIndex(state)
+  state.allowedHosts = hostIds.slice()
+  state.index.forEach((entry: CachedConversation, key: string) => {
+    if (!allowedCacheHost(state, entry.hostId)) {
+      state.index.delete(key); state.sizes.delete(key); markDirty(state, key)
+      if (state.legacyRaw.length > 0) removeLegacyScope(namespace, entry.hostId, null)
+    }
+  })
+  if (state.legacyRaw.length > 0 && previous.size != state.index.size) {
+    try { const raw = uni.getStorageSync(CACHE_KEY); state.legacyRaw = typeof raw == 'string' ? raw : '' } catch (_) {}
+  }
+  if (previous.size != state.index.size) { invalidationRevision++; notifyCache(state, previous); flushCacheState(state) }
 }

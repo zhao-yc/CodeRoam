@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
+import {conversationCacheSource,conversationMemoryDatabase} from './helpers/conversation-cache-fixture.mjs';
 
 const source=name=>fs.readFileSync('apps/mobile/services/'+name+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
 const row=(id,revision='v1',overrides={})=>({id,revision,attention:'running',important:false,terminal:false,...overrides});
@@ -73,38 +74,39 @@ test('失败静默退避，存储失败不会产生立即重试循环',async()=>
 
 /** 执行真实缓存代码，验证预加载沿用容量边界并保留额外历史。 */
 function cacheFixture(){
-  const storage=new Map();const context=vm.createContext({uni:{getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)},Date,reactive:value=>value,setTimeout,clearTimeout,clearFileReportCache:()=>{}});
-  vm.runInContext(stripTypeScriptTypes(source('conversation-cache'),{mode:'transform'})+';globalThis.f={saveConversationCache,peekConversationCache,conversationCacheRevision,clearConversationCache,cachedConversationSnapshot};',context);
-  return {...context.f,storage};
+  const database=conversationMemoryDatabase();const context=vm.createContext({...database.adapter,uni:{getStorageSync:()=>''},Date,reactive:value=>value,setTimeout:()=>1,clearTimeout:()=>{},clearFileReportCache:()=>{}});
+  vm.runInContext(stripTypeScriptTypes(conversationCacheSource,{mode:'transform'})+';globalThis.f={saveConversationCache,peekConversationCache,conversationCacheRevision,clearConversationCache,cachedConversationSnapshot,flushConversationCacheStorage};',context);
+  return {...context.f,database};
 }
 const message=(id,text=id)=>({id,text,role:'assistant',turnId:'turn',status:'completed'});
 const snapshot=(text='正文')=>({threadId:'a',title:'合成聊天',cwd:'/synthetic/project',messages:[message('recent',text)],turns:[],latestTurn:{turnId:'turn',status:'completed'}});
 
-test('预加载版本向后兼容、保留额外历史且只生成不可操作的展示快照',()=>{
+test('预加载版本向后兼容、保留额外历史且只生成不可操作的展示快照',async()=>{
   const f=cacheFixture();f.saveConversationCache('pair','one',snapshot(),{messages:[message('older')],turns:[]});
-  const previous=f.peekConversationCache('pair','one','a');const before=[...f.storage.values()][0];assert.equal(previous.contentRevision,undefined);f.peekConversationCache('pair','one','a');assert.equal([...f.storage.values()][0],before);
+  await f.flushConversationCacheStorage();
+  const previous=f.peekConversationCache('pair','one','a'),before=f.database.writes.length;assert.equal(previous.contentRevision,undefined);f.peekConversationCache('pair','one','a');assert.equal(f.database.writes.length,before);
   f.saveConversationCache('pair','one',snapshot('新正文'),{messages:previous.olderMessages,turns:previous.olderTurns},'v2');
   const cached=f.peekConversationCache('pair','one','a');assert.equal(cached.contentRevision,'v2');assert.equal(cached.olderMessages[0].id,'older');assert.equal(cached.messages[0].text,'新正文');
   const display=f.cachedConversationSnapshot(cached);assert.equal(display.readOnly,true);assert.equal(display.activeTurnId,'');assert.equal(display.approvals.length,0);
-  const epoch=f.conversationCacheRevision();f.clearConversationCache('pair','one',['not-cached']);assert.ok(f.conversationCacheRevision()>epoch);
+  const epoch=f.conversationCacheRevision();await f.clearConversationCache('pair','one',['not-cached']);assert.ok(f.conversationCacheRevision()>epoch);
 });
 
 /** 执行应用服务和缓存，验证真实入口不会碰导航、焦点及当前聊天状态。 */
 function serviceFixture(supportsConversationCache=false){
-  const storage=new Map(),watchers=[],timers=new Map(),requests=[],subscriptions=[],unsubscribed=[],removed=[];let timer=0;
+  const database=conversationMemoryDatabase(),watchers=[],timers=new Map(),requests=[],subscriptions=[],unsubscribed=[],removed=[];let timer=0;
   const connection={cacheNamespace:'pair',configurationRevision:1,connected:true,supportsConversationCache,hostId:'current',activeThreadId:'reading',snapshot:{threadId:'reading',messages:[message('reading')]},computers:[{id:'one',online:true,instanceGeneration:'g'}]};
   const threadList={computers:[{hostId:'one',online:true,subscribed:true,instanceGeneration:'g',threads:[{id:'a',contentRevision:'v1',status:'active',activeTurnId:'turn'}]}]};
   const bridge={prefetchConversation:(hostId,threadId)=>new Promise((resolve,reject)=>requests.push({hostId,threadId,resolve,reject})),watchConversationCache:(hostId,id,threads,verify)=>new Promise((resolve,reject)=>subscriptions.push({hostId,id,threads,verify,resolve,reject})),unwatchConversationCache:(hostId,id)=>unsubscribed.push({hostId,id}),invalidateRemovedConversation:(hostId,threadId)=>removed.push({hostId,threadId})};
-  const context=vm.createContext({JSON,Date,bridge,connection,threadList,reactive:value=>value,clearFileReportCache:()=>{},watch:(read,callback,options)=>{watchers.push(callback);if(options?.immediate)callback();},setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),uni:{getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)}});
+  const context=vm.createContext({JSON,Date,bridge,connection,threadList,...database.adapter,reactive:value=>value,clearFileReportCache:()=>{},watch:(read,callback,options)=>{watchers.push(callback);if(options?.immediate)callback();},setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),uni:{getStorageSync:()=>''}});
   const bridgeSource=source('bridge');const messages=bridgeSource.slice(bridgeSource.indexOf('function hasConversationContentRevision'),bridgeSource.indexOf('type ConversationDelta'));
-  vm.runInContext(stripTypeScriptTypes(source('conversation-cache')+'\n'+messages+'\n'+source('conversation-prefetch-state')+'\n'+source('conversation-prefetch'),{mode:'transform'})+';globalThis.f={startConversationPrefetch,backgroundConversationPrefetch,resumeConversationPrefetch,saveConversationCache,peekConversationCache,clearConversationCache};',context);
+  vm.runInContext(stripTypeScriptTypes(conversationCacheSource+'\n'+messages+'\n'+source('conversation-prefetch-state')+'\n'+source('conversation-prefetch'),{mode:'transform'})+';globalThis.f={startConversationPrefetch,backgroundConversationPrefetch,resumeConversationPrefetch,saveConversationCache,peekConversationCache,clearConversationCache,flushConversationCacheStorage};',context);
   const refresh=()=>watchers.forEach(fn=>fn());
   const resolve=(index,text='新正文')=>{
     const snap={...snapshot(text),readOnly:true};snap.getString=key=>snap[key];snap.getBoolean=key=>snap[key];
     requests[index].resolve({snapshot:snap,getString:key=>key==='contentRevision'?'v1':null});
   };
   const push=(value,index=subscriptions.length-1)=>bridge.cacheEventHandler({hostId:'one',generation:'g',subscriptionId:subscriptions[index].id,threadId:'a',...value,getString(key){return this[key]??null;},getBoolean(key){return this[key]??null;}});
-  return {...context.f,connection,threadList,requests,refresh,resolve,timers,subscriptions,unsubscribed,push,storage,removed};
+  return {...context.f,connection,threadList,requests,refresh,resolve,timers,subscriptions,unsubscribed,push,database,removed};
 }
 
 test('应用级预加载不切换电脑或聊天；缓存可立即展示，后台与归档清理后不回写',async()=>{
@@ -118,7 +120,7 @@ test('应用级预加载不切换电脑或聊天；缓存可立即展示，后�
 
 const version=letter=>'content:'+letter.repeat(64);
 
-test('前台正文推送在回执前入内存，增量缺口仅补当前聊天，后台停止同步',()=>{
+test('前台正文推送在回执前入内存，增量缺口仅补当前聊天，后台停止同步',async()=>{
   const f=serviceFixture(true);f.threadList.computers[0].threads.push({id:'other',updatedAt:1});f.startConversationPrefetch();
   assert.equal(f.requests.length,0);assert.equal(f.subscriptions.length,1);
   f.push({revision:version('a'),snapshot:snapshot('最新')});
@@ -135,7 +137,7 @@ test('前台正文推送在回执前入内存，增量缺口仅补当前聊天�
   f.backgroundConversationPrefetch();assert.equal(f.unsubscribed.at(-1).id,f.subscriptions[1].id);
   f.push({revision:version('f'),snapshot:snapshot('后台迟到正文')});
   assert.equal(f.peekConversationCache('pair','one','a').messages[0].text,'已追平正文');
-  assert.ok([...f.storage.values()][0].includes('已追平正文'));
+  await f.flushConversationCacheStorage();assert.ok(f.database.dump('pair').rows.some(row=>row.value.includes('已追平正文')));
 });
 
 test('旧电脑拒绝正文订阅时只对该电脑恢复前台预加载',async()=>{

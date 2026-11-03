@@ -448,7 +448,9 @@ watch(historyPage, () => { scheduleConversationCache() })
 // 在实时订阅确认前，详情也能呈现后台刚收到的正文。额外历史和阅读位置留在原面板。
 watch((): number => conversationCacheChanges.revision, () => {
   if (pageCacheNamespace.value.length == 0 || pageCacheNamespace.value != connection.cacheNamespace) return
-  cachedDetail.value = peekConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
+  const entry = peekConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
+  if (cachedDetail.value == null && entry != null && historyPage.value == null && entry.olderMessages.length > 0) historyPage.value = { messages: entry.olderMessages, turns: entry.olderTurns, cursor: '', hasMore: true } as HistoryPage
+  cachedDetail.value = entry
 })
 // 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
 watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {

@@ -25,7 +25,7 @@ import TaskNotice from '../task-notice/task-notice.uvue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import type { ComputerThread } from '../../services/thread-list.uts'
-import { readConversationCache } from '../../services/conversation-cache.uts'
+import { readConversationCache, peekConversationCache, primeConversationCache } from '../../services/conversation-cache.uts'
 import { bindWorkspaceNoticeNavigation } from '../../services/task-notifications.uts'
 import type { TaskNotice as TaskNoticeTarget } from '../../services/task-notification-state.uts'
 import { workspaceIsWide, workspaceDetailWidth, workspaceTarget, workspaceTargetKey, WorkspaceTarget } from '../../services/workspace-layout.uts'
@@ -54,9 +54,22 @@ function canOpen(target: WorkspaceTarget, online: boolean): boolean {
   return true
 }
 
+// 冷启动的离线入口等待一次恢复。已有内存正文的点击直接进入详情。
+function pendingOfflineCache(target: WorkspaceTarget, online: boolean): Promise<void> | null {
+  if ((connection.connected && online) || target.cacheNamespace != connection.cacheNamespace || peekConversationCache(target.cacheNamespace, target.hostId, target.threadId) != null) return null
+  return primeConversationCache(target.cacheNamespace)
+}
+
 // 先卸载旧面板，等缓存和订阅清理完成再切换，避免旧清理误取消新订阅。
 async function selectConversation(target: WorkspaceTarget, activate: boolean): Promise<boolean> {
-  const online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
+  let online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
+  const pending = pendingOfflineCache(target, online)
+  if (pending != null) {
+    const revision = ++switchRevision
+    await pending
+    if (!alive || revision != switchRevision || target.cacheNamespace != connection.cacheNamespace) return false
+    online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
+  }
   if (!canOpen(target, online)) return false
   handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   if (mode.value == 'conversation' && detailMounted.value && selectedKey.value == workspaceTargetKey(target)) return true
@@ -74,15 +87,23 @@ async function selectConversation(target: WorkspaceTarget, activate: boolean): P
   } catch (reason) { mode.value = 'list'; selected.value = null; uni.showToast({ title: (reason as Error).message, icon: 'none' }); return false }
 }
 
-function openThread(thread: ComputerThread) {
+async function openThread(thread: ComputerThread) {
   const project = thread.cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0).pop() ?? '未指定项目'
   const target = workspaceTarget(thread.hostId, thread.id, thread.title, project, connection.cacheNamespace)
-  if (!canOpen(target, thread.online)) return
   if (wide.value) { selectConversation(target, true); return }
+  let online = thread.online
+  const pending = pendingOfflineCache(target, online)
+  if (pending != null) {
+    const revision = ++switchRevision
+    await pending
+    if (!alive || revision != switchRevision || target.cacheNamespace != connection.cacheNamespace) return
+    online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
+  }
+  if (!canOpen(target, online)) return
   handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   try {
     bridge.selectComputer(thread.hostId)
-    if (connection.connected && thread.online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    if (connection.connected && online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
     uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&hostId=' + encodeURIComponent(thread.hostId) + '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(project), success: (_) => { listPane.value?.rememberOpened(thread.key) } })
   } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
 }

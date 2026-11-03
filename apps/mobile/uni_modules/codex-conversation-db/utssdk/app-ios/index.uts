@@ -1,0 +1,21 @@
+import { ReadConversationCacheRows, WriteConversationCacheRows } from '../interface.uts'
+
+// 后台事务完成后再在应用线程结算 Promise。
+export const readConversationCacheRows: ReadConversationCacheRows = function (namespace: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    CodexConversationSQLite.read(namespace, completion = (value: string, succeeded: boolean) => {
+      if (succeeded) resolve(value)
+      else reject(new Error('无法读取本地聊天缓存'))
+    })
+  })
+}
+
+// 返回 false 表示前置版本已经失效，事务没有写入任何记录。
+export const writeConversationCacheRows: WriteConversationCacheRows = function (namespace: string, expectedRevision: string, nextRevision: string, changes: string): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    CodexConversationSQLite.write(namespace, expected = expectedRevision, next = nextRevision, changes = changes, completion = (written: boolean, succeeded: boolean) => {
+      if (succeeded) resolve(written)
+      else reject(new Error('无法写入本地聊天缓存'))
+    })
+  })
+}

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
+import {conversationCacheSource,conversationMemoryDatabase} from './helpers/conversation-cache-fixture.mjs';
 
 const uts = name => fs.readFileSync(`apps/mobile/services/${name}.uts`, 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -43,8 +44,8 @@ test('重试只提交目标轮次，回执前后禁止重复，明确拒绝后�
 });
 
 test('失败原因及最新轮次经过历史合并和缓存恢复，缓存不恢复重试能力', () => {
-  const storage=new Map(),c=componentContext({reactive:value=>value,setTimeout,clearTimeout,uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v)}});
-  vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+uts('conversation-cache'))+';globalThis.f={conversationWithHistory,saveConversationCache,readConversationCache,cachedConversationSnapshot}',c);
+  const c=componentContext({...conversationMemoryDatabase().adapter,reactive:value=>value,setTimeout:()=>1,clearTimeout:()=>{},uni:{getStorageSync:()=>''}});
+  vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+conversationCacheSource)+';globalThis.f={conversationWithHistory,saveConversationCache,readConversationCache,cachedConversationSnapshot}',c);
   const s={...state(),title:'合成会话',cwd:'/example/project',updatedAt:1};
   assert.equal(c.f.saveConversationCache('pair','pc',s,null),true);
   const saved=c.f.cachedConversationSnapshot(c.f.readConversationCache('pair','pc','thread'));

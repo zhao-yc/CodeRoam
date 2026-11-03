@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
+import {conversationCacheSource,conversationMemoryDatabase} from './helpers/conversation-cache-fixture.mjs';
 
 const source=name=>fs.readFileSync('apps/mobile/services/'+name+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
 const file={id:'file-a',path:'src/example.uts',kind:'update',additions:1,deletions:1,binary:false};
@@ -108,7 +109,8 @@ test('重新打开差异面板先显示已缓存代码，再更新 PC 正文；�
   const stale=component('sheet',f.storage);stale.requests[0].resolve(object({revision:'two',file:detail('wrong revision')}));await tick();assert.equal(stale.ui.detailFor('file-a'),null);assert.match(stale.ui.errorFor('file-a'),/已更新/);
 });
 
-test('正文缓存的清理入口同时删除已加载文件记录，其他电脑仍保留',()=>{
-  const f=fixture();vm.runInContext(stripTypeScriptTypes(source('conversation-cache'),{mode:'transform'}),f.context);f.saveFileReportCache('pair','pc','thread','report',report());f.saveFileReportCache('pair','other','thread','report',report());
-  vm.runInContext("clearConversationCache('pair','pc',['thread']);",f.context);assert.equal(f.readFileReportCache('pair','pc','thread','report'),null);assert.ok(f.readFileReportCache('pair','other','thread','report'));
+test('正文缓存的清理入口同时删除已加载文件记录，其他电脑仍保留',async()=>{
+  const f=fixture();Object.assign(f.context,conversationMemoryDatabase().adapter);
+  vm.runInContext(stripTypeScriptTypes(conversationCacheSource,{mode:'transform'}),f.context);f.saveFileReportCache('pair','pc','thread','report',report());f.saveFileReportCache('pair','other','thread','report',report());
+  await vm.runInContext("clearConversationCache('pair','pc',['thread']);",f.context);assert.equal(f.readFileReportCache('pair','pc','thread','report'),null);assert.ok(f.readFileReportCache('pair','other','thread','report'));
 });
