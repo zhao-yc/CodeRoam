@@ -1,0 +1,173 @@
+<template>
+  <view :id="instanceId" class="composer-panel" :class="{ 'composer-compact': !expanded, 'composer-entry': entryOnly }" @click="emit('interact')">
+    <slot name="feedback"></slot>
+    <view class="composer-stage" :style="{ height: stageHeight + 'px' }">
+      <!-- 展开与收起始终保留同一个原生输入节点。 -->
+      <scroll-view direction="vertical" :show-scrollbar="false" :scroll-into-view="contentTarget" class="composer-content" :class="{ 'composer-content-compact': !expanded, 'composer-content-hidden': entryOnly && !expanded }" :style="{ height: visibleContentHeight + 'px' }">
+        <view :id="instanceId + '-content'" class="composer-content-body">
+          <view v-show="expanded" class="composer-assets">
+            <thread-mention-chips :mentions="mentions" :disabled="chipsDisabled" @remove="emit('removemention', $event)" />
+            <plugin-chips :plugins="plugins" :disabled="chipsDisabled" @remove="emit('removeplugin', $event)" />
+            <view v-if="images.length > 0" class="draft-images">
+              <view v-for="image in images" :key="image.id" class="draft-image">
+                <image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="emit('previewimage', image.src)" />
+                <view class="remove-image action-frame"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="imagesDisabled" aria-label="移除图片" @click="emit('removeimage', image.id)"></button></view>
+              </view>
+            </view>
+            <view v-for="file in files" :key="file.id" class="draft-file">
+              <app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ fileStatus(file) }}</text></view>
+              <button v-if="retryFiles && (file.status == 'error' || file.status == 'paused')" class="file-retry" :disabled="!active || retryDisabled" @click="emit('retryfile', file.id)">重试</button>
+              <button class="file-remove" :disabled="filesDisabled" :aria-label="'移除附件 ' + file.name" @click="emit('removefile', file.id)">×</button>
+            </view>
+          </view>
+          <view :id="instanceId + '-input'" class="draft-editor" :style="{ height: inputHeight + 'px' }">
+            <textarea class="message-input" :value="text" :cursor="cursor" :focus="active && focus" :disabled="!active || disabled" :adjust-position="false" :maxlength="32000" :placeholder="prediction.length > 0 ? prediction : placeholder" :style="{ height: inputHeight + 'px' }" @input="onInput" @keydown="onKeydown" @confirm="onConfirm" @focus="emit('focus')" @click="emit('focus')" @blur="emit('blur')" @linechange="emit('linechange', $event)" @keyboardheightchange="emit('keyboardheightchange', $event)"></textarea>
+            <!-- 同宽文本只测量占位预测，零宽字符保留末尾换行。 -->
+            <view class="draft-measure-box" aria-hidden="true"><text :id="instanceId + '-prediction'" class="draft-placeholder-measure">{{ prediction + '\u200b' }}</text></view>
+          </view>
+        </view>
+      </scroll-view>
+      <text v-if="entryOnly && !expanded" class="entry-placeholder">问问 Codex</text>
+      <view class="composer-add"><view class="add-action action-frame" :style="{ opacity: addDisabled ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!active || addDisabled" aria-label="添加附件、插件、计划模式或追求目标" @click="emit('add')"></button></view></view>
+      <view v-show="expanded" class="composer-actions">
+        <slot name="permissions"></slot>
+        <view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: planDisabled ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!active || planDisabled" aria-label="关闭计划模式" @click="emit('toggleplan')"></button></view>
+        <view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" aria-label="选择模型、推理强度和速度" @click="emit('settings')"></button></view>
+      </view>
+      <view v-show="!entryOnly || expanded" class="composer-send"><view class="primary-action action-frame" :style="{ opacity: primaryDisabled ? 0.4 : 1 }"><app-icon :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled" :aria-label="primaryLabel" @click="emit('primary')"></button></view></view>
+    </view>
+    <button v-if="entryOnly && !expanded" class="action-hitbox entry-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="emit('expand')"></button>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
+import ComposerPlus from '../composer-plus/composer-plus.uvue'
+import PluginChips from '../plugin-chips/plugin-chips.uvue'
+import ThreadMentionChips from '../thread-mention-chips/thread-mention-chips.uvue'
+import type { DraftImage, DraftFile } from '../../services/composer.uts'
+import type { SelectedPlugin } from '../../services/plugins.uts'
+import type { SelectedThreadMention } from '../../services/thread-mentions.uts'
+import { fileSizeLabel } from '../../services/files.uts'
+
+const props = withDefaults(defineProps<{
+  instanceId: string, resetKey: string, active: boolean, text: string, expanded: boolean, inputHeight: number,
+  images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], mentions: SelectedThreadMention[],
+  disabled: boolean, chipsDisabled: boolean, imagesDisabled: boolean, filesDisabled: boolean,
+  addDisabled: boolean, primaryDisabled: boolean, primaryLabel: string, modelLabel: string,
+  settingsDisabled: boolean, planEnabled: boolean, planDisabled: boolean,
+  focus?: boolean, cursor?: number, placeholder?: string, prediction?: string, primaryIcon?: string,
+  contentHeight?: number, maxContentHeight?: number, layoutWidth?: number, contentTarget?: string, entryOnly?: boolean, retryFiles?: boolean, retryDisabled?: boolean
+}>(), { focus: false, cursor: -1, placeholder: '问问 Codex', prediction: '', primaryIcon: 'send', contentHeight: 0, maxContentHeight: 0, layoutWidth: 0, contentTarget: '', entryOnly: false, retryFiles: false, retryDisabled: false })
+const emit = defineEmits<{
+  input: [event: UniInputEvent], syncinput: [text: string], focus: [], blur: [], linechange: [event: UniTextareaLineChangeEvent],
+  keyboardheightchange: [event: UniInputKeyboardHeightChangeEvent], submit: [], primary: [], add: [], settings: [],
+  toggleplan: [], removeimage: [id: string], previewimage: [source: string], removefile: [id: string],
+  retryfile: [id: string], removeplugin: [id: string], removemention: [id: string], expand: [], interact: [], layout: []
+}>()
+const measuredContentHeight = ref(0)
+const visibleContentHeight = computed((): number => !props.expanded ? 24 : props.contentHeight > 0 ? props.contentHeight : Math.min(Math.max(props.inputHeight, measuredContentHeight.value), props.maxContentHeight > 0 ? props.maxContentHeight : Number.MAX_VALUE))
+const stageHeight = computed((): number => props.expanded ? visibleContentHeight.value + 58 : 44)
+let alive = true, layoutRevision = 0, layoutTimer = 0
+let synchronizedText: string | null = null
+
+// 键盘只通知业务层提交；空草稿、预测、停止和重试由调用方分别判断。
+function requestSubmit() { if (alive && props.active && !props.disabled) emit('submit') }
+// Web 输入回调可能节流；回车已同步的同一回调不能在成功后重新填回旧草稿。
+function onInput(event: UniInputEvent) {
+  if (!alive || !props.active || props.disabled) return
+  const synchronized = synchronizedText
+  synchronizedText = null
+  if (synchronized != null && event.detail.value == synchronized) return
+  emit('input', event)
+}
+// 保留换行、组合快捷键和中文选词，阻止长按及同一次确认重复发送。
+function onKeydown(event: UniEvent) {
+  // #ifdef WEB
+  const key = event as KeyboardEvent
+  if (key.key != 'Enter' || key.isComposing || key.keyCode == 229 || key.shiftKey || key.ctrlKey || key.altKey || key.metaKey) return
+  key.preventDefault()
+  if (key.repeat || !alive || !props.active || props.disabled) return
+  const input = key.target as HTMLTextAreaElement | null
+  if (input != null && typeof input.value == 'string' && input.value != props.text) {
+    synchronizedText = input.value
+    emit('syncinput', input.value)
+  }
+  requestSubmit()
+  // #endif
+}
+// Web 已处理按键事件；原生平台继续使用键盘确认事件。
+function onConfirm() {
+  // #ifndef WEB
+  requestSubmit()
+  // #endif
+}
+// 本地待上传附件与会话附件使用同一展示，上传和重试仍交给业务层。
+function fileStatus(file: DraftFile): string {
+  if (file.error.length > 0) return file.error
+  if (file.status == 'paused') return '上传已暂停，点击重试'
+  if (file.status == 'ready') return fileSizeLabel(file.size) + ' · 已就绪'
+  if (file.status == 'local') return fileSizeLabel(file.size)
+  return '正在上传 ' + file.progress + '%'
+}
+// 每个实例只读取自己的内容节点；目标切换或隐藏立即使旧帧和过渡回调失效。
+function measureContent() {
+  clearTimeout(layoutTimer)
+  const revision = ++layoutRevision
+  if (!props.active) return
+  nextTick(() => {
+    if (!alive || !props.active || revision != layoutRevision) return
+    const height = uni.getElementById(props.instanceId + '-content')?.getBoundingClientRect().height ?? 0
+    if (height > 0) measuredContentHeight.value = height
+    emit('layout')
+    layoutTimer = setTimeout(() => { if (alive && props.active && revision == layoutRevision) emit('layout') }, 220)
+  })
+}
+watch((): string => [props.resetKey, props.active.toString(), props.expanded.toString(), props.inputHeight.toString(), props.contentHeight.toString(), props.maxContentHeight.toString(), props.layoutWidth.toString(), props.prediction, props.images.map((image: DraftImage): string => image.id).join(','), props.files.map((file: DraftFile): string => file.id + file.status + file.error).join(','), props.plugins.map((plugin: SelectedPlugin): string => plugin.id).join(','), props.mentions.map((mention: SelectedThreadMention): string => mention.id).join(',')].join(':'), () => { measureContent() }, { flush: 'post', immediate: true })
+watch((): string => props.resetKey + ':' + props.active, () => { synchronizedText = null }, { flush: 'sync' })
+onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) })
+</script>
+
+<style scoped>
+.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.composer-panel { position: relative; flex-shrink: 0; border-radius: 24px; padding: 6px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; transition-property: border-radius; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-compact { border-radius: 30px; }
+.composer-entry { padding: 2px 3px; }
+.composer-entry.composer-compact { border-radius: 25px; }
+.composer-stage { position: relative; flex-shrink: 0; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-content { position: absolute; left: 0; right: 0; bottom: 50px; flex-shrink: 0; transition-property: height, bottom; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-content-compact { left: 52px; right: 48px; bottom: 10px; }
+.composer-entry .composer-content { left: 8px; right: 8px; }
+.composer-content-hidden { opacity: 0; }
+.composer-content-body, .composer-assets, .draft-editor { flex-shrink: 0; }
+.draft-editor { position: relative; min-width: 0; }
+.message-input { width: 100%; min-height: 24px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
+.draft-measure-box { position: absolute; left: 2px; right: 2px; top: 0; height: 0; overflow: hidden; opacity: 0; }
+.draft-placeholder-measure { flex-shrink: 0; font-size: 16px; line-height: 24px; }
+.composer-add { position: absolute; left: 0; bottom: 0; width: 44px; height: 44px; }
+.composer-send { position: absolute; right: 0; bottom: 2px; width: 40px; height: 40px; }
+.add-action { align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0; padding: 0; background-color: transparent; }
+.composer-actions { position: absolute; left: 44px; right: 40px; bottom: 0; height: 44px; flex-direction: row; align-items: center; }
+.settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
+.settings-trigger-label { flex-shrink: 1; min-width: 0; color: #171717; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
+.primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
+.plan-chip { flex-shrink: 0; height: 28px; padding: 0 8px; margin-left: 4px; border-radius: 14px; flex-direction: row; align-items: center; background-color: #eeeeee; }
+.plan-close { margin-left: 8px; }
+.entry-placeholder { position: absolute; left: 45px; bottom: 10px; color: #94998f; font-size: 16px; line-height: 24px; }
+.entry-hitbox { z-index: 2; border-radius: 25px; }
+.draft-images { flex-direction: row; margin-bottom: 10px; }
+.draft-image { width: 60px; height: 60px; margin-right: 10px; position: relative; }
+.draft-thumbnail { width: 60px; height: 60px; border-radius: 8px; }
+.remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; align-items: center; justify-content: center; background-color: #202c28; border-radius: 12px; }
+.draft-file { flex-direction: row; align-items: center; background-color: #e8eee6; border-radius: 10px; margin-bottom: 8px; padding: 8px; }
+.file-copy { flex: 1; min-width: 0; margin-left: 8px; }
+.file-name { font-size: 13px; color: #202c28; lines: 1; text-overflow: ellipsis; }
+.file-status { font-size: 11px; line-height: 16px; color: #7b827a; }
+.file-remove { width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0; color: #657269; background-color: transparent; }
+.file-retry { font-size: 12px; color: #285c49; background-color: transparent; padding: 0 8px; margin: 0; }
+/* #ifdef WEB */
+.draft-placeholder-measure { display: block; white-space: pre-wrap; overflow-wrap: break-word; }
+/* #endif */
+</style>

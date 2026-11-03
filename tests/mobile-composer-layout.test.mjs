@@ -11,7 +11,7 @@ const helpers=stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/compose
 /** 执行实际页面的布局、测量和焦点方法，使用可控布局帧复现迟到回调。 */
 function fixture(){
   const ref=value=>({value}),frames=[],timers=new Map(),watches=[],unloads=[];let timerId=0;
-  const c={computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
+  const c={composerInstanceId:'example-composer',computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
   Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
   Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([]),mentionOpen:ref(false),draftMentions:ref([])});
   const layout=page.slice(page.indexOf('// 占位预测使用独立测量值'),page.indexOf('// 键盘由输入区处理'));
@@ -58,7 +58,8 @@ test('清空草稿与切换会话复位编辑高度及焦点，不把预测写�
   const f=fixture();f.c.draftHeight.value=144;f.watches.find(watch=>watch.read()==='').run('');assert.equal(f.c.draftHeight.value,64);
   f.c.inputFocused.value=true;f.c.predictionFocus.value=true;f.c.permissionMenuOpen.value=true;f.c.draftHeight.value=144;
   f.watches.find(watch=>watch.read()==='host:thread').run();assert.equal(f.c.inputFocused.value,false);assert.equal(f.c.predictionFocus.value,false);assert.equal(f.c.permissionMenuOpen.value,false);assert.equal(f.c.draftHeight.value,64);
-  assert.equal((page.match(/<textarea\b[^>]*class="draft"/g)??[]).length,1);assert.match(page,/:value="draft"/);
+  const composer=fs.readFileSync('apps/mobile/components/message-composer/message-composer.uvue','utf8');
+  assert.equal((composer.match(/<textarea\b/g)??[]).length,1);assert.match(composer,/:value="text"/);assert.match(page,/:text="draft"/);
 });
 
 test('展开及增行使用明确高度，动画完成后补测菜单与历史阅读位置',()=>{
