@@ -239,6 +239,7 @@ test('应用级清理保留离线电脑内容，welcome 完成后才核对完整
 async function pageFixture(finishInitial = true, cacheOnly = false) {
   const f=fixture(),watchers=[],loads=[],hides=[],unloads=[],timers=new Map(),calls=[];let timer=0;
   f.c.deletedThread=()=>false;
+  f.c.defineEmits=()=>event=>calls.push(event);
   f.c.props=cacheOnly ? {active:true,target:{hostId:'pc',threadId:'thread',title:'',projectName:'',cacheNamespace:'pair',cacheOnly:true,cacheGeneration:'one'}} : {active:true};
   const connection={configured:true,cacheNamespace:'pair',configurationRevision:1,hostId:'pc',activeThreadId:'thread',snapshot:null,connected:true,error:'',conversationError:'',epoch:'',sequence:0,subscriptionRevision:0,subscribedHostId:'pc',subscribedThreadId:'thread',contentRevision:'',pendingCommandId:'',pendingCommands:[],computers:[{id:'pc',online:true}]};
   if(cacheOnly){ connection.connected=false;connection.hostId='other';connection.activeThreadId='different';connection.computers=[];f.c.isCachedThreadScopeAllowed=()=>true; }
@@ -249,7 +250,7 @@ async function pageFixture(finishInitial = true, cacheOnly = false) {
   f.uni.getWindowInfo=()=>({windowWidth:390,windowHeight:800});
   f.uni.getElementById=id=>id==='conversation-timeline'?{getBoundingClientRect:()=>({top:0,bottom:500,height:500})}:id==='message-older'?{getBoundingClientRect:()=>({top:geometry.top,bottom:geometry.top+40})}:null;
   const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,displayTitle,projectName,isCurrentPage,isReadingPage,loadOlder,refresh,refreshButton};',f.c);
+  vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,displayTitle,projectName,isCurrentPage,isReadingPage,loadOlder,refresh,refreshButton,connectCachedFromMenu};',f.c);
   vm.runInContext('paneHideCallbacks.forEach(onHide);',f.c);
   const p=f.c.page;loads.forEach(fn=>fn({threadId:'thread',title:'列表标题'}));
   await f.flushConversationCacheStorage();
@@ -260,12 +261,16 @@ async function pageFixture(finishInitial = true, cacheOnly = false) {
 
 test('缓存先于 PC 回执呈现，后台失败保留内容与重试，缓存不能启用发送',async()=>{
   const f=await pageFixture();assert.deepEqual(f.calls,['watch']);assert.equal(f.connection.snapshot,null);assert.equal(f.p.canWrite.value,false);assert.equal(f.p.showingCachedContent.value,true);
+  assert.equal(f.p.cacheSyncHint.value,'上次同步的聊天，正在同步');
   assert.deepEqual(Array.from(f.p.displayConversation.value.messages,m=>m.text),['更早正文','旧正文']);assert.equal(f.p.historyPage.value.cursor,'');assert.equal(f.p.historyPage.value.hasMore,true);
   f.connection.conversationError='读取超时';assert.equal(f.p.cacheSyncHint.value,'同步失败，当前显示缓存');assert.equal(f.p.displayConversation.value.messages.length,2);f.p.refresh();assert.equal(f.calls.length,2);
 });
 
 test('本地只读详情保留缓存正文和历史，联网后也不读取全局快照或触发桥接',async()=>{
   const f=await pageFixture(true,true);
+  assert.equal(f.p.cacheSyncHint.value,'本地副本，仅供阅读');
+  f.p.connectCachedFromMenu();
+  assert.deepEqual(f.calls,[]);
   assert.equal(f.p.isReadingPage(),true);
   assert.equal(f.p.isCurrentPage(),false);
   assert.deepEqual(Array.from(f.p.displayConversation.value.messages,m=>m.text),['更早正文','旧正文']);
@@ -275,8 +280,12 @@ test('本地只读详情保留缓存正文和历史，联网后也不读取全�
   assert.equal(f.p.canWrite.value,false);assert.equal(f.p.liveConversation.value,null);
   assert.equal(f.p.displayConversation.value.messages.at(-1).text,'旧正文');
   assert.equal(f.p.displayTitle.value,'合成标题');assert.equal(f.p.projectName.value,'project');
+  assert.deepEqual(f.calls,[]);
+  f.p.connectCachedFromMenu();
+  assert.deepEqual(f.calls,['connect-cached']);
+  assert.equal(f.p.canWrite.value,false);
   f.unloads.forEach(fn=>fn());
-  assert.equal(f.connection.snapshot,live);assert.deepEqual(f.calls,[]);
+  assert.equal(f.connection.snapshot,live);
 });
 
 test('实时订阅确认前接收最新展示正文，迟到的实时快照不能启用发送或覆盖缓存',async()=>{

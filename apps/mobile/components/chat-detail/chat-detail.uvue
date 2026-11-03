@@ -6,17 +6,19 @@
       <view v-else class="icon-button round-button action-frame"><app-icon :name="props.embedded ? 'close' : 'back'" :size="24" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="props.embedded ? '关闭聊天详情' : '返回聊天列表'" @click="goBack"></button></view>
       <view class="thread-capsule" @click="showConversationInfo">
         <!-- 状态紧跟标题，长标题省略时仍为状态保留完整宽度。 -->
-        <view class="thread-heading"><text class="thread-title">{{ displayTitle }}</text><view v-if="!cacheOnly && connection.snapshot != null" class="title-status"><task-status :hide-running-label="true" :state="currentTaskState" :visible="pageVisible" /></view></view>
+        <view class="thread-heading">
+          <text class="thread-title">{{ displayTitle }}</text>
+          <view v-if="showingCachedContent" class="detail-cache-indicator" role="img" :aria-label="cacheSyncHint"><app-icon name="clock" :size="14" tone="muted" /></view>
+          <view v-if="!cacheOnly && connection.snapshot != null" class="title-status"><task-status :hide-running-label="true" :state="currentTaskState" :visible="pageVisible" /></view>
+        </view>
         <view class="thread-meta"><view v-if="connection.computers.length > 1" class="meta-computer"><app-icon class="meta-icon" :name="hostIcon" :size="14" tone="muted" /><text class="meta-host">{{ hostName }}</text></view><app-icon class="meta-icon" name="folder" :size="14" tone="muted" /><text class="meta-project">{{ projectName }}</text></view>
       </view>
       <view v-if="liquidGlass" class="icon-button glass-header-action"><liquid-glass-control symbol="ellipsis" label="聊天菜单" @activate="showActions" /></view>
       <view v-else class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
-    <view v-if="cacheOnly" class="cache-notice"><text class="cache-note">本地副本 · 仅供阅读</text><button v-if="canConnectCached" class="cache-connect button-secondary" @click="emit('connect-cached')">连接聊天</button></view>
-    <template v-else>
-    <view v-if="showingCachedContent && (!cacheRefreshing || refreshSource == 'cache')" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><view v-if="!connection.connected || detailError.length > 0 || refreshSource == 'cache'" class="cache-retry button-secondary inline-progress-button"><action-progress :busy="refreshSource == 'cache'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">重试</text><button class="inline-progress-hitbox" @click="refreshButton('cache')" :aria-label="refreshSource == 'cache' ? '正在重试同步' : '重试同步'" :disabled="refreshSource == 'cache'"></button></view></view>
+    <template v-if="!cacheOnly">
     <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><view v-if="(!autoConnectPending && !activating) || activationSource == 'continue'" class="continue-button button-secondary inline-progress-button"><action-progress :busy="activationSource == 'continue'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 13px;">重新连接</text><button class="inline-progress-hitbox" :disabled="!connection.connected || connection.pendingCommandId.length > 0 || (activationSource == 'continue')" @click="continueConversation(true)" :aria-label="(activationSource == 'continue') ? '正在连接聊天' : '重新连接'"></button></view></view>
-    <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
+    <view v-if="!connection.connected && !showingCachedContent" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
     <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><view class="check button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'check-retry'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对重试结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || busy || (pendingAction == 'check-retry')" @click="checkRetryOutcome" :aria-label="(pendingAction == 'check-retry') ? '正在核对重试结果' : '核对重试结果'"></button></view></view>
     <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><view v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary inline-progress-button"><action-progress :busy="pageDeleteTask?.checking == true" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对删除结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome" :aria-label="(pageDeleteTask?.checking == true) ? '正在核对删除结果' : '核对删除结果'"></button></view></view>
@@ -89,8 +91,6 @@
         <message-queue :messages="queuedMessages" :pending-action="pendingAction" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
         </template>
         <view id="timeline-message-end" class="content-end"></view>
-        <!-- 同步骨架紧跟缓存消息末尾，与聊天内容一起滚动。 -->
-        <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
         <view id="timeline-bottom" class="bottom-space"></view>
         </view>
       </scroll-view>
@@ -127,7 +127,9 @@
       <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
-    <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view v-if="!cacheOnly" class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="!cacheOnly && pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="!cacheOnly && approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="!cacheOnly && activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view v-if="!cacheOnly" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view v-if="!cacheOnly" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+    <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view v-if="!cacheOnly" class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view>
+        <view v-else-if="canConnectCached" class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">连接聊天</text><button class="action-hitbox" hover-class="action-pressed" @click="connectCachedFromMenu" aria-label="连接聊天"></button></view>
+        <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="!cacheOnly && pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="!cacheOnly && approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="!cacheOnly && activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view v-if="!cacheOnly" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view v-if="!cacheOnly" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
     <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="!cacheOnly && connection.connected && !showingCachedContent" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
@@ -344,9 +346,13 @@ const canConnectCached = computed((): boolean => cacheOnly && connection.connect
 const subscriptionReady = computed((): boolean => connection.connected && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.subscribedHostId == pageHostId.value && connection.subscribedThreadId == pageThreadId.value && liveConversation.value != null)
 const imagesReady = computed((): boolean => pageVisible.value && subscriptionReady.value)
 const showingCachedContent = computed((): boolean => cachedDetail.value != null && pageCacheNamespace.value == connection.cacheNamespace && (liveConversation.value == null || (connection.connected && goalHostOnline.value && !subscriptionReady.value)))
-// 骨架仅表示有缓存时的联网同步；失败、离线和同步完成立即收起。
-const cacheRefreshing = computed((): boolean => !cacheOnly && showingCachedContent.value && connection.connected && goalHostOnline.value && detailError.value.length == 0)
-const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同步失败，当前显示缓存' : !connection.connected || !goalHostOnline.value ? '当前显示缓存，连接恢复后同步' : '')
+// 时钟图标统一提示缓存，读屏和聊天信息仍能区分只读、同步和失败。
+const cacheSyncHint = computed((): string => {
+  if (cacheOnly) return '本地副本，仅供阅读'
+  if (refreshSource.value == 'cache') return '正在重试同步，当前显示缓存'
+  if (detailError.value.length > 0) return '同步失败，当前显示缓存'
+  return !connection.connected || !goalHostOnline.value ? '当前显示缓存，连接恢复后同步' : '上次同步的聊天，正在同步'
+})
 const displayConversation = computed(() => conversationWithHistory(showingCachedContent.value ? cachedConversationSnapshot(cachedDetail.value!) : liveConversation.value, historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
@@ -617,7 +623,13 @@ async function refreshButton(source: string) {
 }
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { refreshRevision++; refreshSource.value = '' })
 watch((): boolean => reconnecting.value, (pending: boolean) => { if (!pending) refreshSource.value = '' })
-function refreshFromMenu() { closeActions(); refresh(); notify('正在同步聊天') }
+// 缓存同步和本地只读连接都从聊天菜单发起，保持正文区域稳定。
+function refreshFromMenu() {
+  closeActions()
+  if (showingCachedContent.value) { refreshButton('cache'); return }
+  refresh(); notify('正在同步聊天')
+}
+function connectCachedFromMenu() { if (canConnectCached.value) { closeActions(); emit('connect-cached') } }
 // 取消只收起编辑区，重新进入时保留尚未发送的意见。
 function editPlan() { if (!busy.value && canWrite.value) planEditing.value = true }
 function cancelPlanFeedback() { if (!busy.value) planEditing.value = false }
@@ -663,7 +675,7 @@ function tryAutoConnectConversation() {
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
 function copyLatestReply() { closeActions(); const messages = displayConversation.value?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(presentConversationMessages([messages[index]])[0].text); return } }; notify('还没有可复制的回复') }
-function showConversationInfo() { closeActions(); uni.showModal({ title: '聊天信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (displayConversation.value?.cwd ?? '') + '\n连接：' + (cacheOnly ? '本地副本' : connection.status), showCancel: false, confirmText: '知道了' }) }
+function showConversationInfo() { closeActions(); uni.showModal({ title: '聊天信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (displayConversation.value?.cwd ?? '') + '\n连接：' + (cacheOnly || showingCachedContent.value ? cacheSyncHint.value : connection.status), showCancel: false, confirmText: '知道了' }) }
 
 // 永久删除必须完成两次独立确认；页面变化后旧确认立即失效。
 let deletePromptOpen = false
@@ -1082,7 +1094,6 @@ watch(displayConversation, (current: Conversation | null, previous: Conversation
   }
   afterMarkdownLayout(); nextTick(() => { checkShortHistory() })
 }, { flush: 'pre' })
-watch(cacheRefreshing, () => { beforeMarkdownLayout(); afterMarkdownLayout() }, { flush: 'pre' })
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (cacheOnly || _current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
@@ -1715,12 +1726,6 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 /* #ifdef WEB */
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* #endif */
-/* 缓存同步提示保持轻量，避免错误提示重复挤占聊天区域。 */
-.cache-sync-indicator { flex-shrink: 0; padding: 8px 16px 6px; }
-.cache-notice { flex-direction: row; align-items: center; padding: 8px 16px; background-color: #eef2eb; }
-.cache-note { flex: 1; font-size: 12px; line-height: 20px; color: #68776c; }
-.cache-retry { width: 56px; height: 28px; padding: 0; margin: 0 0 0 8px; font-size: 12px; border-radius: 8px; }
-.cache-connect { min-height: 32px; margin-left: 8px; padding: 0 12px; font-size: 12px; border-radius: 8px; }
 /* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
 .annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #cdd6cc; background-color: #f8faf6; flex-direction: row; align-items: center; align-self: flex-start; }
 .annotation-before-text { margin-bottom: 12px; }
@@ -1745,6 +1750,7 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 .thread-heading { flex-direction: row; align-items: center; }
 .thread-title { color: #202c28; font-size: 17px; line-height: 25px; font-weight: bold; flex-shrink: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
 .title-status { margin-left: 10px; flex-shrink: 0; }
+.detail-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 6px; border-radius: 11px; background-color: #edf0e9; align-items: center; justify-content: center; }
 .thread-meta { flex-direction: row; align-items: center; margin-top: 3px; }
 .meta-computer { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 10px; }
 .meta-icon { flex-shrink: 0; }
