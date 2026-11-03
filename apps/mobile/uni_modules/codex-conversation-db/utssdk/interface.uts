@@ -1,5 +1,5 @@
-// 读取同一事务视图中的命名空间版本和记录。空库的版本为空字符串。
-export type ReadConversationCacheRows = (namespace: string) => Promise<string>
+// 同一事务读取版本和记录。空选择读全部，headers 读索引，JSON 数组读指定键。
+export type ReadConversationCacheRows = (namespace: string, selector?: string) => Promise<string>
 
 // 仅在当前版本匹配时原子应用变更，版本冲突返回 false，存储失败拒绝 Promise。
 export type WriteConversationCacheRows = (namespace: string, expectedRevision: string, nextRevision: string, changes: string) => Promise<boolean>

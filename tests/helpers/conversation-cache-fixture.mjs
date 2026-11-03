@@ -14,10 +14,14 @@ export function conversationMemoryDatabase() {
     const current = namespaces.get(namespace) ?? empty();
     return {revision:current.revision,rows:[...current.rows].map(([key,value])=>({key,value}))};
   };
-  const db = { writes, dump, beforeRead:null, beforeWrite:null };
+  const db = { writes, reads:[], dump, beforeRead:null, beforeWrite:null };
   db.adapter = {
-    readConversationCacheRows: async namespace => {
+    readConversationCacheRows: async (namespace, selector='') => {
       const snapshot = dump(namespace);
+      const keys = selector && selector !== 'headers' ? new Set(JSON.parse(selector)) : null;
+      if (selector === 'headers') snapshot.rows = snapshot.rows.filter(row=>row.key.startsWith('h:'));
+      else if (keys) snapshot.rows = snapshot.rows.filter(row=>keys.has(row.key));
+      db.reads.push({namespace,selector,keys:snapshot.rows.map(row=>row.key)});
       await db.beforeRead?.(namespace, snapshot);
       return JSON.stringify(snapshot);
     },

@@ -11,6 +11,7 @@ import java.util.concurrent.Executors
 
 /** 单进程的聊天缓存读写共用一个后台队列和私有数据库。 */
 object CodexConversationSQLite {
+    private const val READ_KEY_BATCH = 400
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var connection: SQLiteDatabase? = null
@@ -38,19 +39,42 @@ object CodexConversationSQLite {
         }
     }
 
-    /** 单个查询同时读取版本与记录，查询期间不会看到跨事务的数据。 */
-    fun read(context: Context, namespace: String, completion: (String, Boolean) -> Unit) {
+    /** 复合主键限定命名空间和记录范围。超出绑定上限的分批查询共用同一事务视图。 */
+    fun read(context: Context, namespace: String, selector: String, completion: (String, Boolean) -> Unit) {
         execute("", completion) {
             require(namespace.isNotEmpty())
+            val keys = if (selector == "" || selector == "headers") null else {
+                val requested = JSONArray(selector)
+                (0 until requested.length()).map { requested.get(it) as String }.distinct()
+            }
+            val db = database(context)
             val rows = JSONArray()
             var revision = ""
-            database(context).rawQuery(
-                "SELECT meta.revision, rows.row_key, rows.value FROM cache_revisions AS meta LEFT JOIN cache_rows AS rows ON rows.namespace = meta.namespace WHERE meta.namespace = ?",
-                arrayOf(namespace)
-            ).use { cursor ->
-                while (cursor.moveToNext()) {
-                    revision = cursor.getString(0)
-                    if (!cursor.isNull(1)) rows.put(JSONObject().put("key", cursor.getString(1)).put("value", cursor.getString(2)))
+            fun collect(condition: String?, bindings: List<String>) {
+                val sql = if (condition == null) "SELECT revision, NULL, NULL FROM cache_revisions WHERE namespace = ?" else
+                    "SELECT meta.revision, rows.row_key, rows.value FROM cache_revisions AS meta LEFT JOIN cache_rows AS rows ON rows.namespace = meta.namespace$condition WHERE meta.namespace = ?"
+                db.rawQuery(sql, (bindings + namespace).toTypedArray()).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        revision = cursor.getString(0)
+                        if (!cursor.isNull(1)) rows.put(JSONObject().put("key", cursor.getString(1)).put("value", cursor.getString(2)))
+                    }
+                }
+            }
+            when {
+                selector == "headers" -> collect(" AND rows.row_key >= ? AND rows.row_key < ?", listOf("h:", "h;"))
+                keys == null -> collect("", emptyList())
+                keys.isEmpty() -> collect(null, emptyList())
+                else -> {
+                    val grouped = keys.size > READ_KEY_BATCH
+                    if (grouped) db.beginTransactionNonExclusive()
+                    try {
+                        keys.chunked(READ_KEY_BATCH).forEach { group ->
+                            collect(" AND rows.row_key IN (${group.joinToString(",") { "?" }})", group)
+                        }
+                        if (grouped) db.setTransactionSuccessful()
+                    } finally {
+                        if (grouped) db.endTransaction()
+                    }
                 }
             }
             JSONObject().put("revision", revision).put("rows", rows).toString()

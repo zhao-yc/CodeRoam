@@ -20,11 +20,15 @@ function fixture() {
     },
     transaction: (names, mode) => {
       calls.push(['开启事务', names, mode]);
-      const marker = {}, entries = {}, cursor = {};
+      const marker = {}, entries = {}, cursor = {}, selected = [];
       const transaction = {
-        marker, entries, cursor,
+        marker, entries, cursor, selected,
         objectStore: name => ({
-          get: key => { calls.push(['读取版本', key]); return marker; },
+          get: key => {
+            if (name === 'revisions') { calls.push(['读取版本', key]); return marker; }
+            calls.push(['读取主键', key]); const request = {}; selected.push(request); return request;
+          },
+          getAll: range => { calls.push(['读取范围', range]); return entries; },
           put: value => { calls.push(['写入', name, value]); },
           delete: key => { calls.push(['删除', name, key]); },
           index: index => ({
@@ -41,7 +45,7 @@ function fixture() {
     calls.push(['打开数据库', name, version]);
     const request = { result: db }; opens.push(request); return request;
   } };
-  const context = vm.createContext({ window: { indexedDB } });
+  const context = vm.createContext({ window: { indexedDB }, IDBKeyRange: { bound: (...args) => args } });
   vm.runInContext(source + ';globalThis.subject={readConversationCacheRows,writeConversationCacheRows};', context);
   return { db, calls, opens, transactions, ...context.subject };
 }
@@ -62,6 +66,47 @@ test('按命名空间在一个只读事务内恢复行和版本，提交前不�
     ['建表', 'rows', ['namespace', 'key']], ['建索引', 'namespace', 'namespace'], ['建表', 'revisions', 'namespace'],
     ['开启事务', ['rows', 'revisions'], 'readonly'], ['读取版本', '配对一'], ['读取索引', 'namespace', '配对一'],
   ]);
+});
+
+test('索引读取以复合主键范围限定会话头，正文读取只请求指定消息键', async () => {
+  const f = fixture();
+  const headers = f.readConversationCacheRows('配对一', 'headers');
+  f.opens[0].onsuccess(); await tick();
+  const scan = f.transactions[0];
+  assert.deepEqual(recorded(f.calls).slice(1), [
+    ['开启事务', ['rows', 'revisions'], 'readonly'], ['读取版本', '配对一'],
+    ['读取范围', [['配对一', 'h:'], ['配对一', 'h;'], false, true]],
+  ]);
+  scan.marker.result = { revision: '版本一' };
+  scan.entries.result = [{ key: 'h:会话', value: '合成会话头' }];
+  scan.oncomplete();
+  assert.deepEqual(JSON.parse(await headers), { revision: '版本一', rows: [{ key: 'h:会话', value: '合成会话头' }] });
+
+  const before = f.calls.length;
+  const messages = f.readConversationCacheRows('配对一', JSON.stringify(['m:消息一', 'm:已删除', 'm:消息一'])); await tick();
+  const lookup = f.transactions[1];
+  assert.deepEqual(recorded(f.calls).slice(before), [
+    ['开启事务', ['rows', 'revisions'], 'readonly'], ['读取版本', '配对一'],
+    ['读取主键', ['配对一', 'm:消息一']], ['读取主键', ['配对一', 'm:已删除']],
+  ]);
+  lookup.marker.result = { revision: '版本二' };
+  lookup.selected[0].result = { key: 'm:消息一', value: '合成正文' };
+  lookup.oncomplete();
+  assert.deepEqual(JSON.parse(await messages), { revision: '版本二', rows: [{ key: 'm:消息一', value: '合成正文' }] });
+});
+
+test('空键列表仅读取版本，无效选择在发出事务前拒绝', async () => {
+  const f = fixture();
+  await assert.rejects(f.readConversationCacheRows('配对一', '[1]'), /范围无效/);
+  await assert.rejects(f.readConversationCacheRows('配对一', 'null'), /范围无效/);
+  assert.equal(f.opens.length, 0);
+  const empty = f.readConversationCacheRows('配对一', '[]');
+  f.opens[0].onsuccess(); await tick();
+  const transaction = f.transactions[0];
+  assert.deepEqual(recorded(f.calls).slice(1), [['开启事务', ['rows', 'revisions'], 'readonly'], ['读取版本', '配对一']]);
+  transaction.marker.result = { revision: '保留版本' };
+  transaction.oncomplete();
+  assert.deepEqual(JSON.parse(await empty), { revision: '保留版本', rows: [] });
 });
 
 test('增量事务只改指定键并更新版本，版本冲突时不写入', async () => {

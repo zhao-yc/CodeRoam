@@ -25,7 +25,7 @@ function fixture(storage=new Map(),database=conversationMemoryDatabase()) {
   let now=1000;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)};
   const c=componentContext({uni,...database.adapter,reactive:value=>value,Date:{now:()=>++now},setTimeout:()=>-1,clearTimeout:()=>{}});
-  vm.runInContext(stripTypeScriptTypes(uts('file-report-cache')+'\n'+conversationCacheSource,{mode:'transform'})+';globalThis.subject={primeConversationCache,readConversationCache,peekConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts,conversationCacheChanges,flushConversationCacheStorage};',c);
+  vm.runInContext(stripTypeScriptTypes(uts('file-report-cache')+'\n'+conversationCacheSource,{mode:'transform'})+';globalThis.subject={primeConversationCache,primeConversationPreview,primeConversationEntry,peekConversationPreview,peekConversationCacheRevision,cachedConversationThreadIds,readConversationCache,peekConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts,conversationCacheChanges,flushConversationCacheStorage};',c);
   return {c,uni,storage,database,...c.subject};
 }
 
@@ -34,7 +34,7 @@ test('重启后恢复正文和额外历史，持久化不包含图片数据、�
   assert.equal(f.saveConversationCache('pair','pc',current,{messages:[message('older'),message('recent','old')],turns:current.turns,cursor:'private-cursor',hasMore:false}),true);
   await f.flushConversationCacheStorage();
   const reopened=fixture(f.storage,f.database);await reopened.primeConversationCache('pair');
-  const restored=reopened.readConversationCache('pair','pc','thread');
+  const restored=await reopened.primeConversationEntry('pair','pc','thread');
   assert.deepEqual(Array.from(restored.messages,m=>m.id),['recent']);assert.deepEqual(Array.from(restored.olderMessages,m=>m.id),['older']);
   const display=f.cachedConversationSnapshot(restored);assert.equal(display.status,'unknown');assert.equal(display.activeTurnId,'');assert.equal(display.readOnly,true);assert.equal(display.approvals.length,0);assert.equal(display.questionGroups.length,0);
   const raw=JSON.stringify(f.database.dump('pair'));for(const secret of ['private-image','private-token','private-approval','private-question','private-cursor'])assert.equal(raw.includes(secret),false);
@@ -71,7 +71,7 @@ test('容量限制淘汰最早完整消息与最久未访问会话，不截断�
   await capacity.flushConversationCacheStorage();
   const restored=fixture(capacity.storage,capacity.database);await restored.primeConversationCache('large');
   let bytes=0,count=0;
-  for(let i=0;i<20;i++){const entry=restored.peekConversationCache('large','pc','large-'+i);if(entry){bytes+=JSON.stringify(entry).length*2;count++;}}
+  for(let i=0;i<20;i++){const entry=await restored.primeConversationEntry('large','pc','large-'+i);if(entry){bytes+=JSON.stringify(entry).length*2;count++;}}
   assert.ok(bytes<=3*1024*1024);assert.ok(count>0&&count<20);
 });
 
@@ -94,8 +94,9 @@ test('迁移期间可从内存显示旧正文，持久事务成功后才移除 S
   commit.resolve();await writing;
   assert.equal(storage.has(legacyKey),false);
   const restored=fixture(storage,f.database);await restored.primeConversationCache('pair');
-  assert.equal(restored.peekConversationCache('pair','pc','thread').messages[0].text,'旧版正文');
-  assert.equal(restored.peekConversationCache('pair','pc','thread').olderMessages[0].id,'older');
+  const entry=await restored.primeConversationEntry('pair','pc','thread');
+  assert.equal(entry.messages[0].text,'旧版正文');
+  assert.equal(entry.olderMessages[0].id,'older');
 });
 
 test('迁移失败保留旧缓存和内存，重试后也不覆盖并发提交的相同会话',async()=>{
@@ -108,7 +109,7 @@ test('迁移失败保留旧缓存和内存，重试后也不覆盖并发提交�
   concurrent.saveConversationCache('pair','pc',snapshot([message('recent','并发新正文')]),null,'new');
   await concurrent.flushConversationCacheStorage();await f.flushConversationCacheStorage();
   assert.equal(storage.has(legacyKey),false);
-  assert.equal(f.peekConversationCache('pair','pc','thread').messages[0].text,'并发新正文');
+  assert.equal((await f.primeConversationEntry('pair','pc','thread')).messages[0].text,'并发新正文');
   assert.equal(f.database.writes.filter(write=>write.applied).length,1);
 });
 
@@ -144,7 +145,7 @@ test('加载期间已归档的聊天不恢复，新的推送内容保留并落�
   load.resolve();await reading;await clearing;await f.flushConversationCacheStorage();
   const restored=fixture(new Map(),f.database);await restored.primeConversationCache('pair');
   assert.equal(restored.peekConversationCache('pair','pc','thread'),null);
-  assert.equal(restored.peekConversationCache('pair','pc','other').messages[0].text,'实时推送');
+  assert.equal((await restored.primeConversationEntry('pair','pc','other')).messages[0].text,'实时推送');
 });
 
 test('流式写入在途时明确清理，完成后重启不会恢复已移除的聊天',async()=>{
@@ -159,7 +160,7 @@ test('流式写入在途时明确清理，完成后重启不会恢复已移除�
   olderWrite.resolve();await clearing;
   const restored=fixture(new Map(),f.database);await restored.primeConversationCache('pair');
   assert.equal(restored.peekConversationCache('pair','pc','thread'),null);
-  assert.ok(restored.peekConversationCache('pair','other','thread'));
+  assert.ok(await restored.primeConversationEntry('pair','other','thread'));
 });
 
 test('并发冲突不覆盖同一会话的新版本，保留独立会话的变更',async()=>{
@@ -170,10 +171,44 @@ test('并发冲突不覆盖同一会话的新版本，保留独立会话的变�
   second.saveConversationCache('pair','pc',snapshot([message('recent','过期窗口的正文')]),null,'stale',true);
   second.saveConversationCache('pair','other',snapshot([message('recent','独立会话')]),null,'different',true);
   await second.flushConversationCacheStorage();
-  assert.ok(first.database.writes.some(write=>!write.applied));
+  assert.equal(first.database.writes.filter(write=>write.applied).length,3);
   const restored=fixture(new Map(),first.database);await restored.primeConversationCache('pair');
-  assert.equal(restored.peekConversationCache('pair','pc','thread').contentRevision,'new');
-  assert.equal(restored.peekConversationCache('pair','other','thread').contentRevision,'different');
+  assert.equal((await restored.primeConversationEntry('pair','pc','thread')).contentRevision,'new');
+  assert.equal((await restored.primeConversationEntry('pair','other','thread')).contentRevision,'different');
+});
+
+test('冷启动只读索引，打开只读选中聊天尾部八条，后台复用首屏记录补齐同一条聊天',async()=>{
+  const seeded=fixture(),recent=Array.from({length:80},(_,i)=>message('recent-'+i));
+  seeded.saveConversationCache('pair','pc',snapshot(recent),{messages:[message('older')],turns:[]},'v1');
+  seeded.saveConversationCache('pair','other',snapshot([message('unrelated')]),null,'v2');
+  await seeded.flushConversationCacheStorage();seeded.database.reads.length=0;
+  const cold=fixture(new Map(),seeded.database);
+  await cold.primeConversationCache('pair');
+  assert.deepEqual(seeded.database.reads.map(read=>read.keys),[['h:["pc","thread"]','h:["other","thread"]']]);
+  assert.deepEqual(Array.from(cold.cachedConversationThreadIds('pair','other')),['thread']);
+  assert.equal(cold.peekConversationCacheRevision('pair','pc','thread'),'v1');
+  assert.equal(cold.peekConversationCache('pair','pc','thread'),null);
+  await cold.primeConversationPreview('pair','pc','thread');
+  const preview=cold.peekConversationPreview('pair','pc','thread');
+  assert.deepEqual(Array.from(preview.messages,item=>item.id),recent.slice(-8).map(item=>item.id));
+  assert.equal(preview.contentRevision,undefined);
+  assert.equal(cold.peekConversationCache('pair','pc','thread'),null);
+  assert.equal(seeded.database.reads[1].keys.filter(key=>key.startsWith('m:')).length,8);
+  const full=await cold.primeConversationEntry('pair','pc','thread');
+  assert.equal(full.messages.length,80);assert.equal(full.olderMessages[0].id,'older');assert.equal(full.contentRevision,'v1');
+  assert.equal(seeded.database.reads[2].keys.filter(key=>key.startsWith('m:')).length,73);
+  assert.equal(seeded.database.reads.slice(1).some(read=>read.keys.some(key=>key.includes('unrelated'))),false);
+  assert.equal(cold.peekConversationCache('pair','other','thread'),null);
+});
+
+test('首屏查询在途时删除会话，迟到的正文无法恢复预览',async()=>{
+  const seeded=fixture();seeded.saveConversationCache('pair','pc',snapshot(),null,'v1');await seeded.flushConversationCacheStorage();
+  const cold=fixture(new Map(),seeded.database);await cold.primeConversationCache('pair');
+  const delayed=pending();seeded.database.beforeRead=(_namespace,data)=>data.rows.some(row=>row.key.startsWith('m:'))?delayed.promise:undefined;
+  const preview=cold.primeConversationPreview('pair','pc','thread');await tick();
+  await cold.clearConversationCache('pair','pc',['thread']);delayed.resolve();await preview;
+  assert.equal(cold.peekConversationPreview('pair','pc','thread'),null);
+  assert.equal(seeded.database.dump('pair').rows.length,0);
 });
 
 test('切换配对后迟到的旧加载不会覆盖新配对或恢复被清理的旧缓存',async()=>{

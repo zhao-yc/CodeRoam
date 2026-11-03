@@ -20,14 +20,15 @@ public final class CodexConversationSQLite {
     }
 
     private enum Failure: Error { case operation }
+    private static let readKeyBatch = 400
     private static let queue = DispatchQueue(label: "codex.conversation-cache", qos: .utility)
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     private static var connection: OpaquePointer?
 
     /** 读取同一个事务视图中的版本和记录。 */
-    static func read(_ namespace: String, completion: @escaping (String, Bool) -> Void) {
+    static func read(_ namespace: String, selector: String, completion: @escaping (String, Bool) -> Void) {
         queue.async {
-            let result = try? readRows(namespace)
+            let result = try? readRows(namespace, selector: selector)
             DispatchQueue.main.async { completion(result ?? "", result != nil) }
         }
     }
@@ -101,25 +102,59 @@ public final class CodexConversationSQLite {
         return String(decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(query, index))), as: UTF8.self)
     }
 
-    /** 单条查询将版本和所属记录一起读取。 */
-    private static func readRows(_ namespace: String) throws -> String {
+    /** 复合主键只读取目标范围，分批请求在一个只读事务中取得一致版本。 */
+    private static func readRows(_ namespace: String, selector: String) throws -> String {
         guard !namespace.isEmpty else { throw Failure.operation }
-        let db = try database()
-        let snapshot = try statement(db, "SELECT meta.revision, rows.row_key, rows.value FROM cache_revisions AS meta LEFT JOIN cache_rows AS rows ON rows.namespace = meta.namespace WHERE meta.namespace = ?") { query in
-            try bind(namespace, query, 1)
-            var revision = ""
-            var rows: [Row] = []
-            var state = sqlite3_step(query)
-            while state == SQLITE_ROW {
-                revision = text(query, 0)
-                if sqlite3_column_type(query, 1) != SQLITE_NULL {
-                    rows.append(Row(key: text(query, 1), value: text(query, 2)))
-                }
-                state = sqlite3_step(query)
-            }
-            guard state == SQLITE_DONE else { throw Failure.operation }
-            return Snapshot(revision: revision, rows: rows)
+        let keys: [String]?
+        if selector.isEmpty || selector == "headers" {
+            keys = nil
+        } else {
+            let requested = try JSONDecoder().decode([String].self, from: Data(selector.utf8))
+            var seen = Set<String>()
+            keys = requested.filter { seen.insert($0).inserted }
         }
+        let db = try database()
+        var revision = ""
+        var rows: [Row] = []
+        func collect(_ condition: String?, _ bindings: [String]) throws {
+            let sql = condition.map { "SELECT meta.revision, rows.row_key, rows.value FROM cache_revisions AS meta LEFT JOIN cache_rows AS rows ON rows.namespace = meta.namespace\($0) WHERE meta.namespace = ?" }
+                ?? "SELECT revision, NULL, NULL FROM cache_revisions WHERE namespace = ?"
+            try statement(db, sql) { query in
+                for (index, value) in (bindings + [namespace]).enumerated() {
+                    try bind(value, query, Int32(index + 1))
+                }
+                var state = sqlite3_step(query)
+                while state == SQLITE_ROW {
+                    revision = text(query, 0)
+                    if sqlite3_column_type(query, 1) != SQLITE_NULL {
+                        rows.append(Row(key: text(query, 1), value: text(query, 2)))
+                    }
+                    state = sqlite3_step(query)
+                }
+                guard state == SQLITE_DONE else { throw Failure.operation }
+            }
+        }
+        if selector == "headers" {
+            try collect(" AND rows.row_key >= ? AND rows.row_key < ?", ["h:", "h;"])
+        } else if let keys = keys {
+            if keys.isEmpty {
+                try collect(nil, [])
+            } else {
+                let grouped = keys.count > readKeyBatch
+                if grouped { try execute(db, "BEGIN DEFERRED") }
+                var committed = false
+                defer { if grouped && !committed { _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil) } }
+                for start in stride(from: 0, to: keys.count, by: readKeyBatch) {
+                    let group = Array(keys[start..<min(start + readKeyBatch, keys.count)])
+                    let placeholders = Array(repeating: "?", count: group.count).joined(separator: ",")
+                    try collect(" AND rows.row_key IN (\(placeholders))", group)
+                }
+                if grouped { try execute(db, "COMMIT"); committed = true }
+            }
+        } else {
+            try collect("", [])
+        }
+        let snapshot = Snapshot(revision: revision, rows: rows)
         return String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
     }
 

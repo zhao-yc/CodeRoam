@@ -1,9 +1,9 @@
-import { ReadConversationCacheRows, WriteConversationCacheRows } from '../interface.uts'
+import { WriteConversationCacheRows } from '../interface.uts'
 
 // 后台事务完成后再在应用线程结算 Promise。
-export const readConversationCacheRows: ReadConversationCacheRows = function (namespace: string): Promise<string> {
+export function readConversationCacheRows(namespace: string, selector: string = ''): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    CodexConversationSQLite.read(namespace, completion = (value: string, succeeded: boolean) => {
+    CodexConversationSQLite.read(namespace, selector = selector, completion = (value: string, succeeded: boolean) => {
       if (succeeded) resolve(value)
       else reject(new Error('无法读取本地聊天缓存'))
     })

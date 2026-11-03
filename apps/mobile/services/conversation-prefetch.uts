@@ -1,7 +1,7 @@
 import { watch } from 'vue'
 import { bridge, connection, Computer, Conversation, ChatMessage, ConversationTurn, LatestTurn, ThreadSummary, ConversationCacheTarget, ConversationMessageUpdate, applyConversationMessages, hasConversationContentRevision } from './bridge.uts'
 import { threadList, ComputerThreads } from './thread-list.uts'
-import { peekConversationCache, saveConversationCache, cachedConversationThreadIds, conversationCacheChanges, conversationCacheRevision, clearConversationCache, flushConversationCacheStorage, validCachedMessages } from './conversation-cache.uts'
+import { peekConversationCache, peekConversationCacheRevision, primeConversationCache, primeConversationEntry, conversationCacheIndexPending, saveConversationCache, cachedConversationThreadIds, conversationCacheChanges, conversationCacheRevision, clearConversationCache, flushConversationCacheStorage, validCachedMessages } from './conversation-cache.uts'
 import { HistoryPage } from './history.uts'
 import { ConversationPrefetchQueue, PrefetchHost, PrefetchThread, PrefetchJob, PrefetchResult } from './conversation-prefetch-state.uts'
 
@@ -11,6 +11,8 @@ let timer = 0
 let membershipTimer = 0
 let subscriptionSequence = 0
 let subscriptionScope = ''
+let pendingIndexScope = ''
+const pendingCacheBodies = new Map<string, Promise<void>>()
 type CacheCandidate = { hostId: string, threadId: string, priority: number, updatedAt: number }
 type CacheSubscription = { id: string, namespace: string, hostId: string, generation: string, threads: string[], verify: string[], repaired: Set<string>, limited: Set<string> }
 type CacheProjection = { threadId: string, title: string, cwd: string, messages?: ChatMessage[], turns: ConversationTurn[], latestTurn?: LatestTurn }
@@ -40,7 +42,7 @@ function watchCacheHost(hostId: string, generation: string, threads: string[], v
   if (repair.length > 0) subscription.repaired.add(repair)
   subscriptions.set(hostId, subscription)
   const targets = threads.map((threadId: string): ConversationCacheTarget => {
-    const revision = peekConversationCache(namespace, hostId, threadId)?.contentRevision ?? ''
+    const revision = peekConversationCacheRevision(namespace, hostId, threadId) ?? ''
     return { threadId, revision: threadId != repair && hasConversationContentRevision(revision) ? revision : '' } as ConversationCacheTarget
   })
   bridge.watchConversationCache(hostId, id, targets, verify).then((result: UTSJSONObject) => {
@@ -99,7 +101,7 @@ function observeCacheSubscriptions(hosts: ComputerThreads[]) {
 }
 
 // 事件属于当前授权、实例和订阅时才可写入展示缓存；缺帧只清空出错聊天的基线。
-function receiveCacheEvent(event: UTSJSONObject) {
+function receiveCacheEvent(event: UTSJSONObject, bodyReady: boolean = false) {
   const hostId = event.getString('hostId') ?? ''
   const threadId = event.getString('threadId') ?? ''
   const generation = event.getString('generation') ?? ''
@@ -117,8 +119,20 @@ function receiveCacheEvent(event: UTSJSONObject) {
   const revision = event.getString('revision') ?? ''
   if (!hasConversationContentRevision(revision)) return
   const previous = peekConversationCache(subscription.namespace, hostId, threadId)
-  if (previous?.contentRevision == revision) return
+  if (peekConversationCacheRevision(subscription.namespace, hostId, threadId) == revision) return
   const full = event['snapshot']
+  if (!bodyReady) {
+    const pendingKey = subscription.id + ':' + threadId
+    const pending = pendingCacheBodies.get(pendingKey)
+    const baseRevision = event.getString('baseRevision') ?? ''
+    if (pending != null || (full == null && previous == null && baseRevision.length > 0 && peekConversationCacheRevision(subscription.namespace, hostId, threadId) == baseRevision)) {
+      // 冷索引可协商版本，只有实际收到变化时才读取这一条聊天的完整基线。
+      const wait = pending ?? primeConversationEntry(subscription.namespace, hostId, threadId).then((_entry) => {})
+      const next = wait.then(() => { receiveCacheEvent(event, true) }).finally(() => { if (pendingCacheBodies.get(pendingKey) === next) pendingCacheBodies.delete(pendingKey) })
+      pendingCacheBodies.set(pendingKey, next)
+      return
+    }
+  }
   const raw = full ?? event['update']
   try {
     const projected = raw == null ? null : JSON.parse<CacheProjection>(JSON.stringify(raw))
@@ -149,8 +163,7 @@ const queue = new ConversationPrefetchQueue((hostId: string, threadId: string): 
   if (snapshot == null || snapshot.getString('threadId') != threadId || snapshot.getBoolean('readOnly') != true || revision.length == 0 || !Array.isArray(snapshot['messages']) || !Array.isArray(snapshot['turns'])) throw new Error('预加载回执无效')
   return { snapshot, contentRevision: revision } as PrefetchResult
 }), (namespace: string, hostId: string, threadId: string): string | null => {
-  const cached = peekConversationCache(namespace, hostId, threadId)
-  return cached == null ? null : cached.contentRevision ?? ''
+  return peekConversationCacheRevision(namespace, hostId, threadId)
 }, (job: PrefetchJob, result: PrefetchResult): boolean => {
   if (!foreground || !connection.connected || connection.cacheNamespace != job.namespace) return false
   const snapshot = JSON.parse<Conversation>(JSON.stringify(result.snapshot))
@@ -171,6 +184,18 @@ function schedulePrefetch() {
 
 function observePrefetch() {
   if (!foreground || !connection.connected || connection.cacheNamespace.length == 0) { resetCacheSubscriptions(); queue.reset(); clearTimeout(timer); timer = 0; return }
+  const namespace = connection.cacheNamespace
+  const scope = connection.configurationRevision.toString() + ':' + namespace
+  if (conversationCacheIndexPending(namespace)) {
+    if (pendingIndexScope != scope) {
+      pendingIndexScope = scope
+      primeConversationCache(namespace).then(() => {
+        if (pendingIndexScope != scope) return
+        pendingIndexScope = ''; observePrefetch()
+      })
+    }
+    return
+  }
   const online = threadList.computers.filter((entry: ComputerThreads): boolean => entry.online && entry.subscribed == true && connection.computers.some((computer: Computer): boolean => computer.id == entry.hostId && computer.online && (computer.instanceGeneration ?? '') == (entry.instanceGeneration ?? '')))
   observeCacheSubscriptions(online)
   const hosts = online.filter((entry: ComputerThreads): boolean => !connection.supportsConversationCache || fallbackHosts.get(entry.hostId) == (entry.instanceGeneration ?? '')).map((entry: ComputerThreads): PrefetchHost => ({ id: entry.hostId, generation: entry.instanceGeneration ?? '', threads: entry.threads.map((thread: ThreadSummary): PrefetchThread => ({ id: thread.id, revision: thread.contentRevision ?? '', important: thread.status == 'active' || (thread.activeTurnId ?? '').length > 0 || thread.hasUnreadTurn == true || (thread.notificationState?.pending.length ?? 0) > 0, terminal: thread.notificationState?.latestTurnStatus == 'completed' || thread.notificationState?.latestTurnStatus == 'failed', attention: JSON.stringify(thread.notificationState ?? null) })) }))

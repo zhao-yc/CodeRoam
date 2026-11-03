@@ -1,12 +1,12 @@
 <template>
   <view class="chat-workspace" :class="{ 'workspace-wide': wide }">
-    <view v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? '340px' : '100%' }">
+    <view v-if="!props.detailRoute || wide || (mode == 'list' && !openingRouteDetail)" v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? '340px' : '100%' }">
       <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :wide="wide" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="openNewConversation" />
     </view>
     <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
       <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
       <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" />
-      <view v-show="mode == 'new'" class="workspace-new">
+      <view v-if="!props.detailRoute || wide || mode == 'new'" v-show="mode == 'new'" class="workspace-new">
         <view class="workspace-status-space"></view>
         <view id="new-conversation-header" class="workspace-new-header"><view class="workspace-header-button"><app-icon :name="wide ? 'close' : 'back'" :size="23" /><button class="workspace-hitbox" :disabled="creating" aria-label="关闭新聊天" @click="closeNewConversation"></button></view><text class="workspace-new-title">新聊天</text><view class="workspace-header-button"></view></view>
         <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
@@ -24,8 +24,9 @@ import NewConversation from '../new-conversation/new-conversation.uvue'
 import TaskNotice from '../task-notice/task-notice.uvue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
+import type { Computer } from '../../services/bridge.uts'
 import type { ComputerThread } from '../../services/thread-list.uts'
-import { readConversationCache, peekConversationCache, primeConversationCache } from '../../services/conversation-cache.uts'
+import { peekConversationPreview, primeConversationPreview } from '../../services/conversation-cache.uts'
 import { bindWorkspaceNoticeNavigation } from '../../services/task-notifications.uts'
 import type { TaskNotice as TaskNoticeTarget } from '../../services/task-notification-state.uts'
 import { workspaceIsWide, workspaceDetailWidth, workspaceTarget, workspaceTargetKey, WorkspaceTarget } from '../../services/workspace-layout.uts'
@@ -45,19 +46,20 @@ let switchRevision = 0
 let alive = true
 let unbindNotices: (() => void) | null = null
 let handledInitialTarget = ''
+const openingRouteDetail = ref(props.detailRoute && props.initialTarget != null)
 
 // 所有入口先检查离线缓存和目标归属，拒绝时保留原面板。
 function canOpen(target: WorkspaceTarget, online: boolean): boolean {
   if (creating.value) { uni.showToast({ title: '操作正在提交，请稍后切换聊天', icon: 'none' }); return false }
   if (target.cacheNamespace != connection.cacheNamespace || !connection.computers.some((computer): boolean => computer.id == target.hostId)) { uni.showToast({ title: '这台电脑不在当前授权范围内', icon: 'none' }); return false }
-  if ((!connection.connected || !online) && readConversationCache(target.cacheNamespace, target.hostId, target.threadId) == null) { uni.showToast({ title: '此聊天暂无本地缓存，请恢复连接后查看', icon: 'none' }); return false }
+  if ((!connection.connected || !online) && peekConversationPreview(target.cacheNamespace, target.hostId, target.threadId) == null) { uni.showToast({ title: '此聊天暂无本地缓存，请恢复连接后查看', icon: 'none' }); return false }
   return true
 }
 
 // 冷启动的离线入口等待一次恢复。已有内存正文的点击直接进入详情。
 function pendingOfflineCache(target: WorkspaceTarget, online: boolean): Promise<void> | null {
-  if ((connection.connected && online) || target.cacheNamespace != connection.cacheNamespace || peekConversationCache(target.cacheNamespace, target.hostId, target.threadId) != null) return null
-  return primeConversationCache(target.cacheNamespace)
+  if ((connection.connected && online) || target.cacheNamespace != connection.cacheNamespace || !connection.computers.some((computer: Computer): boolean => computer.id == target.hostId) || peekConversationPreview(target.cacheNamespace, target.hostId, target.threadId) != null) return null
+  return primeConversationPreview(target.cacheNamespace, target.hostId, target.threadId)
 }
 
 // 先卸载旧面板，等缓存和订阅清理完成再切换，避免旧清理误取消新订阅。
@@ -100,6 +102,8 @@ async function openThread(thread: ComputerThread) {
     online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
   }
   if (!canOpen(target, online)) return
+  // 窄屏路由创建详情前先发起尾部读取，与路由切换并行。
+  if (connection.connected && online) primeConversationPreview(target.cacheNamespace, target.hostId, target.threadId)
   handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   try {
     bridge.selectComputer(thread.hostId)
@@ -162,14 +166,15 @@ defineExpose({ handleBack })
 // 刷新直达聊天时，握手回包填充授权列表后再校验；已有授权记录时仍支持离线缓存。
 watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? null), props.active, connection.connected, connection.cacheNamespace]), () => {
   const target = props.initialTarget ?? null
-  if (target == null) { handledInitialTarget = ''; return }
+  if (target == null) { handledInitialTarget = ''; openingRouteDetail.value = false; return }
   const key = workspaceTargetKey(target)
   if (key == handledInitialTarget) return
-  if (target.cacheNamespace != connection.cacheNamespace) { handledInitialTarget = key; return }
+  if (target.cacheNamespace != connection.cacheNamespace) { handledInitialTarget = key; openingRouteDetail.value = false; return }
   if (!props.active || mode.value != 'list' || selected.value != null) return
   if (!connection.connected && !connection.computers.some((computer): boolean => computer.id == target.hostId)) return
   handledInitialTarget = key
-  selectConversation(target, false)
+  openingRouteDetail.value = props.detailRoute
+  selectConversation(target, false).then((_opened: boolean) => { openingRouteDetail.value = false })
 }, { immediate: true })
 watch((): string => props.active + ':' + wide.value, () => { syncNoticeNavigation() })
 watch((): string => connection.cacheNamespace + ':' + connection.computers.map((computer): string => computer.id).join('|'), () => {

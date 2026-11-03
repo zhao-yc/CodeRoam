@@ -27,7 +27,7 @@
         <!-- 首次同步仅替换正文占位，导航、输入区和失败重试继续沿用真实状态。 -->
         <loading-skeleton v-if="displayConversation == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
         <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得聊天内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步聊天。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
-        <view v-for="entry in timeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
+        <view v-for="entry in renderedTimeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
             <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
@@ -160,8 +160,8 @@ import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as exe
 import { failureTimeline, retryTarget, latestFailureTurnId } from '../../services/turn-failure.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
 import type { Conversation } from '../../services/bridge.uts'
-import { CachedConversation, readConversationCache, peekConversationCache, saveConversationCache, cachedConversationSnapshot, clearConversationCache, conversationCacheChanges } from '../../services/conversation-cache.uts'
-import { MessageAnnotation, MessagePresentation, parseAnnotationReferences, annotationPresentationsForTimeline } from '../../services/annotations.uts'
+import { CachedConversation, readConversationCache, peekConversationCache, peekConversationPreview, primeConversationPreview, primeConversationEntry, saveConversationCache, cachedConversationSnapshot, clearConversationCache, conversationCacheChanges } from '../../services/conversation-cache.uts'
+import { MessageAnnotation, MessagePresentation, annotationPresentationsForTimeline } from '../../services/annotations.uts'
 import { presentConversationMessages } from '../../services/message-presentations.uts'
 import { FileReport } from '../../services/file-reports.uts'
 import FileChangeSummary from '../../components/file-change-summary/file-change-summary.uvue'
@@ -318,6 +318,10 @@ let historyTopTimer = 0
 let historyFollowRevision = 0
 const cachedDetail = ref<CachedConversation | null>(null)
 let cacheInitialPositioning = false
+const cacheFilling = ref(false)
+let cachePreviewReady = false
+let cacheFillTimer = 0
+let cacheFillRevision = 0
 const pageCacheNamespace = ref('')
 const liveConversation = computed((): Conversation | null => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot : null)
 const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
@@ -331,20 +335,61 @@ const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同
 const displayConversation = computed(() => conversationWithHistory(showingCachedContent.value ? cachedConversationSnapshot(cachedDetail.value!) : liveConversation.value, historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
-const messagePresentations = computed((): MessagePresentation[] => presentConversationMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
-// 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
-const timeline = computed((): TimelineEntry[] => {
-  const entries = failureTimeline(displayConversation.value, reportTimeline(displayConversation.value, expandedReportIds.value))
-  const presentations = annotationPresentationsForTimeline(messagePresentations.value, entries.map((entry: TimelineEntry): string => entry.id))
-  entries.forEach((entry: TimelineEntry) => {
-    const presentation = presentations.find((message: MessagePresentation): boolean => message.messageId == entry.id)
-    if (presentation != null) { entry.text = presentation.text; entry.annotations = presentation.annotations; entry.attachments = presentation.attachments }
-  })
-  return entries
+const timeline = computed((): TimelineEntry[] => failureTimeline(displayConversation.value, reportTimeline(displayConversation.value, expandedReportIds.value)))
+const timelineBoundary = ref('')
+const timelineFilled = ref(false)
+let timelineFillTimer = 0
+let timelineFillStarted = false
+let timelinePainted = false
+let timelinePaintFrame = 0
+let timelinePaintRevision = 0
+
+// 用视口和正文体量估算尾部首批。长 Markdown 优先少挂载，短消息仍能填满首屏。
+function firstScreenTimelineStart(entries: TimelineEntry[], width: number, height: number): number {
+  const viewport = Math.max(220, height - 145)
+  const charsPerLine = Math.max(16, Math.floor((width - 64) / 11))
+  let estimated = 0
+  let index = entries.length
+  const minimum = Math.max(0, entries.length - 8)
+  while (index > minimum && estimated < viewport) {
+    const entry = entries[--index]
+    const lines = entry.text.split('\n').length + Math.floor(entry.text.length / charsPerLine)
+    estimated += Math.max(44, 20 * lines + 12) + ((entry.imageCount ?? 0) > 0 ? 160 : 0)
+  }
+  return index
+}
+
+const timelineStart = computed((): number => {
+  if (timelineFilled.value) return 0
+  const entries = timeline.value
+  const boundary = timelineBoundary.value
+  const start = boundary.length > 0 ? entries.findIndex((entry: TimelineEntry): boolean => entry.id == boundary) : -1
+  return start >= 0 ? start : firstScreenTimelineStart(entries, props.paneWidth, props.paneHeight)
 })
-const selectedAnnotations = computed((): MessageAnnotation[] => timeline.value.find((entry: TimelineEntry): boolean => entry.id == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
+const visibleTimeline = computed((): TimelineEntry[] => timeline.value.slice(timelineStart.value))
+const messagePresentations = computed((): MessagePresentation[] => {
+  const messages = displayConversation.value?.messages ?? [] as ChatMessage[]
+  if (timelineStart.value == 0) return presentConversationMessages(messages)
+  const ids = new Set<string>()
+  const turns = new Set<string>()
+  visibleTimeline.value.forEach((entry: TimelineEntry) => { ids.add(entry.id); if (entry.turnId.length > 0) turns.add(entry.turnId) })
+  // 仍检查可见回复同轮的提问，防止隐藏在首批之外的注释来源丢失。
+  return presentConversationMessages(messages.filter((message: ChatMessage): boolean => ids.has(message.id) || (message.role == 'user' && turns.has(message.turnId))))
+})
+// 仅构造已挂载消息的 Markdown 与展示附加信息。完整时间线仍供历史和通知定位使用。
+const renderedTimeline = computed((): TimelineEntry[] => {
+  const entries = visibleTimeline.value
+  const presentations = annotationPresentationsForTimeline(messagePresentations.value, entries.map((entry: TimelineEntry): string => entry.id))
+  const byId = new Map<string, MessagePresentation>()
+  presentations.forEach((message: MessagePresentation) => { byId.set(message.messageId, message) })
+  return entries.map((entry: TimelineEntry): TimelineEntry => {
+    const presentation = byId.get(entry.id)
+    return presentation == null ? entry : { ...entry, text: presentation.text, annotations: presentation.annotations, attachments: presentation.attachments } as TimelineEntry
+  })
+})
+const selectedAnnotations = computed((): MessageAnnotation[] => renderedTimeline.value.find((entry: TimelineEntry): boolean => entry.id == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 const expandedExecutionIds = ref<string[]>([])
-const pendingPlanOutsideTimeline = computed((): boolean => pendingPlan.value != null && !timeline.value.some((entry: TimelineEntry): boolean => entry.id == pendingPlan.value!.id))
+const pendingPlanOutsideTimeline = computed((): boolean => pendingPlan.value != null && !visibleTimeline.value.some((entry: TimelineEntry): boolean => entry.id == pendingPlan.value!.id))
 const selectedPlanId = ref('')
 const selectedPlanSource = ref('')
 // 待确认方案使用桌面给出的完整正文，避免消息窗口中的截取影响详情阅读。
@@ -417,7 +462,7 @@ function flushConversationCache() {
   cacheDirty = false
   const namespace = pageCacheNamespace.value
   if (namespace.length == 0 || namespace != connection.cacheNamespace || !pageAlive || !isCurrentPage() || !subscriptionReady.value || !goalHostOnline.value) return
-  saveConversationCache(namespace, pageHostId.value, liveConversation.value!, historyPage.value, connection.contentRevision)
+  saveConversationCache(namespace, pageHostId.value, liveConversation.value!, cacheFilling.value ? null : historyPage.value, connection.contentRevision)
 }
 // 固定窗口节流，持续输出也会落盘；不因每个分片重新延后写入。
 function scheduleConversationCache() {
@@ -425,15 +470,16 @@ function scheduleConversationCache() {
   cacheDirty = true
   if (cacheWriteTimer == 0) cacheWriteTimer = setTimeout(() => { flushConversationCache() }, 500)
 }
-// 只恢复额外历史，不把缓存最近快照混入历史，且不恢复旧分页游标。
-function restoreConversationCache() {
-  pageCacheNamespace.value = connection.cacheNamespace ?? ''
-  if (pageCacheNamespace.value.length == 0) return
-  cachedDetail.value = readConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
-  const cached = cachedDetail.value
-  if (cached != null) {
+// 先呈现内存或尾部预览，只有完整缓存才能恢复额外历史。
+function presentCachedEntry(cached: CachedConversation | null, complete: boolean) {
+  const positionAtBottom = cached != null && cachedDetail.value == null && liveConversation.value == null && historyGesture == 0
+  if (positionAtBottom) {
     cacheInitialPositioning = true
     pauseFollowing()
+  }
+  cachedDetail.value = cached
+  if (complete && cached != null && historyPage.value == null && cached.olderMessages.length > 0) historyPage.value = { messages: cached.olderMessages, turns: cached.olderTurns, cursor: '', hasMore: true } as HistoryPage
+  if (positionAtBottom) {
     // 缓存首屏仍按原策略定位最新处，此后所有后台刷新只保持阅读位置。
     nextTick(() => {
       if (!isCurrentPage() || historyGesture != 0) return
@@ -441,7 +487,53 @@ function restoreConversationCache() {
       setTimeout(() => { if (isCurrentPage() && historyGesture == 0) { scrollTarget.value = ''; cacheInitialPositioning = false; updateTimelinePosition(); rememberReadingPosition() } }, 50)
     })
   }
-  if (cached != null && cached.olderMessages.length > 0) historyPage.value = { messages: cached.olderMessages, turns: cached.olderTurns, cursor: '', hasMore: true } as HistoryPage
+}
+
+function validCacheFill(revision: number, namespace: string): boolean {
+  return pageAlive && revision == cacheFillRevision && namespace == pageCacheNamespace.value && namespace == connection.cacheNamespace
+}
+
+// 留出首帧时间再读单条会话的完整缓存，读取回执不会应用到已退出的面板。
+function scheduleCacheFill() {
+  if (!cacheFilling.value || !cachePreviewReady || !pageVisible.value || cacheFillTimer != 0) return
+  if (!timelinePaintReady()) return
+  const revision = cacheFillRevision
+  const namespace = pageCacheNamespace.value
+  cacheFillTimer = setTimeout(() => {
+    cacheFillTimer = 0
+    if (!validCacheFill(revision, namespace) || !pageVisible.value || !timelinePaintReady()) return
+    cachePreviewReady = false
+    primeConversationEntry(namespace, pageHostId.value, pageThreadId.value).then((entry: CachedConversation | null) => {
+      if (!validCacheFill(revision, namespace)) return
+      cacheFilling.value = false
+      if (entry != null) presentCachedEntry(readConversationCache(namespace, pageHostId.value, pageThreadId.value) ?? entry, true)
+      scheduleTimelineFill()
+      nextTick(() => { checkShortHistory() })
+    })
+  }, 120)
+}
+
+function cancelCacheFill() {
+  clearTimeout(cacheFillTimer); cacheFillTimer = 0; cacheFillRevision++; cacheFilling.value = false; cachePreviewReady = false
+}
+
+function restoreConversationCache() {
+  const namespace = connection.cacheNamespace ?? ''
+  pageCacheNamespace.value = namespace
+  if (namespace.length == 0) return
+  const full = readConversationCache(namespace, pageHostId.value, pageThreadId.value)
+  if (full != null) { presentCachedEntry(full, true); return }
+  const revision = ++cacheFillRevision
+  cacheFilling.value = true
+  presentCachedEntry(peekConversationPreview(namespace, pageHostId.value, pageThreadId.value), false)
+  primeConversationPreview(namespace, pageHostId.value, pageThreadId.value).then(() => {
+    if (!validCacheFill(revision, namespace)) return
+    const entry = readConversationCache(namespace, pageHostId.value, pageThreadId.value)
+    presentCachedEntry(entry ?? peekConversationPreview(namespace, pageHostId.value, pageThreadId.value), entry != null)
+    cacheFilling.value = entry == null
+    cachePreviewReady = true
+    nextTick(() => { scheduleCacheFill() })
+  })
 }
 watch(liveConversation, () => { scheduleConversationCache() })
 watch(historyPage, () => { scheduleConversationCache() })
@@ -449,19 +541,19 @@ watch(historyPage, () => { scheduleConversationCache() })
 watch((): number => conversationCacheChanges.revision, () => {
   if (pageCacheNamespace.value.length == 0 || pageCacheNamespace.value != connection.cacheNamespace) return
   const entry = peekConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
-  if (cachedDetail.value == null && entry != null && historyPage.value == null && entry.olderMessages.length > 0) historyPage.value = { messages: entry.olderMessages, turns: entry.olderTurns, cursor: '', hasMore: true } as HistoryPage
-  cachedDetail.value = entry
+  presentCachedEntry(entry ?? peekConversationPreview(pageCacheNamespace.value, pageHostId.value, pageThreadId.value), entry != null)
 })
 // 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
 watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
   if (pageCacheNamespace.value.length == 0) return
   if (pageCacheNamespace.value != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value))) {
     clearTimeout(cacheWriteTimer); cacheWriteTimer = 0; cacheDirty = false
-    cachedDetail.value = null; historyPage.value = null; historyRequest++
+    cancelCacheFill(); cachedDetail.value = null; historyPage.value = null; historyRequest++
   }
 })
-onPaneHide(() => { flushConversationCache() })
-onUnmounted(() => { flushConversationCache(); clearTimeout(cacheWriteTimer) })
+onPaneShow(() => { nextTick(() => { scheduleCacheFill(); scheduleTimelineFill() }) })
+onPaneHide(() => { flushConversationCache(); clearTimeout(cacheFillTimer); cacheFillTimer = 0; clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
+onUnmounted(() => { flushConversationCache(); clearTimeout(cacheWriteTimer); cancelCacheFill(); clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
 
 onMounted(() => {
   baseWindowHeight = uni.getWindowInfo().windowHeight
@@ -584,7 +676,7 @@ function tryAutoConnectConversation() {
 // 在方法声明后注册监听，兼容 Android UTS；离线或提交中保留本次打开意图。
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
-function copyLatestReply() { closeActions(); const messages = displayConversation.value?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(messagePresentations.value.find((message: MessagePresentation): boolean => message.messageId == messages[index].id)?.text ?? parseAnnotationReferences(messages[index].text).text); return } }; notify('还没有可复制的回复') }
+function copyLatestReply() { closeActions(); const messages = displayConversation.value?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(presentConversationMessages([messages[index]])[0].text); return } }; notify('还没有可复制的回复') }
 function showConversationInfo() { closeActions(); uni.showModal({ title: '聊天信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (displayConversation.value?.cwd ?? '') + '\n连接：' + connection.status, showCancel: false, confirmText: '知道了' }) }
 
 // 永久删除必须完成两次独立确认；页面变化后旧确认立即失效。
@@ -733,7 +825,7 @@ let readingCorrectionPending = false
 // 锚点定位可能先于 scroll 回调完成，保位必须读取容器当前距离，不能只信任上次事件。
 function timelineScrollPosition(): number { return (uni.getElementById('conversation-timeline') as UniScrollViewElement | null)?.scrollTop ?? lastScrollTop }
 // 以消息编号和视口偏移保存后续候选；首条被移除时顺延，全部失效则保留滚动距离。
-function captureReadingPosition(entries: TimelineEntry[] = timeline.value): ReadingPosition | null {
+function captureReadingPosition(entries: TimelineEntry[] = visibleTimeline.value): ReadingPosition | null {
   const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
   if (viewport == null || viewport.height <= 0) return null
   const anchors = [] as ReadingAnchor[]
@@ -760,13 +852,81 @@ function updateTimelinePosition(userScroll: boolean = false) {
   if (userScroll && timelineUserScrolling && !touchingTimeline && !readingCorrectionPending && scrollBottom.bottom <= viewport.bottom + 2) resumeFollowing(true)
 }
 // 布局前锁住当前有效滚动范围，防止内容缩短时浏览器先强制回弹。
-function beforeMarkdownLayout(entries: TimelineEntry[] = timeline.value) {
+function beforeMarkdownLayout(entries: TimelineEntry[] = visibleTimeline.value) {
   if (cacheInitialPositioning || following.value || touchingTimeline || readingCorrectionPending) return
   pendingReadingPosition = captureReadingPosition(entries) ?? readingPosition
   if (pendingReadingPosition == null) return
   readingCorrectionPending = true
   readingFloor.value = Math.max(readingFloor.value, pendingReadingPosition!.top + pendingReadingPosition!.height)
 }
+
+// Web 计时器可能早于页面首帧执行。首条消息进入视口后，再留出一次绘制机会。
+function waitForTimelinePaint(revision: number, visibleLastFrame: boolean) {
+  // #ifdef WEB
+  timelinePaintFrame = window.requestAnimationFrame(() => {
+    if (revision != timelinePaintRevision) return
+    timelinePaintFrame = 0
+    if (!pageVisible.value || !isCurrentPage()) return
+    const entries = visibleTimeline.value
+    if (entries.length == 0) { scheduleCacheFill(); return }
+    const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
+    const visible = viewport != null && viewport.height > 0 && entries.some((entry: TimelineEntry): boolean => {
+      const rect = uni.getElementById(entryAnchor(entry))?.getBoundingClientRect()
+      return rect != null && rect.height > 0 && rect.bottom > viewport!.top && rect.top < viewport!.bottom
+    })
+    if (!visible || !visibleLastFrame) { waitForTimelinePaint(revision, visible); return }
+    timelinePainted = true
+    scheduleCacheFill()
+    scheduleTimelineFill()
+  })
+  // #endif
+}
+
+// 空预览可以直接读完整缓存，原生继续沿用布局与计时器。
+function timelinePaintReady(): boolean {
+  // #ifdef WEB
+  if (typeof window != 'undefined' && !timelinePainted && visibleTimeline.value.length > 0) {
+    if (timelinePaintFrame == 0) waitForTimelinePaint(timelinePaintRevision, false)
+    return false
+  }
+  // #endif
+  return true
+}
+
+function cancelTimelinePaintWait() {
+  // #ifdef WEB
+  timelinePaintRevision++
+  if (timelinePaintFrame != 0) window.cancelAnimationFrame(timelinePaintFrame)
+  timelinePaintFrame = 0
+  // #endif
+}
+
+// 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
+function scheduleTimelineFill() {
+  if (timelineFillTimer != 0 || timelineFilled.value || !pageVisible.value || !isCurrentPage()) return
+  const entries = timeline.value
+  const start = timelineStart.value
+  if (entries.length == 0) return
+  if (timelineBoundary.value.length == 0) timelineBoundary.value = entries[start].id
+  if (start == 0) { if (!cacheFilling.value) timelineFilled.value = true; return }
+  if (!timelinePaintReady()) return
+  timelineFillTimer = setTimeout(() => {
+    timelineFillTimer = 0
+    if (!pageVisible.value || !isCurrentPage()) return
+    if (touchingTimeline || cacheInitialPositioning || readingCorrectionPending) { scheduleTimelineFill(); return }
+    const current = timeline.value
+    const earlier = Math.max(0, timelineStart.value - 6)
+    if (current.length == 0) return
+    beforeMarkdownLayout()
+    timelineBoundary.value = current[earlier].id
+    timelineFilled.value = earlier == 0 && !cacheFilling.value
+    timelineFillStarted = true
+    afterMarkdownLayout()
+    nextTick(() => { scheduleTimelineFill(); checkShortHistory() })
+  }, timelineFillStarted ? 48 : 150)
+}
+
+function localTimelineHasMore(): boolean { return cacheFilling.value || timelineStart.value > 0 }
 // 所有异步布局共用一条补偿链；布局完成后只保留维持原位置所需的最小尾部空间。
 function afterMarkdownLayout() {
   // 首屏缓存尚未完成原有初始定位时，子卡片挂载不能把位置补偿回顶部。
@@ -839,20 +999,21 @@ function loadOlder(preserveFollowing: boolean = false) {
 }
 function onHistoryTop() {
   if (lastHistoryGesture == historyGesture || (!touchingTimeline && following.value)) return
+  if (localTimelineHasMore()) { scheduleTimelineFill(); return }
   const delay = layoutUntil - Date.now()
   if (delay > 0) { clearTimeout(historyTopTimer); historyTopTimer = setTimeout(() => { if (isCurrentPage() && pageVisible.value) onHistoryTop() }, delay + 16); return }
   lastHistoryGesture = historyGesture; loadOlder()
 }
 // 短会话没有可滚动距离，首个稳定布局自动检查一次，不关闭跟随最新消息。
 function checkShortHistory() {
-  if (!following.value || initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
+  if (localTimelineHasMore() || !following.value || initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
   const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
   const bottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect()
   if (viewport == null || bottom == null || viewport.height <= 0) return
   initialHistoryChecked = true
   if (bottom.bottom <= viewport.bottom + 1) { lastHistoryGesture = historyGesture; loadOlder(true) }
 }
-function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); rememberReadingPosition(); updateTimelinePosition(true) }
+function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); rememberReadingPosition(); updateTimelinePosition(true); scheduleTimelineFill() }
 // 内层列表结束触摸不恢复自动跟随，避免新输出打断阅读。
 function beginExecutionTouch() { beginTimelineTouch() }
 function endExecutionTouch() { touchingTimeline = false; rememberReadingPosition() }
@@ -898,7 +1059,7 @@ watch(cacheRefreshing, () => { beforeMarkdownLayout(); afterMarkdownLayout() }, 
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
-  nextTick(() => { updateTimelinePosition() })
+  nextTick(() => { updateTimelinePosition(); scheduleTimelineFill() })
   if (connection.snapshot == null) return
   // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
   expandedExecutionIds.value = retainExpandedExecutions(executionTimeline(displayConversation.value?.messages ?? []), expandedExecutionIds.value)
@@ -928,7 +1089,17 @@ function toggleExecutions(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyb
 function toggleExecution(id: string) { pauseFollowing(); uni.hideKeyboard(); selectedExecutionId.value = id }
 function closeExecution() { selectedExecutionId.value = '' }
 function toggleQuestion(id: string) { pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
-function jumpTo(anchor: string) { closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''; nextTick(() => { scrollTarget.value = anchor }) }
+function jumpTo(anchor: string) {
+  closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''
+  if (anchor.startsWith('message-') && !timelineFilled.value) {
+    const index = timeline.value.findIndex((entry: TimelineEntry): boolean => entryAnchor(entry) == anchor)
+    if (index >= 0 && index < timelineStart.value) {
+      // 用户明确跳到暂未挂载的消息时，先挂载目标并取消旧的阅读锚点补偿。
+      historyGesture++; cancelReadingCorrection(); timelineBoundary.value = timeline.value[index].id
+    }
+  }
+  nextTick(() => { scrollTarget.value = anchor })
+}
 // 点击通知后等待目标快照和布局就绪；后续流式更新不重复抢走阅读位置。
 function questionNoticeAnchor(id: string): string { return taskNoticeAnchor('question', id) }
 function approvalNoticeAnchor(id: string): string { return taskNoticeAnchor('approval', id) }

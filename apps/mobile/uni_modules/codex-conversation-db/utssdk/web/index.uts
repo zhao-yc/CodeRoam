@@ -44,16 +44,34 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 // 版本和数据在同一个只读事务内读取，避免读到提交前后的混合内容。
-export async function readConversationCacheRows(namespace: string): Promise<string> {
+export async function readConversationCacheRows(namespace: string, selector: string = ''): Promise<string> {
+  const keys = [] as string[]
+  if (selector !== '' && selector !== 'headers') {
+    const requested = JSON.parse<string[]>(selector)
+    if (!Array.isArray(requested)) throw new Error('聊天缓存读取范围无效')
+    const seen = new Set<string>()
+    requested.forEach((key: string) => {
+      if (typeof key !== 'string') throw new Error('聊天缓存读取范围无效')
+      if (!seen.has(key)) { seen.add(key); keys.push(key) }
+    })
+  }
   const db = await openDatabase()
   return new Promise<string>((resolve, reject) => {
     const transaction = db.transaction([ROWS, REVISIONS], 'readonly')
     const revision = transaction.objectStore(REVISIONS).get(namespace)
-    const entries = transaction.objectStore(ROWS).index(NAMESPACE).getAll(namespace)
+    const store = transaction.objectStore(ROWS)
+    // 主键按命名空间和记录键排序，h: 的上界 h; 不包含正文行。
+    const entries = selector === '' ? store.index(NAMESPACE).getAll(namespace) : selector === 'headers' ? store.getAll(IDBKeyRange.bound([namespace, 'h:'], [namespace, 'h;'], false, true)) : null
+    const selected = keys.map((key: string): IDBRequest => store.get([namespace, key]))
     transaction.onabort = () => { reject(new Error('无法读取聊天缓存数据库')) }
     transaction.oncomplete = () => {
       const marker = revision.result as CacheRevision | undefined
-      const rows = (entries.result as StoredRow[]).map((row: StoredRow): CacheRow => ({ key: row.key, value: row.value }))
+      const stored = entries == null ? [] as StoredRow[] : entries.result as StoredRow[]
+      selected.forEach((request: IDBRequest) => {
+        const row = request.result as StoredRow | undefined
+        if (row != null) stored.push(row)
+      })
+      const rows = stored.map((row: StoredRow): CacheRow => ({ key: row.key, value: row.value }))
       resolve(JSON.stringify({ revision: marker?.revision ?? '', rows } as CacheRows))
     }
   })

@@ -1,11 +1,11 @@
-import { ReadConversationCacheRows, WriteConversationCacheRows } from '../interface.uts'
+import { WriteConversationCacheRows } from '../interface.uts'
 
 // 原生队列读取完整事务视图，仅将结果返回给应用逻辑。
-export const readConversationCacheRows: ReadConversationCacheRows = function (namespace: string): Promise<string> {
+export function readConversationCacheRows(namespace: string, selector: string = ''): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const context = UTSAndroid.getAppContext()
     if (context == null) { reject(new Error('无法打开本地聊天缓存')); return }
-    CodexConversationSQLite.read(context, namespace, (value: string, succeeded: boolean) => {
+    CodexConversationSQLite.read(context, namespace, selector, (value: string, succeeded: boolean) => {
       if (succeeded) resolve(value)
       else reject(new Error('无法读取本地聊天缓存'))
     })
