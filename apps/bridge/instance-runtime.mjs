@@ -44,7 +44,7 @@ class InstanceGoalController extends DesktopGoalController {
 
 /** 一个实例一份上下文，默认实例沿用原账本，其余实例独立保存附件和去重状态。 */
 export class InstanceRuntime {
-  constructor({ instance, config, dataPath, send, bind = bindInstanceClients }) {
+  constructor({ instance, config, dataPath, send, bind = bindInstanceClients, diagnostics = null }) {
     this.instance = instance; this.bind = bind; this.closed = false; this.bindings = null;
     this.isMac = instance.platform === 'darwin';
     this.client = this.isMac ? new MacInstanceIpcClient({ instance, verify: () => instance.verify() }) : new InstanceIpcClient({ instance, socketPath: config.ipcSocketPath });
@@ -59,7 +59,7 @@ export class InstanceRuntime {
     // 目录查询和创建共用原实例的 CODEX_HOME 与已核验桌面随附 CLI。
     const desktopIdentity = { platform: instance.platform, executable: instance.executable };
     const newThreads = new NewThreadService({ codexHome: instance.codexHome, catalog: this.adapter.modelCatalog, creation: new ThreadCreationClient({ codexHome: instance.codexHome, resolveCli: () => instanceCodexPath(desktopIdentity) }) });
-    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }) });
+    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }), diagnostics });
     this.agent.nativeDrafts.controller.close();
     this.agent.nativeDrafts.controller=new NativeDraftController({adapter:this.adapter,instance,discover:async()=>instance.alive&&instance.port?[{pid:instance.pid,port:instance.port,executable:instance.executable}]:[]});
     this.agent.predictions.close();

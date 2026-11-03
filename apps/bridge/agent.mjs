@@ -24,9 +24,10 @@ import { ThreadMentionService } from './thread-mentions.mjs';
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
-  constructor({ config, adapter, journal, nativeDrafts, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
+  constructor({ config, adapter, journal, nativeDrafts, diagnostics = null, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
+    this.diagnostics=diagnostics;this.diagnosticInFlight=0;
     this.newThreads=newThreads;
     adapter.threadMentions ??= new ThreadMentionService(adapter);
     this.nativeDrafts=nativeDrafts??new NativeDraftService({controller:new NativeDraftController({adapter}),projects:newThreads,attachments:adapter.attachments,threadMentions:adapter.threadMentions});
@@ -54,7 +55,11 @@ export class BridgeAgent extends EventEmitter {
     const watchdog=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)return;if(!alive){socket.terminate();return;}alive=false;socket.ping();},15000);
     socket.on('pong',()=>{alive=true;});
     socket.on('open',()=>{this.retries=0;this.send({v:1,type:'host.ready',label:computerName(this.config.label),hostname:hostname(),connectionType:'codex-desktop'});this.emit('connected');});
-    socket.on('message',data=>{let message;try{message=JSON.parse(data.toString());}catch{return;}if(message.type==='request')this.handleRequest(message).then(response=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify(response));}).catch(()=>{});});
+    socket.on('message',data=>{let message;try{message=JSON.parse(data.toString());}catch{return;}if(message.type==='request')this.handleRequest(message).then(response=>{
+      const delivered=socket.readyState===WebSocket.OPEN;
+      if(delivered)socket.send(JSON.stringify(response));
+      this.diagnostics?.record(delivered?'bridge.sent':'bridge.dropped',this.diagnostics.context(message),{delivered,bufferedBytes:socket.bufferedAmount});
+    }).catch(()=>{});});
     socket.on('error',()=>this.emit('warning',{code:'RELAY_UNAVAILABLE',message:'中转暂时不可用，正在重连'}));
     socket.on('close',code=>{clearInterval(watchdog);this.threadListFeed.devices.clear();this.threadListFeed.stop();this.emit('disconnected');if(this.stopped||code===4001)return;const delay=Math.min(15000,500*2**Math.min(this.retries++,5))+Math.random()*300;this.reconnectTimer=setTimeout(()=>this.connect(),delay);});
   }
@@ -82,11 +87,17 @@ export class BridgeAgent extends EventEmitter {
   }
   async handleRequest(message) {
     const response={v:1,type:'response',transportId:message.transportId};
+    const diagnostic=this.diagnostics?.context(message);
+    this.diagnosticInFlight++;
+    this.diagnostics?.record('bridge.dispatch',diagnostic,{inFlight:this.diagnosticInFlight});
     try {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
       let deletionTarget = null;
+      let lockQueued = false;
       const execute=async()=>{
+        // 队列等待和实际执行分开记录，便于区分会话锁阻塞与桌面响应慢。
+        this.diagnostics?.record('bridge.execute',diagnostic,{inFlight:this.diagnosticInFlight,queueWaitMs:this.diagnostics.elapsed(diagnostic),lockQueued});
         if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该聊天正在永久删除，请先核对删除结果');
         if(message.method==='turn.send'&&message.params.queueAction) {
           if(!this.messageQueue)throw new BridgeError('QUEUE_UNAVAILABLE','请更新电脑连接服务后使用消息排队');
@@ -153,6 +164,7 @@ export class BridgeAgent extends EventEmitter {
       };
       if(WRITE_METHODS.has(message.method)) {
         const key=message.method==='thread.create'?'create:'+message.deviceId:message.method.startsWith('thread.draft.')?'draft:'+(message.params.draftId??message.params.projectId):message.params.threadId, previous=this.threadLocks.get(key)??Promise.resolve();
+        lockQueued=this.threadLocks.has(key);
         // 删除先入账并持有目标，再排队；立即返回、退订和断线均不依赖页面存活。
         if(message.method==='thread.delete') {
           const requestKey=JSON.stringify([message.deviceId,message.requestId]), fingerprint=requestFingerprint(message.method,message.params);
@@ -172,6 +184,10 @@ export class BridgeAgent extends EventEmitter {
         try { response.result=await operation; } finally {if(this.threadLocks.get(key)===operation)this.threadLocks.delete(key);}
       } else response.result=await execute();
     } catch(error) {response.error=errorPayload(error);}
+    finally {
+      this.diagnosticInFlight--;
+      this.diagnostics?.record('bridge.completed',diagnostic,{inFlight:this.diagnosticInFlight,elapsedMs:this.diagnostics.elapsed(diagnostic),failed:!!response.error,errorCode:response.error?.code,outcomeUnknown:response.error?.outcomeUnknown===true});
+    }
     return response;
   }
   async close(){this.stopped=true;this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}

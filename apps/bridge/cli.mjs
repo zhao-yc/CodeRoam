@@ -12,6 +12,7 @@ import { DesktopDeleteController } from './desktop-delete.mjs';
 import { BridgeAgent } from './agent.mjs';
 import { IpcClient, defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
 import { InstanceHub } from './instance-hub.mjs';
+import { createRequestDiagnostics } from '../../packages/protocol/request-diagnostics.mjs';
 
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
 let releaseBridgeLock=()=>{};
@@ -19,9 +20,10 @@ try {
   // 先取得进程级排他，再打开操作账本；避免第二个启动入口扰动正在提交的请求。
   releaseBridgeLock=await acquireBridgeLock(values.config);
   const config=JSON.parse(fs.readFileSync(values.config,'utf8'));
+  const diagnostics=createRequestDiagnostics({component:'bridge'});
   const dataPath=path.resolve(config.dataPath??'.local/bridge');fs.mkdirSync(dataPath,{recursive:true});
   if(['win32','darwin'].includes(process.platform) && config.multiInstance!==false) {
-    const hub=new InstanceHub({config,dataPath});
+    const hub=new InstanceHub({config,dataPath,diagnostics});
     const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
     hub.on('disconnected',detail=>{status(false);console.log(`中转连接已断开（代码 ${detail.code}）`);});
@@ -31,11 +33,11 @@ try {
   } else {
   const client=new IpcClient({socketPath:config.ipcSocketPath??defaultIpcSocketPath({codexHome:config.codexHome})});
   const adapter=new DesktopAdapter({client,index:new StateReader(config.codexHome),modelCatalog:new ModelCatalog({codexHome:config.codexHome}),attachments:new AttachmentStore({root:path.join(dataPath,'attachments')}),goalController:new DesktopGoalController({diagnosticPath:path.join(dataPath,'goal-ui-diagnostics.jsonl')})});
-  const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite')),deleteController:new DesktopDeleteController({diagnosticPath:path.join(dataPath,'delete-ui-diagnostics.jsonl')})});
+  const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite')),deleteController:new DesktopDeleteController({diagnosticPath:path.join(dataPath,'delete-ui-diagnostics.jsonl')}),diagnostics});
   const writeStatus=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
-  agent.on('connected',()=>{writeStatus(true);console.log('电脑已连接中转服务');});
-  agent.on('disconnected',()=>{writeStatus(false);console.log('中转连接已断开');});
-  agent.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
+  agent.on('connected',()=>{writeStatus(true);diagnostics.record('connection.open',null,{role:'host'});console.log('电脑已连接中转服务');});
+  agent.on('disconnected',()=>{writeStatus(false);diagnostics.record('connection.close',null,{role:'host'});console.log('中转连接已断开');});
+  agent.on('warning',warning=>{diagnostics.record('connection.warning',null,{errorCode:warning.code});console.log(`${warning.code}：${warning.message}`);});
   adapter.connect().catch(()=>console.log('等待 Codex 桌面客户端启动'));
   agent.predictions.start().catch(()=>{});
   agent.start();

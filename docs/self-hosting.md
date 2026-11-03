@@ -24,6 +24,8 @@ node apps/relay/cli.mjs --config /private/config/relay.json --data /private/data
 
 让自己的 HTTPS 网关代理 `/session`、`/ws` 与 `/healthz` 到该进程。WebSocket 升级和 HTTPS POST 都须正常转发。健康检查不能代替经过鉴权的配对与设备隔离验收。
 
+中转和电脑连接服务默认输出脱敏的请求诊断 JSON 行。出现“待处理请求过多”时，可按时间和传输摘要查找积压请求、等待时长及电脑处理阶段，详见[请求积压诊断](request-diagnostics.md)。
+
 ## 可选容器部署
 
 仓库提供 `deploy/Dockerfile` 与 `deploy/compose-public.yml`。先核对目标服务器的身份，再在该服务器构建与运行，不要照抄其他人的主机名或目录。

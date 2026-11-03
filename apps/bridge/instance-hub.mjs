@@ -13,11 +13,13 @@ import { bindBackendOwners } from './instance-binding.mjs';
 
 /** 一条电脑鉴权连接承载多个实例，每个实例维护独立账本、订阅及运行代次。 */
 export class InstanceHub extends EventEmitter {
-  constructor({ config, dataPath, discover = discoverInstances, createRuntime = options => new InstanceRuntime(options), bindOwners = bindBackendOwners, intervalMs = 10000 }) {
+  constructor({ config, dataPath, discover = discoverInstances, createRuntime = options => new InstanceRuntime(options), bindOwners = bindBackendOwners, intervalMs = 10000, diagnostics = null }) {
     super(); this.config = config; this.dataPath = dataPath; this.discover = discover; this.createRuntime = createRuntime; this.intervalMs = intervalMs;
     this.registry = new InstanceRegistry({ file: path.join(dataPath, 'instances.json'), hostId: config.hostId, defaultHome: config.codexHome ?? path.join(os.homedir(), '.codex'), label: computerName(config.label), backupDirectory: config.instanceBackupDirectory });
     this.runtimes = new Map(); this.stopped = false; this.socket = null; this.scan = null; this.supported = false; this.retries = 0;
     this.bindOwners=bindOwners;
+    this.diagnostics = diagnostics;
+    this.on('warning', warning => diagnostics?.record('connection.warning', null, { errorCode: warning.code }));
   }
   /** 仅发布匿名编号和显示名称，目录、PID、端口都不进入中转设备资料。 */
   manifest() { return [...this.runtimes.values()].map(({ instance }) => ({ id: instance.id, label: instance.label, generation: instance.generation, online: instance.alive && instance.ready })); }
@@ -45,16 +47,20 @@ export class InstanceHub extends EventEmitter {
         this.supported = message.capabilities?.hostInstances === true;
         this.send({ v: 1, type: 'host.ready', label: computerName(this.config.label), hostname: os.hostname(), connectionType: 'codex-desktop' });
         if (!this.supported) { this.emit('warning', { code: 'INSTANCES_RELAY_UNSUPPORTED', message: '请先更新中转服务以启用多实例连接' }); socket.close(4001); return; }
-        this.retries = 0; this.emit('connected');
+        this.retries = 0; this.emit('connected'); this.diagnostics?.record('connection.open', null, { role: 'host' });
         this.refresh().catch(() => {});
         if (!this.timer) { this.timer = setInterval(() => this.refresh().catch(() => {}), this.intervalMs); this.timer.unref(); }
         this.publish();
-      } else if (message.type === 'request') this.request(message).then(response => { if (this.socket === socket) this.send(response); }).catch(() => {});
+      } else if (message.type === 'request') this.request(message).then(response => {
+        const delivered = this.socket === socket && this.send(response);
+        this.diagnostics?.record(delivered ? 'bridge.sent' : 'bridge.dropped', this.diagnostics.context(message), { delivered, bufferedBytes: socket.bufferedAmount });
+      }).catch(() => {});
     });
     socket.on('error', () => this.emit('warning', { code: 'RELAY_UNAVAILABLE', message: '中转暂时不可用，正在重连' }));
     socket.on('close', code => {
       // 只上报标准关闭码，不把服务端原因中的潜在配置或路径写入日志。
       clearInterval(timer); this.supported = false; this.emit('disconnected', { code });
+      this.diagnostics?.record('connection.close', null, { role: 'host', closeCode: code });
       for (const runtime of this.runtimes.values()) { runtime.agent.threadListFeed.devices.clear(); runtime.agent.threadListFeed.stop(); }
       if (!this.stopped && code !== 4001) this.reconnect = setTimeout(() => this.connect(), Math.min(15000, 500 * 2 ** Math.min(this.retries++, 5)));
     });
@@ -82,7 +88,7 @@ export class InstanceHub extends EventEmitter {
           instance.verify = () => instance.platform === 'darwin' ? this.verifyMacInstance(instance) : this.verifyWindowsInstance(instance);
           const directory = identity.id === this.config.hostId ? this.dataPath : path.join(this.dataPath, 'instances', identity.id.slice(this.config.hostId.length + 1));
           fs.mkdirSync(directory, { recursive: true });
-          runtime = this.createRuntime({ instance, config: this.config, dataPath: directory, send: message => this.send(message) });
+          runtime = this.createRuntime({ instance, config: this.config, dataPath: directory, send: message => this.send(message), diagnostics: this.diagnostics });
           runtime.agent.on('warning', warning => this.emit('warning', warning));
           this.runtimes.set(identity.id, runtime);
         }
@@ -96,12 +102,17 @@ export class InstanceHub extends EventEmitter {
     return this.scan;
   }
   async request(message) {
+    const diagnostic = this.diagnostics?.context(message);
+    this.diagnostics?.record('bridge.received', diagnostic);
     try {
       const runtime = this.runtimes.get(message.hostId);
       if (!runtime) throw new BridgeError('INSTANCE_OFFLINE', '所选实例已离线，请重新选择设备');
       const response = await runtime.request(message);
       return { ...response, hostId: message.hostId, generation: message.generation };
-    } catch (error) { return { v: 1, type: 'response', transportId: message.transportId, hostId: message.hostId, generation: message.generation, error: errorPayload(error) }; }
+    } catch (error) {
+      this.diagnostics?.record('bridge.completed', diagnostic, { failed: true, errorCode: error.code, elapsedMs: this.diagnostics.elapsed(diagnostic) });
+      return { v: 1, type: 'response', transportId: message.transportId, hostId: message.hostId, generation: message.generation, error: errorPayload(error) };
+    }
   }
   /** Windows 周期发现已固定进程、端口和代次；原生调用只接受仍在线的同一上下文，页面另核对固定目标。 */
   async verifyWindowsInstance(instance) {
