@@ -15,6 +15,10 @@
             <button class="action-hitbox" aria-label="掌上Codex列表菜单" :aria-expanded="menuVisible" hover-class="action-pressed" @click="toggleMenu"></button>
             <!-- #endif -->
           </view>
+          <!-- 缓存状态独立于标题菜单，读屏可识别且不占聊天列表高度。 -->
+          <view v-if="showCachedList" class="list-cache-indicator" role="img" aria-label="上次同步的聊天">
+            <app-icon name="clock" :size="14" tone="muted" />
+          </view>
         </view>
         <view v-if="liquidGlass" class="header-glass-group">
           <liquid-glass-control symbol="magnifyingglass" label="搜索聊天" secondary-symbol="gearshape" secondary-label="电脑连接设置" :secondary-disabled="creatingConversation" @activate="openSearch" @secondary="openConnection" />
@@ -29,7 +33,6 @@
       <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in displayComputers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><view class="computer-connection-content" :style="{ opacity: computerSyncState(computer.id) == 'loading' ? computerPulseOpacity : 1 }" :aria-label="computerSyncLabel(computer.id)"><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view><view v-if="computerSyncState(computer.id) == 'offline' || computerSyncState(computer.id) == 'error'" class="computer-sync-badge" :aria-label="computerSyncLabel(computer.id)"><app-icon name="alert-triangle" :size="14" tone="warning" /></view></view></view></scroll-view>
     </view>
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
-    <view v-else-if="showCachedList" class="notice"><text class="notice-text">显示上次同步的聊天</text></view>
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
         <view v-if="!connection.configured" class="empty"><text class="empty-title">在手机上继续你的聊天</text><text class="description">首次使用时连接电脑，已有聊天就会显示在这里。</text><button class="empty-action button-primary" @click="openConnection">连接电脑</button></view>
@@ -478,6 +481,7 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 /* 让标题和展开箭头整体居中，两侧与按下背景保持相同留白。 */
 .list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding: 0 8px; border-radius: 12px; }
 .list-title-text { flex-shrink: 0; margin-right: 6px; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
+.list-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 2px; border-radius: 11px; background-color: #edf0e9; align-items: center; justify-content: center; }
 .list-menu-arrow { flex-shrink: 0; width: 18px; height: 18px; transform: rotate(0deg); transition-property: transform; transition-duration: 140ms; transition-timing-function: ease-in; }
 .list-menu-arrow-open { transform: rotate(180deg); transition-duration: 200ms; transition-timing-function: ease-out; }
 /* #ifdef WEB */
