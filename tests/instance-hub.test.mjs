@@ -6,6 +6,7 @@ import path from 'node:path';
 import { EventEmitter, once } from 'node:events';
 import { WebSocketServer } from 'ws';
 import { InstanceHub } from '../apps/bridge/instance-hub.mjs';
+import { InstanceRuntime } from '../apps/bridge/instance-runtime.mjs';
 
 test('中转拒绝连接时保留关闭码，错误原因及私有配置不进入状态事件', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-close-code-'));
@@ -86,4 +87,16 @@ test('Windows 普通启动可直连，第二个实例或 IPC 归属变化立即�
   await hub.refresh();
   assert.equal(hub.runtimes.get('computer').instance.directIpc, true);
   assert.equal(hub.manifest()[0].online, true);
+});
+
+test('普通启动时永久删除在进入操作队列前被拒绝，带端口的实例仍走原删除流程', async () => {
+  const instance = { directIpc: true, generation: 'current', alive: true, verify: async () => {} };
+  const handled = [];
+  const runtime = { instance, client: { assertCurrent() {} }, agent: { handleRequest(message) { handled.push(message.method); } } };
+  const request = method => InstanceRuntime.prototype.request.call(runtime, { generation: instance.generation, method });
+  await assert.rejects(request('thread.delete'), { code: 'DELETE_UNSUPPORTED' });
+  await request('threads.list');
+  instance.directIpc = false;
+  await request('thread.delete');
+  assert.deepEqual(handled, ['threads.list', 'thread.delete']);
 });

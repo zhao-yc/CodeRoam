@@ -92,6 +92,10 @@ export class InstanceRuntime {
     if (message.generation !== this.instance.generation || !this.instance.alive) throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
     if (this.isMac || this.instance.directIpc) await this.instance.verify();
     this.client.assertCurrent();
+    // 永久删除依赖页面确认，普通启动时在停止任务等删除前置步骤之前拒绝。
+    if (this.instance.directIpc && message.method === 'thread.delete') {
+      throw new BridgeError('DELETE_UNSUPPORTED', '普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
+    }
     return this.agent.handleRequest(message);
   }
   /** 先断开传输，停止时不再向已撤销身份的客户端发送退订，也不会遗留账本和连接。 */
