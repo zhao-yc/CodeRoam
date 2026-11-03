@@ -421,7 +421,8 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .header-search { flex: 1; min-width: 0; margin-right: 8px; }
 .page-title { flex: 1; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
 .list-title { flex: 1; flex-direction: row; align-items: center; }
-.list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding-right: 8px; border-radius: 12px; }
+/* 让标题和展开箭头整体居中，两侧与按下背景保持相同留白。 */
+.list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding: 0 8px; border-radius: 12px; }
 .list-title-text { flex-shrink: 0; margin-right: 6px; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
 .list-menu-arrow { flex-shrink: 0; width: 18px; height: 18px; transform: rotate(0deg); transition-property: transform; transition-duration: 140ms; transition-timing-function: ease-in; }
 .list-menu-arrow-open { transform: rotate(180deg); transition-duration: 200ms; transition-timing-function: ease-out; }
