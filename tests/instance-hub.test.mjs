@@ -56,3 +56,34 @@ test('两个 Windows 实例分别核对原生草稿身份，端口换代后只�
   await assert.rejects(first.verify(), { code: 'INSTANCE_NOT_READY' });
   await second.verify(); assert.equal(second.ready, true); assert.equal(first.ready, false);
 });
+
+test('Windows 普通启动可直连，第二个实例或 IPC 归属变化立即使原代次失效', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-direct-'));
+  const first = { pid: 101, startedAt: 1, nativePipe: 'pipe-one', codexHome: root, soleIpc: true };
+  const second = { pid: 102, startedAt: 2, nativePipe: 'pipe-two', codexHome: path.join(root, 'second'), port: 1234 };
+  let rows = [first], probed = [];
+  const hub = new InstanceHub({ config: { hostId: 'computer', codexHome: root }, dataPath: root, discover: async () => rows.map(row => ({ ...row })), bindOwners: async runtimes => { probed = runtimes.map(runtime => runtime.instance.pid); }, createRuntime: ({ instance }) => ({ instance, agent: new EventEmitter(), ready: async () => { instance.ready = instance.directIpc || !!instance.port; }, close: async () => { instance.alive = false; instance.ready = false; } }) });
+  t.after(async () => { await hub.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  await hub.refresh();
+  const direct = hub.runtimes.get('computer').instance;
+  assert.equal(direct.directIpc, true);
+  assert.equal(hub.manifest()[0].online, true);
+  assert.deepEqual(probed, []);
+  await direct.verify();
+
+  // 第二个进程可能还没建好工具管道，发现器此时也会撤销独占证明。
+  rows = [{ ...first, soleIpc: false }];
+  await assert.rejects(direct.verify(), { code: 'INSTANCE_NOT_READY' });
+  assert.equal(hub.manifest()[0].online, false);
+  rows = [{ ...first, soleIpc: false, port: 2345 }, second];
+  await hub.refresh();
+  assert.equal(direct.alive, false);
+  assert.deepEqual(probed, [101, 102]);
+  assert.equal(hub.manifest().every(row => row.online), true);
+  assert.notEqual(hub.runtimes.get('computer').instance.generation, direct.generation);
+
+  rows = [{ ...first, pid: 103, startedAt: 3 }];
+  await hub.refresh();
+  assert.equal(hub.runtimes.get('computer').instance.directIpc, true);
+  assert.equal(hub.manifest()[0].online, true);
+});

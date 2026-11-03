@@ -26,7 +26,11 @@ class InstanceNativeDesktop extends NativeDesktop {
     this.boundClient.assertCurrent();
     return { path: this.instance.nativePipe, pid: this.instance.pid };
   }
-  async call(...args) { this.boundClient.assertCurrent(); return super.call(...args); }
+  async call(tool, ...args) {
+    if (this.instance.directIpc && tool !== 'list_threads') await this.instance.verify();
+    this.boundClient.assertCurrent();
+    return super.call(tool, ...args);
+  }
   async connect() { try { return await super.connect(); } catch { throw new BridgeError('INSTANCE_NOT_READY', '所选实例的原生连接尚未就绪，请在电脑检查该实例后重试'); } }
   /** 冷会话在原桌面加载后立即补核后台身份，避免等到下次周期发现才可跟随。 */
   async navigate(...args) { await super.navigate(...args); await this.instance.refreshOwners?.(); }
@@ -69,14 +73,15 @@ export class InstanceRuntime {
     this.agent.send = message => instance.alive && instance.ready && send({ ...message, hostId: instance.id, generation: instance.generation });
     this.client.on('disconnected', () => { instance.ready = false; });
   }
-  /** Windows 重新核对页面来源；Mac 重新核对独占 IPC，不复用失效的客户端编号。 */
+  /** Windows 单实例复用系统核验的独占 IPC，多实例继续核对页面来源。 */
   async ready() {
     if (this.closed || !this.instance.alive) return false;
-    if (this.instance.ready && (this.isMac || this.client.allowedClients.size)) return true;
+    if (this.instance.ready && (this.isMac || this.instance.directIpc || this.client.allowedClients.size)) return true;
     if (!this.bindings) this.bindings = (async () => {
       if (this.isMac) await this.instance.verify();
-      await this.client.connect();
-      const ids = this.isMac ? new Set() : await this.bind(this.client, this.instance);
+      try { await this.client.connect(); }
+      catch (error) { this.client.close(); throw error; }
+      const ids = this.isMac || this.instance.directIpc ? new Set() : await this.bind(this.client, this.instance);
       if (this.closed || !this.instance.alive) return false;
       this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
       await this.agent.predictions.start(); return true;
@@ -85,7 +90,7 @@ export class InstanceRuntime {
   }
   async request(message) {
     if (message.generation !== this.instance.generation || !this.instance.alive) throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
-    if (this.isMac) await this.instance.verify();
+    if (this.isMac || this.instance.directIpc) await this.instance.verify();
     this.client.assertCurrent();
     return this.agent.handleRequest(message);
   }

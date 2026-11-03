@@ -54,4 +54,15 @@ $result=@(foreach($candidate in $native.candidates){
  } catch { $failedIdentity=$true }
 })
 if($failedIdentity){throw 'INSTANCE_IDENTITY_INCOMPLETE'}
+# 普通启动时只有一个官方桌面主进程，且会话 IPC 由同一进程提供，才允许单实例直连。
+# 主进程枚举同时覆盖尚未建立工具管道的第二个实例。
+if($result.Count -eq 1 -and !$result[0].port -and $native.ipcProcessId -eq $result[0].pid){
+ $sessionId=(Get-Process -Id $PID).SessionId
+ $desktopProcesses=@(Get-CimInstance Win32_Process -Filter "SessionId=$sessionId AND (Name='ChatGPT.exe' OR Name='Codex.exe')" | Where-Object {
+  (!$_.ExecutablePath -or $_.ExecutablePath -match '\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\(?:ChatGPT|Codex)\.exe$') -and $_.CommandLine -notmatch '--type='
+ })
+ if($desktopProcesses.Count -eq 1 -and $desktopProcesses[0].ProcessId -eq $result[0].pid){
+  $result[0] | Add-Member -NotePropertyName soleIpc -NotePropertyValue $true
+ }
+}
 if($AsObject){Write-Output -NoEnumerate $result}else{[Console]::WriteLine((ConvertTo-Json -InputObject $result -Depth 3 -Compress))}

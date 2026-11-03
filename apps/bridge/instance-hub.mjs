@@ -10,6 +10,9 @@ import { InstanceRegistry } from './instance-registry.mjs';
 import { discoverInstances } from './instance-discovery.mjs';
 import { InstanceRuntime } from './instance-runtime.mjs';
 import { bindBackendOwners } from './instance-binding.mjs';
+import { defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
+
+const windowsIpc = defaultIpcSocketPath({ platform: 'win32' });
 
 /** 一条电脑鉴权连接承载多个实例，每个实例维护独立账本、订阅及运行代次。 */
 export class InstanceHub extends EventEmitter {
@@ -78,13 +81,14 @@ export class InstanceHub extends EventEmitter {
       rows.sort((a, b) => Number(!!a.userData) - Number(!!b.userData) || a.startedAt - b.startedAt);
       for (const row of rows) {
         const identity = this.registry.identify(row);
+        const directIpc = rows.length === 1 && row.soleIpc === true && !row.port && (this.config.ipcSocketPath ?? windowsIpc) === windowsIpc;
         // 同一用户数据目录意外对应多个活动进程时拒绝混用，而不是覆盖正在工作的实例。
         if (seen.has(identity.id)) { const duplicate = this.runtimes.get(identity.id); if (duplicate) duplicate.instance.ready = false; continue; }
         seen.add(identity.id);
         let runtime = this.runtimes.get(identity.id);
-        if (runtime && (runtime.instance.pid !== row.pid || runtime.instance.startedAt !== row.startedAt || runtime.instance.nativePipe !== row.nativePipe || runtime.instance.port !== row.port)) { await runtime.close(); this.runtimes.delete(identity.id); runtime = null; }
+        if (runtime && (runtime.instance.pid !== row.pid || runtime.instance.startedAt !== row.startedAt || runtime.instance.nativePipe !== row.nativePipe || runtime.instance.port !== row.port || runtime.instance.directIpc !== directIpc)) { await runtime.close(); this.runtimes.delete(identity.id); runtime = null; }
         if (!runtime) {
-          const instance = { ...row, id: identity.id, label: identity.label, generation: randomUUID(), alive: true, ready: false, refreshOwners: () => this.refreshOwners() };
+          const instance = { ...row, directIpc, id: identity.id, label: identity.label, generation: randomUUID(), alive: true, ready: false, refreshOwners: () => this.refreshOwners() };
           instance.verify = () => instance.platform === 'darwin' ? this.verifyMacInstance(instance) : this.verifyWindowsInstance(instance);
           const directory = identity.id === this.config.hostId ? this.dataPath : path.join(this.dataPath, 'instances', identity.id.slice(this.config.hostId.length + 1));
           fs.mkdirSync(directory, { recursive: true });
@@ -114,11 +118,19 @@ export class InstanceHub extends EventEmitter {
       return { v: 1, type: 'response', transportId: message.transportId, hostId: message.hostId, generation: message.generation, error: errorPayload(error) };
     }
   }
-  /** Windows 周期发现已固定进程、端口和代次；原生调用只接受仍在线的同一上下文，页面另核对固定目标。 */
+  /** 单实例直连额外复核当前只有一个桌面主进程；多个实例继续使用固定端口绑定。 */
   async verifyWindowsInstance(instance) {
-    // 不为每次草稿读写重新启动系统枚举，避免多实例轮询叠加导致发现超时和代次抖动。
-    if (this.stopped || !instance.alive || !instance.ready || this.runtimes.get(instance.id)?.instance !== instance) {
-      instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连');
+    try {
+      if (instance.directIpc) {
+        const rows = await (this.singleVerification ??= this.discover().finally(() => { this.singleVerification = null; }));
+        const [row] = rows;
+        if (rows.length !== 1 || row.soleIpc !== true || row.port || row.pid !== instance.pid || row.startedAt !== instance.startedAt || row.nativePipe !== instance.nativePipe) throw new Error();
+      }
+      if (this.stopped || !instance.alive || !instance.ready || this.runtimes.get(instance.id)?.instance !== instance) throw new Error();
+    } catch {
+      instance.ready = false;
+      this.publish();
+      throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连');
     }
   }
   /** Mac 不借用全局调试页面；操作前复核专属 IPC，目录共用或 PID 换代立即暂停。 */
@@ -133,6 +145,6 @@ export class InstanceHub extends EventEmitter {
     } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Mac 实例身份已变化或配置目录被共用，请在电脑核对后重连'); }
   }
   /** 导航与后台发现共用一次身份复核，不能并发重写客户端集合。 */
-  refreshOwners() { return this.ownerScan ??= Promise.resolve().then(() => { const runtimes = [...this.runtimes.values()].filter(runtime => runtime.instance.platform !== 'darwin'); return runtimes.length ? this.bindOwners(runtimes) : undefined; }).finally(() => { this.ownerScan = null; }); }
+  refreshOwners() { return this.ownerScan ??= Promise.resolve().then(() => { const runtimes = [...this.runtimes.values()].filter(runtime => runtime.instance.platform !== 'darwin' && !runtime.instance.directIpc); return runtimes.length ? this.bindOwners(runtimes) : undefined; }).finally(() => { this.ownerScan = null; }); }
   async close() { this.stopped = true; clearInterval(this.timer); clearTimeout(this.reconnect); this.socket?.terminate(); if (this.scan) await this.scan.catch(() => {}); await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.close())); this.runtimes.clear(); }
 }

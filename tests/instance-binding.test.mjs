@@ -43,6 +43,28 @@ test('客户端退出立即撤销运行期绑定，旧来源广播不能恢复�
   assert.equal(instance.ready, false); assert.equal(events, 0);
 });
 
+test('单实例直连只接受复核后的所有者，失去独占时拒绝发现新身份和发送', async () => {
+  const owner = randomUUID(), other = randomUUID(), requests = [];
+  let current = owner, exclusive = true;
+  const instance = { alive: true, ready: true, directIpc: true, verify: async () => { if (!exclusive) throw Error('IPC 不再独占'); } };
+  const client = new InstanceIpcClient({ instance });
+  client.socket = { writable: true, write(frame) {
+    const request = JSON.parse(frame.subarray(4));
+    requests.push(request);
+    queueMicrotask(() => client.handleMessage({ type: 'response', requestId: request.requestId, resultType: 'success', handledByClientId: current, result: {} }));
+  } };
+  assert.equal((await client.findOwner('合成聊天')).clientId, owner);
+  assert.equal(requests[0].targetClientId, undefined);
+  await client.request('thread-follower-start-turn', {}, 2, { targetClientId: owner });
+  assert.equal(requests[1].targetClientId, owner);
+  exclusive = false;
+  current = other;
+  await assert.rejects(client.findOwner('合成聊天'), /IPC 不再独占/);
+  assert.deepEqual([...client.allowedClients], [owner]);
+  await assert.rejects(client.request('thread-follower-start-turn', {}, 2, { targetClientId: owner }), /IPC 不再独占/);
+  assert.equal(requests.length, 3);
+});
+
 test('后台身份要求全部实例完成只读归属核验，相同编号多所有者及核验期间变更均拒绝绑定', async () => {
   const a = { instance: { alive: true }, client: { allowedClients: new Set() } }, b = { instance: { alive: true }, client: { allowedClients: new Set() } }, id = randomUUID();
   const row = { hostId: 'local', threadId: randomUUID() };

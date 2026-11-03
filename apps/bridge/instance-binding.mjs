@@ -92,9 +92,22 @@ export async function bindInstanceClients(client, instance, { pages = instancePa
 /** 任何会话发现、请求和广播都限制在当前运行代次绑定的客户端集合内。 */
 export class InstanceIpcClient extends IpcClient {
   constructor({ instance, ...options }) { super(options); this.instance = instance; this.allowedClients = new Set(); }
-  assertCurrent() { if (!this.instance.alive || !this.instance.ready || !this.allowedClients.size) throw new BridgeError('INSTANCE_NOT_READY', '所选实例连接尚未就绪，请稍后核对原操作', this.instance.wasReady === true); }
+  assertCurrent() { if (!this.instance.alive || !this.instance.ready || (!this.instance.directIpc && !this.allowedClients.size)) throw new BridgeError('INSTANCE_NOT_READY', '所选实例连接尚未就绪，请稍后核对原操作', this.instance.wasReady === true); }
   async findOwner(threadId, hostId = 'local', timeoutMs = this.timeoutMs) {
     this.assertCurrent();
+    if (this.instance.directIpc) {
+      // 只在独占 IPC 模式发现新所有者，首次接纳前复核进程；后续操作仍须定向到已核验的编号。
+      const response = await super.request('thread-owner-discovery', { hostId, conversationId: threadId }, 1, { timeoutMs });
+      this.assertCurrent();
+      const clientId = response.handledByClientId;
+      if (response.resultType !== 'success' || !/^[0-9a-f-]{36}$/i.test(clientId ?? '')) return null;
+      if (!this.allowedClients.has(clientId)) {
+        await this.instance.verify();
+        this.assertCurrent();
+        this.allowedClients.add(clientId);
+      }
+      return { ...response.result, clientId, hostId };
+    }
     for (const targetClientId of this.allowedClients) {
       try {
         const result = await this.request('thread-owner-discovery', { hostId, conversationId: threadId }, 1, { targetClientId, timeoutMs });
@@ -106,10 +119,18 @@ export class InstanceIpcClient extends IpcClient {
   /** 全局查询只用于报告归属冲突，结果绝不能用于订阅、发送或自动接管。 */
   async ownedElsewhere(threadId) {
     this.assertCurrent();
+    if (this.instance.directIpc) return false;
     const result = await IpcClient.prototype.request.call(this, 'thread-owner-discovery', { hostId: 'local', conversationId: threadId }, 1, { timeoutMs: 750 });
     return result.resultType === 'success' && !this.allowedClients.has(result.handledByClientId);
   }
   request(method, params, version, options = {}) {
+    if (method !== 'initialize' && this.instance.directIpc) {
+      return this.instance.verify().then(() => this.requestTarget(method, params, version, options));
+    }
+    return this.requestTarget(method, params, version, options);
+  }
+  /** 多开和单开都只向已核验的目标发送命令。 */
+  requestTarget(method, params, version, options) {
     if (method !== 'initialize') { this.assertCurrent(); if (!options.targetClientId || !this.allowedClients.has(options.targetClientId)) return Promise.reject(new BridgeError('INSTANCE_CHANGED', '聊天所属实例已变化，请重新连接')); }
     return super.request(method, params, version, options).then(result => {
       if (method !== 'initialize' && result.resultType === 'success' && result.handledByClientId !== options.targetClientId) throw new BridgeError('INSTANCE_CHANGED', '桌面响应归属已变化，已停止操作');
