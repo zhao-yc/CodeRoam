@@ -84,12 +84,15 @@ test('面板只保留一个输入节点，附件状态覆盖本地、上传、�
 test('新聊天回车与按钮共用创建流程，提交中不重复创建，失败保留草稿，仅附件也能发送', async () => {
   const parent = fs.readFileSync('apps/mobile/components/new-conversation/new-conversation.uvue', 'utf8');
   const pending = [], events = [], ref = value => ({value});
-  const c = {props: {expanded: true}, projectReady: ref(true), native: ref({snapshot: null}), existingDraft: ref(null),
+  const c = {props: {expanded: true}, projectReady: ref(true), existingDraft: ref(null),
+    connection: {configurationRevision: 1}, newConversationMode: ref('nativeDraft'), outcomeUnknown: ref(false),
+    hasCompletedConversation: ref(false), direct: ref({threadId: ''}),
     busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), settingsLoading: ref(false),
     draft: ref({text: '保留的合成草稿', images: [], files: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
     computed: read => ({get value() { return read(); }}), closeMenus() {}, uni: {hideKeyboard() {}},
     emit: (...event) => events.push(event), sendNewConversation: () => new Promise((resolve, reject) => pending.push({resolve, reject}))};
-  const code = parent.match(/^const canSend = .*$/m)[0] + '\n' + parent.match(/async function send\(\) \{[^]*?\n\}/)[0];
+  c.operationBusy = c.busy;
+  const code = parent.match(/^const canSend = [^]*?(?=^const pickerHeight)/m)[0] + '\n' + parent.match(/async function send\(\) \{[^]*?\n\}/)[0];
   vm.runInNewContext(stripTypeScriptTypes(code, {mode: 'transform'}) + '\nglobalThis.send=send;', c);
   const input = fixture({onSubmit: () => { c.send(); }});
   const enter = () => input.ui.onKeydown({key: 'Enter', preventDefault() {}});

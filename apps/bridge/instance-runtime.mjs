@@ -91,7 +91,10 @@ export class InstanceRuntime {
     return this.bindings;
   }
   async request(message) {
-    if (message.generation !== this.instance.generation || !this.instance.alive) throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
+    if (message.generation !== this.instance.generation || !this.instance.alive ||
+        (message.expectedGeneration !== undefined && message.expectedGeneration !== this.instance.generation)) {
+      throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
+    }
     // 永久删除依赖页面确认，普通启动时在停止任务等删除前置步骤之前拒绝。
     if (this.instance.directIpc && message.method === 'thread.delete') {
       throw new BridgeError('DELETE_UNSUPPORTED', '普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');

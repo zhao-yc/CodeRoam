@@ -483,6 +483,12 @@ class MobileBridge {
     return this.requestForComputer(connection.hostId, method, params, write)
   }
 
+  // 单实例旧创建流程先保存阶段编号再发送，结果未知时只能核对同一编号。
+  submitDirectNewConversationStep(method: string, params: UTSJSONObject, commandId: string, expectedGeneration: string, firstMessageGuard: UTSJSONObject | null = null): Promise<UTSJSONObject> {
+    if (['thread.create', 'thread.settings.update', 'thread.permissions.update', 'turn.send'].indexOf(method) < 0 || commandId.length < 20 || commandId.length > 160 || expectedGeneration.length == 0 || method == 'turn.send' && firstMessageGuard == null) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('新聊天操作编号或步骤无效')) })
+    return this.requestForComputer(connection.hostId, method, params, true, commandId, expectedGeneration, firstMessageGuard)
+  }
+
   // 聊天候选只允许读取已授权且在线的电脑，固定接口且不开放通用跨电脑请求。
   readThreadMentions(hostId: string, params: UTSJSONObject): Promise<UTSJSONObject> {
     if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
@@ -529,7 +535,7 @@ class MobileBridge {
   }
 
   // 通道内部复用回执和超时处理；写请求始终由当前电脑入口发出。
-  private requestForComputer(hostId: string, method: string, params: UTSJSONObject, write: boolean, commandId: string = ''): Promise<UTSJSONObject> {
+  private requestForComputer(hostId: string, method: string, params: UTSJSONObject, write: boolean, commandId: string = '', expectedGeneration: string = '', firstMessageGuard: UTSJSONObject | null = null): Promise<UTSJSONObject> {
     return new Promise<UTSJSONObject>((resolve, reject) => {
       // 历史浏览不能承载执行、停止或审批；后端也会重新核对真实所有者。
       if (write && connection.snapshot?.readOnly == true && params['threadId'] == connection.snapshot?.threadId) { reject(new Error('这条聊天当前仅支持历史浏览，暂不支持发送、停止或审批')); return }
@@ -551,7 +557,11 @@ class MobileBridge {
         catch (_) { clearTimeout(timer); reject(new Error(method == 'thread.delete' ? '无法保存删除核对信息，请检查本地存储后重试' : '操作正在提交，请稍后再试')); return }
       }
       this.pending.set(id, { resolve, reject, timer, write, hostId, threadId, method })
-      socket.send({ data: JSON.stringify({ v: 1, type: 'request', requestId: id, hostId, method, params }), fail: (_) => {
+      // 原实例代次和首次发送条件由电脑端复核，中转转发不能替换手机确认的值。
+      const envelope: UTSJSONObject = { v: 1, type: 'request', requestId: id, hostId, method, params }
+      if (expectedGeneration.length > 0) envelope['expectedGeneration'] = expectedGeneration
+      if (firstMessageGuard != null) envelope['firstMessageGuard'] = firstMessageGuard
+      socket.send({ data: JSON.stringify(envelope), fail: (_) => {
         const entry = this.pending.get(id)
         if (entry == null) return
         clearTimeout(entry.timer); this.pending.delete(id)

@@ -22,6 +22,16 @@ export function permissionState(state) {
   return { mode, revision };
 }
 
+/** 首条消息只使用已核对的内置档案，避免发送时继承桌面随后变更的权限。 */
+export function firstMessagePermissions(state,guard) {
+  const current=permissionState(state);
+  if(current.revision!==guard.permissionRevision)throw new BridgeError('PERMISSIONS_CHANGED','电脑权限已变化，请重新确认后发送');
+  const preset=presets.find(item=>item.id===current.mode);
+  if(!preset)throw new BridgeError('PERMISSIONS_UNAVAILABLE','无法确认电脑权限，请重新选择后发送');
+  if(current.mode==='full-access'&&guard.confirmedFullAccess!==true)throw new BridgeError('PERMISSION_CONFIRMATION_REQUIRED','请先确认电脑完整访问权限');
+  return {permissions:preset.profile,approvalPolicy:preset.policy,approvalsReviewer:state.latestThreadSettings.approvalsReviewer};
+}
+
 /** 配置、托管限制和内置档案全部通过原生只读接口读取，不回传原始配置。 */
 export class PermissionCatalog {
   constructor({ creation = new ThreadCreationClient() } = {}) { this.creation = creation; }

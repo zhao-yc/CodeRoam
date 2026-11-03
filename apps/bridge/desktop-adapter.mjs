@@ -1,4 +1,4 @@
-import { readPermissions, updatePermissions } from './permissions.mjs';
+import { firstMessagePermissions, readPermissions, updatePermissions } from './permissions.mjs';
 import { EventEmitter } from 'node:events';
 import { predictionTurnId } from './prediction-turn.mjs';
 import { randomUUID } from 'node:crypto';
@@ -138,7 +138,7 @@ export class DesktopAdapter extends EventEmitter {
           if(previous&&this.client.socket?.writable) this.client.broadcast('thread-stream-following-changed',{hostId:previous.hostId,conversationId:threadId,following:false},1,[previous.clientId]);
           entry.owner=null;entry.state=null;entry.revision=null;
           const history=this.native?{...saved,hasUnreadTurn:this.native.unread.get(threadId)}:saved;
-          return this.client.instance?.directIpc?{...history,supportsFileReports:false}:history;
+          return {...history,supportsFileReports:this.supportsFileReports};
         }
         // 列表临时探测失败时只撤销本次订阅，不能清空手机正在使用的所有者和快照。
         if(!discovered) throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此聊天，加载完成后再操作');
@@ -254,8 +254,8 @@ export class DesktopAdapter extends EventEmitter {
   /** 只读刷新原生未读记录，失败保留未知，不猜测已读。 */
   async refreshReadState(ids){try{await this.native?.refresh(ids);}catch{}}
 
-  /** 普通启动的 Windows 实例可读取聊天，但没有用于原生文件汇总的页面。 */
-  get supportsFileReports() { return process.platform==='win32'&&!this.client.instance?.directIpc; }
+  /** 文件汇总能力由已核验的本机原生算法或页面通道决定。 */
+  get supportsFileReports() { return this.nativeFileReportAvailable?.()??(process.platform==='win32'&&!this.client.instance?.directIpc); }
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
     const snapshot={...normalizeConversation(state,options),supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
@@ -303,7 +303,26 @@ export class DesktopAdapter extends EventEmitter {
     return {ok:true,commandId,threadId:params.threadId,expectedTurnId:params.expectedTurnId,result:response.result};
   }
 
-  async operate(method,params,commandId,deviceId,checkpoint=()=>{}) {
+  /** 发送首条消息前以当前绑定和最新快照核对空会话，并返回本次明确使用的权限。 */
+  firstMessageContext(threadId,deviceId,guard,expected=null) {
+    const instance=this.client.instance;
+    if(instance?.directIpc!==true||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通单实例连接已变化，请重新连接');
+    const entry=this.subscribed(threadId,deviceId), owner=entry.owner;
+    const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd;
+    if(expected&&(expected.instance!==instance||expected.generation!==instance.generation||expected.entry!==entry||expected.ownerId!==owner.clientId||expected.hostId!==owner.hostId||expected.cwd!==cwd)){
+      throw new BridgeError('SUBSCRIPTION_CANCELED','原聊天连接已变化，请重新打开后核对');
+    }
+    const snapshot=normalizeConversation(entry.state), history=entry.state.turnHistory?.history;
+    if(entry.state.historyTruncated||!Array.isArray(entry.state.turns)&&!history?.entitiesByKey||
+        snapshot.activeTurnId||snapshot.status==='active'||snapshot.messages.length||snapshot.turns.length||entry.state.turns?.length||
+        (history?.entitiesByKey&&Object.keys(history.entitiesByKey).length)){
+      throw new BridgeError('FIRST_MESSAGE_CHANGED','电脑未确认原聊天为空，请核对后重试');
+    }
+    const permissions=firstMessagePermissions(entry.state,guard);
+    return {instance,generation:instance.generation,entry,ownerId:owner.clientId,hostId:owner.hostId,cwd,permissions};
+  }
+
+  async operate(method,params,commandId,deviceId,checkpoint=()=>{},firstMessageGuard) {
     if(method==='turn.send'||method==='turn.steer')validateTurnInput(params);
     if(method==='turn.retry')return this.retryTurn(params,commandId,deviceId);
     // 正文由最新桌面计划提供，手机只能选择计划编号。
@@ -319,7 +338,8 @@ export class DesktopAdapter extends EventEmitter {
     if(method==='thread.permissions.update')return updatePermissions(this,params,commandId,deviceId,checkpoint);
     if(method==='thread.goal.update')return updateGoal(this,params,commandId,deviceId);
     // 问答在回传前读取所有者最新快照，避免使用手机停留期间的旧问题。
-    await this.watch(params.threadId,deviceId,{fresh:method==='question.reply'||(method==='turn.send'&&params.resetPlanAfterSend===true),history:false});
+    await this.watch(params.threadId,deviceId,{fresh:firstMessageGuard!==undefined||method==='question.reply'||(method==='turn.send'&&params.resetPlanAfterSend===true),history:false});
+    const firstMessage=firstMessageGuard===undefined?null:this.firstMessageContext(params.threadId,deviceId,firstMessageGuard);
     if(method==='turn.send'&&params.resetPlanAfterSend===true) {
       const current=normalizeConversation(this.conversations.get(params.threadId).state);
       if(current.activeTurnId||current.status==='active')throw new BridgeError('TURN_ACTIVE','任务正在运行，请使用追加指令');
@@ -396,6 +416,11 @@ export class DesktopAdapter extends EventEmitter {
       ipcMethod=approval.kind==='command'?'thread-follower-command-approval-decision':'thread-follower-file-approval-decision';version=1;
       payload={...base,requestId:request.id,decision:params.decision};
     } else throw new BridgeError('METHOD_NOT_ALLOWED','不支持的桌面操作');
+    if(firstMessage){
+      // 初始快照强制刷新，插件解析和附件落盘后再次核对当前订阅收到的最新状态。
+      const current=this.firstMessageContext(params.threadId,deviceId,firstMessageGuard,firstMessage);
+      Object.assign(payload.turnStart.request,current.permissions);
+    }
     selection?.check(); mentions?.check();
     const response=await this.client.request(ipcMethod,payload,version,{targetClientId:entry.owner.clientId,timeoutMs:15000});
     if(response.resultType!=='success') throw new BridgeError('OWNER_UNAVAILABLE','桌面聊天所有者已不可用');

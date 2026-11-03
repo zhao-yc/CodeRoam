@@ -10,6 +10,8 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const compile = source => stripTypeScriptTypes(source.replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, ''), { mode: 'transform' });
+const directThreadId = '1a2b3c4d-1234-4567-890a-1a2b3c4d5e6f';
+const directGeneration = 'synthetic-generation-a';
 
 /** 给模拟传输补齐 UTSJSONObject 方法，数据和协议形状保持真实。 */
 function json(value) {
@@ -28,11 +30,18 @@ function snapshot(projectId = 'project-a', draftId = 'draft-a') {
 /** 实际执行状态层、新建编排和正式聊天本地草稿，仅替换传输与系统 API。 */
 function fixture({ component = false, storage = new Map() } = {}) {
   const calls = [], hooks = new Map(), backend = new Map(), pending = new Map(), watches = [], emitted = [], unmounts = [];
-  const connection = { hostId: 'pc-a', cacheNamespace: 'example-pairing', configurationRevision: 1, connected: true, configured: true, computers: [{ id: 'pc-a', online: true }, { id: 'pc-b', online: true }], snapshot: null };
+  const connection = { hostId: 'pc-a', cacheNamespace: 'example-pairing', configurationRevision: 1, connected: true, configured: true, computers: [
+    { id: 'pc-a', online: true, instanceGeneration: directGeneration },
+    { id: 'pc-b', online: true, instanceGeneration: 'synthetic-generation-b' },
+  ], snapshot: null };
   let serial = 0, created = 0, state;
   const bridge = {
     pendingCommand: (hostId, scope) => pending.get(hostId + ':' + scope) ?? '',
     clearCommand: (id, hostId) => { for (const [key, value] of pending) if (key.startsWith(hostId + ':') && value === id) pending.delete(key); },
+    readCommandStatus(hostId, commandId) {
+      assert.equal(hostId, connection.hostId);
+      return this.request('command.status', { commandId });
+    },
     request(method, params, write = false) {
       const hostId = connection.hostId, commandId = write ? 'command-' + ++serial : '';
       const scope = hostId + ':';
@@ -42,6 +51,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
         if (hooks.has(method)) return hooks.get(method)(params, hostId);
         if (method === 'projects.list') return { supportsNativeNewDraft: true, projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a' };
         if (method === 'thread.create.settings') { const { settings, models } = snapshot(params.projectId); return { settings, models }; }
+        if (method === 'thread.permissions.read') return snapshot().permissions;
         if (method === 'thread.draft.open') {
           let value = [...backend.values()].find(entry => entry.hostId === hostId && entry.projectId === params.projectId && entry.status !== 'promoted');
           if (!value) { value = { ...snapshot(params.projectId, 'draft-' + ++created), hostId }; backend.set(hostId + ':' + value.draftId, value); }
@@ -67,6 +77,22 @@ function fixture({ component = false, storage = new Map() } = {}) {
       return Promise.resolve().then(run).then(result => { if (write) pending.delete(scope); return json(result); }, error => { if (write && error.outcomeUnknown === false) pending.delete(scope); throw error; });
     },
     async openThread(threadId) { calls.push({ hostId: connection.hostId, method: 'thread.watch', params: { threadId, activate: true } }); if (hooks.has('thread.watch')) await hooks.get('thread.watch')(); connection.activeThreadId = threadId; },
+    async openCreatedThread(threadId) {
+      await this.openThread(threadId);
+      connection.snapshot = { threadId, cwd: '/example', status: 'idle', messages: [], turns: [], activeTurnId: '' };
+    },
+    async submitDirectNewConversationStep(method, params, commandId, expectedGeneration, firstMessageGuard) {
+      assert.ok(commandId.length >= 20 && commandId.length <= 160);
+      assert.ok(expectedGeneration);
+      assert.equal(expectedGeneration, connection.computers.find(computer => computer.id === connection.hostId)?.instanceGeneration);
+      if (method === 'turn.send') assert.deepEqual(plain(firstMessageGuard), { permissionRevision: snapshot().permissions.revision, confirmedFullAccess: false });
+      else assert.equal(firstMessageGuard, null);
+      calls.push({ hostId: connection.hostId, method, params: plain(params), write: true, commandId, expectedGeneration, firstMessageGuard: plain(firstMessageGuard) });
+      if (hooks.has(method)) return json(await hooks.get(method)(params, commandId));
+      if (method === 'thread.create') return json({ threadId: directThreadId, commandId });
+      if (method === 'turn.send') return json({ ok: true, commandId });
+      throw Error('测试不允许其他直连写操作：' + method);
+    },
     selectComputer(id) { connection.hostId = id; },
   };
   const props = { expanded: false };
@@ -80,9 +106,9 @@ function fixture({ component = false, storage = new Map() } = {}) {
     FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', computerIcon: () => 'laptop', bindImagePaste: () => () => {},
   });
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
-  if (component) source += '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
+  if (component) source += '\n' + read('apps/mobile/services/direct-new-conversation.uts') + '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
-  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,send,projectId,draft,native,settings,canSend,focused,error' : '') + '};', context);
+  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,openCompletedConversation,send,projectId,draft,native,direct,settings,canSend,focused,error,newConversationMode' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
   return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
@@ -486,6 +512,98 @@ test('普通启动时提示用专用入口打开桌面，保留本地输入且�
   assert.equal(f.canSend.value,false);
   assert.equal(f.draft.value.text,'合成输入');
   assert.equal(f.calls.some(call=>call.method==='thread.draft.open'||call.method==='thread.create'),false);
+});
+
+/** 普通连接由电脑明确声明，设置读取与首次提交使用实际组件和服务。 */
+async function directComponentFixture() {
+  const f = fixture({ component: true });
+  f.hooks.set('projects.list', () => ({
+    newConversationMode: 'desktopIpc', supportsNativeNewDraft: false,
+    projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a',
+  }));
+  f.props.expanded = true;
+  await f.loadProjects(); await tick();
+  return f;
+}
+
+test('明确直连能力时读取设置，点击发送才创建聊天并提交首条消息', async () => {
+  const f = await directComponentFixture();
+  assert.equal(f.newConversationMode.value, 'desktopIpc');
+  assert.equal(f.settings.value.model, 'model-a');
+  assert.equal(f.calls.some(call => call.write), false);
+  f.draft.value.text = '合成首条消息';
+  assert.equal(f.canSend.value, true);
+  await f.send();
+  assert.deepEqual(f.calls.filter(call => call.write).map(call => call.method), ['thread.create', 'turn.send']);
+  assert.deepEqual(f.calls.filter(call => call.write).map(call => call.expectedGeneration), [directGeneration, directGeneration]);
+  assert.deepEqual(f.emitted.filter(event => event[0] === 'created'), [['created', directThreadId]]);
+  assert.equal(f.direct.value.completedThreadId, '');
+  assert.equal(f.calls.some(call => call.method.startsWith('thread.draft.')), false);
+});
+
+test('未识别的显式模式不回退，原生未知操作也不能通过直连重发', async () => {
+  const f = await directComponentFixture();
+  f.draft.value.text = '保留合成消息';
+  f.native.value.outcomeUnknown = true;
+  await f.send();
+  assert.equal(f.canSend.value, false);
+  f.native.value.outcomeUnknown = false;
+  f.hooks.set('projects.list', () => ({ newConversationMode: 'unknown', supportsNativeNewDraft: true, projects: [] }));
+  await f.loadProjects();
+  assert.equal(f.newConversationMode.value, '');
+  assert.equal(f.canSend.value, false);
+  assert.equal(f.draft.value.text, '保留合成消息');
+  assert.equal(f.calls.some(call => call.write), false);
+});
+
+test('直连声明缺少实例代际时保留输入并拒绝创建', async () => {
+  const f = await directComponentFixture();
+  f.draft.value.text = '合成首条消息';
+  f.connection.computers[0].instanceGeneration = '';
+  await f.loadProjects();
+  assert.equal(f.newConversationMode.value, '');
+  assert.match(f.error.value, /确认当前 Codex 实例/);
+  assert.equal(f.canSend.value, false);
+  await f.send();
+  assert.equal(f.draft.value.text, '合成首条消息');
+  assert.equal(f.calls.some(call => call.write), false);
+});
+
+test('直连结果未知时原生模式仍锁定发送，核对仅回读原命令', async () => {
+  const f = await directComponentFixture();
+  f.draft.value.text = '待核对的合成消息';
+  f.hooks.set('turn.send', () => { throw Error('模拟回执中断'); });
+  await f.send();
+  const commandId = f.direct.value.pendingCommandId;
+  assert.equal(f.direct.value.outcomeUnknown, true);
+  f.hooks.set('projects.list', () => ({
+    newConversationMode: 'nativeDraft', supportsNativeNewDraft: true,
+    projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a',
+  }));
+  await f.loadProjects(); await tick();
+  assert.equal(f.newConversationMode.value, 'nativeDraft');
+  assert.equal(f.canSend.value, false);
+  await f.checkDraftOutcome();
+  assert.ok(f.calls.some(call => call.method === 'command.status' && call.params.commandId === commandId));
+  assert.deepEqual(f.calls.filter(call => call.write).map(call => call.method), ['thread.create', 'turn.send']);
+});
+
+test('发送中换电脑时不发出原聊天事件，回到原电脑可以交接已确认聊天', async () => {
+  const f = await directComponentFixture(), response = deferred();
+  const original = f.direct.value;
+  f.draft.value.text = '合成首条消息';
+  f.hooks.set('turn.send', (_, commandId) => response.promise.then(() => ({ ok: true, commandId })));
+  const submitting = f.send();
+  await tick();
+  assert.equal(f.calls.filter(call => call.method === 'turn.send').length, 1);
+  f.connection.hostId = 'pc-b'; response.resolve(); await submitting;
+  assert.equal(f.emitted.some(event => event[0] === 'created'), false);
+  assert.equal(original.completedThreadId, directThreadId);
+  assert.equal(f.direct.value.completedThreadId, '');
+  f.connection.hostId = 'pc-a'; await f.openCompletedConversation();
+  assert.deepEqual(f.emitted.filter(event => event[0] === 'created'), [['created', directThreadId]]);
+  assert.equal(original.completedThreadId, '');
+  assert.equal(f.calls.filter(call => call.method === 'turn.send').length, 1);
 });
 
 /** 同一电脑的两个合成项目，使用只读设置回执验证焦点与草稿隔离。 */

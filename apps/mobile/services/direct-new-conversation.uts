@@ -1,0 +1,316 @@
+import { reactive } from 'vue'
+import { bridge, connection } from './bridge.uts'
+import type { Computer } from './bridge.uts'
+import type { DraftFile, DraftImage } from './composer.uts'
+import type { SettingsResponse } from './execution-settings.uts'
+import { FILE_CHUNK_BYTES, readFileBase64 } from './files.uts'
+import type { NewDraft, NewDraftChoices, NewProject } from './new-conversation.uts'
+import type { PermissionState } from './permissions.uts'
+import type { SelectedPlugin } from './plugins.uts'
+
+type DirectCheckpoint = { threadId: string, pendingAction: string, pendingCommandId: string, completedThreadId: string }
+type DirectSubmission = { text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], choices: NewDraftChoices }
+type DirectTarget = { hostId: string, cacheNamespace: string, configurationRevision: number, generation: string }
+export type DirectNewConversationState = { key: string, threadId: string, pendingAction: string, pendingCommandId: string, completedThreadId: string, busy: boolean, outcomeUnknown: boolean, error: string }
+
+const directStates = reactive<DirectNewConversationState[]>([])
+const directSubmissions = new Map<string, DirectSubmission>()
+const directThreadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const directCommandId = /^[a-zA-Z0-9-]{16,80}$/
+
+// 本地仅保留原命令与会话编号；电脑、项目和配对更换后不恢复上一目标。
+export function directNewConversationState(draft: NewDraft): DirectNewConversationState {
+  const key = 'codex-mobile-direct-new-v1-' + JSON.stringify([draft.cacheNamespace, draft.hostId, draft.projectId])
+  const found = directStates.find((state: DirectNewConversationState): boolean => state.key == key)
+  if (found != null) return found
+  const state: DirectNewConversationState = { key, threadId: '', pendingAction: '', pendingCommandId: '', completedThreadId: '', busy: false, outcomeUnknown: false, error: '' }
+  try {
+    const saved = uni.getStorageSync(key)
+    if (typeof saved == 'string' && saved.length > 0) {
+      const record = JSON.parse<DirectCheckpoint>(saved)
+      if (record == null || typeof record.threadId != 'string' || typeof record.completedThreadId != 'string' || typeof record.pendingAction != 'string' || typeof record.pendingCommandId != 'string') throw new Error('操作记录无效')
+      if (record.threadId.length > 0 && !directThreadId.test(record.threadId)) throw new Error('会话编号无效')
+      const pending = record.pendingAction.length > 0
+      if (pending && (!['create', 'settings', 'permissions', 'send'].includes(record.pendingAction) || !directCommandId.test(record.pendingCommandId) || (record.pendingAction != 'create' && record.threadId.length == 0))) throw new Error('待核对操作记录无效')
+      if (!pending && record.pendingCommandId.length > 0) throw new Error('待核对操作记录缺少阶段')
+      if (record.completedThreadId.length > 0 && (record.threadId != record.completedThreadId || pending)) throw new Error('已完成操作记录无效')
+      state.threadId = record.threadId; state.completedThreadId = record.completedThreadId
+      state.pendingAction = record.pendingAction; state.pendingCommandId = record.pendingCommandId
+      state.outcomeUnknown = state.pendingCommandId.length > 0
+      if (state.outcomeUnknown) state.error = '上次操作结果需要核对，请勿重复提交'
+    }
+  } catch (_) { state.outcomeUnknown = true; state.error = '无法读取新聊天核对记录，请先检查本地存储和电脑端' }
+  directStates.push(state)
+  return directStates[directStates.length - 1]
+}
+
+// 先落盘后更新页面，保存失败时保留原保护，绝不继续发下一步写请求。
+function saveDirectCheckpoint(state: DirectNewConversationState, threadId: string, action: string = '', commandId: string = '', completedThreadId: string = '') {
+  uni.setStorageSync(state.key, JSON.stringify({ threadId, pendingAction: action, pendingCommandId: commandId, completedThreadId } as DirectCheckpoint))
+  state.threadId = threadId; state.pendingAction = action; state.pendingCommandId = commandId
+  state.completedThreadId = completedThreadId; state.outcomeUnknown = commandId.length > 0
+}
+
+function directGeneration(hostId: string): string {
+  return connection.computers.find((computer: Computer): boolean => computer.id == hostId && computer.online)?.instanceGeneration ?? ''
+}
+
+function assertDirectTarget(target: DirectTarget) {
+  if (!connection.connected || target.generation.length == 0 || connection.hostId != target.hostId || (connection.cacheNamespace ?? '') != target.cacheNamespace || connection.configurationRevision != target.configurationRevision ||
+    !connection.computers.some((computer: Computer): boolean => computer.id == target.hostId && computer.online) || directGeneration(target.hostId) != target.generation) throw new Error('所选电脑连接已变化，输入和原操作编号已保留')
+}
+
+function directTarget(draft: NewDraft): DirectTarget {
+  const target: DirectTarget = { hostId: draft.hostId, cacheNamespace: draft.cacheNamespace, configurationRevision: connection.configurationRevision, generation: directGeneration(draft.hostId) }
+  assertDirectTarget(target)
+  return target
+}
+
+// 保存并复用原请求编号。旧通道的同步抛错或超时均交给账本确认。
+async function writeDirectStep(target: DirectTarget, state: DirectNewConversationState, action: string, method: string, params: UTSJSONObject, firstMessageGuard: UTSJSONObject | null = null): Promise<UTSJSONObject> {
+  assertDirectTarget(target)
+  const scope = action == 'create' ? '' : state.threadId
+  if (bridge.pendingCommand(target.hostId, scope).length > 0) throw new Error('该聊天正在处理另一项操作，请稍后再试')
+  const commandId = Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2)
+  saveDirectCheckpoint(state, state.threadId, action, commandId)
+  try { return await bridge.submitDirectNewConversationStep(method, params, commandId, target.generation, firstMessageGuard) }
+  catch (reason) {
+    let confirmed: UTSJSONObject | null = null
+    try { confirmed = await reconcileDirectStep(target, state) } catch (_) {}
+    // 状态核对可能确认写已生效；当前调用只在下一次用户操作时继续。
+    if (state.completedThreadId.length > 0 && confirmed != null) return confirmed
+    if (state.outcomeUnknown) throw new Error('原操作结果需要核对，请勿重复提交')
+    throw reason
+  }
+}
+
+function directPath(value: string): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[a-z]:/i.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+// 重试或核对时重新读取所选项目，禁止把旧会话绑定到已切换目录的同名项目。
+async function directProject(draft: NewDraft, target: DirectTarget): Promise<NewProject> {
+  assertDirectTarget(target)
+  const result = await bridge.request('projects.list', {})
+  assertDirectTarget(target)
+  if (result.getString('newConversationMode') != 'desktopIpc') throw new Error('所选电脑的普通连接模式已变化，请重新读取项目')
+  const projects = JSON.parse<NewProject[]>(JSON.stringify(result['projects'])) ?? [] as NewProject[]
+  const project = projects.find((item: NewProject): boolean => item.id == draft.projectId)
+  if (project == null || project.cwd.length == 0) throw new Error('原项目已变化，请重新选择电脑项目')
+  return project
+}
+
+function consumeDirectSubmission(draft: NewDraft, state: DirectNewConversationState) {
+  const sent = directSubmissions.get(state.key)
+  if (sent == null) return
+  if (draft.text.trim() == sent.text) draft.text = ''
+  draft.images = draft.images.filter((image: DraftImage): boolean => !sent.images.some((item: DraftImage): boolean => item.id == image.id))
+  draft.files = draft.files.filter((file: DraftFile): boolean => !sent.files.some((item: DraftFile): boolean => item.id == file.id))
+  draft.plugins = draft.plugins.filter((plugin: SelectedPlugin): boolean => !sent.plugins.some((item: SelectedPlugin): boolean => item.id == plugin.id))
+  if (JSON.stringify(draft.choices) == JSON.stringify(sent.choices)) draft.choices = {} as NewDraftChoices
+  directSubmissions.delete(state.key)
+}
+
+// 账本只核对原命令。找不到或未确认的请求不视为失败，也不重建或补发。
+async function reconcileDirectStep(target: DirectTarget, state: DirectNewConversationState, draft: NewDraft | null = null): Promise<UTSJSONObject | null> {
+  assertDirectTarget(target)
+  const commandId = state.pendingCommandId, action = state.pendingAction
+  const status = await bridge.readCommandStatus(target.hostId, commandId)
+  assertDirectTarget(target)
+  const outcome = status.getString('state'), result = status['result'] as UTSJSONObject | null
+  const failure = status['error'] as UTSJSONObject | null
+  const created = action == 'create' ? result?.getString('threadId') ?? '' : ''
+  if (created.length > 0) {
+    if (!directThreadId.test(created) || (state.threadId.length > 0 && state.threadId != created)) throw new Error('原创建回执的聊天编号不一致，请在电脑核对')
+    if (state.threadId.length == 0) saveDirectCheckpoint(state, created, action, commandId)
+  }
+  if (outcome == 'unknown' && action == 'create' && created.length > 0 && draft != null) {
+    // 编号已写入原账本时，静默查索引确认确实落盘。下一次仍由用户手动发送。
+    const project = await directProject(draft, target)
+    assertDirectTarget(target)
+    const observed = await bridge.request('thread.history', { threadId: created, view: 'prefetch' })
+    assertDirectTarget(target)
+    const snapshot = observed['snapshot'] as UTSJSONObject | null
+    const cwd = snapshot?.getString('cwd') ?? ''
+    if (snapshot?.getString('threadId') != created || cwd.length == 0 || directPath(cwd) != directPath(project.cwd)) throw new Error('原创建尚未确认，请在电脑核对')
+    saveDirectCheckpoint(state, created)
+  } else if (outcome == 'done' && failure != null && failure.getBoolean('outcomeUnknown') == false) {
+    saveDirectCheckpoint(state, state.threadId)
+    if (action == 'send') directSubmissions.delete(state.key)
+    state.error = '已确认上次操作失败，输入已保留，可手动重试'
+  } else if (outcome == 'done' && failure == null) {
+    if (action == 'create' && created.length == 0) throw new Error('原创建回执缺少聊天编号，请在电脑核对')
+    if (action != 'create' && result?.getBoolean('ok') != true) throw new Error('原操作缺少成功回执，请继续核对')
+    if (action == 'send' && result?.getString('commandId') != commandId) throw new Error('原发送回执编号不一致，请继续核对')
+    saveDirectCheckpoint(state, state.threadId, '', '', action == 'send' ? state.threadId : '')
+  } else {
+    throw new Error('原操作结果尚未确认，请勿重复提交')
+  }
+  bridge.clearCommand(commandId, target.hostId)
+  return result
+}
+
+// 重新进入编辑器只读取原记录，点击核对也不会发起新建、设置或发送。
+export async function checkDirectNewConversation(draft: NewDraft): Promise<string> {
+  const state = directNewConversationState(draft)
+  if (state.busy) throw new Error('新聊天操作正在处理')
+  const target = directTarget(draft)
+  if (state.completedThreadId.length > 0) { consumeDirectSubmission(draft, state); return state.completedThreadId }
+  if (state.pendingCommandId.length == 0) return ''
+  state.busy = true; state.error = ''
+  try {
+    await reconcileDirectStep(target, state, draft)
+    if (state.completedThreadId.length > 0) consumeDirectSubmission(draft, state)
+    assertDirectTarget(target)
+    return state.completedThreadId
+  } catch (reason) { state.error = (reason as Error).message; throw reason }
+  finally { state.busy = false }
+}
+
+// 页面已接收正式聊天编号后才释放完成标记，刷新不会把原消息重新提交。
+export function acknowledgeDirectNewConversation(draft: NewDraft, threadId: string) {
+  const state = directNewConversationState(draft)
+  if (threadId.length > 0 && state.completedThreadId == threadId) saveDirectCheckpoint(state, '')
+}
+
+function assertDirectThread(target: DirectTarget, state: DirectNewConversationState, project: NewProject) {
+  assertDirectTarget(target)
+  const snapshot = connection.snapshot
+  if (connection.activeThreadId != state.threadId || snapshot == null || snapshot.threadId != state.threadId || snapshot.readOnly == true || directPath(snapshot.cwd) != directPath(project.cwd)) throw new Error('电脑未确认所建聊天与项目，原编号和输入已保留')
+  if (snapshot.messages.length > 0 || (snapshot.turns?.length ?? 0) > 0 || snapshot.activeTurnId.length > 0 || snapshot.status == 'active') {
+    saveDirectCheckpoint(state, '')
+    throw new Error('电脑已使用原聊天，手机输入已保留；再次发送会新建聊天')
+  }
+}
+
+// 仅把显式选择发给原桌面，模型、速度和模式继续走原有校验与读回。
+async function prepareDirectSettings(target: DirectTarget, state: DirectNewConversationState, project: NewProject, selection: DirectSubmission, apply: boolean) {
+  assertDirectThread(target, state, project)
+  const choices = selection.choices, threadId = state.threadId
+  if (choices.model == null && choices.effort == null && choices.serviceTier == null && choices.mode == null && selection.images.length == 0) return
+  const raw = await bridge.request('thread.settings.read', { threadId })
+  assertDirectThread(target, state, project)
+  const settings = JSON.parse<SettingsResponse>(JSON.stringify(raw))
+  if (settings == null) throw new Error('无法核对电脑执行设置')
+  const changes: UTSJSONObject = {}
+  if (choices.model != null && choices.model != settings.settings.model) changes['model'] = choices.model
+  if (choices.effort != null && (choices.effort != settings.settings.effort || changes['model'] != null)) changes['effort'] = choices.effort
+  if (choices.serviceTier != null && (choices.serviceTier != settings.settings.serviceTier || changes['model'] != null)) changes['serviceTier'] = choices.serviceTier
+  if (choices.mode != null && choices.mode != settings.settings.mode) changes['mode'] = choices.mode
+  if (changes['model'] != null || changes['effort'] != null || changes['serviceTier'] != null || changes['mode'] != null) {
+    if (!apply) throw new Error('电脑执行设置已变化，输入已保留，请重新确认后发送')
+    const result = await writeDirectStep(target, state, 'settings', 'thread.settings.update', { threadId, changes })
+    if (result.getBoolean('ok') != true) throw new Error('电脑执行设置结果尚未确认')
+    saveDirectCheckpoint(state, threadId)
+    return
+  }
+  if (selection.images.length > 0 && settings.models.find((model): boolean => model.id == settings.settings.model)?.supportsImages != true) throw new Error('当前模型不支持图片，请切换模型')
+}
+
+// 权限始终以原会话读回为准，跟随电脑时也必须显式确认完整访问。
+async function prepareDirectPermissions(target: DirectTarget, state: DirectNewConversationState, project: NewProject, choices: NewDraftChoices, apply: boolean): Promise<string> {
+  assertDirectThread(target, state, project)
+  const threadId = state.threadId, selected = choices.permissionMode == 'desktop-default' ? '' : choices.permissionMode ?? ''
+  const raw = await bridge.request('thread.permissions.read', { threadId })
+  assertDirectThread(target, state, project)
+  const current = JSON.parse<PermissionState>(JSON.stringify(raw))
+  if (current == null || current.revision.length == 0) throw new Error('无法核对电脑权限')
+  if (selected.length > 0 && current.mode != selected) {
+    if (!apply) throw new Error('电脑权限已变化，输入已保留，请重新确认后发送')
+    const result = await writeDirectStep(target, state, 'permissions', 'thread.permissions.update', { threadId, mode: selected, expectedRevision: current.revision, confirmedFullAccess: choices.confirmedFullAccess == true })
+    if (result.getBoolean('ok') != true) throw new Error('电脑权限变更结果尚未确认')
+    saveDirectCheckpoint(state, threadId)
+    return ''
+  }
+  if (current.mode == 'full-access' && (selected != 'full-access' || choices.confirmedFullAccess != true)) throw new Error('电脑聊天为完整访问，请在手机上选择并确认权限后发送')
+  if (!['default', 'auto-review', 'read-only', 'full-access'].includes(current.mode)) throw new Error('电脑权限无法确认，请在手机选择可核验的权限后发送')
+  return current.revision
+}
+
+// 同一附件 ID 按正式会话续传，每次开始时由电脑确认进度，不能沿用原生草稿上传状态。
+async function uploadDirectFile(target: DirectTarget, state: DirectNewConversationState, project: NewProject, file: DraftFile) {
+  const threadId = state.threadId
+  assertDirectThread(target, state, project)
+  file.status = 'uploading'; file.error = ''
+  try {
+    const started = await bridge.request('attachment.begin', { threadId, uploadId: file.id, name: file.name, size: file.size })
+    assertDirectThread(target, state, project)
+    if (started.getBoolean('complete') != true) {
+      if (file.data.length == 0) file.data = await readFileBase64(file.source)
+      let index = started.getNumber('nextChunk') ?? 0
+      const length = FILE_CHUNK_BYTES * 4 / 3
+      while (index * length < file.data.length) {
+        assertDirectThread(target, state, project)
+        const part = await bridge.request('attachment.chunk', { threadId, uploadId: file.id, index, data: file.data.slice(index * length, (index + 1) * length) })
+        assertDirectThread(target, state, project)
+        const next = part.getNumber('nextChunk') ?? 0
+        if (next != index + 1) throw new Error('电脑附件进度未确认，请重新上传')
+        index = next
+        file.progress = Math.min(99, Math.floor((part.getNumber('received') ?? 0) * 100 / file.size))
+      }
+      assertDirectThread(target, state, project)
+      await bridge.request('attachment.finish', { threadId, uploadId: file.id })
+      assertDirectThread(target, state, project)
+    }
+    file.status = 'ready'; file.progress = 100
+  } catch (reason) { file.status = 'paused'; file.error = (reason as Error).message; throw reason }
+}
+
+// 单实例普通启动：先建空会话，再由原桌面接管并发送。未知步骤只核对，禁止自动重放。
+export async function sendDirectNewConversation(draft: NewDraft, progress: (message: string) => void): Promise<string> {
+  const state = directNewConversationState(draft)
+  if (state.busy) throw new Error('正在提交，请勿重复发送')
+  const target = directTarget(draft)
+  if (state.completedThreadId.length > 0) { consumeDirectSubmission(draft, state); return state.completedThreadId }
+  if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
+  if (draft.projectId.length == 0) throw new Error('请先选择项目')
+  if (draft.threadMentions.length > 0) throw new Error('普通启动暂不支持随新聊天发送聊天引用，请移除引用后重试；输入和引用已保留')
+  const submission: DirectSubmission = { text: draft.text.trim(), images: draft.images.slice(), files: draft.files.slice(), plugins: draft.plugins.slice(), choices: { ...draft.choices } as NewDraftChoices }
+  if (submission.text.length == 0 && submission.images.length == 0 && submission.files.length == 0) throw new Error('请先输入内容或添加附件')
+  if (submission.images.length + submission.files.length > 3) throw new Error('每次最多添加3个附件')
+  if (submission.choices.permissionMode == 'full-access' && submission.choices.confirmedFullAccess != true) throw new Error('请先确认电脑完整访问权限')
+  state.busy = true; state.error = ''
+  try {
+    const project = await directProject(draft, target)
+    if (state.threadId.length == 0) {
+      progress('正在创建聊天…')
+      const title = submission.text.split('\n')[0].slice(0, 60)
+      const created = await writeDirectStep(target, state, 'create', 'thread.create', { projectId: draft.projectId, title: title.length > 0 ? title : '新聊天' })
+      const id = created.getString('threadId') ?? ''
+      if (!directThreadId.test(id)) throw new Error('创建回执缺少有效聊天编号，请核对原操作')
+      saveDirectCheckpoint(state, id)
+    }
+    assertDirectTarget(target)
+    const threadId = state.threadId
+    progress('正在连接电脑聊天…')
+    assertDirectTarget(target)
+    await bridge.openCreatedThread(threadId)
+    assertDirectThread(target, state, project)
+    progress('正在应用执行设置和权限…')
+    await prepareDirectSettings(target, state, project, submission, true)
+    await prepareDirectPermissions(target, state, project, submission.choices, true)
+    assertDirectThread(target, state, project)
+    progress('正在准备附件…')
+    for (const file of submission.files) await uploadDirectFile(target, state, project, file)
+    await prepareDirectSettings(target, state, project, submission, false)
+    const permissionRevision = await prepareDirectPermissions(target, state, project, submission.choices, false)
+    assertDirectThread(target, state, project)
+    const params: UTSJSONObject = { threadId, text: submission.text, images: submission.images.map((image: DraftImage): string => image.src), attachments: submission.files.map((file: DraftFile): string => file.id) }
+    if (submission.plugins.length > 0) params['pluginIds'] = submission.plugins.map((plugin: SelectedPlugin): string => plugin.id)
+    progress('正在发送…')
+    directSubmissions.set(state.key, submission)
+    // 将最后一次权限核对与首条发送绑定，由电脑再次校验；正文协议保持原样。
+    const firstMessageGuard: UTSJSONObject = { permissionRevision, confirmedFullAccess: submission.choices.permissionMode == 'full-access' && submission.choices.confirmedFullAccess == true }
+    const result = await writeDirectStep(target, state, 'send', 'turn.send', params, firstMessageGuard)
+    if (state.completedThreadId.length == 0) {
+      if (result.getBoolean('ok') != true || result.getString('commandId') != state.pendingCommandId) throw new Error('发送回执需要核对，请勿重复提交')
+      // 迟到的成功仍属于原草稿。先结算旧目标，再校验当前目标，拒绝在新电脑导航。
+      saveDirectCheckpoint(state, threadId, '', '', threadId)
+    }
+    consumeDirectSubmission(draft, state)
+    assertDirectTarget(target)
+    return threadId
+  } catch (reason) { state.error = (reason as Error).message; throw reason }
+  finally { state.busy = false }
+}

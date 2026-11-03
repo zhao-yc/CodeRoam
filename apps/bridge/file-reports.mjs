@@ -6,6 +6,7 @@ import {BridgeError} from '../../packages/protocol/contracts.mjs';
 import {ComposerPredictionReader} from './composer-prediction.mjs';
 import {fileReportExpression} from './file-report-expression.mjs';
 import {fileReportSource} from './file-report-source.mjs';
+import {NativeFileReportRuntime} from './native-report-runtime.mjs';
 
 /** 从已核验的原桌面安装包定位现成模块，只读取索引，不执行或复制安装包源码。 */
 export function desktopDiffModules(executable) {
@@ -36,10 +37,22 @@ export async function evaluateNativeFileReport(url,expression) {
 
 /** 按电脑实例、会话和报告读取汇总；差异正文仅按文件请求返回，不进入快照或操作账本。 */
 export class DesktopFileReportReader extends ComposerPredictionReader {
-  constructor({evaluateNative=evaluateNativeFileReport,resolveModules=desktopDiffModules,...options}={}){super(options);this.evaluateNative=evaluateNative;this.resolveModules=resolveModules;this.cache=new Map();this.pendingReports=new Map();}
-  /** 只向同一已验证进程的页面读取原生统计，不导航、唤醒或修改桌面会话。 */
+  constructor({evaluateNative=evaluateNativeFileReport,resolveModules=desktopDiffModules,nativeRuntime=new NativeFileReportRuntime(),...options}={}){super(options);this.evaluateNative=evaluateNative;this.resolveModules=resolveModules;this.nativeRuntime=nativeRuntime;this.cache=new Map();this.pendingReports=new Map();}
+  /** 仅使用实例发现器已核验的安装位置，手机和历史内容不能指定原生代码来源。 */
+  nativeExecutable(adapter) {
+    const instance=adapter.client?.instance;
+    return instance?.alive===true&&instance.ready===true?instance.executable:null;
+  }
+  /** 普通启动复用官方离线计算能力；其它启动模式继续保留原有页面接口。 */
+  supports(adapter) {
+    if(this.closed)return false;
+    return this.nativeRuntime.supports(this.nativeExecutable(adapter))||process.platform==='win32'&&!adapter.client?.instance?.directIpc;
+  }
+  /** 优先在隔离线程执行同版本原生算法，兼容既有页面调用，不修改桌面会话。 */
   async nativeReport(adapter,source) {
-    if(adapter.client?.instance?.directIpc)throw new BridgeError('REPORT_UNAVAILABLE','请在电脑用掌上 Codex 启动入口重新打开 Codex，再查看原生文件汇总');
+    const executable=this.nativeExecutable(adapter);
+    if(this.nativeRuntime.supports(executable))return this.nativeRuntime.calculate(executable,source.batches);
+    if(adapter.client?.instance?.directIpc)throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
     if(!adapter.native?.processId)await adapter.native?.connect();
     const ports=(await this.endpoints()).filter(port=>port.pid===adapter.native?.processId);
     if(ports.length!==1)throw new BridgeError('REPORT_UNAVAILABLE','电脑原生文件汇总暂不可用，请确认桌面端正在运行');
@@ -55,10 +68,14 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
     const entry=adapter.conversations.get(threadId);
     if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条聊天再查看文件修改');
     const owner=entry.owner,ownerId=JSON.stringify([owner?.hostId,owner?.clientId]);
-    const current=()=>!this.closed&&adapter.conversations.get(threadId)===entry&&entry.watchers.has(deviceId)&&JSON.stringify([entry.owner?.hostId,entry.owner?.clientId])===ownerId;
+    const instance=adapter.client?.instance,generation=instance?.generation;
+    // 本地计算期间同样核对实例代次，不能把已撤销实例的差异返回新连接。
+    const current=()=>!this.closed&&(!instance||adapter.client?.instance===instance&&instance.alive===true&&instance.ready===true&&instance.generation===generation)&&adapter.conversations.get(threadId)===entry&&entry.watchers.has(deviceId)&&JSON.stringify([entry.owner?.hostId,entry.owner?.clientId])===ownerId;
     let source=entry.state?fileReportSource(entry.state,reportId):null;
     if(!source&&adapter.index?.readHistory){const saved=await adapter.index.readHistory(threadId,{reportId,rawTurns:true});source=fileReportSource(saved,reportId);}
     if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的文件查看已取消');
+    // 安装包原地升级后也要重新确认能力，不能从旧报告缓存绕过版本核验。
+    if(instance?.directIpc&&!this.supports(adapter))throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
     if(!source)throw new BridgeError('REPORT_NOT_FOUND','这份报告的修改记录暂不可用');
     if(!source.batches.length)return {report:null};
     const revision=createHash('sha256').update(JSON.stringify(source.batches)).digest('hex'),key=JSON.stringify([ownerId,threadId,reportId,revision]);
@@ -78,5 +95,5 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
     if(fileId){const file=report.files.find(file=>file.id===fileId);if(!file)throw new BridgeError('FILE_NOT_FOUND','这份报告中没有这个文件');return {reportId,revision,file};}
     return {report:{...report,fileCount:report.files.length,files:report.files.map(({diffs,...file})=>file)}};
   }
-  close(){super.close();this.cache.clear();this.pendingReports.clear();}
+  close(){super.close();this.nativeRuntime.close();this.cache.clear();this.pendingReports.clear();}
 }

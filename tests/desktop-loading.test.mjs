@@ -56,7 +56,7 @@ test('加载请求仅调用固定原生会话接口，加载标记必须明确�
 test('未加载会话只读后台历史，不调用桌面导航或创建跟随订阅',async()=>{
   const client=new ColdDesktop(),reads=[];
   const adapter=new DesktopAdapter({client,index:{readHistory:id=>{reads.push(id);return saved;}}});
-  try {assert.equal(await adapter.watch('thread','phone'),saved);assert.deepEqual(reads,['thread']);assert.deepEqual(client.calls,[]);assert.equal(adapter.conversations.get('thread').owner,null);adapter.unwatch('thread','phone');assert.equal(adapter.conversations.size,0);}
+  try {assert.deepEqual(await adapter.watch('thread','phone'),{...saved,supportsFileReports:adapter.supportsFileReports});assert.deepEqual(reads,['thread']);assert.deepEqual(client.calls,[]);assert.equal(adapter.conversations.get('thread').owner,null);adapter.unwatch('thread','phone');assert.equal(adapter.conversations.size,0);}
   finally {adapter.close();}
 });
 

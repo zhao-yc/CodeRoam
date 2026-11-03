@@ -219,7 +219,7 @@ function newFixture() {
 test('新建输入同样保留光标后正文，取消不删触发片段，迟到选择不覆盖新项目或新草稿', async () => {
   for (const action of ['confirm', 'cancel', 'changed', 'reverted', 'project']) {
     const f = newFixture(); const c = f.c, watches = [];
-    c.projectReady = ref(true);
+    c.projectReady = ref(true); c.newConversationMode = ref('nativeDraft');
     Object.assign(c, { ref, props: { expanded: true }, busy: ref(false), focused: ref(false), mentionOpen: ref(false), mentionCursor: ref(-1), mentionTrigger: ref(null), mentionDraftRevision: 0, mentionSourceRevision: 0, mentionContext: '', mentionSelectionRevision: 0, projectId: ref('project'), watch: (_, run) => watches.push(run), notify() {}, focusDraftInput() {}, closeMenus() {} });
     c.connection.configurationRevision = 1; c.uni.hideKeyboard = () => {};
     c.draft = computed(() => c.newDraft('pc', c.projectId.value)); c.native = computed(() => c.nativeDraftState('pc', c.projectId.value));

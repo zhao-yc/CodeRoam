@@ -49,6 +49,8 @@ export class BridgeAgent extends EventEmitter {
     adapter.permissionCatalog ??= new PermissionCatalog({ creation: newThreads.creation });
     adapter.pluginCatalog ??= new PluginCatalog({ creation: newThreads.creation, verify: pluginInstanceVerifier(adapter, newThreads.creation) });
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();this.fileReports=new DesktopFileReportReader();
+    // 能力由当前文件汇总读取器决定，普通启动也可使用已核验的原生离线算法。
+    this.adapter.nativeFileReportAvailable=()=>this.fileReports.supports(this.adapter);
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
@@ -144,9 +146,30 @@ export class BridgeAgent extends EventEmitter {
     try {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
+      const instance=this.adapter.client?.instance;
+      const expectedGeneration=message.expectedGeneration;
+      if(expectedGeneration!==undefined&&(typeof expectedGeneration!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(expectedGeneration)))throw new BridgeError('BAD_PARAMS','预期实例代次无效');
+      // 排队可能跨过实例撤销，真正执行之前也必须复核手机预期的代次。
+      const assertExpectedGeneration=()=>{
+        if(expectedGeneration!==undefined&&(this.adapter.client?.instance!==instance||instance?.generation!==expectedGeneration||instance.alive!==true||instance.ready!==true)){
+          throw new BridgeError('INSTANCE_CHANGED','实例已变化，请重新连接后核对原操作');
+        }
+      };
+      assertExpectedGeneration();
+      const guard=message.firstMessageGuard;
+      if(guard!==undefined){
+        // 首条消息保护只适用于已核验的普通单实例，不能绕过计划或排队入口。
+        if(message.method!=='turn.send'||Object.keys(message.params).some(key=>!['threadId','text','images','attachments','pluginIds'].includes(key))||
+            guard==null||typeof guard!=='object'||Array.isArray(guard)||Object.keys(guard).length!==2||
+            typeof guard.permissionRevision!=='string'||!/^[a-f0-9]{64}$/.test(guard.permissionRevision)||typeof guard.confirmedFullAccess!=='boolean'){
+          throw new BridgeError('BAD_PARAMS','首条消息保护参数无效');
+        }
+        if(instance?.directIpc!==true||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通单实例连接已变化，请重新连接');
+      }
       let deletionTarget = null;
       let lockQueued = false;
       const execute=async()=>{
+        assertExpectedGeneration();
         // 队列等待和实际执行分开记录，便于区分会话锁阻塞与桌面响应慢。
         this.diagnostics?.record('bridge.execute',diagnostic,{inFlight:this.diagnosticInFlight,queueWaitMs:this.diagnostics.elapsed(diagnostic),lockQueued});
         if(WRITE_METHODS.has(message.method)&&this.deletingIds.has(message.params.threadId))throw new BridgeError('DELETE_IN_PROGRESS','该聊天正在永久删除，请先核对删除结果');
@@ -161,9 +184,14 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='threads.mentions')return this.adapter.threadMentions.list(message.params);
         if(message.method==='projects.list'){
           const projects=this.newThreads.projects();
-          // 普通启动时明确告诉手机缺的是本机页面连接，更新服务或重试不会启用它。
-          if(this.adapter.client?.instance?.directIpc)return {...projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true};
-          return {...projects,supportsNativeNewDraft:await this.nativeDrafts.controller.capabilities()};
+          const instance=this.adapter.client?.instance;
+          // 只有完成独占 IPC 绑定的普通单实例可使用直接创建，原生共享草稿仍需要桌面页面。
+          if(instance?.directIpc===true){
+            const ready=instance.alive===true&&instance.ready===true;
+            return {...projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,...(ready?{newConversationMode:'desktopIpc'}:{})};
+          }
+          const supportsNativeNewDraft=await this.nativeDrafts.controller.capabilities();
+          return {...projects,supportsNativeNewDraft,...(supportsNativeNewDraft?{newConversationMode:'nativeDraft'}:{})};
         }
         if(message.method.startsWith('thread.draft.')) {
           if(['thread.draft.open','thread.draft.read'].includes(message.method))await this.adapter.threadMentions.available();
@@ -223,7 +251,7 @@ export class BridgeAgent extends EventEmitter {
         }
         if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!hasDetailWatcher(this.adapter,message.params.threadId))this.published.delete(message.params.threadId);return result;}
         if(message.method==='command.status') { const draft=await this.nativeDrafts.commandStatus(this.journal,message.deviceId,message.params.commandId);if(draft.state!=='unknown')return draft;const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
-        if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
+        if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result),guard);
         throw new BridgeError('METHOD_NOT_ALLOWED','此接口不支持通过电脑执行');
       };
       if(WRITE_METHODS.has(message.method)) {
@@ -243,7 +271,9 @@ export class BridgeAgent extends EventEmitter {
           try {response.result=await operation;} finally {deletionTarget?.release();this.deletionRequests.delete(requestKey);if(this.threadLocks.get(key)===operation)this.threadLocks.delete(key);}
           return response;
         }
-        const operation=previous.catch(()=>{}).then(()=>this.journal.execute(message.deviceId,message.requestId,message.method,message.params,execute));
+        // 首条保护参与原命令指纹；代次只限制路由，恢复时仍可用原命令核对。
+        const journalParams=guard===undefined?message.params:{...message.params,firstMessageGuard:guard};
+        const operation=previous.catch(()=>{}).then(()=>this.journal.execute(message.deviceId,message.requestId,message.method,journalParams,execute));
         this.threadLocks.set(key,operation);
         try { response.result=await operation; } finally {if(this.threadLocks.get(key)===operation)this.threadLocks.delete(key);}
       } else response.result=await execute();

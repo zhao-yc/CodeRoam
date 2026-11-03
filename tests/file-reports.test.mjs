@@ -56,7 +56,7 @@ test('切换会话后丢弃在途原生汇总，不向新订阅返回旧代码',
   await assert.rejects(pending,/已取消/);assert.equal(reader.cache.size,0);reader.close();
 });
 
-test('普通启动的历史回退和实时快照不声明原生文件汇总',async()=>{
+test('未经验证的普通启动版本不声明原生文件汇总',async()=>{
   const client=new EventEmitter();
   client.instance={directIpc:true}; client.connect=async()=>{}; client.close=()=>{};
   const adapter=new DesktopAdapter({client,index:{readHistory:()=>({threadId:'thread',supportsFileReports:true})}});
@@ -65,11 +65,54 @@ test('普通启动的历史回退和实时快照不声明原生文件汇总',asy
   try {
     assert.equal((await adapter.watch('thread','phone')).supportsFileReports,false);
     assert.equal(adapter.snapshot({id:'thread',turns:[]}).supportsFileReports,false);
-    await assert.rejects(reader.nativeReport(adapter,{}),{code:'REPORT_UNAVAILABLE',message:/重新打开 Codex/});
+    await assert.rejects(reader.nativeReport(adapter,{}),{code:'REPORT_UNAVAILABLE',message:/更新电脑连接服务/});
   } finally {
     reader.close();
     adapter.close();
   }
+});
+
+test('已核验的普通启动实例使用官方离线算法，并向历史与实时快照声明能力',async()=>{
+  const executable='C:/Program Files/WindowsApps/OpenAI.Codex_example/app/ChatGPT.exe';
+  const instance={directIpc:true,alive:true,ready:true,generation:'first',executable};
+  const client=new EventEmitter();client.instance=instance;client.connect=async()=>{};client.close=()=>{};
+  const adapter=new DesktopAdapter({client,index:{readHistory:()=>({threadId:'thread'})}});
+  adapter.discoverOwner=async()=>null;
+  let reads=0,closed=false,supported=true;
+  const reader=new DesktopFileReportReader({discover:async()=>assert.fail('普通启动不需要页面端口'),nativeRuntime:{
+    supports:value=>supported&&value===executable,
+    calculate:async(value,batches)=>{assert.equal(value,executable);assert.equal(batches.length,1);reads++;return {additions:1,deletions:1,files:[{path:'src/demo.uts',kind:'update',additions:1,deletions:1,binary:false,diffs:['合成原生差异']}]};},
+    close:()=>{closed=true;},
+  }});
+  adapter.nativeFileReportAvailable=()=>reader.supports(adapter);
+  try {
+    assert.equal((await adapter.watch('thread','phone')).supportsFileReports,true);
+    assert.equal(adapter.snapshot({id:'thread',turns:[]}).supportsFileReports,true);
+    adapter.conversations.set('thread',{watchers:new Set(['phone']),waiters:[],state:state([change('edit'),final('report')])});
+    assert.equal((await reader.read(adapter,{threadId:'thread',reportId:'report'},'phone')).report.additions,1);
+    assert.equal(reads,1);
+    supported=false;
+    await assert.rejects(reader.read(adapter,{threadId:'thread',reportId:'report'},'phone'),{code:'REPORT_UNAVAILABLE'});
+    supported=true;
+    instance.ready=false;
+    assert.equal(reader.supports(adapter),false);
+    await assert.rejects(reader.read(adapter,{threadId:'thread',reportId:'report'},'phone'),{code:'SUBSCRIPTION_CANCELED'});
+  } finally {reader.close();adapter.close();}
+  assert.equal(closed,true);
+});
+
+test('普通启动实例换代时丢弃在途本地原生差异',async()=>{
+  const instance={directIpc:true,alive:true,ready:true,generation:'first',executable:'已核验安装'};
+  const entry={watchers:new Set(['phone']),state:state([change('edit'),final('report')])};
+  const adapter={client:{instance},conversations:new Map([['thread',entry]])};
+  let finish;
+  const reader=new DesktopFileReportReader({nativeRuntime:{supports:()=>true,calculate:()=>new Promise(resolve=>{finish=resolve;}),close(){}}});
+  try {
+    const pending=reader.read(adapter,{threadId:'thread',reportId:'report'},'phone');
+    instance.generation='second';finish({additions:1,deletions:1,files:[]});
+    await assert.rejects(pending,{code:'SUBSCRIPTION_CANCELED'});
+    assert.equal(reader.cache.size,0);
+  }finally{reader.close();}
 });
 
 /** 执行实际 UTS 展示代码，增删行数不由展示解析器生成。 */
