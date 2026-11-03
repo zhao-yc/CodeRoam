@@ -73,7 +73,7 @@ test('页面打开列表暂停跟随，详情关闭不收起列表，同步裁�
   const f=fixture(),watches=[],calls=[];
   let bottom=400;
   const connection={snapshot:{messages:[message('c'),message('f','fileChange')],approvals:[],questionGroups:[],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
-  const context=vm.createContext({...f,conversationWithHistory:snapshot=>snapshot,executionRecordTitle:f.executionTitle,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',nextTick:callback=>callback(),uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{height:600,bottom:700}:{bottom}}),getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>calls.push('收起键盘')}});
+  const context=vm.createContext({...f,setTimeout:()=>0,conversationWithHistory:snapshot=>snapshot,executionRecordTitle:f.executionTitle,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',nextTick:callback=>callback(),uni:{getElementById:id=>({getBoundingClientRect:()=>id==='conversation-timeline'?{height:600,bottom:700}:{bottom}}),getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>calls.push('收起键盘')}});
   const source=fs.readFileSync('apps/mobile/pages/conversation/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   // 注释展示与执行记录共用时间线，回归时一并加载真实展示解析器。
   for (const module of ['turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
@@ -82,7 +82,7 @@ test('页面打开列表暂停跟随，详情关闭不收起列表，同步裁�
   const page=context.subject;
   // 短内容及触摸后仍在底部时隐藏按钮，离开底部才显示。
   page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,true);
-  page.beginTimelineTouch();page.endTimelineTouch();assert.equal(page.atTimelineBottom.value,true);assert.equal(page.following.value,false);
+  page.beginTimelineTouch();page.endTimelineTouch();assert.equal(page.atTimelineBottom.value,true);assert.equal(page.following.value,true);
   bottom=900;page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,false);
   bottom=720;page.updateTimelinePosition();assert.equal(page.atTimelineBottom.value,true);
   page.toggleExecutions(page.timeline.value[0]);

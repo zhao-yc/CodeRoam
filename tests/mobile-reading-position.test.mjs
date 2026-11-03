@@ -31,10 +31,24 @@ test('程序定位已完成而 scroll 回调尚未到达时，使用实际距离
  assert.equal(f.p.historyScrollTop.value,352);assert.equal(f.p.readingFloor.value,852);assert.equal(f.p.hasUnseenBelow.value,false);
 });
 
-test('下方追加与流式增长显示原有箭头；手动到底只清提示，箭头显式恢复跟随',()=>{
+test('下方追加与流式增长显示原有箭头；手动到底清提示并恢复跟随',()=>{
  const f=fixture();f.p.beforeMarkdownLayout();f.state.bottom=800;f.p.afterMarkdownLayout();f.flush();assert.equal(f.p.hasUnseenBelow.value,true);assert.equal(f.p.historyScrollTop.value,0);
- f.p.beginTimelineTouch();f.state.bottom=500;f.p.endTimelineTouch();assert.equal(f.p.hasUnseenBelow.value,false);assert.equal(f.p.following.value,false);
- f.p.updateTimelinePosition();f.p.resumeFollowing();assert.equal(f.p.following.value,false);f.p.resumeFollowing(true);f.flush();assert.equal(f.p.following.value,true);assert.equal(f.p.scrollTarget.value,'timeline-bottom');assert.equal(f.p.readingFloor.value,0);
+ f.p.beginTimelineTouch();f.state.bottom=500;f.p.endTimelineTouch();f.flush();assert.equal(f.p.hasUnseenBelow.value,false);assert.equal(f.p.following.value,true);assert.equal(f.p.readingFloor.value,0);
+ const g=fixture();g.p.updateTimelinePosition();g.p.resumeFollowing();assert.equal(g.p.following.value,false);g.p.resumeFollowing(true);g.flush();assert.equal(g.p.following.value,true);assert.equal(g.p.scrollTarget.value,'timeline-bottom');
+});
+
+test('箭头释放保位空间后滚动距离缩短及迟到的旧事件均不能关闭跟随',()=>{
+ const f=fixture();f.state.scrollTop=900;f.p.onTimelineScroll({detail:{scrollTop:900,scrollHeight:1400}});f.p.readingFloor.value=1400;
+ f.p.resumeFollowing(true);f.flush();f.state.scrollTop=100;f.p.onTimelineScroll({detail:{scrollTop:100,scrollHeight:600}});assert.equal(f.p.following.value,true);
+ f.p.onTimelineScroll({detail:{scrollTop:0,scrollHeight:600}});assert.equal(f.p.following.value,true);
+ f.update(()=>{f.connection.snapshot={...f.connection.snapshot,messages:[...f.connection.snapshot.messages,message('new')]};});f.flush();assert.equal(f.p.scrollTarget.value,'timeline-bottom');
+});
+
+test('箭头点击能结束遗留触摸状态；触摸结束后的惯性滑到底部也恢复跟随',()=>{
+ const f=fixture();f.p.beginTimelineTouch();f.p.resumeFollowing(true);f.flush();assert.equal(f.p.scrollTarget.value,'timeline-bottom');assert.equal(f.p.following.value,true);
+ const g=fixture();g.p.beginTimelineTouch();g.p.endTimelineTouch();assert.equal(g.p.following.value,false);
+ g.state.scrollTop=100;g.state.bottom=500;g.p.onTimelineScroll({detail:{scrollTop:100,scrollHeight:600}});g.flush();assert.equal(g.p.following.value,true);
+ const h=fixture();h.state.bottom=500;h.p.updateTimelinePosition();assert.equal(h.p.following.value,false);
 });
 
 test('历史前插和图片重排保持首条可见消息；锚点消失时使用后续候选',()=>{

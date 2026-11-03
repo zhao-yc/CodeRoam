@@ -658,7 +658,7 @@ function archiveFromMenu() {
 }
 onUnload(() => { hideArchiveLoading() })
 
-// 首次打开沿用自动定位；暂停后只有点击已有向下箭头才重新允许跟随。
+// 首次打开沿用自动定位；箭头与用户手动滑到底部均可恢复跟随。
 function scrollLatest() {
   if (!following.value || touchingTimeline) return
   scrollTarget.value = ''
@@ -673,9 +673,9 @@ function scrollLatest() {
 function resumeFollowing(explicit: boolean = false) {
   // 发送和重试回执只能延续原跟随意图，不能解除缓存浏览或手动阅读的暂停。
   if (!explicit) { if (following.value) scrollLatest(); return }
-  historyGesture++; historyFollowRevision++; cancelReadingCorrection(); readingFloor.value = 0; hasUnseenBelow.value = false; following.value = true; scrollLatest()
+  historyGesture++; historyFollowRevision++; cancelReadingCorrection(); touchingTimeline = false; timelineUserScrolling = false; readingFloor.value = 0; hasUnseenBelow.value = false; following.value = true; scrollLatest()
 }
-function pauseFollowing() { following.value = false; scrollTarget.value = '' }
+function pauseFollowing() { following.value = false; timelineUserScrolling = false; scrollTarget.value = '' }
 // 面板不插入时间线，阅读期间暂停自动跟随；关闭时保持原来的消息位置和草稿。
 function openAnnotations(messageId: string) {
   if (!messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == messageId && message.annotations.length > 0)) return
@@ -688,8 +688,14 @@ onUnload(() => { closeAnnotations() })
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { closeAnnotations() })
 watch((): boolean => selectedAnnotationId.value.length > 0 && !messagePresentations.value.some((message: MessagePresentation): boolean => message.messageId == selectedAnnotationId.value), (missing: boolean) => { if (missing) closeAnnotations() })
 // 新手势先取消待执行的布局补偿，不能让迟到回调抢回滚动位置。
-function beginTimelineTouch() { historyGesture++; touchingTimeline = true; cancelReadingCorrection(); pauseFollowing(); readingFloor.value = 0 }
-function onTimelineWheel() { beginTimelineTouch(); touchingTimeline = false; nextTick(() => { rememberReadingPosition(); updateTimelinePosition(true) }) }
+let timelineUserScrolling = false
+function beginTimelineTouch() { historyGesture++; touchingTimeline = true; cancelReadingCorrection(); pauseFollowing(); timelineUserScrolling = true; readingFloor.value = 0 }
+function onTimelineWheel() {
+  beginTimelineTouch(); touchingTimeline = false
+  const gesture = historyGesture
+  // 滚轮事件先于浏览器默认滚动；等本轮滚动完成后再判断是否真正触底。
+  setTimeout(() => { if (isCurrentPage() && gesture == historyGesture && !touchingTimeline) { rememberReadingPosition(); updateTimelinePosition(true) } }, 80)
+}
 function entryAnchor(entry: TimelineEntry): string { return 'message-' + entry.id.split(':').join('-') }
 type ReadingAnchor = { id: string, offset: number }
 type ReadingPosition = { anchors: ReadingAnchor[], top: number, gesture: number, height: number, bottom: number }
@@ -716,13 +722,15 @@ function captureReadingPosition(entries: TimelineEntry[] = timeline.value): Read
 }
 function rememberReadingPosition() { if (!readingCorrectionPending && !touchingTimeline) readingPosition = captureReadingPosition() }
 function cancelReadingCorrection() { readingCorrectionRevision++; readingCorrectionPending = false; pendingReadingPosition = null; readingPosition = null; cacheInitialPositioning = false }
-// 底部测量只管理按钮；手动看完可清除提示，永远不改变跟随意图。
+// 普通布局测量只管理按钮；真实手势到达底部才恢复跟随，缓存刷新不会自动解锁。
 function updateTimelinePosition(userScroll: boolean = false) {
   const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
   const bottom = uni.getElementById('timeline-message-end')?.getBoundingClientRect() ?? uni.getElementById('timeline-bottom')?.getBoundingClientRect()
   if (viewport == null || bottom == null || viewport.height <= 0) return
   atTimelineBottom.value = bottom.bottom <= viewport.bottom + 36
   if (userScroll && bottom.bottom <= viewport.bottom + 2) hasUnseenBelow.value = false
+  const scrollBottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect() ?? bottom
+  if (userScroll && timelineUserScrolling && !touchingTimeline && !readingCorrectionPending && scrollBottom.bottom <= viewport.bottom + 2) resumeFollowing(true)
 }
 // 布局前锁住当前有效滚动范围，防止内容缩短时浏览器先强制回弹。
 function beforeMarkdownLayout(entries: TimelineEntry[] = timeline.value) {
@@ -822,13 +830,15 @@ function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 
 function beginExecutionTouch() { beginTimelineTouch() }
 function endExecutionTouch() { touchingTimeline = false; rememberReadingPosition() }
 function onTimelineScroll(event: UniScrollEvent) {
-  const top = event.detail.scrollTop
-  const element = uni.getElementById('conversation-timeline')
+  const element = uni.getElementById('conversation-timeline') as UniScrollViewElement | null
+  // 回到底部及保位空间释放都会产生滚动回调；旧事件不能被误判成新的上滑手势。
+  const top = element?.scrollTop ?? event.detail.scrollTop
   const height = element?.getBoundingClientRect().height ?? 0
-  if (height > 0 && Date.now() > layoutUntil && (top < lastScrollTop - 6 || touchingTimeline)) pauseFollowing()
-  if (!touchingTimeline && lastScrollTop > 60 && top <= 60 && Date.now() > layoutUntil) historyGesture++
+  const userScroll = height > 0 && timelineUserScrolling && Math.abs(top - lastScrollTop) > 0.5 && !readingCorrectionPending
+  if (userScroll && following.value && top < lastScrollTop - 6) pauseFollowing()
+  if (userScroll && !touchingTimeline && lastScrollTop > 60 && top <= 60 && Date.now() > layoutUntil) historyGesture++
   lastScrollTop = top
-  updateTimelinePosition(touchingTimeline || !readingCorrectionPending && Date.now() > layoutUntil)
+  updateTimelinePosition(userScroll)
   rememberReadingPosition()
   if (top <= 60 && !following.value) onHistoryTop()
 }
