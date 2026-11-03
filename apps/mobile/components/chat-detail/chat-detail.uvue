@@ -102,7 +102,7 @@
         :prediction="visiblePrediction" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
         :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retry-disabled="!canWrite"
         @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange"
-        @syncinput="syncComposerText" @submit="applyComposerEnter" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
+        @syncinput="syncComposerText" @submit="applyComposerEnter" @acceptprediction="acceptPrediction(false)" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
         @retryfile="retryFile" @interact="dismissGoal" @layout="updateComposerGeometry"
         @removeimage="removeImage" @previewimage="previewImage" @removefile="removeFile" @removeplugin="removePlugin" @removemention="removeThreadMention">
         <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" @applied="onPermissionApplied" /></template>
@@ -488,7 +488,7 @@ function pollPrediction(revision: number) {
   })
 }
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.epoch + ':' + connection.subscriptionRevision + ':' + (connection.snapshot?.predictionTurnId ?? '') + ':' + predictionAllowed.value, () => { resetPrediction(); if (predictionAllowed.value) pollPrediction(predictionRevision) }, { flush: 'sync' })
-// 预测只用作占位提示，首次回车才写入空草稿，始终沿用手动发送。
+// 采纳占位预测时只写入空草稿，保留原始空格和换行。
 function acceptPrediction(focus: boolean = true) {
   if (!predictionAllowed.value || visiblePrediction.value.length == 0 || Date.now() > predictionDeadline) { resetPrediction(); return }
   const text = visiblePrediction.value

@@ -44,8 +44,15 @@ function mobile(){
   const keyboard=composer.slice(composer.indexOf('// 键盘只通知业务层提交'),composer.indexOf('// 本地待上传附件')).replace(/\/\/ #ifndef WEB[\s\S]*?\/\/ #endif/g,'');
   const code=source.slice(source.indexOf('const predictionAllowed ='),source.indexOf('function notify(message: string)'))+keyboard;
   const ref=value=>({value});const pending=[],saved=[],timers=[];let sends=0;
-  const c={props:{active:true,disabled:false},alive:true,dismissGoal(){},imageBusy:ref(false),filesReady:ref(true),send:()=>{sends++;},ref,computed:fn=>({get value(){return fn();}}),pageVisible:ref(true),canWrite:ref(true),goalHostOnline:ref(true),connection:{epoch:'e',subscriptionRevision:1,snapshot:{supportsComposerPrediction:true,predictionTurnId:'turn-1'}},activeTurnId:ref(''),currentTaskState:ref('idle'),draft:ref(''),draftPlugins:ref([]),draftMentions:ref([]),mentionOpen:ref(false),draftImages:ref([]),draftFiles:ref([]),pendingQuestionCount:ref(0),approvalCount:ref(0),pageHostId:ref('host'),pageThreadId:ref('thread-1'),predictionText:ref(''),predictionFocus:ref(false),inputFocused:ref(false),composerBlurTimer:0,pageAlive:true,predictionRevision:0,predictionTimer:0,predictionExpiryTimer:0,predictionDeadline:0,Date,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},watch(){},onUnload(){},nextTick:fn=>fn(),saveDraft:(host,thread,text)=>{saved.push({host,thread,text});c.draft.value=text;},bridge:{request:(method,params)=>{assert.equal(method,'thread.prediction.read');return new Promise(resolve=>pending.push(resolve));}}};
-  c.emit=event=>{if(event==='submit')c.ui.applyComposerEnter();if(event==='focus')c.ui.onComposerFocus();};
+  const c={props:{active:true,disabled:false,get text(){return c.draft.value;},get prediction(){return c.ui?.visiblePrediction.value ?? '';}},alive:true,dismissGoal(){},imageBusy:ref(false),filesReady:ref(true),send:()=>{sends++;},ref,computed:fn=>({get value(){return fn();}}),pageVisible:ref(true),canWrite:ref(true),goalHostOnline:ref(true),connection:{epoch:'e',subscriptionRevision:1,snapshot:{supportsComposerPrediction:true,predictionTurnId:'turn-1'}},activeTurnId:ref(''),currentTaskState:ref('idle'),draft:ref(''),draftPlugins:ref([]),draftMentions:ref([]),mentionOpen:ref(false),draftImages:ref([]),draftFiles:ref([]),pendingQuestionCount:ref(0),approvalCount:ref(0),pageHostId:ref('host'),pageThreadId:ref('thread-1'),predictionText:ref(''),predictionFocus:ref(false),inputFocused:ref(false),composerBlurTimer:0,pageAlive:true,predictionRevision:0,predictionTimer:0,predictionExpiryTimer:0,predictionDeadline:0,Date,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},watch(){},onUnload(){},nextTick:fn=>fn(),saveDraft:(host,thread,text)=>{saved.push({host,thread,text});c.draft.value=text;},bridge:{request:(method,params)=>{assert.equal(method,'thread.prediction.read');return new Promise(resolve=>pending.push(resolve));}}};
+  c.emit=event=>{
+    if(event==='submit')c.ui.applyComposerEnter();
+    if(event==='focus')c.ui.onComposerFocus();
+    if(event==='acceptprediction'){
+      const expression=source.match(/@acceptprediction="([^"]+)"/)[1];
+      vm.runInNewContext(expression,{acceptPrediction:c.ui.acceptPrediction});
+    }
+  };
   vm.runInNewContext(stripTypeScriptTypes(code+source.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0]+';globalThis.ui={pollPrediction,acceptPrediction,resetPrediction,visiblePrediction,applyComposerEnter,onComposerKeydown:onKeydown,onComposerFocus};'), componentScope(c));
   const result=p=>({getString:k=>p?.[k]??null});
   const textarea=composer.match(/<textarea\b[^>]*class="message-input"[^]*?<\/textarea>/)[0];
@@ -83,4 +90,20 @@ test('实际输入框点击与聚焦事件不会采纳预测，首次回车只�
   m.click();m.click();assert.equal(m.c.draft.value,'');assert.equal(m.saved.length,0);assert.equal(m.ui.visiblePrediction.value,prediction.text);assert.equal(m.sends,0);
   m.ui.onComposerKeydown({key:'Enter',preventDefault(){}});assert.equal(m.c.draft.value,prediction.text);assert.equal(m.sends,0);
   m.ui.onComposerKeydown({key:'Enter',preventDefault(){}});assert.equal(m.sends,1);
+});
+
+test('详情 Tab 只采纳可见预测，保留焦点且不发送，有正文或没有预测时保留焦点导航',async()=>{
+  const m=mobile();
+  const tab=(state={})=>{
+    let prevented=false;
+    m.ui.onComposerKeydown({key:'Tab',target:{value:''},preventDefault(){prevented=true;},...state});
+    return prevented;
+  };
+  assert.equal(tab(),false);
+  m.ui.pollPrediction(0);m.resolve(prediction);await Promise.resolve();
+  for(const state of [{shiftKey:true},{isComposing:true},{target:{value:'还未同步的输入'}}])assert.equal(tab(state),false);
+  m.c.props.disabled=true;assert.equal(tab(),false);m.c.props.disabled=false;
+  assert.equal(m.saved.length,0);
+  assert.equal(tab(),true);assert.equal(m.c.draft.value,prediction.text);assert.equal(m.c.predictionFocus.value,false);
+  assert.equal(tab({target:{value:prediction.text}}),false);assert.equal(m.saved.length,1);assert.equal(m.sends,0);
 });

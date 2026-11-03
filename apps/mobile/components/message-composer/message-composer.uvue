@@ -62,7 +62,7 @@ const props = withDefaults(defineProps<{
 }>(), { focus: false, cursor: -1, placeholder: '问问 Codex', prediction: '', primaryIcon: 'send', contentHeight: 0, maxContentHeight: 0, layoutWidth: 0, contentTarget: '', entryOnly: false, retryFiles: false, retryDisabled: false })
 const emit = defineEmits<{
   input: [event: UniInputEvent], syncinput: [text: string], focus: [], blur: [], linechange: [event: UniTextareaLineChangeEvent],
-  keyboardheightchange: [event: UniInputKeyboardHeightChangeEvent], submit: [], primary: [], add: [], settings: [],
+  keyboardheightchange: [event: UniInputKeyboardHeightChangeEvent], submit: [], acceptprediction: [], primary: [], add: [], settings: [],
   toggleplan: [], removeimage: [id: string], previewimage: [source: string], removefile: [id: string],
   retryfile: [id: string], removeplugin: [id: string], removemention: [id: string], expand: [], interact: [], layout: []
 }>()
@@ -86,10 +86,17 @@ function onInput(event: UniInputEvent) {
 function onKeydown(event: UniEvent) {
   // #ifdef WEB
   const key = event as KeyboardEvent
-  if (key.key != 'Enter' || key.isComposing || key.keyCode == 229 || key.shiftKey || key.ctrlKey || key.altKey || key.metaKey) return
+  if (key.isComposing || key.keyCode == 229 || key.shiftKey || key.ctrlKey || key.altKey || key.metaKey) return
+  const input = key.target as HTMLTextAreaElement | null
+  // 仅在空输入框显示预测时接管 Tab，也检查尚未同步到草稿的实际输入。
+  if (key.key == 'Tab' && alive && props.active && !props.disabled && props.prediction.length > 0 && props.text.length == 0 && input?.value == '') {
+    key.preventDefault()
+    if (!key.repeat) emit('acceptprediction')
+    return
+  }
+  if (key.key != 'Enter') return
   key.preventDefault()
   if (key.repeat || !alive || !props.active || props.disabled) return
-  const input = key.target as HTMLTextAreaElement | null
   if (input != null && typeof input.value == 'string' && input.value != props.text) {
     synchronizedText = input.value
     emit('syncinput', input.value)
