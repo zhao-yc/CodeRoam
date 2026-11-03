@@ -29,14 +29,15 @@
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
             <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
+            <!-- 注释入口先于正文显示，方便先查看引用再阅读补充文字。 -->
+            <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-before-text' : '']">
+              <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
+              <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
+            </view>
             <plan-preview v-if="entry.role == 'assistant' && entry.kind == 'planImplementation'" :source="planSource(entry.id, entry.text)" @open="openPlan(entry.id, entry.text)" />
             <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? threadMentionMessageText(pluginMessageText(entry.text)) : entry.text }}</text>
             <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
-            <view v-if="(entry.annotations?.length ?? 0) > 0" :class="['annotation-entry', 'action-frame', entry.text.trim().length > 0 ? 'annotation-after-text' : '']">
-              <view class="annotation-icon"><view class="annotation-icon-line"></view><view class="annotation-icon-line annotation-icon-short"></view></view><text class="annotation-entry-label">{{ entry.annotations!.length }} 条注释</text><app-icon name="chevron-right" :size="14" tone="muted" />
-              <button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看 ' + entry.annotations!.length + ' 条注释'" @click="openAnnotations(entry.id)"></button>
-            </view>
             <file-change-summary v-if="(entry.reportId ?? '').length > 0 && (connection.snapshot?.supportsFileReports == true || showingCachedContent)" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected && !showingCachedContent" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout" @layout="afterMarkdownLayout" />
           </template>
           <view v-else-if="entry.role == 'failure'" class="turn-failure-card" aria-label="任务失败">
@@ -1455,7 +1456,7 @@ onBackPress((): boolean => { if (mentionOpen.value) { closeThreadMentions(); ret
 .cache-retry { width: 56px; height: 28px; padding: 0; margin: 0 0 0 8px; font-size: 12px; border-radius: 8px; }
 /* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
 .annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #cdd6cc; background-color: #f8faf6; flex-direction: row; align-items: center; align-self: flex-start; }
-.annotation-after-text { margin-top: 12px; }
+.annotation-before-text { margin-bottom: 12px; }
 .annotation-entry-label { font-size: 14px; line-height: 22px; color: #42564a; margin-left: 8px; margin-right: 8px; }
 .annotation-icon { width: 17px; height: 15px; border-width: 1.5px; border-style: solid; border-color: #7b8f81; border-radius: 4px; padding: 3px; }
 .annotation-icon-line { height: 1px; background-color: #7b8f81; margin-bottom: 2px; }
