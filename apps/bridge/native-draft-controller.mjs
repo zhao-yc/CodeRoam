@@ -37,6 +37,8 @@ export async function evaluateNativeDraft(url,expression,write=false) {
 export class NativeDraftController extends ComposerPredictionReader {
   constructor({adapter,instance,resolveModules=nativeDraftModules,evaluateNative=evaluateNativeDraft,...options}={}){super(options);this.adapter=adapter;this.instance=instance;this.resolveModules=resolveModules;this.evaluateNative=evaluateNative;this.pendingOpens=new Map();}
   async candidates(){
+    // 普通启动没有原生页面端口，项目列表查询能力时直接返回。
+    if(this.instance?.directIpc)return [];
     if(this.instance)await this.instance.verify?.();
     if(!this.adapter?.native?.processId&&!this.instance)await this.adapter?.native?.connect();
     const pid=this.instance?.pid??this.adapter?.native?.processId;

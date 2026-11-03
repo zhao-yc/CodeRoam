@@ -12,7 +12,7 @@ import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { DesktopFileReportReader } from './file-reports.mjs';
 import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
-import { BridgeError } from '../../packages/protocol/contracts.mjs';
+import { BridgeError, READ_METHODS } from '../../packages/protocol/contracts.mjs';
 import { MacInstanceIpcClient, navigateMacInstance } from './macos-instance-client.mjs';
 import { withDesktopUi } from './desktop-ui-coordinator.mjs';
 import { NewThreadService } from './new-thread-service.mjs';
@@ -26,14 +26,15 @@ class InstanceNativeDesktop extends NativeDesktop {
     this.boundClient.assertCurrent();
     return { path: this.instance.nativePipe, pid: this.instance.pid };
   }
-  async call(tool, ...args) {
-    if (this.instance.directIpc && tool !== 'list_threads') await this.instance.verify();
-    this.boundClient.assertCurrent();
-    return super.call(tool, ...args);
-  }
+  async call(...args) { this.boundClient.assertCurrent(); return super.call(...args); }
   async connect() { try { return await super.connect(); } catch { throw new BridgeError('INSTANCE_NOT_READY', '所选实例的原生连接尚未就绪，请在电脑检查该实例后重试'); } }
   /** 冷会话在原桌面加载后立即补核后台身份，避免等到下次周期发现才可跟随。 */
-  async navigate(...args) { await super.navigate(...args); await this.instance.refreshOwners?.(); }
+  async navigate(...args) {
+    // 导航和随后的已读更新使用同一条已固定的工具管道，开始导航前复核一次即可。
+    if (this.instance.directIpc) await this.instance.verify();
+    await super.navigate(...args);
+    await this.instance.refreshOwners?.();
+  }
 }
 
 /** 原生帮助程序只接收连接服务生成的实例约束，手机不能指定 PID 或管道。 */
@@ -90,12 +91,13 @@ export class InstanceRuntime {
   }
   async request(message) {
     if (message.generation !== this.instance.generation || !this.instance.alive) throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
-    if (this.isMac || this.instance.directIpc) await this.instance.verify();
-    this.client.assertCurrent();
     // 永久删除依赖页面确认，普通启动时在停止任务等删除前置步骤之前拒绝。
     if (this.instance.directIpc && message.method === 'thread.delete') {
       throw new BridgeError('DELETE_UNSUPPORTED', '普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
     }
+    // 读取复用已绑定的实例和运行代次；IPC 接纳新所有者、定向写入和原生导航仍会单独复核。
+    if (this.isMac || (this.instance.directIpc && !READ_METHODS.has(message.method))) await this.instance.verify();
+    this.client.assertCurrent();
     return this.agent.handleRequest(message);
   }
   /** 先断开传输，停止时不再向已撤销身份的客户端发送退订，也不会遗留账本和连接。 */

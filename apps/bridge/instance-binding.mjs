@@ -124,7 +124,8 @@ export class InstanceIpcClient extends IpcClient {
     return result.resultType === 'success' && !this.allowedClients.has(result.handledByClientId);
   }
   request(method, params, version, options = {}) {
-    if (method !== 'initialize' && this.instance.directIpc) {
+    // 模型设置读取仍限定到已核验所有者，不需要再次启动 Windows 进程扫描。
+    if (this.instance.directIpc && method !== 'initialize' && method !== 'thread-follower-read-model-settings') {
       return this.instance.verify().then(() => this.requestTarget(method, params, version, options));
     }
     return this.requestTarget(method, params, version, options);

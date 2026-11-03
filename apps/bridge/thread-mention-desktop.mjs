@@ -54,6 +54,8 @@ export class ThreadMentionDesktop extends ComposerPredictionReader {
     try {
       const instance = this.instance ?? adapter?.client?.instance ?? adapter?.native?.instance;
       if (this.instance && adapter?.client?.instance && this.instance !== adapter.client.instance) throw changed();
+      // 普通启动没有页面端口，打开聊天无需再核验一个无法启用的引用功能。
+      if (instance?.directIpc) throw unavailable();
       const generation = instance?.generation;
       if (instance && instance.alive !== true) throw changed();
       adapter?.client?.assertCurrent?.();

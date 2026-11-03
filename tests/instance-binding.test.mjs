@@ -58,11 +58,14 @@ test('单实例直连只接受复核后的所有者，失去独占时拒绝发�
   await client.request('thread-follower-start-turn', {}, 2, { targetClientId: owner });
   assert.equal(requests[1].targetClientId, owner);
   exclusive = false;
+  // 模型设置仍定向到已知所有者，读接口不会触发再次扫描。
+  await client.request('thread-follower-read-model-settings', {}, 1, { targetClientId: owner });
+  await assert.rejects(client.request('thread-follower-read-model-settings', {}, 1, { targetClientId: other }), { code: 'INSTANCE_CHANGED' });
   current = other;
   await assert.rejects(client.findOwner('合成聊天'), /IPC 不再独占/);
   assert.deepEqual([...client.allowedClients], [owner]);
   await assert.rejects(client.request('thread-follower-start-turn', {}, 2, { targetClientId: owner }), /IPC 不再独占/);
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 4);
 });
 
 test('后台身份要求全部实例完成只读归属核验，相同编号多所有者及核验期间变更均拒绝绑定', async () => {

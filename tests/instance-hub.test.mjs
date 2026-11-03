@@ -7,6 +7,8 @@ import { EventEmitter, once } from 'node:events';
 import { WebSocketServer } from 'ws';
 import { InstanceHub } from '../apps/bridge/instance-hub.mjs';
 import { InstanceRuntime } from '../apps/bridge/instance-runtime.mjs';
+import { NativeDraftController } from '../apps/bridge/native-draft-controller.mjs';
+import { ThreadMentionDesktop } from '../apps/bridge/thread-mention-desktop.mjs';
 
 test('中转拒绝连接时保留关闭码，错误原因及私有配置不进入状态事件', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-close-code-'));
@@ -99,4 +101,26 @@ test('普通启动时永久删除在进入操作队列前被拒绝，带端口�
   instance.directIpc = false;
   await request('thread.delete');
   assert.deepEqual(handled, ['threads.list', 'thread.delete']);
+});
+
+test('单实例只读请求和不可用的原生页面能力不扫描进程，写入仍复核', async () => {
+  let scans = 0;
+  const instance = { directIpc: true, generation: 'current', alive: true, verify: async () => { scans++; } };
+  const client = { instance, assertCurrent() {} };
+  const runtime = { instance, client, agent: { handleRequest(message) { return message.method; } } };
+  const draft = new NativeDraftController({ instance });
+  const mention = new ThreadMentionDesktop();
+  try {
+    for (const method of ['threads.list', 'thread.history', 'thread.watch', 'projects.list']) {
+      assert.equal(await InstanceRuntime.prototype.request.call(runtime, { generation: instance.generation, method }), method);
+    }
+    assert.equal(await draft.capabilities(), false);
+    assert.equal(await mention.capabilities({ client }), false);
+    assert.equal(scans, 0);
+    assert.equal(await InstanceRuntime.prototype.request.call(runtime, { generation: instance.generation, method: 'turn.send' }), 'turn.send');
+    assert.equal(scans, 1);
+  } finally {
+    draft.close();
+    mention.close();
+  }
 });
