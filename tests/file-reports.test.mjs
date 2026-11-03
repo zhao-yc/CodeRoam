@@ -7,6 +7,8 @@ import {fileReportSource} from '../apps/bridge/file-report-source.mjs';
 import {DesktopFileReportReader} from '../apps/bridge/file-reports.mjs';
 import {fileReportExpression} from '../apps/bridge/file-report-expression.mjs';
 import {validateRequest} from '../packages/protocol/contracts.mjs';
+import {EventEmitter} from 'node:events';
+import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';
 
 const change=(id,path='src/demo.uts',status='completed')=>({id,type:'fileChange',status,changes:[{path,kind:{type:'update'},diff:'@@ -1 +1 @@\n-old\n+new\n'}]});
 const final=id=>({id,type:'agentMessage',phase:'final_answer',text:'合成报告'});
@@ -52,6 +54,22 @@ test('切换会话后丢弃在途原生汇总，不向新订阅返回旧代码',
   const pending=reader.read(adapter,{threadId:'thread',reportId:'report'},'phone');
   entry.watchers.clear();finish({additions:1,deletions:1,files:[]});
   await assert.rejects(pending,/已取消/);assert.equal(reader.cache.size,0);reader.close();
+});
+
+test('普通启动的历史回退和实时快照不声明原生文件汇总',async()=>{
+  const client=new EventEmitter();
+  client.instance={directIpc:true}; client.connect=async()=>{}; client.close=()=>{};
+  const adapter=new DesktopAdapter({client,index:{readHistory:()=>({threadId:'thread',supportsFileReports:true})}});
+  adapter.discoverOwner=async()=>null;
+  const reader=new DesktopFileReportReader({discover:async()=>assert.fail('普通启动不扫描页面')});
+  try {
+    assert.equal((await adapter.watch('thread','phone')).supportsFileReports,false);
+    assert.equal(adapter.snapshot({id:'thread',turns:[]}).supportsFileReports,false);
+    await assert.rejects(reader.nativeReport(adapter,{}),{code:'REPORT_UNAVAILABLE',message:/重新打开 Codex/});
+  } finally {
+    reader.close();
+    adapter.close();
+  }
 });
 
 /** 执行实际 UTS 展示代码，增删行数不由展示解析器生成。 */

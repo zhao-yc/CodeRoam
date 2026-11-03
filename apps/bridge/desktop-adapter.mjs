@@ -131,7 +131,8 @@ export class DesktopAdapter extends EventEmitter {
           if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
           if(previous&&this.client.socket?.writable) this.client.broadcast('thread-stream-following-changed',{hostId:previous.hostId,conversationId:threadId,following:false},1,[previous.clientId]);
           entry.owner=null;entry.state=null;entry.revision=null;
-          return this.native?{...saved,hasUnreadTurn:this.native.unread.get(threadId)}:saved;
+          const history=this.native?{...saved,hasUnreadTurn:this.native.unread.get(threadId)}:saved;
+          return this.client.instance?.directIpc?{...history,supportsFileReports:false}:history;
         }
         // 列表临时探测失败时只撤销本次订阅，不能清空手机正在使用的所有者和快照。
         if(!discovered) throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此聊天，加载完成后再操作');
@@ -243,9 +244,11 @@ export class DesktopAdapter extends EventEmitter {
   /** 只读刷新原生未读记录，失败保留未知，不猜测已读。 */
   async refreshReadState(ids){try{await this.native?.refresh(ids);}catch{}}
 
+  /** 普通启动的 Windows 实例可读取聊天，但没有用于原生文件汇总的页面。 */
+  get supportsFileReports() { return process.platform==='win32'&&!this.client.instance?.directIpc; }
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
-    const snapshot={...normalizeConversation(state,options),supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:process.platform==='win32',supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
+    const snapshot={...normalizeConversation(state,options),supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
     // 侧边栏保存的未读独立于流式快照，不能用快照默认 false 提前清理桌面蓝点。
     if(this.native){if(this.native.unread.has(state.id))snapshot.hasUnreadTurn=this.native.unread.get(state.id);else delete snapshot.hasUnreadTurn;}
     const entry=this.conversations.get(state.id);

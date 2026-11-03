@@ -108,7 +108,12 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.plugins.read')return this.adapter.readPlugins(message.params.threadId,message.deviceId);
         if(message.method==='thread.permissions.read')return this.adapter.readPermissions(message.params.threadId,message.deviceId);
         if(message.method==='threads.mentions')return this.adapter.threadMentions.list(message.params);
-        if(message.method==='projects.list')return {...this.newThreads.projects(),supportsNativeNewDraft:await this.nativeDrafts.controller.capabilities()};
+        if(message.method==='projects.list'){
+          const projects=this.newThreads.projects();
+          // 普通启动时明确告诉手机缺的是本机页面连接，更新服务或重试不会启用它。
+          if(this.adapter.client?.instance?.directIpc)return {...projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true};
+          return {...projects,supportsNativeNewDraft:await this.nativeDrafts.controller.capabilities()};
+        }
         if(message.method.startsWith('thread.draft.')) {
           if(['thread.draft.open','thread.draft.read'].includes(message.method))await this.adapter.threadMentions.available();
           const action=message.method.slice('thread.draft.'.length);

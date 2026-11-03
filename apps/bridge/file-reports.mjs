@@ -39,6 +39,7 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
   constructor({evaluateNative=evaluateNativeFileReport,resolveModules=desktopDiffModules,...options}={}){super(options);this.evaluateNative=evaluateNative;this.resolveModules=resolveModules;this.cache=new Map();this.pendingReports=new Map();}
   /** 只向同一已验证进程的页面读取原生统计，不导航、唤醒或修改桌面会话。 */
   async nativeReport(adapter,source) {
+    if(adapter.client?.instance?.directIpc)throw new BridgeError('REPORT_UNAVAILABLE','请在电脑用掌上 Codex 启动入口重新打开 Codex，再查看原生文件汇总');
     if(!adapter.native?.processId)await adapter.native?.connect();
     const ports=(await this.endpoints()).filter(port=>port.pid===adapter.native?.processId);
     if(ports.length!==1)throw new BridgeError('REPORT_UNAVAILABLE','电脑原生文件汇总暂不可用，请确认桌面端正在运行');

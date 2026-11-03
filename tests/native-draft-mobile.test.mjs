@@ -81,7 +81,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
-  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend,focused' : '') + '};', context);
+  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend,focused,error' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
   return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
@@ -446,6 +446,19 @@ test('显式重新展开仍调用原生新聊天，连接恢复读取不能自�
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
   f.loadProjects();await tick();await tick();
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
+});
+
+test('普通启动时提示用专用入口打开桌面，保留本地输入且不创建会话',async()=>{
+  const f=fixture({component:true});
+  f.props.expanded=true;
+  f.draft.value.text='合成输入';
+  f.hooks.set('projects.list',()=>({supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,projects:[]}));
+  f.loadProjects();
+  await tick(); await tick();
+  assert.match(f.error.value,/用掌上 Codex 启动入口重新打开/);
+  assert.equal(f.canSend.value,false);
+  assert.equal(f.draft.value.text,'合成输入');
+  assert.equal(f.calls.some(call=>call.method==='thread.draft.open'||call.method==='thread.create'),false);
 });
 
 /** 同一电脑的两个合成项目，沿用真实原生草稿协议验证焦点与草稿隔离。 */

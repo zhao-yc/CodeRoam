@@ -141,7 +141,12 @@ function loadProjects() {
   bridge.request('projects.list', {}).then((result: UTSJSONObject) => {
     if (!alive || hostId != connection.hostId || request != projectRequest) return
     projectsLoading.value = false
-    if (result.getBoolean('supportsNativeNewDraft') != true) { closeNativeDraft(hostId, projectId.value); error.value = '请更新电脑连接服务后使用原生新聊天'; return }
+    if (result.getBoolean('supportsNativeNewDraft') != true) {
+      closeNativeDraft(hostId, projectId.value)
+      // 缺少页面连接和旧桥接未声明能力需要不同的处理。
+      error.value = result.getBoolean('nativeNewDraftNeedsDesktopPage') == true ? '请在电脑用掌上 Codex 启动入口重新打开 Codex，再使用原生新聊天' : '请更新电脑连接服务后使用原生新聊天'
+      return
+    }
     projects.value = JSON.parse<NewProject[]>(JSON.stringify(result['projects'])) ?? [] as NewProject[]
     let remembered = ''
     try { const value = uni.getStorageSync('codex-mobile-new-project-' + hostId); if (typeof value == 'string') remembered = value } catch (_) {}
