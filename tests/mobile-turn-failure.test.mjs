@@ -31,7 +31,7 @@ function pageFixture() {
   const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const start=source.indexOf('function retrySubmitting('), end=source.indexOf('// 仅在明确收到成功响应后清空草稿',start);
   let resolve,reject;const calls=[];
-  const c=componentContext({submittedRetryKey:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},retryTurnId:{value:'failed'},canWrite:{value:true},goalHostOnline:{value:true},liveConversation:{value:state()},operationError:{value:''},busy:{value:false},pendingAction:{value:''},pendingRetryCommand:{value:''},connection:{connected:true},isCurrentPage:()=>true,resumeFollowing(){},refresh(){},bridge:{request:(method,params)=>{calls.push({method,params});return new Promise((ok,bad)=>{resolve=ok;reject=bad;});},pendingCommand:()=>'',watch(){}}});
+  const c=componentContext({cacheOnly:false,submittedRetryKey:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},retryTurnId:{value:'failed'},canWrite:{value:true},goalHostOnline:{value:true},liveConversation:{value:state()},operationError:{value:''},busy:{value:false},pendingAction:{value:''},pendingRetryCommand:{value:''},connection:{connected:true},isCurrentPage:()=>true,resumeFollowing(){},refresh(){},bridge:{request:(method,params)=>{calls.push({method,params});return new Promise((ok,bad)=>{resolve=ok;reject=bad;});},pendingCommand:()=>'',watch(){}}});
   vm.runInContext(stripTypeScriptTypes(source.slice(start,end))+';globalThis.f={retryTurn,canRetryTurn}',c);
   return {c,calls,...c.f,resolve:()=>resolve({ok:true}),reject:()=>reject(new Error('已拒绝'))};
 }

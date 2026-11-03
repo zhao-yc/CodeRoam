@@ -17,7 +17,7 @@ function fixture() {
   const context = vm.createContext({
     timeline: { value: entries }, ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
     props: { paneWidth: 430, paneHeight: 900 }, pageVisible: { value: true }, cacheFilling: { value: false },
-    isCurrentPage: () => true, touchingTimeline: false, cacheInitialPositioning: false, readingCorrectionPending: false,
+    isReadingPage: () => true, touchingTimeline: false, cacheInitialPositioning: false, readingCorrectionPending: false,
     beforeMarkdownLayout: () => layouts.push('记录锚点'), afterMarkdownLayout: () => layouts.push('恢复锚点'),
     setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
     nextTick: callback => callback(), checkShortHistory() {}, closeActions() {}, pauseFollowing() {},

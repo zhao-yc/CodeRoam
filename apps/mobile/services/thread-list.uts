@@ -1,37 +1,147 @@
 import { reactive, watch } from 'vue'
 import { bridge, connection, liveThreadLists, ThreadListUpdate, Computer, ThreadSummary, LatestTurn } from './bridge.uts'
+import { CachedThreadListHost, CachedThreadListRow, readThreadListCache, replaceThreadListCacheHost, removeThreadListCacheHost, removeThreadListCacheThreads, retainThreadListCacheHosts, clearThreadListCache } from './thread-list-storage.uts'
 
 export type ComputerThreads = { hostId: string, label: string, online: boolean, threads: ThreadSummary[], loading: boolean, loaded: boolean, error: string, revision: number, subscribed?: boolean, instanceGeneration?: string }
-export type ComputerThread = { latestTurn?: LatestTurn, key: string, hostId: string, hostLabel: string, online: boolean, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
+export type ComputerThread = { latestTurn?: LatestTurn, key: string, hostId: string, hostLabel: string, online: boolean, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number, cached?: boolean }
 type ListQueueEntry = { hostId: string, configuration: number, revision: number }
-type ThreadListState = { configuration: number, computers: ComputerThreads[] }
-export const threadList = reactive<ThreadListState>({ configuration: -1, computers: [] as ComputerThreads[] })
+type ThreadListState = { configuration: number, computers: ComputerThreads[], cachedHosts: CachedThreadListHost[], cachedReady: boolean, cachedRevision: number }
+export const threadList = reactive<ThreadListState>({ configuration: -1, computers: [] as ComputerThreads[], cachedHosts: [] as CachedThreadListHost[], cachedReady: false, cachedRevision: 0 })
 const queue = [] as ListQueueEntry[]
 let activeReads = 0
 const deletedThreadKeys = new Set<string>()
+const archivedThreads = new Map<string, Set<string>>()
+const appliedPushes = new Map<string, number>()
+let cacheScope = ''
+let hasAuthoritativeHosts = false
+let rosterKey = ''
+
+function threadScopeKey(hostId: string, threadId: string): string { return JSON.stringify([hostId, threadId]) }
+
+// 磁盘列表只供展示。收到授权清单后，立即按真实电脑和实例范围裁剪。
+function cachedHostAllowed(host: CachedThreadListHost): boolean {
+  if (!hasAuthoritativeHosts) return true
+  const computer = connection.computers.find((item: Computer): boolean => item.id == host.hostId)
+  if (computer == null) return false
+  const generation = computer.instanceGeneration ?? ''
+  return generation.length == 0 || generation == (host.instanceGeneration ?? '')
+}
+
+function archiveBlocked(hostId: string, threadId: string): boolean { return archivedThreads.get(hostId)?.has(threadId) == true }
+
+function threadExcluded(hostId: string, threadId: string): boolean { return deletedThreadKeys.has(threadScopeKey(hostId, threadId)) || archiveBlocked(hostId, threadId) }
+
+// 详情只读权限与最近列表窗口分开，滚出窗口后已打开的详情仍可阅读。
+export function isCachedThreadScopeAllowed(namespace: string, hostId: string, threadId: string, instanceGeneration: string = ''): boolean {
+  if (!connection.configured || namespace.length == 0 || namespace != cacheScope || namespace != connection.cacheNamespace || threadExcluded(hostId, threadId)) return false
+  const computer = connection.computers.find((item: Computer): boolean => item.id == hostId)
+  if (hasAuthoritativeHosts && computer == null) return false
+  const generation = computer?.instanceGeneration ?? ''
+  return generation.length == 0 || instanceGeneration == generation
+}
+
+export function cachedThreadGeneration(hostId: string): string {
+  return connection.computers.find((item: Computer): boolean => item.id == hostId)?.instanceGeneration ?? threadList.cachedHosts.find((host: CachedThreadListHost): boolean => host.hostId == hostId)?.instanceGeneration ?? ''
+}
+
+// 只有当前配对实际展示过的行，才可从本地正文打开详情。
+export function canReadCachedThread(namespace: string, hostId: string, threadId: string): boolean {
+  if (!isCachedThreadScopeAllowed(namespace, hostId, threadId, cachedThreadGeneration(hostId))) return false
+  const live = threadList.computers.find((entry: ComputerThreads): boolean => entry.hostId == hostId)
+  if (live?.loaded == true) return live!.threads.some((thread: ThreadSummary): boolean => thread.id == threadId)
+  return threadList.cachedHosts.some((host: CachedThreadListHost): boolean => host.hostId == hostId && host.threads.some((thread: CachedThreadListRow): boolean => thread.id == threadId))
+}
+
+// 缓存读与握手并行；实时空列表、权限清单及本地移除同样优先于晚到的磁盘结果。
+export function startThreadListCache() {
+  watch((): string => connection.cacheNamespace, (namespace: string) => {
+    const previous = cacheScope
+    cacheScope = namespace
+    hasAuthoritativeHosts = false; rosterKey = ''
+    threadList.cachedHosts = [] as CachedThreadListHost[]
+    threadList.cachedReady = namespace.length == 0
+    threadList.cachedRevision++
+    if (previous.length > 0) clearThreadListCache(previous)
+    if (namespace.length == 0) return
+    readThreadListCache(namespace).then((hosts: CachedThreadListHost[]) => {
+      if (cacheScope != namespace) return
+      threadList.cachedHosts = hosts.filter((host: CachedThreadListHost): boolean => {
+        if (!cachedHostAllowed(host)) {
+          // 已实时确认的新版本可能正在落盘，由当时的接管事务负责替换。
+          if (!threadList.computers.some((entry: ComputerThreads): boolean => entry.hostId == host.hostId && entry.loaded)) removeThreadListCacheHost(namespace, host.hostId)
+          return false
+        }
+        host.threads = host.threads.filter((thread: CachedThreadListRow): boolean => !threadExcluded(host.hostId, thread.id))
+        return !threadList.computers.some((entry: ComputerThreads): boolean => entry.hostId == host.hostId && entry.loaded)
+      })
+      threadList.cachedReady = true; threadList.cachedRevision++
+    }, (_: Error) => {
+      if (cacheScope == namespace) { threadList.cachedReady = true; threadList.cachedRevision++ }
+    })
+  }, { immediate: true, flush: 'sync' })
+}
+
+// 列表标签可以显示离线副本的电脑；连接和操作入口仍检查桥接授权清单。
+export function listDisplayComputers(): Computer[] {
+  const computers = connection.computers.slice()
+  threadList.cachedHosts.forEach((host: CachedThreadListHost) => {
+    if (!computers.some((computer: Computer): boolean => computer.id == host.hostId)) computers.push({ id: host.hostId, label: host.label, icon: host.icon, online: false } as Computer)
+  })
+  return computers
+}
+
+// 权限与实例变化优先清理内存，再在同一存储队列清理磁盘。
+function reconcileCachedHosts() {
+  if (cacheScope.length == 0 || !connection.connected) return
+  hasAuthoritativeHosts = true
+  const next = JSON.stringify(connection.computers.map((computer: Computer): string[] => [computer.id, computer.instanceGeneration ?? '']))
+  if (next == rosterKey) return
+  rosterKey = next
+  const authorized = connection.computers.map((computer: Computer): string => computer.id)
+  const inactivePushes = [] as string[]
+  appliedPushes.forEach((_revision: number, id: string) => { if (authorized.indexOf(id) < 0) inactivePushes.push(id) })
+  inactivePushes.forEach((id: string) => { appliedPushes.delete(id) })
+  threadList.cachedHosts = threadList.cachedHosts.filter((host: CachedThreadListHost): boolean => {
+    if (cachedHostAllowed(host)) return true
+    removeThreadListCacheHost(cacheScope, host.hostId)
+    return false
+  })
+  retainThreadListCacheHosts(cacheScope, authorized)
+  threadList.cachedRevision++
+}
 
 // 永久删除后拒绝旧列表回执重新带回相同电脑的已删除编号。
 export function removeDeletedThreads(hostId: string, ids: string[]) {
-  ids.forEach((id: string) => { deletedThreadKeys.add(hostId + ':' + id); removeArchivedThread(hostId, id) })
+  ids.forEach((id: string) => { deletedThreadKeys.add(threadScopeKey(hostId, id)) })
+  removeThreadRows(hostId, ids)
   liveThreadLists.updates.forEach((update: ThreadListUpdate) => { if (update.hostId == hostId) update.threads = update.threads.filter((thread: ThreadSummary): boolean => ids.indexOf(thread.id) < 0) })
   if (connection.hostId == hostId) connection.threads = connection.threads.filter((thread: ThreadSummary): boolean => ids.indexOf(thread.id) < 0)
 }
 
-function retainedThreads(hostId: string, threads: ThreadSummary[]): ThreadSummary[] { return threads.filter((thread: ThreadSummary): boolean => !deletedThreadKeys.has(hostId + ':' + thread.id)) }
-
-// 原生归档成功后移除缓存，并使归档前发出的列表回执失效，防止会话重新出现。
+// 归档保留临时屏障，直到新快照确认该会话已移出列表，再允许取消归档后的条目返回。
 export function removeArchivedThread(hostId: string, threadId: string) {
-  const computers = threadList.computers as ComputerThreads[]
-  const entry = computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
-  if (entry == null) return
-  entry.revision++; entry.loading = false; entry.subscribed = false
-  entry.threads = entry.threads.filter((thread: ThreadSummary): boolean => thread.id != threadId)
+  const blocked = archivedThreads.get(hostId) ?? new Set<string>()
+  blocked.add(threadId); archivedThreads.set(hostId, blocked)
+  removeThreadRows(hostId, [threadId])
 }
 
-// 配对变化与授权撤回立即清除旧数据；临时离线保留当前运行期内的列表缓存。
+function removeThreadRows(hostId: string, ids: string[]) {
+  const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
+  if (entry != null) {
+    if (entry.loading) { entry.revision++; entry.loading = false }
+    entry.threads = entry.threads.filter((thread: ThreadSummary): boolean => ids.indexOf(thread.id) < 0)
+  }
+  const cached = threadList.cachedHosts.find((host: CachedThreadListHost): boolean => host.hostId == hostId)
+  if (cached != null) cached.threads = cached.threads.filter((thread: CachedThreadListRow): boolean => ids.indexOf(thread.id) < 0)
+  if (cacheScope.length > 0) removeThreadListCacheThreads(cacheScope, hostId, ids)
+  threadList.cachedRevision++
+}
+
+// 配对变化与授权撤回立即清除旧数据；临时离线保留列表。
 export function syncThreadComputers() {
   if (!connection.configured || threadList.configuration != connection.configurationRevision) {
     deletedThreadKeys.clear()
+    archivedThreads.clear(); appliedPushes.clear()
     threadList.configuration = connection.configurationRevision
     threadList.computers = [] as ComputerThreads[]
     queue.splice(0, queue.length)
@@ -40,24 +150,36 @@ export function syncThreadComputers() {
   threadList.computers = connection.computers.map((computer: Computer): ComputerThreads => {
     const existing = threadList.computers.find((entry: ComputerThreads): boolean => entry.hostId == computer.id)
     if (existing == null) return { hostId: computer.id, label: computer.label, online: computer.online, instanceGeneration: computer.instanceGeneration, threads: [] as ThreadSummary[], loading: false, loaded: false, error: '', revision: 0 } as ComputerThreads
-    if ((existing.instanceGeneration ?? '') != (computer.instanceGeneration ?? '')) { existing.revision++; existing.loading = false; existing.loaded = false; existing.subscribed = false; existing.threads = [] as ThreadSummary[]; existing.error = '' }
+    if ((existing.instanceGeneration ?? '') != (computer.instanceGeneration ?? '')) {
+      existing.revision++; existing.loading = false; existing.loaded = false; existing.subscribed = false; existing.threads = [] as ThreadSummary[]; existing.error = ''
+      appliedPushes.delete(computer.id); archivedThreads.delete(computer.id)
+      if (cacheScope.length > 0) removeThreadListCacheHost(cacheScope, computer.id)
+    }
     existing.instanceGeneration = computer.instanceGeneration
-    if (existing.online && !computer.online) { existing.revision++; existing.loading = false; existing.subscribed = false }
+    if (existing.online && !computer.online) { existing.revision++; existing.loading = false; existing.subscribed = false; appliedPushes.delete(computer.id) }
     existing.label = computer.label; existing.online = computer.online
     return existing
   })
+  reconcileCachedHosts()
 }
 
 // 汇总记录携带电脑归属，同号会话不会合并；搜索仍限定在当前读取的最近会话中。
 export function visibleComputerThreads(hostId: string, search: string): ComputerThread[] {
   const query = search.trim().toLowerCase()
   const result = [] as ComputerThread[]
-  threadList.computers.forEach((computer: ComputerThreads) => {
-    if (hostId.length > 0 && computer.hostId != hostId) return
-    computer.threads.forEach((thread: ThreadSummary) => {
+  const append = (computerId: string, label: string, online: boolean, threads: ThreadSummary[]) => {
+    if (hostId.length > 0 && computerId != hostId) return
+    threads.forEach((thread: ThreadSummary) => {
       if (query.length > 0 && thread.title.toLowerCase().indexOf(query) < 0 && thread.cwd.toLowerCase().indexOf(query) < 0) return
-      result.push({ key: computer.hostId + ':' + thread.id, hostId: computer.hostId, hostLabel: computer.label, online: connection.connected && computer.online, id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt, hasUnreadTurn: thread.hasUnreadTurn, activeFlags: thread.activeFlags, latestTurn: thread.latestTurn, status: thread.status, activeTurnId: thread.activeTurnId, approvalCount: thread.approvalCount, pendingQuestionCount: thread.pendingQuestionCount, unansweredQuestionCount: thread.unansweredQuestionCount } as ComputerThread)
+      result.push({ key: computerId + ':' + thread.id, hostId: computerId, hostLabel: label, online, cached: !online, id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt, hasUnreadTurn: thread.hasUnreadTurn, activeFlags: thread.activeFlags, latestTurn: thread.latestTurn, status: thread.status, activeTurnId: thread.activeTurnId, approvalCount: thread.approvalCount, pendingQuestionCount: thread.pendingQuestionCount, unansweredQuestionCount: thread.unansweredQuestionCount } as ComputerThread)
     })
+  }
+  threadList.computers.forEach((computer: ComputerThreads) => { append(computer.hostId, computer.label, connection.connected && computer.online, computer.threads) })
+  threadList.cachedHosts.forEach((host: CachedThreadListHost) => {
+    const live = threadList.computers.find((entry: ComputerThreads): boolean => entry.hostId == host.hostId)
+    if (live?.loaded == true) return
+    const rows = host.threads.map((row: CachedThreadListRow): ThreadSummary => ({ id: row.id, title: row.title, cwd: row.cwd, updatedAt: row.updatedAt } as ThreadSummary))
+    append(host.hostId, live?.label ?? host.label, false, rows)
   })
   return result.sort((left: ComputerThread, right: ComputerThread): number => {
     const difference = right.updatedAt - left.updatedAt
@@ -70,9 +192,32 @@ export function computerThreadsLoading(hostId: string): boolean {
   if (!connection.configured) return false
   const entries = threadList.computers.filter((entry: ComputerThreads): boolean => hostId.length == 0 || entry.hostId == hostId)
   if (entries.some((entry: ComputerThreads): boolean => entry.threads.length > 0)) return false
+  if (threadList.cachedHosts.some((host: CachedThreadListHost): boolean => (hostId.length == 0 || host.hostId == hostId) && host.threads.length > 0)) return false
+  if (cacheScope.length > 0 && !threadList.cachedReady) return true
   if (connection.error.length == 0 && !entries.some((entry: ComputerThreads): boolean => entry.loaded) && (connection.status == '正在连接' || connection.status == '正在重新连接')) return true
   if (entries.some((entry: ComputerThreads): boolean => entry.online && !entry.loaded && entry.loading)) return true
   return entries.length == 0 && connection.error.length == 0 && (connection.status == '正在连接' || connection.status == '正在重新连接')
+}
+
+// 只有已通过实时会话校验的全量快照才能接管展示和落盘；流式正文变化不进入列表字段。
+function acceptThreadSnapshot(entry: ComputerThreads, incoming: ThreadSummary[]) {
+  const archived = archivedThreads.get(entry.hostId)
+  if (archived != null) {
+    const present = new Set<string>(incoming.map((thread: ThreadSummary): string => thread.id))
+    const confirmed = [] as string[]
+    archived.forEach((id: string) => { if (!present.has(id)) confirmed.push(id) })
+    confirmed.forEach((id: string) => { archived.delete(id) })
+    if (archived.size == 0) archivedThreads.delete(entry.hostId)
+  }
+  const threads = incoming.filter((thread: ThreadSummary): boolean => !threadExcluded(entry.hostId, thread.id))
+  entry.threads = threads; entry.loaded = true; entry.error = ''
+  threadList.cachedHosts = threadList.cachedHosts.filter((host: CachedThreadListHost): boolean => host.hostId != entry.hostId)
+  threadList.cachedRevision++
+  if (cacheScope.length == 0) return
+  const computer = connection.computers.find((item: Computer): boolean => item.id == entry.hostId)
+  if (computer == null) return
+  const rows = threads.map((thread: ThreadSummary): CachedThreadListRow => ({ id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt } as CachedThreadListRow))
+  replaceThreadListCacheHost(cacheScope, { hostId: entry.hostId, label: computer.label, icon: computer.icon, instanceGeneration: computer.instanceGeneration, threads: rows } as CachedThreadListHost)
 }
 
 // 队列全局最多四个请求；每台电脑只保留一个在途读取，不占用写操作归属。
@@ -87,9 +232,19 @@ function drainThreadQueue() {
     bridge.readComputerThreads(entry.hostId).then((result: UTSJSONObject) => {
       if (next.configuration == threadList.configuration && threadList.computers.some((item: ComputerThreads): boolean => item === entry) && entry.revision == revision) {
         const pushed = liveThreadLists.updates.find((item: ThreadListUpdate): boolean => item.hostId == entry.hostId)
-        entry.threads = retainedThreads(entry.hostId, pushed != null && pushed.revision > pushedRevision ? pushed.threads : JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[])
+        const rawRevision = result['revision']
+        const responseRevision = typeof rawRevision == 'number' ? rawRevision as number : pushedRevision
+        const raw = result['threads']
+        if (pushed != null && pushed.revision > responseRevision) {
+          appliedPushes.set(entry.hostId, pushed.revision)
+          acceptThreadSnapshot(entry, pushed.threads)
+        } else if (Array.isArray(raw)) {
+          appliedPushes.set(entry.hostId, Math.max(appliedPushes.get(entry.hostId) ?? -1, responseRevision))
+          acceptThreadSnapshot(entry, JSON.parse<ThreadSummary[]>(JSON.stringify(raw)) ?? [] as ThreadSummary[])
+        }
+        else { entry.loading = false; entry.error = '收到无法识别的聊天列表'; activeReads--; drainThreadQueue(); return }
         entry.subscribed = true
-        entry.loaded = true; entry.loading = false; entry.error = ''
+        entry.loading = false
       }
       activeReads--; drainThreadQueue()
     }, (reason: Error) => {
@@ -114,13 +269,17 @@ export function refreshComputerThreads(hostId: string = '') {
 // 断线使旧回执失效，保留内容；恢复连接后重新订阅并取得全量快照。
 export function disconnectThreadLists() {
   queue.splice(0, queue.length)
+  appliedPushes.clear()
   threadList.computers.forEach((entry: ComputerThreads) => { entry.revision++; entry.loading = false; entry.subscribed = false })
 }
 
 // 即使列表页隐藏也消费推送，返回时直接显示内存中的最新状态。
 watch((): string => liveThreadLists.updates.map((item: ThreadListUpdate): string => item.hostId + ':' + item.revision).join('|'), () => {
+  if (!connection.connected) return
   liveThreadLists.updates.forEach((update: ThreadListUpdate) => {
     const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == update.hostId)
-    if (entry != null) { entry.threads = retainedThreads(entry.hostId, update.threads); entry.loaded = true; entry.error = '' }
+    if (entry == null || !entry.online || (appliedPushes.get(update.hostId) ?? -1) >= update.revision) return
+    appliedPushes.set(update.hostId, update.revision)
+    acceptThreadSnapshot(entry, update.threads)
   })
 })

@@ -158,6 +158,7 @@ class MobileBridge {
     this.disconnect()
     liveThreadLists.updates = [] as ThreadListUpdate[]
     connection.configurationRevision++
+    connection.computers = [] as Computer[]
     this.config = parsed
     this.migrateDeleteCommands = !persist
     connection.pendingCommands = [] as PendingCommand[]
@@ -227,7 +228,15 @@ class MobileBridge {
         if (generation != this.generation) return
         if (response.statusCode != 200 || response.data == null) {
           this.connecting = false; connection.connectionAttempt = 0
-          if (response.statusCode == 401) { connection.status = '需要重新配对'; connection.error = '连接配置已失效，请从电脑重新导入'; return }
+          if (response.statusCode == 401) {
+            // 明确拒绝后立即废弃本地副本。保留配置用于提示，重启时也不再读取原命名空间。
+            config.cacheNamespace = ''
+            try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: config.relayUrl, token: config.token, hostId: config.hostId, cacheNamespace: '' })) } catch (_) {}
+            connection.cacheNamespace = ''; connection.computers = [] as Computer[]
+            connection.threads = [] as ThreadSummary[]; liveThreadLists.updates = [] as ThreadListUpdate[]
+            connection.snapshot = null; connection.contentRevision = ''; connection.activeThreadId = ''
+            connection.status = '需要重新配对'; connection.error = '连接配置已失效，请从电脑重新导入'; return
+          }
           failed('获取连接票据失败（HTTP ' + response.statusCode.toString() + '）'); return
         }
         const ticket = response.data!.ticket
@@ -403,6 +412,15 @@ class MobileBridge {
       clearTimeout(entry.timer); this.pending.delete(id)
       const error = envelope['error'] as UTSJSONObject | null
       if (error != null) {
+        // 电脑明确拒绝授权时立即移出名单，等后续权威清单重新确认。
+        if (error.getString('code') == 'HOST_FORBIDDEN') {
+          connection.computers = connection.computers.filter((computer: Computer): boolean => computer.id != entry.hostId)
+          liveThreadLists.updates = liveThreadLists.updates.filter((update: ThreadListUpdate): boolean => update.hostId != entry.hostId)
+          if (connection.hostId == entry.hostId) {
+            this.clearConversationSubscription()
+            connection.threads = [] as ThreadSummary[]; connection.snapshot = null; connection.contentRevision = ''
+          }
+        }
         if (entry.write && !((entry.method == 'thread.delete' || entry.method == 'turn.retry' || (entry.method ?? '').startsWith('thread.draft.')) && error.getBoolean('outcomeUnknown') == true)) this.clearCommand(id, entry.hostId)
         entry.reject(new Error(entry.method == 'turn.retry' && error.getBoolean('outcomeUnknown') == true ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' && error.getBoolean('outcomeUnknown') == true ? '永久删除结果需要核对，请核对原操作，勿重复提交' : error.getBoolean('outcomeUnknown') == true ? '未收到明确结果，请查看聊天，按需重新操作' : error.getString('message') ?? '操作失败'))
       } else {

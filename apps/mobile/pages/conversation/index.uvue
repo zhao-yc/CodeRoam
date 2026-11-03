@@ -17,7 +17,7 @@ onLoad((options: OnLoadOptions) => {
   // #endif
   const notice = pendingTaskNotice(options['noticeKey'] ?? '')
   const id = options['threadId'] ?? ''
-  if (id.length > 0) initialTarget.value = workspaceTarget(notice?.hostId ?? options['hostId'] ?? connection.hostId, id, options['title'] ?? '', options['projectName'] ?? '', connection.cacheNamespace)
+  if (id.length > 0) initialTarget.value = workspaceTarget(notice?.hostId ?? options['hostId'] ?? connection.hostId, id, options['title'] ?? '', options['projectName'] ?? '', connection.cacheNamespace, options['cacheOnly'] == '1')
 })
 onShow(() => { active.value = true })
 onHide(() => { active.value = false })

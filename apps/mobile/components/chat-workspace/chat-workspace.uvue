@@ -5,14 +5,14 @@
     </view>
     <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
       <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
-      <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" />
+      <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" @connect-cached="connectCachedConversation" />
       <view v-if="!props.detailRoute || wide || mode == 'new'" v-show="mode == 'new'" class="workspace-new">
         <view class="workspace-status-space"></view>
         <view id="new-conversation-header" class="workspace-new-header"><view class="workspace-header-button"><app-icon :name="wide ? 'close' : 'back'" :size="23" /><button class="workspace-hitbox" :disabled="creating" aria-label="关闭新聊天" @click="closeNewConversation"></button></view><text class="workspace-new-title">新聊天</text><view class="workspace-header-button"></view></view>
         <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
       </view>
     </view>
-    <task-notice :active="props.active" :header-id="mode == 'conversation' ? 'conversation-header' : mode == 'new' ? 'new-conversation-header' : 'home-header'" :host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" :pane-left="wide && mode != 'list' ? 341 : 0" :pane-width="wide && mode == 'list' ? 340 : wide ? detailWidth : props.windowWidth" />
+    <task-notice :active="props.active && !(mode == 'conversation' && selected?.cacheOnly == true)" :header-id="mode == 'conversation' ? 'conversation-header' : mode == 'new' ? 'new-conversation-header' : 'home-header'" :host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" :pane-left="wide && mode != 'list' ? 341 : 0" :pane-width="wide && mode == 'list' ? 340 : wide ? detailWidth : props.windowWidth" />
   </view>
 </template>
 
@@ -26,6 +26,7 @@ import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import type { Computer } from '../../services/bridge.uts'
 import type { ComputerThread } from '../../services/thread-list.uts'
+import { canReadCachedThread, cachedThreadGeneration, isCachedThreadScopeAllowed, threadList } from '../../services/thread-list.uts'
 import { peekConversationPreview, primeConversationPreview } from '../../services/conversation-cache.uts'
 import { bindWorkspaceNoticeNavigation } from '../../services/task-notifications.uts'
 import type { TaskNotice as TaskNoticeTarget } from '../../services/task-notification-state.uts'
@@ -48,17 +49,25 @@ let unbindNotices: (() => void) | null = null
 let handledInitialTarget = ''
 const openingRouteDetail = ref(props.detailRoute && props.initialTarget != null)
 
+// 本地索引仅供进入缓存详情，实时入口仍使用中转提供的电脑清单。
+function canAccessTarget(target: WorkspaceTarget): boolean {
+  if (target.cacheNamespace != connection.cacheNamespace) return false
+  return target.cacheOnly == true
+    ? canReadCachedThread(target.cacheNamespace, target.hostId, target.threadId)
+    : connection.computers.some((computer: Computer): boolean => computer.id == target.hostId)
+}
+
 // 所有入口先检查离线缓存和目标归属，拒绝时保留原面板。
 function canOpen(target: WorkspaceTarget, online: boolean): boolean {
   if (creating.value) { uni.showToast({ title: '操作正在提交，请稍后切换聊天', icon: 'none' }); return false }
-  if (target.cacheNamespace != connection.cacheNamespace || !connection.computers.some((computer): boolean => computer.id == target.hostId)) { uni.showToast({ title: '这台电脑不在当前授权范围内', icon: 'none' }); return false }
-  if ((!connection.connected || !online) && peekConversationPreview(target.cacheNamespace, target.hostId, target.threadId) == null) { uni.showToast({ title: '此聊天暂无本地缓存，请恢复连接后查看', icon: 'none' }); return false }
+  if (!canAccessTarget(target)) { uni.showToast({ title: '这台电脑不在当前授权范围内', icon: 'none' }); return false }
+  if ((target.cacheOnly == true || !connection.connected || !online) && peekConversationPreview(target.cacheNamespace, target.hostId, target.threadId) == null) { uni.showToast({ title: '此聊天暂无本地缓存，请恢复连接后查看', icon: 'none' }); return false }
   return true
 }
 
 // 冷启动的离线入口等待一次恢复。已有内存正文的点击直接进入详情。
 function pendingOfflineCache(target: WorkspaceTarget, online: boolean): Promise<void> | null {
-  if ((connection.connected && online) || target.cacheNamespace != connection.cacheNamespace || !connection.computers.some((computer: Computer): boolean => computer.id == target.hostId) || peekConversationPreview(target.cacheNamespace, target.hostId, target.threadId) != null) return null
+  if ((target.cacheOnly != true && connection.connected && online) || !canAccessTarget(target) || peekConversationPreview(target.cacheNamespace, target.hostId, target.threadId) != null) return null
   return primeConversationPreview(target.cacheNamespace, target.hostId, target.threadId)
 }
 
@@ -78,11 +87,12 @@ async function selectConversation(target: WorkspaceTarget, activate: boolean): P
   const revision = ++switchRevision
   newReady.value = false; mode.value = 'list'; detailMounted.value = false
   await nextTick()
-  if (!alive || revision != switchRevision || target.cacheNamespace != connection.cacheNamespace) return false
+  if (!alive || revision != switchRevision || !canAccessTarget(target)) return false
   try {
-    bridge.selectComputer(target.hostId)
+    if (target.cacheOnly == true) target.cacheGeneration = cachedThreadGeneration(target.hostId)
+    else bridge.selectComputer(target.hostId)
     selected.value = target; mode.value = 'conversation'
-    if (activate && connection.connected && online) bridge.openThread(target.threadId).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    if (target.cacheOnly != true && activate && connection.connected && online) bridge.openThread(target.threadId).then((_: UTSJSONObject) => {}, (_: Error) => {})
     detailMounted.value = true
     listPane.value?.rememberOpened(target.hostId + ':' + target.threadId)
     return true
@@ -91,8 +101,9 @@ async function selectConversation(target: WorkspaceTarget, activate: boolean): P
 
 async function openThread(thread: ComputerThread) {
   const project = thread.cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0).pop() ?? '未指定项目'
-  const target = workspaceTarget(thread.hostId, thread.id, thread.title, project, connection.cacheNamespace)
-  if (wide.value) { selectConversation(target, true); return }
+  const cacheOnly = thread.cached == true || !thread.online || !connection.connected
+  const target = workspaceTarget(thread.hostId, thread.id, thread.title, project, connection.cacheNamespace, cacheOnly)
+  if (wide.value) { await selectConversation(target, true); return }
   let online = thread.online
   const pending = pendingOfflineCache(target, online)
   if (pending != null) {
@@ -103,24 +114,40 @@ async function openThread(thread: ComputerThread) {
   }
   if (!canOpen(target, online)) return
   // 窄屏路由创建详情前先发起尾部读取，与路由切换并行。
-  if (connection.connected && online) primeConversationPreview(target.cacheNamespace, target.hostId, target.threadId)
+  if (!cacheOnly && connection.connected && online) primeConversationPreview(target.cacheNamespace, target.hostId, target.threadId)
   handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   try {
-    bridge.selectComputer(thread.hostId)
-    if (connection.connected && online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
-    uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&hostId=' + encodeURIComponent(thread.hostId) + '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(project), success: (_) => { listPane.value?.rememberOpened(thread.key) } })
+    if (!cacheOnly) {
+      bridge.selectComputer(thread.hostId)
+      if (connection.connected && online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    }
+    // 本地路由只携带标识，标题和项目由已核验的正文缓存提供。
+    const suffix = cacheOnly ? '&cacheOnly=1' : '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(project)
+    uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&hostId=' + encodeURIComponent(thread.hostId) + suffix, success: (_) => { listPane.value?.rememberOpened(thread.key) } })
   } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
 }
 
 function closeConversation() {
   switchRevision++; uni.hideKeyboard()
-  if (!wide.value && props.detailRoute && getCurrentPages().length > 1) { uni.navigateBack(); return }
   mode.value = 'list'; detailMounted.value = false; selected.value = null
+  if (!wide.value && props.detailRoute && getCurrentPages().length > 1) uni.navigateBack()
+}
+
+// 联网后仍保持只读，用户确认后重新走正常的实时入口。
+async function connectCachedConversation() {
+  const target = selected.value
+  if (target == null || target.cacheOnly != true || !connection.connected || !isCachedThreadScopeAllowed(target.cacheNamespace, target.hostId, target.threadId, target.cacheGeneration ?? '') || !connection.computers.some((computer: Computer): boolean => computer.id == target.hostId && computer.online)) return
+  await selectConversation(workspaceTarget(target.hostId, target.threadId, target.title, target.projectName, target.cacheNamespace), true)
 }
 
 function closeNewConversation() {
   if (creating.value) return
   switchRevision++; newReady.value = false; uni.hideKeyboard()
+  const target = selected.value
+  if (target?.cacheOnly == true) {
+    if (isCachedThreadScopeAllowed(target.cacheNamespace, target.hostId, target.threadId, target.cacheGeneration ?? '')) { mode.value = 'conversation'; return }
+    closeConversation(); return
+  }
   if (selected.value != null && selected.value!.cacheNamespace == connection.cacheNamespace && connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)) {
     try { bridge.selectComputer(selected.value!.hostId); bridge.watch(selected.value!.threadId); mode.value = 'conversation'; return } catch (_) {}
   }
@@ -135,7 +162,7 @@ async function openNewConversation(hostId: string = '') {
   newReady.value = false; mode.value = 'new'; uni.hideKeyboard()
   await nextTick()
   if (!alive || revision != switchRevision || mode.value != 'new') return
-  if (selected.value != null && connection.hostId == selected.value!.hostId) bridge.cancelOpen(selected.value!.threadId)
+  if (selected.value != null && selected.value!.cacheOnly != true && connection.hostId == selected.value!.hostId) bridge.cancelOpen(selected.value!.threadId)
   try { if (hostId.length > 0) bridge.selectComputer(hostId); newReady.value = true }
   catch (reason) { closeNewConversation(); uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
 }
@@ -168,21 +195,27 @@ defineExpose({ handleBack })
 // 列表传入已选电脑，保留带默认值的新建入口供页面内部调用。
 function createFromList(hostId: string) { openNewConversation(hostId) }
 
-watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? null), props.active.toString(), connection.connected.toString(), connection.cacheNamespace]), () => {
+watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? null), props.active.toString(), connection.connected.toString(), connection.cacheNamespace, threadList.cachedReady.toString(), threadList.cachedRevision.toString()]), () => {
   const target = props.initialTarget ?? null
   if (target == null) { handledInitialTarget = ''; openingRouteDetail.value = false; return }
   const key = workspaceTargetKey(target)
   if (key == handledInitialTarget) return
   if (target.cacheNamespace != connection.cacheNamespace) { handledInitialTarget = key; openingRouteDetail.value = false; return }
   if (!props.active || mode.value != 'list' || selected.value != null) return
-  if (!connection.connected && !connection.computers.some((computer): boolean => computer.id == target.hostId)) return
+  if (target.cacheOnly == true) {
+    if (!threadList.cachedReady && !canAccessTarget(target)) return
+  } else if (!connection.connected && !connection.computers.some((computer): boolean => computer.id == target.hostId)) return
   handledInitialTarget = key
   openingRouteDetail.value = props.detailRoute
   selectConversation(target, false).then((_opened: boolean) => { openingRouteDetail.value = false })
 }, { immediate: true })
 watch((): string => props.active.toString() + ':' + wide.value.toString(), () => { syncNoticeNavigation() })
-watch((): string => connection.cacheNamespace + ':' + connection.computers.map((computer): string => computer.id).join('|'), () => {
-  if (selected.value != null && (selected.value!.cacheNamespace != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)))) { switchRevision++; selected.value = null; detailMounted.value = false; mode.value = 'list' }
+watch((): string => connection.cacheNamespace + ':' + connection.computers.map((computer): string => computer.id).join('|') + ':' + threadList.cachedRevision.toString(), () => {
+  const target = selected.value
+  if (target == null) return
+  if (target.cacheOnly == true) {
+    if (!isCachedThreadScopeAllowed(target.cacheNamespace, target.hostId, target.threadId, target.cacheGeneration ?? '')) closeConversation()
+  } else if (target.cacheNamespace != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer): boolean => computer.id == target.hostId))) { switchRevision++; selected.value = null; detailMounted.value = false; mode.value = 'list' }
 })
 onMounted(() => { syncNoticeNavigation() })
 onUnmounted(() => { alive = false; switchRevision++; unbindNotices?.() })

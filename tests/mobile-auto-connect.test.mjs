@@ -15,7 +15,7 @@ function fixture(){
   const hint=page.slice(page.indexOf('const conversationConnectionHint ='),page.indexOf('const openingTitle ='));
   const watches=[],requests=[],loaders=[];
   const connection={hostId:'pc',activeThreadId:'thread',subscribedHostId:'pc',subscribedThreadId:'thread',epoch:'e',sequence:1,connected:true,pendingCommandId:'',error:'',computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',readOnly:true,messages:[]}};
-  const context=componentContext({connection,ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),busy:{value:false},checking:{value:false},bridge:{syncingThread:'',openThread:id=>{requests.push(id);return new Promise((resolve,reject)=>loaders.push({resolve,reject}));}}});
+  const context=componentContext({connection,cacheOnly:false,ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),busy:{value:false},checking:{value:false},bridge:{syncingThread:'',openThread:id=>{requests.push(id);return new Promise((resolve,reject)=>loaders.push({resolve,reject}));}}});
   vm.runInContext(stripTypeScriptTypes(declarations+'\n'+hint+'\n'+methods,{mode:'transform'})+'\nglobalThis.subject={operationError,activating,autoConnectPending,pageVisible,pageHostId,pageThreadId,canWrite,conversationConnectionHint,tryAutoConnectConversation,continueConversation};',context);
   const f=context.subject;f.pageHostId.value='pc';f.pageThreadId.value='thread';f.pageVisible.value=true;
   return {page,context,connection,f,requests,loaders,tick:()=>watches[0].callback(watches[0].source(),'')};

@@ -17,6 +17,19 @@ function mobileFixture(storage=new Map()){
   return {bridge,connection,timers,sockets,storage,uni};
 }
 
+test('票据接口明确拒绝配对时清除旧缓存范围，普通连接失败继续保留',()=>{
+  const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
+  const namespace=f.connection.cacheNamespace;f.bridge.foreground=true;
+  f.uni.request=options=>options.success({statusCode:503,data:null});f.bridge.connect();
+  assert.equal(f.connection.cacheNamespace,namespace);
+  f.connection.computers=[{id:'pc',online:false}];f.connection.activeThreadId='thread';f.connection.snapshot={threadId:'thread'};
+  f.uni.request=options=>options.success({statusCode:401,data:null});f.bridge.connect();
+  assert.equal(f.connection.cacheNamespace,'');assert.equal(f.connection.computers.length,0);assert.equal(f.connection.snapshot,null);
+  assert.equal(f.connection.status,'需要重新配对');assert.equal(JSON.parse(f.storage.get('codex-mobile-connection')).cacheNamespace,'');
+  const restored=mobileFixture(f.storage);restored.bridge.foreground=false;restored.bridge.restore();
+  assert.notEqual(restored.connection.cacheNamespace,namespace);
+});
+
 test('导入默认保存连接，新页面忽略旧操作锁且不重发写操作',()=>{
   const storage=new Map(),first=mobileFixture(storage);first.bridge.foreground=false;
   const config={relayUrl:'wss://relay.example/ws',hostId:'pc',token:'s'.repeat(43),extra:'不应保存'};

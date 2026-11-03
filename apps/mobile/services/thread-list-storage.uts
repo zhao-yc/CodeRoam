@@ -1,0 +1,235 @@
+import { readConversationCacheRows, writeConversationCacheRows } from '@/uni_modules/codex-conversation-db'
+import type { CacheRow, CacheRowChanges } from './conversation-cache-rows.uts'
+
+export type CachedThreadListRow = { id: string, title: string, cwd: string, updatedAt: number }
+export type CachedThreadListHost = { hostId: string, label: string, icon?: string, instanceGeneration?: string, threads: CachedThreadListRow[] }
+type StoredHostSummary = { hostId: string, label: string, icon: string, instanceGeneration: string }
+type StoredThreadSummary = { hostId: string, id: string, title: string, cwd: string, updatedAt: number }
+type StoredRow = { key: string, value: string, bytes: number, hostId: string, host: StoredHostSummary | null, thread: StoredThreadSummary | null }
+type CacheRead = { revision: string, rows: CacheRow[] }
+type StoredList = { revision: string, rows: Map<string, StoredRow> }
+type CacheState = { namespace: string, stored: StoredList | null, reading: Promise<StoredList> | null, pending: Promise<void>, writeEpoch: number, closed: boolean }
+type ChangeRows = (rows: Map<string, StoredRow>) => void
+
+const HOST_LIMIT = 50
+const THREAD_LIMIT = 500
+const BYTE_LIMIT = 1024 * 1024
+const CLOSED_REVISION = 'closed:'
+const states = new Map<string, CacheState>()
+
+function listCacheState(namespace: string): CacheState {
+  const existing = states.get(namespace)
+  if (existing != null) return existing
+  const state = { namespace: 'thread-list-v1:' + namespace, stored: null, reading: null, pending: Promise.resolve(), writeEpoch: 0, closed: false } as CacheState
+  states.set(namespace, state)
+  return state
+}
+
+function hostKey(hostId: string): string { return 'host:' + JSON.stringify([hostId]) }
+function threadKey(hostId: string, id: string): string { return 'thread:' + JSON.stringify([hostId, id]) }
+
+// 以序列化键值的 UTF-8 大小计算预算，覆盖中文标题和代理对。
+function utf8Bytes(value: string): number {
+  let bytes = 0
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index) ?? 0
+    if (code < 0x80) bytes++
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+      const next = value.charCodeAt(index + 1) ?? 0
+      if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index++ }
+      else bytes += 3
+    } else bytes += 3
+  }
+  return bytes
+}
+
+function storedRow(key: string, value: string, host: StoredHostSummary | null, thread: StoredThreadSummary | null): StoredRow {
+  return { key, value, bytes: utf8Bytes(key) + utf8Bytes(value), hostId: host?.hostId ?? thread?.hostId ?? '', host, thread } as StoredRow
+}
+
+// 单条损坏不影响其余列表。键和值都必须与同一电脑和会话相符。
+function decodeRow(key: string, value: string): StoredRow {
+  try {
+    if (key.startsWith('host:')) {
+      const host = JSON.parse<StoredHostSummary>(value)
+      if (host != null && typeof host.hostId == 'string' && host.hostId.length > 0 && typeof host.label == 'string' && typeof host.icon == 'string' && typeof host.instanceGeneration == 'string' && key == hostKey(host.hostId)) return storedRow(key, value, host, null)
+    } else if (key.startsWith('thread:')) {
+      const thread = JSON.parse<StoredThreadSummary>(value)
+      if (thread != null && typeof thread.hostId == 'string' && typeof thread.id == 'string' && thread.id.length > 0 && typeof thread.title == 'string' && typeof thread.cwd == 'string' && Number.isFinite(thread.updatedAt) && key == threadKey(thread.hostId, thread.id)) return storedRow(key, value, null, thread)
+    }
+  } catch (_) {}
+  return storedRow(key, value, null, null)
+}
+
+// 保留最新的有效行。某条记录自身超过预算时跳过，电脑摘要只为仍有条目的电脑保留。
+function boundedRows(rows: Map<string, StoredRow>): Map<string, StoredRow> {
+  const threads = [] as StoredRow[]
+  rows.forEach((row: StoredRow) => { if (row.thread != null) threads.push(row) })
+  threads.sort((left: StoredRow, right: StoredRow): number => {
+    const order = right.thread!.updatedAt - left.thread!.updatedAt
+    return order != 0 ? order : left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+  })
+  const kept = new Map<string, StoredRow>()
+  const counts = new Map<string, number>()
+  let count = 0, bytes = 0
+  for (let index = 0; index < threads.length && count < THREAD_LIMIT; index++) {
+    const row = threads[index]
+    const host = rows.get(hostKey(row.hostId))
+    if (host == null || host.host == null) continue
+    const current = counts.get(row.hostId) ?? 0
+    if (current >= HOST_LIMIT) continue
+    const addedBytes = row.bytes + (current == 0 ? host.bytes : 0)
+    if (addedBytes > BYTE_LIMIT) continue
+    if (bytes + addedBytes > BYTE_LIMIT) break
+    if (current == 0) kept.set(host.key, host)
+    kept.set(row.key, row)
+    counts.set(row.hostId, current + 1)
+    bytes += addedBytes; count++
+  }
+  return kept
+}
+
+// 并行恢复和首次写入共享一次读取，数据库只访问列表的命名空间。
+function readStoredList(state: CacheState): Promise<StoredList> {
+  const stored = state.stored
+  if (stored != null) return Promise.resolve(stored)
+  const reading = state.reading
+  if (reading != null) return reading
+  const pending = readConversationCacheRows(state.namespace).then((raw: string): StoredList => {
+    const data = JSON.parse<CacheRead>(raw)
+    if (data == null || typeof data.revision != 'string' || !Array.isArray(data.rows)) throw new Error('聊天列表缓存回执无效')
+    const rows = new Map<string, StoredRow>()
+    data.rows.forEach((row: CacheRow) => {
+      if (row != null && typeof row.key == 'string' && typeof row.value == 'string') rows.set(row.key, decodeRow(row.key, row.value))
+    })
+    const result = { revision: data.revision, rows } as StoredList
+    state.stored = result
+    if (data.revision.startsWith(CLOSED_REVISION)) state.closed = true
+    return result
+  }).finally(() => { state.reading = null })
+  state.reading = pending
+  return pending
+}
+
+// 还原副本只返回展示字段，数据库失败时交给现有在线流程。
+export async function readThreadListCache(namespace: string): Promise<CachedThreadListHost[]> {
+  const result = [] as CachedThreadListHost[]
+  if (namespace.length == 0) return result
+  const state = listCacheState(namespace)
+  if (state.closed) return result
+  try {
+    const stored = await readStoredList(state)
+    if (state.closed) return result
+    const hosts = new Map<string, CachedThreadListHost>()
+    const rows = boundedRows(stored.rows)
+    rows.forEach((row: StoredRow) => {
+      const host = row.host
+      if (host != null) {
+        const entry = { hostId: host.hostId, label: host.label, icon: host.icon, instanceGeneration: host.instanceGeneration, threads: [] as CachedThreadListRow[] } as CachedThreadListHost
+        hosts.set(host.hostId, entry); result.push(entry)
+      }
+    })
+    rows.forEach((row: StoredRow) => {
+      const thread = row.thread
+      if (thread != null) hosts.get(thread.hostId)?.threads.push({ id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt } as CachedThreadListRow)
+    })
+  } catch (_) {}
+  return result
+}
+
+function newRevision(closed: boolean): string {
+  return (closed ? CLOSED_REVISION : '') + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
+}
+
+// 只提交变更行。并行窗口改变基线后，旧快照不覆盖新数据或复活已清除的条目。
+async function persistListChange(pending: Promise<void>, state: CacheState, change: ChangeRows, deleting: boolean, clear: boolean, epoch: number): Promise<void> {
+  await pending
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if ((state.closed && !clear) || (!deleting && state.writeEpoch != epoch)) return
+    try {
+      const previous = await readStoredList(state)
+      if (previous.revision.startsWith(CLOSED_REVISION) || (state.closed && !clear)) return
+      const candidate = new Map<string, StoredRow>()
+      if (!clear) previous.rows.forEach((row: StoredRow, key: string) => { candidate.set(key, row) })
+      change(candidate)
+      const next = boundedRows(candidate)
+      const batch = { put: [] as CacheRow[], remove: [] as string[], clear } as CacheRowChanges
+      next.forEach((row: StoredRow, key: string) => {
+        if (previous.rows.get(key)?.value != row.value) batch.put.push({ key, value: row.value } as CacheRow)
+      })
+      if (!clear) previous.rows.forEach((_row: StoredRow, key: string) => { if (!next.has(key)) batch.remove.push(key) })
+      // 明确移除时，即使没有对应数据行也推进版本，拒绝另一页面已经发出的旧写入。
+      if (!deleting && batch.put.length == 0 && batch.remove.length == 0) return
+      const revision = newRevision(clear)
+      if (await writeConversationCacheRows(state.namespace, previous.revision, revision, JSON.stringify(batch))) {
+        state.stored = { revision, rows: next } as StoredList
+        return
+      }
+    } catch (_) {}
+    state.writeEpoch++
+    state.stored = null
+    if (!deleting) return
+  }
+}
+
+// 同一配对按调用顺序写入。失败保留内存列表，并允许下次实时更新重试。
+function queueListChange(namespace: string, change: ChangeRows, deleting: boolean = false, clear: boolean = false): Promise<void> {
+  if (namespace.length == 0) return Promise.resolve()
+  const state = listCacheState(namespace)
+  if (state.closed && !clear) return Promise.resolve()
+  if (clear) state.closed = true
+  const epoch = state.writeEpoch
+  const pending = persistListChange(state.pending, state, change, deleting, clear, epoch)
+  state.pending = pending
+  return pending
+}
+
+// 原生集合遍历时不能同时移除成员，先收集要删除的稳定键。
+function removeRows(rows: Map<string, StoredRow>, matches: (row: StoredRow) => boolean) {
+  const keys = [] as string[]
+  rows.forEach((row: StoredRow, key: string) => { if (matches(row)) keys.push(key) })
+  keys.forEach((key: string) => { rows.delete(key) })
+}
+
+// 仅接收已核对的完整快照。建立白名单投影后再入队，后续实时对象变化不会改变该批次。
+export function replaceThreadListCacheHost(namespace: string, host: CachedThreadListHost): Promise<void> {
+  const hostId = host.hostId
+  if (hostId.length == 0) return Promise.resolve()
+  const summary = { hostId, label: host.label, icon: host.icon ?? '', instanceGeneration: host.instanceGeneration ?? '' } as StoredHostSummary
+  const header = storedRow(hostKey(hostId), JSON.stringify(summary), summary, null)
+  const projected = host.threads.filter((thread: CachedThreadListRow): boolean => typeof thread.id == 'string' && thread.id.length > 0 && typeof thread.title == 'string' && typeof thread.cwd == 'string' && Number.isFinite(thread.updatedAt)).map((thread: CachedThreadListRow): StoredRow => {
+    const row = { hostId, id: thread.id, title: thread.title, cwd: thread.cwd, updatedAt: thread.updatedAt } as StoredThreadSummary
+    return storedRow(threadKey(hostId, row.id), JSON.stringify(row), null, row)
+  })
+  return queueListChange(namespace, (rows: Map<string, StoredRow>) => {
+    removeRows(rows, (row: StoredRow): boolean => row.hostId == hostId)
+    rows.set(header.key, header)
+    projected.forEach((row: StoredRow) => { rows.set(row.key, row) })
+  })
+}
+
+// 权威授权全集决定哪些电脑可以继续保留，普通掉线不调用此入口。
+export function retainThreadListCacheHosts(namespace: string, hostIds: string[]): Promise<void> {
+  const allowed = new Set<string>()
+  hostIds.forEach((id: string) => { allowed.add(id) })
+  return queueListChange(namespace, (rows: Map<string, StoredRow>) => {
+    removeRows(rows, (row: StoredRow): boolean => !allowed.has(row.hostId))
+  }, true)
+}
+
+export function removeThreadListCacheHost(namespace: string, hostId: string): Promise<void> {
+  return queueListChange(namespace, (rows: Map<string, StoredRow>) => {
+    removeRows(rows, (row: StoredRow): boolean => row.hostId == hostId)
+  }, true)
+}
+
+export function removeThreadListCacheThreads(namespace: string, hostId: string, threadIds: string[]): Promise<void> {
+  const keys = threadIds.map((id: string): string => threadKey(hostId, id))
+  return queueListChange(namespace, (rows: Map<string, StoredRow>) => { keys.forEach((key: string) => { rows.delete(key) }) }, true)
+}
+
+// 旧配对以后不再被使用，终止标记也阻止另一页面的旧请求重建已清理的副本。
+export function clearThreadListCache(namespace: string): Promise<void> {
+  return queueListChange(namespace, (_rows: Map<string, StoredRow>) => {}, true, true)
+}

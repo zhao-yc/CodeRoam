@@ -4,7 +4,7 @@ import {workspaceFixture} from './helpers/workspace-fixture.mjs';
 
 // 离线入口迁移到工作区，列表组件仅发出用户选择。
 async function fixture(connected, online, cached) {
-  const f=workspaceFixture({props:{windowWidth:390},connection:{connected,computers:[{id:'host',online}]},cached});
+  const f=workspaceFixture({props:{windowWidth:390},connection:{connected,computers:[{id:'host',online}]},cached,cachedAllowed:true});
   await f.openThread({id:'thread',hostId:'host',online,title:'合成聊天',cwd:'',key:'host:thread'});
   return f.calls;
 }
@@ -12,7 +12,7 @@ test('电脑或中转离线时，有缓存仍进入详情且不触发桌面导�
   for(const [connected,online] of [[true,false],[false,true],[false,false]]) {
     const calls=await fixture(connected,online,true);
     assert.ok(calls.some(call=>call[0]==='navigate'));
-    assert.ok(!calls.some(call=>call[0]==='open'));
+    assert.ok(!calls.some(call=>call[0]==='open'||call[0]==='select'));
     assert.deepEqual(calls[0],['cache','pair','host','thread']);
   }
 });
@@ -25,7 +25,7 @@ test('离线未缓存只提示，在线仍正常打开桌面聊天',async()=>{
 
 test('冷启动时离线点击等持久缓存恢复，命中后直接进入详情',async()=>{
   const restored=Promise.withResolvers();
-  const f=workspaceFixture({props:{windowWidth:390},connection:{connected:false,computers:[{id:'host',online:false}]},prime:()=>restored.promise});
+  const f=workspaceFixture({props:{windowWidth:390},connection:{connected:false,computers:[{id:'host',online:false}]},cachedAllowed:true,prime:()=>restored.promise});
   const opening=f.openThread({id:'thread',hostId:'host',online:false,title:'合成聊天',cwd:'',key:'host:thread'});
   assert.deepEqual(f.calls,[]);
   f.setCached(true);restored.resolve();await opening;

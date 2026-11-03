@@ -24,11 +24,12 @@
     </view>
     <view class="list-shell" :class="{ 'list-shell-glass': liquidGlass }">
     <deletion-task-list :visible-thread-keys="visibleDeletionThreadKeys" />
-    <view v-if="connection.computers.length > 1" class="computer-tabs">
+    <view v-if="displayComputers.length > 1" class="computer-tabs">
       <view :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
-      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in connection.computers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><view class="computer-connection-content" :style="{ opacity: computerSyncState(computer.id) == 'loading' ? computerPulseOpacity : 1 }" :aria-label="computerSyncLabel(computer.id)"><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view><view v-if="computerSyncState(computer.id) == 'offline' || computerSyncState(computer.id) == 'error'" class="computer-sync-badge" :aria-label="computerSyncLabel(computer.id)"><app-icon name="alert-triangle" :size="14" tone="warning" /></view></view></view></scroll-view>
+      <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in displayComputers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><view class="computer-connection-content" :style="{ opacity: computerSyncState(computer.id) == 'loading' ? computerPulseOpacity : 1 }" :aria-label="computerSyncLabel(computer.id)"><app-icon :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view><view v-if="computerSyncState(computer.id) == 'offline' || computerSyncState(computer.id) == 'error'" class="computer-sync-badge" :aria-label="computerSyncLabel(computer.id)"><app-icon name="alert-triangle" :size="14" tone="warning" /></view></view></view></scroll-view>
     </view>
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
+    <view v-else-if="showCachedList" class="notice"><text class="notice-text">显示上次同步的聊天</text></view>
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
         <view v-if="!connection.configured" class="empty"><text class="empty-title">在手机上继续你的聊天</text><text class="description">首次使用时连接电脑，已有聊天就会显示在这里。</text><button class="empty-action button-primary" @click="openConnection">连接电脑</button></view>
@@ -46,7 +47,7 @@
             <view class="thread-heading"><text class="thread-title">{{ thread.title }}</text><draft-indicator :host-id="thread.hostId" :thread-id="thread.id" /><text v-if="deletionTask(thread.hostId, thread.id) != null" class="thread-deleting">{{ deletionLabel(deletionTask(thread.hostId, thread.id)!) }}</text><task-status v-else-if="threadState(thread) == 'failed'" class="thread-failure" state="failed" /><task-status v-else-if="threadState(thread) != 'failed' && (threadState(thread) != 'question' || (thread.unansweredQuestionCount ?? 0) == 0)" :hide-running-label="true" class="thread-status" :state="threadState(thread)" :visible="pageVisible" /></view>
             <!-- 状态放在标题右侧，时间放在项目右侧；保留待回答数量和原有显示条件。 -->
             <view class="thread-meta">
-              <view v-if="selectedComputerId.length == 0 && connection.computers.length > 1" class="thread-computer-meta"><app-icon class="thread-meta-icon" :name="iconForThread(thread)" :size="16" tone="muted" /><text class="thread-computer">{{ thread.hostLabel }}</text></view>
+              <view v-if="selectedComputerId.length == 0 && displayComputers.length > 1" class="thread-computer-meta"><app-icon class="thread-meta-icon" :name="iconForThread(thread)" :size="16" tone="muted" /><text class="thread-computer">{{ thread.hostLabel }}</text></view>
               <app-icon class="thread-meta-icon" name="folder" :size="16" tone="muted" /><text class="thread-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text><text v-if="thread.online && (thread.unansweredQuestionCount ?? 0) > 0" class="thread-question">待回答 {{ thread.unansweredQuestionCount }}</text><text v-if="threadState(thread) != 'running'" class="thread-time">{{ updatedLabel(thread.updatedAt) }}</text>
             </view>
           </view>
@@ -73,7 +74,7 @@
 <script setup lang="uts">
 import { computed, ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { bridge, connection, Computer, computerIcon, taskState, conversationTaskState, threadIndicator } from '../../services/bridge.uts'
-import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, refreshComputerThreads } from '../../services/thread-list.uts'
+import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, refreshComputerThreads, listDisplayComputers } from '../../services/thread-list.uts'
 import { readConversationCache } from '../../services/conversation-cache.uts'
 import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import DeletionTaskList from '../../components/deletion-tasks/deletion-tasks.uvue'
@@ -197,6 +198,7 @@ const connectionMenuTop = ref(104)
 const connectionEditorBusy = ref(false)
 const connectionReleaseAt = ref(0)
 let suppressComputerClickUntil = 0
+const displayComputers = computed((): Computer[] => listDisplayComputers())
 const editingComputer = computed((): Computer | null => connection.computers.find((computer: Computer): boolean => computer.id == editingComputerId.value) ?? null)
 // 原生元素查询在 Web 内部使用 CSS 选择器；逐字符编码避免实例编号中的特殊符号及替换碰撞。
 function computerTabElementId(id: string): string {
@@ -206,6 +208,7 @@ function computerTabElementId(id: string): string {
 }
 // 长按只编辑目标标签，保留当前筛选、执行电脑和列表滚动位置。
 function openComputerMenu(id: string) {
+  if (!connection.computers.some((computer: Computer): boolean => computer.id == id)) return
   const tab = uni.getElementById(computerTabElementId(id))?.getBoundingClientRect()
   const page = uni.getElementById('home-page')?.getBoundingClientRect()
   connectionMenuLeft.value = tab?.left ?? 12
@@ -221,7 +224,7 @@ function onConnectionEditorBusy(value: boolean) { connectionEditorBusy.value = v
 function iconForComputer(computer: Computer): string { return computerIcon(computer) }
 // 会话使用所属客户端的配置图标，旧连接或缺失配置沿用笔记本兜底。
 function iconForThread(thread: ComputerThread): string {
-  const computer = connection.computers.find((entry: Computer): boolean => entry.id == thread.hostId) ?? null
+  const computer = displayComputers.value.find((entry: Computer): boolean => entry.id == thread.hostId) ?? null
   return computerIcon(computer)
 }
 const creatingConversation = computed((): boolean => props.busy)
@@ -236,9 +239,11 @@ let archiveToastRequest = 0
 // 筛选只影响列表；当前执行电脑在打开会话或新建编辑区时才切换。
 const selectedComputers = computed((): ComputerThreads[] => threadList.computers.filter((entry: ComputerThreads): boolean => selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value))
 const allVisibleThreads = computed((): ComputerThread[] => visibleComputerThreads(selectedComputerId.value, ''))
+const showCachedList = computed((): boolean => allVisibleThreads.value.some((thread: ComputerThread): boolean => thread.cached == true))
 type ComputerIndicator = { hostId: string, state: string }
 // 列表状态来自实际读取结果，当前订阅会话优先采用实时快照。
 function threadState(thread: ComputerThread): string {
+  if (thread.cached == true) return 'idle'
   const snapshot = connection.snapshot
   if (connection.hostId == thread.hostId && snapshot?.threadId == thread.id) return threadIndicator(conversationTaskState(snapshot, thread.online), snapshot?.hasUnreadTurn ?? null)
   return threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? [], thread.latestTurn?.status ?? ''), thread.hasUnreadTurn ?? null)
@@ -262,7 +267,7 @@ const listUnavailable = computed((): boolean => selectedComputers.value.length >
 function computerSyncState(hostId: string): string {
   const computer = connection.computers.find((item: Computer): boolean => item.id == hostId)
   const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
-  if (computer == null) return ''
+  if (computer == null) return displayComputers.value.some((item: Computer): boolean => item.id == hostId) ? 'offline' : ''
   if (!connection.connected) return connection.error.length == 0 && (connection.status == '正在连接' || connection.status == '正在重新连接') ? 'loading' : 'offline'
   if (!computer.online) return 'offline'
   if (entry != null && entry.error.length > 0) return 'error'
@@ -385,10 +390,10 @@ function toggleRecent() { if (!menuVisible.value) return; closeMenu(); recentFir
 function openMenuConnection(adding: boolean) { if (!menuVisible.value || creatingConversation.value) return; closeMenu(); uni.navigateTo({ url: '/pages/connection/index' + (adding ? '?add=true' : '') }) }
 function openSearch() { searchVisible.value = true; nextTick(() => { searchFocused.value = true }) }
 function closeSearch() { search.value = ''; searchFocused.value = false; searchVisible.value = false; uni.hideKeyboard() }
-function chooseComputerFilter(id: string) { if (editingComputerId.value.length > 0 || Date.now() < suppressComputerClickUntil) return; if (id.length > 0 && !connection.computers.some((computer: Computer): boolean => computer.id == id)) return; selectedComputerId.value = id; resetThreadScroll(); refreshComputerThreads(id) }
+function chooseComputerFilter(id: string) { if (editingComputerId.value.length > 0 || Date.now() < suppressComputerClickUntil) return; if (id.length > 0 && !displayComputers.value.some((computer: Computer): boolean => computer.id == id)) return; selectedComputerId.value = id; resetThreadScroll(); refreshComputerThreads(id) }
 // 全局订阅由应用维护；首页只清理已撤回的筛选选项。
-watch((): string => connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
-  if (selectedComputerId.value.length > 0 && !connection.computers.some((computer: Computer): boolean => computer.id == selectedComputerId.value)) selectedComputerId.value = ''
+watch((): string => displayComputers.value.map((computer: Computer): string => computer.id).join('|'), () => {
+  if (selectedComputerId.value.length > 0 && !displayComputers.value.some((computer: Computer): boolean => computer.id == selectedComputerId.value)) selectedComputerId.value = ''
 })
 watch(search, () => { resetThreadScroll() })
 

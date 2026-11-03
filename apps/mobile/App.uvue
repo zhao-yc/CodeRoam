@@ -2,6 +2,7 @@
 import { bridge } from './services/bridge.uts'
 import { startConversationPrefetch, resumeConversationPrefetch, backgroundConversationPrefetch } from './services/conversation-prefetch.uts'
 import { startConversationCacheLifecycle } from './services/conversation-cache-lifecycle.uts'
+import { startThreadListCache } from './services/thread-list.uts'
 import { startTaskNotifications, resetTaskNotifications } from './services/task-notifications.uts'
 import { startDeletionTasks, resumeDeletionTasks, backgroundDeletionTasks } from './services/delete-tasks.uts'
 // #ifdef WEB
@@ -9,7 +10,7 @@ import { startTaskBrowserNotifications } from './services/task-browser-notificat
 // #endif
 export default {
   onLaunch() {
-    startConversationCacheLifecycle(); startTaskNotifications(); startDeletionTasks(); startConversationPrefetch()
+    startConversationCacheLifecycle(); startThreadListCache(); startTaskNotifications(); startDeletionTasks(); startConversationPrefetch()
     // #ifdef WEB
     startTaskBrowserNotifications()
     // #endif

@@ -44,11 +44,12 @@ test('首页长按及关闭后的释放点击不筛选，正常点击保持原�
   const source = fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue', 'utf8');
   const methods = source.split(/\r?\n/).filter(line => line.startsWith('function chooseComputerFilter(')).join('\n');
   let refreshes = 0;
-  const context = { editingComputerId: { value: 'pc' }, suppressComputerClickUntil: 0, Date, connection: { computers: [{ id: 'pc' }] }, selectedComputerId: { value: '' }, resetThreadScroll() {}, refreshComputerThreads() { refreshes++; } };
+  const context = { editingComputerId: { value: 'pc' }, suppressComputerClickUntil: 0, Date, displayComputers: { value: [{ id: 'pc' }, { id: 'cached-pc' }] }, selectedComputerId: { value: '' }, resetThreadScroll() {}, refreshComputerThreads() { refreshes++; } };
   vm.runInNewContext(stripTypeScriptTypes(methods) + ";chooseComputerFilter('pc');", componentScope(context)); assert.equal(refreshes, 0);
   context.editingComputerId.value = ''; context.suppressComputerClickUntil = Date.now() + 500;
   vm.runInNewContext("chooseComputerFilter('pc');", componentScope(context)); assert.equal(refreshes, 0);
   context.suppressComputerClickUntil = 0; vm.runInNewContext("chooseComputerFilter('pc');", componentScope(context)); assert.equal(refreshes, 1); assert.equal(context.selectedComputerId.value, 'pc');
+  vm.runInNewContext("chooseComputerFilter('cached-pc');", componentScope(context)); assert.equal(refreshes, 2); assert.equal(context.selectedComputerId.value, 'cached-pc');
 });
 
 test('长按尚未松手和松手后的合成点击不会关闭菜单，后续遮罩点击正常关闭', () => {
@@ -62,12 +63,13 @@ test('含实例分隔符的设备长按使用可查询且无碰撞的元素编�
   const methods = ['computerTabElementId', 'openComputerMenu'].map(name => source.match(new RegExp('function ' + name + '\\([^]*?\\n}'))?.[0]).join('\n');
   const ids = ['pc', 'pc~00000000-0000-4000-8000-000000000001', 'pc_7e_', 'pc~', 'pc.1:second', '合成设备'];
   const queries = [], target = ids[1];
-  const context = componentContext({ editingNewConversation: { value: false }, editingComputerId: { value: '' }, connectionMenuLeft: { value: 0 }, connectionMenuTop: { value: 0 }, connectionReleaseAt: { value: 1 }, suppressComputerClickUntil: 0, Date, uni: { getElementById(id) {
+  const context = componentContext({ connection: { computers: [{ id: target }] }, editingNewConversation: { value: false }, editingComputerId: { value: '' }, connectionMenuLeft: { value: 0 }, connectionMenuTop: { value: 0 }, connectionReleaseAt: { value: 1 }, suppressComputerClickUntil: 0, Date, uni: { getElementById(id) {
     assert.match(id, /^[A-Za-z][A-Za-z0-9_-]*$/); queries.push(id);
     return { getBoundingClientRect: () => id === 'home-page' ? { top: 20 } : { left: 180, bottom: 120 } };
   } } });
   vm.runInContext(stripTypeScriptTypes(methods, { mode: 'transform' }) + ';globalThis.subject={computerTabElementId,openComputerMenu}', context);
   const encoded = ids.map(id => context.subject.computerTabElementId(id)); assert.equal(new Set(encoded).size, ids.length);
+  context.subject.openComputerMenu('cached-pc'); assert.equal(queries.length, 0);
   context.subject.openComputerMenu(target); assert.equal(queries[0], encoded[1]); assert.equal(context.editingComputerId.value, target); assert.equal(context.connectionMenuLeft.value, 180); assert.equal(context.connectionMenuTop.value, 104);
   assert.match(source, /:id="computerTabElementId\(computer\.id\)"/);
 });

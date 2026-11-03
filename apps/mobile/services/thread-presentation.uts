@@ -7,7 +7,7 @@ export type RecentThread = { key: string, viewedAt: number }
 
 // 未设置偏好或存储内容无效时，统一按项目排列。
 export function normalizeListPreferences(value: ListPreferences | null): ListPreferences {
-  return { sort: value != null && ['priority', 'project', 'time'].indexOf(value.sort) >= 0 ? value.sort : 'project', recentFirst: value?.recentFirst == true }
+  return { sort: value != null && ['priority', 'project', 'time'].indexOf(value.sort) >= 0 ? value.sort : 'project', recentFirst: value?.recentFirst == true } as ListPreferences
 }
 
 // 只有真实查看动作才记为最近；仅保存电脑与会话标识，不保存标题和消息。
@@ -22,6 +22,16 @@ function priority(thread: ComputerThread): number {
   return state == 'question' || state == 'approval' ? 0 : state == 'running' ? 1 : state == 'unread' ? 2 : 3
 }
 
+type ThreadProject = { key: string, path: string, name: string }
+
+// 每个项目路径只归一化一次，用末级名称索引查找跨电脑、跨路径重名。
+function threadProject(thread: ComputerThread): ThreadProject {
+  let path = thread.cwd.split('\\').join('/')
+  while (path.endsWith('/') && path.length > 1) path = path.slice(0, -1)
+  const name = path.split('/').pop() ?? ''
+  return { key: 'project:' + JSON.stringify([thread.hostId, path]), path, name } as ThreadProject
+}
+
 // 保留完整规范路径作分组键；末级名称相同的不同路径、不同电脑不会误合并。
 export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: boolean, recent: RecentThread[], dayStart: number): ThreadGroup[] {
   const threads = rows.slice().sort((left: ComputerThread, right: ComputerThread): number => {
@@ -31,20 +41,37 @@ export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: 
     return left.key < right.key ? -1 : left.key > right.key ? 1 : 0
   })
   const result = [] as ThreadGroup[]
-  const recentRows = recentFirst ? recent.map((entry: RecentThread): ComputerThread | null => threads.find((thread: ComputerThread): boolean => thread.key == entry.key) ?? null).filter((thread: ComputerThread | null): boolean => thread != null) as ComputerThread[] : [] as ComputerThread[]
-  if (recentRows.length > 0) result.push({ key: 'recent', title: '最近', threads: recentRows } as ThreadGroup)
+  const byKey = new Map<string, ComputerThread>()
+  const projects = new Map<string, ThreadProject>()
+  const firstProjectByName = new Map<string, string>()
+  const duplicateProjects = new Set<string>()
   threads.forEach((thread: ComputerThread) => {
-    if (recentRows.some((entry: ComputerThread): boolean => entry.key == thread.key)) return
+    if (recentFirst) byKey.set(thread.key, thread)
+    if (sort != 'project') return
+    const project = threadProject(thread)
+    projects.set(thread.key, project)
+    if (project.name.length == 0) return
+    const first = firstProjectByName.get(project.name)
+    if (first == null) firstProjectByName.set(project.name, project.key)
+    else if (first != project.key) duplicateProjects.add(project.name)
+  })
+  const recentRows = [] as ComputerThread[]
+  const recentKeys = new Set<string>()
+  if (recentFirst) recent.forEach((entry: RecentThread) => {
+    const thread = byKey.get(entry.key)
+    if (thread != null) { recentRows.push(thread); recentKeys.add(thread.key) }
+  })
+  if (recentRows.length > 0) result.push({ key: 'recent', title: '最近', threads: recentRows } as ThreadGroup)
+  const groups = new Map<string, ThreadGroup>()
+  threads.forEach((thread: ComputerThread) => {
+    if (recentKeys.has(thread.key)) return
     let key = '', title = ''
     if (sort == 'project') {
-      let cwd = thread.cwd.split('\\').join('/')
-      while (cwd.endsWith('/') && cwd.length > 1) cwd = cwd.slice(0, -1)
-      key = 'project:' + thread.hostId + ':' + cwd
-      const parts = cwd.split('/')
-      title = cwd.length > 0 ? parts[parts.length - 1] : '未指定项目'
+      const project = projects.get(thread.key)!
+      key = project.key
+      title = project.path.length > 0 ? project.name : '未指定项目'
       // 同名项目使用电脑名和完整路径区分，普通项目保留简洁名称。
-      const duplicate = threads.some((entry: ComputerThread): boolean => entry.key != thread.key && entry.cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0).pop() == title && (entry.hostId != thread.hostId || entry.cwd.split('\\').join('/').replace(/\/$/, '') != cwd))
-      if (duplicate) title += ' · ' + thread.hostLabel + ' · ' + cwd
+      if (duplicateProjects.has(project.name)) title += ' · ' + thread.hostLabel + ' · ' + project.path
     } else if (sort == 'priority') {
       const rank = priority(thread)
       key = 'priority:' + rank.toString()
@@ -53,8 +80,8 @@ export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: 
       key = thread.updatedAt >= dayStart ? 'today' : thread.updatedAt >= dayStart - 86400000 ? 'yesterday' : 'older'
       title = key == 'today' ? '今天' : key == 'yesterday' ? '昨天' : '更早'
     }
-    let group = result.find((entry: ThreadGroup): boolean => entry.key == key)
-    if (group == null) { group = { key, title, threads: [] as ComputerThread[] } as ThreadGroup; result.push(group) }
+    let group = groups.get(key)
+    if (group == null) { group = { key, title, threads: [] as ComputerThread[] } as ThreadGroup; groups.set(key, group); result.push(group) }
     group.threads.push(thread)
   })
   if (sort == 'priority') result.sort((left: ThreadGroup, right: ThreadGroup): number => left.key == 'recent' ? -1 : right.key == 'recent' ? 1 : left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
