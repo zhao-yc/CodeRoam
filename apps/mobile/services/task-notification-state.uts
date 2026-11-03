@@ -14,6 +14,14 @@ export class TaskNotificationCenter {
   durationMs = 5000
   visibleHostId = ''
   visibleThreadId = ''
+  presentationActive = true
+  detected = [] as TaskNotice[]
+
+  // 后台只识别事件，不积压页面卡片；恢复前台也不重放已送达的事件。
+  setPresentationActive(active: boolean) {
+    this.presentationActive = active
+    if (!active) { this.queue = [] as TaskNotice[]; this.current = null; this.phase = 'idle'; this.deadline = 0 }
+  }
 
   // 连接代次结束时清空事件，保留仍在前台的页面身份，恢复后重新建立基线。
   reset() { this.hosts = [] as NoticeHost[]; this.seen.clear(); this.queue = [] as TaskNotice[]; this.current = null; this.phase = 'idle'; this.deadline = 0 }
@@ -37,7 +45,8 @@ export class TaskNotificationCenter {
   }
 
   // 首份完整列表只补待交互；随后按事项编号和轮次终态识别新事件。
-  observe(hostId: string, generation: string, threads: ThreadSummary[], now: number) {
+  observe(hostId: string, generation: string, threads: ThreadSummary[], now: number): TaskNotice[] {
+    this.detected = [] as TaskNotice[]
     const previous = this.hosts.find((host: NoticeHost): boolean => host.hostId == hostId && host.generation == generation)
     const baseline = previous == null
     const oldThreads = previous?.threads ?? [] as ThreadSummary[]
@@ -56,6 +65,7 @@ export class TaskNotificationCenter {
     })
     this.queue = this.queue.filter((notice: TaskNotice): boolean => this.valid(notice))
     this.tick(now)
+    return this.detected
   }
 
   // 去重身份包含电脑及实例代次，不按会话标题或待办数量猜测。
@@ -64,9 +74,11 @@ export class TaskNotificationCenter {
     const key = JSON.stringify([hostId, generation, thread.id, kind, turnId, targetId])
     if (this.seen.has(key)) return
     this.seen.add(key)
+    const notice = { key, hostId, generation, threadId: thread.id, threadTitle: thread.title, turnId, kind, targetId } as TaskNotice
+    this.detected.push(notice)
     // 已在聊天内看到的事件也记为已读，离开页面后不补发同一事项。
-    if (this.isVisibleThread(hostId, thread.id)) return
-    this.queue.push({ key, hostId, generation, threadId: thread.id, threadTitle: thread.title, turnId, kind, targetId } as TaskNotice)
+    if (!this.presentationActive || this.isVisibleThread(hostId, thread.id)) return
+    this.queue.push(notice)
   }
 
   // 排队中已回答的问题、已处理的审批和已归档的会话不再展示。

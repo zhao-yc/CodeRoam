@@ -66,6 +66,15 @@ class MobileBridge {
   socket: SocketTask | null = null
   pending = new Map<string, PendingReply>()
   foreground = true
+  backgroundNotifications = false
+
+  // 仅 Web 通知服务就绪并获得授权后允许后台保持传输；原生默认仍随前后台断开。
+  shouldMaintainConnection(): boolean { return this.foreground || this.backgroundNotifications }
+  setBackgroundNotifications(allowed: boolean) {
+    if (this.backgroundNotifications == allowed) return
+    this.backgroundNotifications = allowed
+    if (!this.foreground) { if (allowed) this.connect(); else { this.disconnect(); connection.status = '返回后恢复连接' } }
+  }
   connecting = false
   generation = 0
   attempts = 0
@@ -91,7 +100,7 @@ class MobileBridge {
       this.networkInstalled = true
       uni.onNetworkStatusChange((event) => {
         if (!event.isConnected) { this.disconnect(); connection.status = '网络不可用' }
-        else if (this.foreground) { this.disconnect(); this.connect() }
+        else if (this.shouldMaintainConnection()) { this.disconnect(); this.connect() }
       })
     }
   }
@@ -126,7 +135,7 @@ class MobileBridge {
     connection.activeThreadId = ''
     connection.conversationError = ''
     this.clearLegacyCommands(parsed.hostId)
-    if (this.foreground) this.connect()
+    if (this.shouldMaintainConnection()) this.connect()
   }
 
   // 只清除当前应用的连接配置；正在提交时等待请求结束，其他存储继续保留。
@@ -154,11 +163,11 @@ class MobileBridge {
   }
 
   resume() { this.foreground = true; if (this.config != null && !connection.connected) this.connect() }
-  background() { this.foreground = false; this.disconnect(); connection.status = '返回后恢复连接' }
+  background() { this.foreground = false; if (!this.backgroundNotifications) { this.disconnect(); connection.status = '返回后恢复连接' } }
 
   connect() {
     const config = this.config
-    if (config == null || !this.foreground || this.connecting || connection.connected) return
+    if (config == null || !this.shouldMaintainConnection() || this.connecting || connection.connected) return
     clearTimeout(this.reconnectTimer)
     this.connecting = true
     const generation = ++this.generation
@@ -206,7 +215,7 @@ class MobileBridge {
   }
 
   scheduleReconnect() {
-    if (!this.foreground || this.config == null) return
+    if (!this.shouldMaintainConnection() || this.config == null) return
     clearTimeout(this.reconnectTimer)
     connection.connected = false
     connection.status = '等待重连'
@@ -401,7 +410,7 @@ class MobileBridge {
   heartbeat() {
     clearTimeout(this.heartbeatTimer)
     this.heartbeatTimer = setTimeout(() => {
-      if (!connection.connected || !this.foreground) return
+      if (!connection.connected || !this.shouldMaintainConnection()) return
       this.request('ping', {}).then((_: UTSJSONObject) => { this.heartbeat() }, (_: Error) => { this.disconnect(); this.scheduleReconnect() })
     }, 15000)
   }

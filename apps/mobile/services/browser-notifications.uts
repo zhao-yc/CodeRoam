@@ -1,0 +1,182 @@
+import { reactive } from 'vue'
+import { TaskNotice, taskNoticeTitle } from './task-notification-state.uts'
+
+type BrowserNoticeState = { enabled: boolean, supported: boolean, permission: string, ready: boolean, busy: boolean, foreground: boolean, error: string }
+type BrowserNoticeRecord = { notice: TaskNotice, namespace: string }
+export const browserNotifications = reactive<BrowserNoticeState>({ enabled: false, supported: false, permission: 'default', ready: false, busy: false, foreground: true, error: '' })
+const preferenceKey = 'codex-mobile-browser-notifications-enabled'
+const records = new Map<string, BrowserNoticeRecord>()
+let registration: ServiceWorkerRegistration | null = null
+let initialization: Promise<void> | null = null
+let installed = false
+let revision = 0
+let namespace = ''
+let hosts = [] as string[]
+let openNotice: ((notice: TaskNotice) => void) | null = null
+let keepAlive: ((allowed: boolean) => void) | null = null
+let visibility: ((active: boolean) => void) | null = null
+
+// 前台必须同时可见且拥有焦点，覆盖切换标签页以及切换桌面应用两种场景。
+function isForeground(): boolean { return document.visibilityState == 'visible' && document.hasFocus() }
+function transportChanged() { keepAlive?.(browserNotifications.enabled && browserNotifications.supported && browserNotifications.permission == 'granted' && browserNotifications.ready) }
+
+// 安全来源与 API 能力分别判断，iOS 普通标签页给出可理解的限制说明。
+function refreshCapability() {
+  browserNotifications.foreground = isForeground()
+  browserNotifications.supported = window.isSecureContext && 'Notification' in window && 'serviceWorker' in navigator && 'MessageChannel' in window
+  if (!window.isSecureContext) browserNotifications.error = '浏览器通知需要 HTTPS 或本机安全来源'
+  else if (!browserNotifications.supported) browserNotifications.error = /iPhone|iPad|iPod/.test(navigator.userAgent) || navigator.platform == 'MacIntel' && navigator.maxTouchPoints > 1 ? 'iPhone/iPad 普通标签页不支持，请添加至主屏幕；本版本优先支持电脑和 Android' : '当前浏览器不支持系统通知，请继续使用页面内提醒'
+  browserNotifications.permission = 'Notification' in window ? Notification.permission : 'default'
+  if (browserNotifications.permission != 'granted') browserNotifications.ready = false
+  visibility?.(browserNotifications.foreground)
+  transportChanged()
+}
+
+// 与已激活的注册实例通信，不等待控制当前页面的 serviceWorker.ready。
+function workerRequest(message: UTSJSONObject): Promise<UTSJSONObject> {
+  return new Promise<UTSJSONObject>((resolve, reject) => {
+    const worker = registration?.active
+    if (worker == null) { reject(new Error('浏览器通知尚未就绪')); return }
+    const channel = new MessageChannel()
+    const timer = setTimeout(() => { channel.port1.close(); reject(new Error('浏览器通知服务响应超时')) }, 8000)
+    channel.port1.onmessage = (event: MessageEvent) => {
+      clearTimeout(timer); channel.port1.close()
+      const response = event.data as UTSJSONObject
+      if (response['ok'] == true) resolve(response)
+      else reject(new Error('浏览器未能显示通知，请检查站点通知权限'))
+    }
+    try { worker.postMessage(message, [channel.port2]) }
+    catch (_) { clearTimeout(timer); channel.port1.close(); reject(new Error('无法联系浏览器通知服务')) }
+  })
+}
+
+// 静态目录中的 Worker 只负责通知，不控制页面、不缓存网络请求。
+function initializeWorker(): Promise<void> {
+  if (initialization != null) return initialization!
+  initialization = navigator.serviceWorker.register(new URL('static/browser-notifications-sw.js', document.baseURI).href, { updateViaCache: 'none' }).then((value: ServiceWorkerRegistration): Promise<void> => {
+    registration = value
+    return new Promise<void>((resolve, reject) => {
+      if (value.active?.state == 'activated') { resolve(); return }
+      const worker = value.installing ?? value.waiting ?? value.active
+      if (worker == null) { reject(new Error('通知服务未能安装')); return }
+      const timer = setTimeout(() => { worker.removeEventListener('statechange', changed); reject(new Error('通知服务激活超时')) }, 10000)
+      const changed = () => {
+        if (worker.state == 'activated') { clearTimeout(timer); worker.removeEventListener('statechange', changed); resolve() }
+        else if (worker.state == 'redundant') { clearTimeout(timer); worker.removeEventListener('statechange', changed); reject(new Error('通知服务安装失败')) }
+      }
+      worker.addEventListener('statechange', changed); changed()
+    })
+  }).then(() => {
+    if (browserNotifications.enabled && Notification.permission == 'granted') { browserNotifications.ready = true; browserNotifications.error = '' }
+    transportChanged()
+  }).catch((_: Error) => {
+    browserNotifications.ready = false; browserNotifications.error = '浏览器通知初始化失败，请重新开启后重试'; transportChanged()
+  }).finally(() => { initialization = null })
+  return initialization!
+}
+
+// 清理只针对本功能生成的标签，不注销其他 Worker，也不触及浏览器缓存。
+function closeTags(tags: string[]) {
+  if (tags.length == 0 || registration?.active == null) return
+  workerRequest({ type: 'codex-notice-close', tags }).catch((_: Error) => {})
+}
+function clearRecords() { const tags = Array.from(records.keys()); records.clear(); closeTags(tags) }
+
+// 点击映射留在页面内存；Worker 及通知持久化数据只保留不透明票据和来源窗口编号。
+export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, onKeepAlive: (allowed: boolean) => void, onVisibility: (active: boolean) => void) {
+  if (installed) return
+  installed = true; openNotice = onOpen; keepAlive = onKeepAlive; visibility = onVisibility
+  try { browserNotifications.enabled = uni.getStorageSync(preferenceKey) == true } catch (_) {}
+  const refreshed = () => {
+    refreshCapability()
+    if (browserNotifications.permission != 'granted') clearRecords()
+    if (browserNotifications.enabled && browserNotifications.supported && browserNotifications.permission == 'granted' && !browserNotifications.ready) initializeWorker()
+  }
+  document.addEventListener('visibilitychange', refreshed)
+  window.addEventListener('focus', refreshed); window.addEventListener('blur', refreshed)
+  window.addEventListener('storage', () => {
+    try {
+      const enabled = uni.getStorageSync(preferenceKey) == true
+      if (enabled != browserNotifications.enabled) { revision++; browserNotifications.enabled = enabled; if (!enabled) { browserNotifications.ready = false; clearRecords() } }
+    } catch (_) {}
+    refreshed()
+  })
+  if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
+    const data = event.data as UTSJSONObject
+    if (data == null || data['type'] != 'codex-notice-click' || event.origin != location.origin) return
+    const ticket = data['ticket'] as string
+    const record = records.get(ticket)
+    const valid = browserNotifications.enabled && Notification.permission == 'granted' && record != null && record.namespace == namespace && hosts.indexOf(JSON.stringify([record.notice.hostId, record.notice.generation])) >= 0
+    event.ports[0]?.postMessage({ handled: valid })
+    if (valid) { records.delete(ticket); openNotice?.(record!.notice) }
+  })
+  // 权限变化时立即撤销后台传输；不支持权限侦听的浏览器在焦点和每次投递时复核。
+  refreshed()
+  if (navigator.permissions != null && browserNotifications.supported) navigator.permissions.query({ name: 'notifications' }).then((status: PermissionStatus) => { status.addEventListener('change', refreshed) }).catch((_: Error) => {})
+}
+
+// 切换配对或实例时先废弃异步投递，再移除旧通知，避免迟到回调跨越授权边界。
+export function syncBrowserNotificationContext(currentNamespace: string, currentHosts: string[]) {
+  if (namespace != currentNamespace) { revision++; namespace = currentNamespace; clearRecords() }
+  hosts = currentHosts
+  const removed = [] as string[]
+  records.forEach((record: BrowserNoticeRecord, tag: string) => { if (hosts.indexOf(JSON.stringify([record.notice.hostId, record.notice.generation])) < 0) { records.delete(tag); removed.push(tag) } })
+  closeTags(removed)
+}
+
+// 权限申请直接发生在按钮点击链中；取消和拒绝不记录为开启。
+export async function enableBrowserNotifications() {
+  if (browserNotifications.busy) return
+  refreshCapability()
+  if (!browserNotifications.supported) return
+  if (Notification.permission == 'denied') { browserNotifications.error = '通知权限已被拒绝，请在浏览器的站点设置中允许通知'; return }
+  browserNotifications.busy = true
+  const expected = ++revision
+  try {
+    const permission = await Notification.requestPermission()
+    if (expected != revision) return
+    browserNotifications.permission = permission
+    if (permission != 'granted') { browserNotifications.error = permission == 'denied' ? '通知权限已被拒绝，请在浏览器的站点设置中允许通知' : '尚未授权，点击开启可再次申请通知权限'; return }
+    uni.setStorageSync(preferenceKey, true); browserNotifications.enabled = true
+    await initializeWorker()
+  } catch (_) { browserNotifications.error = '无法开启浏览器通知，请检查站点权限和本地存储' }
+  finally { browserNotifications.busy = false; transportChanged() }
+}
+
+export function disableBrowserNotifications() {
+  try { uni.setStorageSync(preferenceKey, false) } catch (_) { browserNotifications.error = '无法保存通知设置，请检查本地存储权限'; return }
+  revision++; browserNotifications.enabled = false; browserNotifications.ready = false; browserNotifications.error = ''; clearRecords(); transportChanged()
+}
+
+// SHA-256 标签包含配对命名空间和完整事件身份，不把身份或令牌直接写入通知持久化数据。
+async function eventTag(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return 'codex-mobile-task-' + Array.from(new Uint8Array(digest)).map((part: number): string => part.toString(16).padStart(2, '0')).join('')
+}
+
+export async function deliverBrowserTaskNotice(notice: TaskNotice) {
+  refreshCapability()
+  if (!browserNotifications.enabled || !browserNotifications.ready || browserNotifications.permission != 'granted' || browserNotifications.foreground || namespace.length == 0) return
+  const expected = revision, currentNamespace = namespace
+  const tag = await eventTag(JSON.stringify([currentNamespace, notice.key]))
+  if (expected != revision || isForeground() || !browserNotifications.ready || hosts.indexOf(JSON.stringify([notice.hostId, notice.generation])) < 0) return
+  records.set(tag, { notice, namespace: currentNamespace } as BrowserNoticeRecord)
+  if (records.size > 256) { const first = records.keys().next().value; if (first != null) records.delete(first) }
+  try { await workerRequest({ type: 'codex-notice-show', tag, title: taskNoticeTitle(notice.kind), body: notice.threadTitle, test: false }) }
+  catch (_) { browserNotifications.ready = false; browserNotifications.error = '系统通知未能显示，请检查权限或重新开启；页面内通知仍可使用'; transportChanged() }
+}
+
+// 测试只由显式点击触发，可以在前台显示，不伪造真实聊天或审批。
+export async function testBrowserNotification() {
+  refreshCapability()
+  if (!browserNotifications.enabled || !browserNotifications.ready || browserNotifications.permission != 'granted') throw new Error('请先开启浏览器通知并允许权限')
+  await workerRequest({ type: 'codex-notice-show', tag: 'codex-mobile-test-' + crypto.randomUUID(), title: '掌上 Codex 通知测试', body: '浏览器通知已就绪，切到后台后可接收任务提醒。', test: true })
+}
+
+export function browserNotificationLabel(): string {
+  if (!browserNotifications.supported) return '不支持'
+  if (browserNotifications.permission == 'denied') return '已拒绝'
+  if (browserNotifications.busy) return '正在开启'
+  if (!browserNotifications.enabled) return browserNotifications.permission == 'default' ? '未授权' : '已关闭'
+  return browserNotifications.ready ? '已开启' : '未就绪'
+}

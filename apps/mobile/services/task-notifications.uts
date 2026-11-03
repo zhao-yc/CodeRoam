@@ -6,6 +6,12 @@ import { TaskNotificationCenter, TaskNotice } from './task-notification-state.ut
 type NotificationView = { current: TaskNotice | null, phase: string, focus: TaskNotice | null, focusRevision: number, durationMs: number }
 export const taskNotifications = reactive<NotificationView>({ current: null, phase: 'idle', focus: null, focusRevision: 0, durationMs: 5000 })
 const center = new TaskNotificationCenter()
+let noticeDelivery: ((notice: TaskNotice) => void) | null = null
+
+// 系统通知消费新事件，不依赖页面卡片时长、排队和当前聊天抑制。
+export function bindTaskNoticeDelivery(deliver: (notice: TaskNotice) => void) { noticeDelivery = deliver }
+export function setTaskNoticeForeground(active: boolean) { center.setPresentationActive(active); publishNotice() }
+export function openTaskNoticeFromBrowser(notice: TaskNotice) { openTaskNotice(notice, center.visibleHostId, center.visibleThreadId) }
 let installed = false
 let displayTimer = 0
 let configuration = -1
@@ -78,7 +84,7 @@ export function startTaskNotifications() {
   watch((): string => JSON.stringify(threadList.computers.map((entry: ComputerThreads): UTSJSONObject => ({ hostId: entry.hostId, generation: entry.instanceGeneration ?? '', online: entry.online, subscribed: entry.subscribed == true, threads: entry.threads.map((thread: ThreadSummary): UTSJSONObject => ({ id: thread.id, title: thread.title, notificationState: thread.notificationState })) }))), () => {
     if (!connection.connected) return
     threadList.computers.forEach((entry: ComputerThreads) => {
-      if (entry.online && entry.subscribed == true) center.observe(entry.hostId, entry.instanceGeneration ?? '', entry.threads, Date.now())
+      if (entry.online && entry.subscribed == true) center.observe(entry.hostId, entry.instanceGeneration ?? '', entry.threads, Date.now()).forEach((notice: TaskNotice) => { noticeDelivery?.(notice) })
     })
     publishNotice()
   }, { immediate: true })

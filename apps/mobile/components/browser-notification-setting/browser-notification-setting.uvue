@@ -1,0 +1,31 @@
+<template>
+  <view class="browser-notice-setting">
+    <view class="notice-heading"><text class="notice-title">浏览器通知</text><text class="notice-state">{{ status }}</text></view>
+    <text class="notice-description">{{ browserNotifications.error.length > 0 ? browserNotifications.error : '切到其他标签页或应用后提醒。网页需保持运行，关闭或被系统挂起后可能无法送达。' }}</text>
+    <view class="notice-actions">
+      <button v-if="!browserNotifications.enabled" class="notice-button button-secondary" :disabled="browserNotifications.busy || !browserNotifications.supported" @click="enable">开启浏览器通知</button>
+      <button v-else class="notice-button button-secondary" :disabled="browserNotifications.busy" @click="disableBrowserNotifications">关闭浏览器通知</button>
+      <button v-if="browserNotifications.enabled && !browserNotifications.ready" class="notice-button button-secondary" :disabled="browserNotifications.busy" @click="enable">重新开启</button>
+      <button class="notice-button button-secondary" :disabled="!browserNotifications.ready || browserNotifications.busy" @click="test">发送测试通知</button>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed } from 'vue'
+import { browserNotifications, browserNotificationLabel, enableBrowserNotifications, disableBrowserNotifications, testBrowserNotification } from '../../services/browser-notifications.uts'
+const status = computed((): string => browserNotificationLabel())
+// 权限申请保持在真实点击的调用链中，不在页面加载时请求。
+function enable() { enableBrowserNotifications() }
+function test() { testBrowserNotification().then(() => { uni.showToast({ title: '已请求显示测试通知，请查看系统通知', icon: 'none' }) }, (error: Error) => { uni.showToast({ title: error.message, icon: 'none' }) }) }
+</script>
+
+<style>
+.browser-notice-setting { margin-top: 24px; }
+.notice-heading { flex-direction: row; align-items: center; justify-content: space-between; }
+.notice-title { color: #202c28; font-size: 16px; line-height: 24px; font-weight: bold; }
+.notice-state { color: #657269; font-size: 14px; line-height: 22px; }
+.notice-description { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 8px; }
+.notice-actions { flex-direction: row; flex-wrap: wrap; margin-top: 12px; gap: 8px; }
+.notice-button { margin: 0; padding: 0 12px; min-height: 38px; font-size: 13px; }
+</style>

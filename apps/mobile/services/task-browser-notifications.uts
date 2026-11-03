@@ -1,0 +1,33 @@
+import { watch } from 'vue'
+import { bridge, connection, Computer } from './bridge.uts'
+import { TaskNotice } from './task-notification-state.uts'
+import { bindTaskNoticeDelivery, setTaskNoticeForeground, openTaskNoticeFromBrowser } from './task-notifications.uts'
+import { startBrowserNotifications, deliverBrowserTaskNotice, syncBrowserNotificationContext } from './browser-notifications.uts'
+
+let pending: TaskNotice | null = null
+let pendingNamespace = ''
+
+// 点击后只恢复读取；连接恢复并核对授权及实例后，才沿用现有的显式导航入口。
+function openPendingNotice() {
+  const notice = pending
+  if (notice == null) return
+  if (pendingNamespace != connection.cacheNamespace) { pending = null; return }
+  if (!connection.connected) return
+  pending = null
+  const valid = connection.computers.some((computer: Computer): boolean => computer.id == notice.hostId && computer.online && (computer.instanceGeneration ?? '') == notice.generation)
+  if (!valid) { uni.showToast({ title: '电脑离线、授权或实例已变化，请从列表查看聊天', icon: 'none' }); return }
+  openTaskNoticeFromBrowser(notice)
+}
+
+// Web 集成独立于原生构建；设置、事件分发和传输生命周期只在这里连接。
+export function startTaskBrowserNotifications() {
+  startBrowserNotifications((notice: TaskNotice) => {
+    pending = notice; pendingNamespace = connection.cacheNamespace
+    bridge.resume(); openPendingNotice()
+  }, (allowed: boolean) => { bridge.setBackgroundNotifications(allowed) }, (active: boolean) => { setTaskNoticeForeground(active) })
+  bindTaskNoticeDelivery((notice: TaskNotice) => { deliverBrowserTaskNotice(notice).catch((_: Error) => {}) })
+  watch((): string => connection.cacheNamespace + ':' + connection.configured + ':' + connection.connected + ':' + JSON.stringify(connection.computers.map((computer: Computer): string => JSON.stringify([computer.id, computer.instanceGeneration ?? '']))), () => {
+    syncBrowserNotificationContext(connection.configured ? connection.cacheNamespace : '', connection.computers.map((computer: Computer): string => JSON.stringify([computer.id, computer.instanceGeneration ?? ''])))
+    openPendingNotice()
+  }, { immediate: true, flush: 'sync' })
+}
