@@ -44,6 +44,7 @@ const detailPane = ref<ChatDetailComponentPublicInstance | null>(null)
 let switchRevision = 0
 let alive = true
 let unbindNotices: (() => void) | null = null
+let handledInitialTarget = ''
 
 // 所有入口先检查离线缓存和目标归属，拒绝时保留原面板。
 function canOpen(target: WorkspaceTarget, online: boolean): boolean {
@@ -57,6 +58,7 @@ function canOpen(target: WorkspaceTarget, online: boolean): boolean {
 async function selectConversation(target: WorkspaceTarget, activate: boolean): Promise<boolean> {
   const online = connection.computers.some((computer): boolean => computer.id == target.hostId && computer.online)
   if (!canOpen(target, online)) return false
+  handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   if (mode.value == 'conversation' && detailMounted.value && selectedKey.value == workspaceTargetKey(target)) return true
   const revision = ++switchRevision
   newReady.value = false; mode.value = 'list'; detailMounted.value = false
@@ -77,6 +79,7 @@ function openThread(thread: ComputerThread) {
   const target = workspaceTarget(thread.hostId, thread.id, thread.title, project, connection.cacheNamespace)
   if (!canOpen(target, thread.online)) return
   if (wide.value) { selectConversation(target, true); return }
+  handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   try {
     bridge.selectComputer(thread.hostId)
     if (connection.connected && thread.online) bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
@@ -93,6 +96,7 @@ function closeConversation() {
 // 新建时保留旧详情节点和阅读位置，但暂停订阅，不能让旧页面自动切回电脑。
 async function openNewConversation(hostId: string = '') {
   if (creating.value || mode.value == 'new') return
+  handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   const revision = ++switchRevision
   newReady.value = false; mode.value = 'new'; uni.hideKeyboard()
   await nextTick()
@@ -134,7 +138,18 @@ function handleBack(): boolean {
   return listPane.value?.handleBack() ?? false
 }
 defineExpose({ handleBack })
-watch((): WorkspaceTarget | null => props.initialTarget, (target: WorkspaceTarget | null) => { if (target != null && selected.value == null) selectConversation(target, false) }, { immediate: true })
+// 刷新直达聊天时，握手回包填充授权列表后再校验；已有授权记录时仍支持离线缓存。
+watch((): string => JSON.stringify([workspaceTargetKey(props.initialTarget ?? null), props.active, connection.connected, connection.cacheNamespace]), () => {
+  const target = props.initialTarget ?? null
+  if (target == null) { handledInitialTarget = ''; return }
+  const key = workspaceTargetKey(target)
+  if (key == handledInitialTarget) return
+  if (target.cacheNamespace != connection.cacheNamespace) { handledInitialTarget = key; return }
+  if (!props.active || mode.value != 'list' || selected.value != null) return
+  if (!connection.connected && !connection.computers.some((computer): boolean => computer.id == target.hostId)) return
+  handledInitialTarget = key
+  selectConversation(target, false)
+}, { immediate: true })
 watch((): string => props.active + ':' + wide.value, () => { syncNoticeNavigation() })
 watch((): string => connection.cacheNamespace + ':' + connection.computers.map((computer): string => computer.id).join('|'), () => {
   if (selected.value != null && (selected.value!.cacheNamespace != connection.cacheNamespace || (connection.connected && !connection.computers.some((computer): boolean => computer.id == selected.value!.hostId)))) { switchRevision++; selected.value = null; detailMounted.value = false; mode.value = 'list' }

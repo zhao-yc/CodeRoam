@@ -37,3 +37,44 @@ test('宽屏通知使用同一工作区，关闭优先处理浮层；窄屏独�
   const narrow=workspaceFixture({props:{windowWidth:390,detailRoute:true}});await narrow.selectConversation(narrow.target(),false);narrow.closeConversation();assert.ok(narrow.calls.some(row=>row[0]==='back'));
   narrow.onConversationRemoved('archive');assert.equal(narrow.calls.some(row=>row[0]==='archive-notice'),false);
 });
+
+// 模拟刷新后直达详情，首个握手回包到达前客户端还没有授权列表。
+function refreshedRoute() {
+  const initialTarget={hostId:'host',threadId:'route-thread',title:'合成聊天',projectName:'项目',cacheNamespace:'pair'};
+  const f=workspaceFixture({props:{initialTarget},connection:{connected:false,computers:[]}});
+  const readings=f.watchers.map(watcher=>watcher.read());
+  const update=async values=>{
+    Object.assign(f.connection,values);
+    f.watchers.forEach((watcher,index)=>{
+      const value=watcher.read();
+      if(value!==readings[index]) { const previous=readings[index];readings[index]=value;watcher.callback(value,previous); }
+    });
+    await f.flush();
+  };
+  return {f,update};
+}
+
+test('刷新直达聊天等待握手，目标在授权列表时自动打开一次',async()=>{
+  const {f,update}=refreshedRoute();
+  assert.deepEqual(f.calls,[]);
+  const computers=[{id:'host',online:true}];
+  await update({connected:true,computers});
+  assert.equal(f.selected.value?.threadId,'route-thread');
+  assert.deepEqual(f.calls.filter(([kind])=>kind==='toast'||kind==='select'),[['select','host']]);
+  f.closeConversation();
+  await update({connected:false});await update({connected:true,computers});
+  assert.equal(f.selected.value,null);
+});
+
+test('握手确认电脑不在授权列表后才拒绝打开，等待期间换配对则丢弃旧路由',async()=>{
+  const {f,update}=refreshedRoute();
+  await update({connected:true,computers:[{id:'other',online:true}]});
+  assert.deepEqual(f.calls,[['toast','这台电脑不在当前授权范围内']]);
+  assert.equal(f.selected.value,null);
+
+  const changed=refreshedRoute();
+  await changed.update({cacheNamespace:'new-pair'});
+  await changed.update({connected:true,computers:[{id:'host',online:true}]});
+  assert.deepEqual(changed.f.calls,[]);
+  assert.equal(changed.f.selected.value,null);
+});
