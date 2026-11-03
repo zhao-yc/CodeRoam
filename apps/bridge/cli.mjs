@@ -12,6 +12,7 @@ import { DesktopDeleteController } from './desktop-delete.mjs';
 import { BridgeAgent } from './agent.mjs';
 import { IpcClient, defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
 import { InstanceHub } from './instance-hub.mjs';
+import { WindowsIpcHost } from './windows-ipc-host.mjs';
 import { createRequestDiagnostics } from '../../packages/protocol/request-diagnostics.mjs';
 
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
@@ -23,7 +24,10 @@ try {
   const diagnostics=createRequestDiagnostics({component:'bridge'});
   const dataPath=path.resolve(config.dataPath??'.local/bridge');fs.mkdirSync(dataPath,{recursive:true});
   if(['win32','darwin'].includes(process.platform) && config.multiInstance!==false) {
-    const hub=new InstanceHub({config,dataPath,diagnostics});
+    const defaultSocket=defaultIpcSocketPath();
+    const ipcHost=process.platform==='win32'&&(config.ipcSocketPath??defaultSocket)===defaultSocket
+      ? new WindowsIpcHost({onState:state=>console.log(state==='ready'?'本机多实例管道已就绪':'等待现有桌面释放本机管道')}) : null;
+    const hub=new InstanceHub({config,dataPath,diagnostics,ipcHost});
     const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
     hub.on('disconnected',detail=>{status(false);console.log(`中转连接已断开（代码 ${detail.code}）`);});

@@ -106,9 +106,9 @@ function fixture({ component = false, storage = new Map() } = {}) {
     FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', computerIcon: () => 'laptop', bindImagePaste: () => () => {},
   });
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
-  if (component) source += '\n' + read('apps/mobile/services/direct-new-conversation.uts') + '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
+  if (component) source += '\n' + read('apps/mobile/services/thread-mentions.uts') + '\n' + read('apps/mobile/services/direct-new-conversation.uts') + '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
-  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,openCompletedConversation,send,projectId,draft,native,direct,settings,canSend,focused,error,newConversationMode' : '') + '};', context);
+  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,openCompletedConversation,send,projectId,draft,native,direct,settings,canSend,focused,error,newConversationMode,mentionsAvailable,mentionOpen,updateText,selectThreadMentions' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
   return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
@@ -566,6 +566,32 @@ test('直连声明缺少实例代际时保留输入并拒绝创建', async () =>
   assert.equal(f.canSend.value, false);
   await f.send();
   assert.equal(f.draft.value.text, '合成首条消息');
+  assert.equal(f.calls.some(call => call.write), false);
+});
+
+test('直连引用需要明确能力，撤回能力时保留已选引用并锁住发送', async () => {
+  const f = await directComponentFixture();
+  let supportsNewChatMentions = false;
+  f.hooks.set('projects.list', () => ({
+    newConversationMode: 'desktopIpc', supportsNewChatMentions,
+    projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a',
+  }));
+  const type = () => f.updateText({ detail: { value: '合成 @查询', cursor: 6 } });
+  type();
+  assert.equal(f.mentionOpen.value, false);
+  supportsNewChatMentions = true;
+  await f.loadProjects(); await tick();
+  type();
+  assert.equal(f.mentionOpen.value, true);
+  f.selectThreadMentions([{ id: 'synthetic-reference', title: '示例聊天' }]);
+  assert.equal(f.draft.value.threadMentions[0].id, 'synthetic-reference');
+  assert.equal(f.canSend.value, true);
+  supportsNewChatMentions = false;
+  await f.loadProjects(); await tick();
+  assert.equal(f.mentionsAvailable.value, false);
+  assert.equal(f.canSend.value, false);
+  assert.equal(f.draft.value.threadMentions.length, 1);
+  await f.send();
   assert.equal(f.calls.some(call => call.write), false);
 });
 

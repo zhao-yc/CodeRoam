@@ -92,7 +92,14 @@ export async function bindInstanceClients(client, instance, { pages = instancePa
 /** 任何会话发现、请求和广播都限制在当前运行代次绑定的客户端集合内。 */
 export class InstanceIpcClient extends IpcClient {
   constructor({ instance, ...options }) { super(options); this.instance = instance; this.allowedClients = new Set(); }
-  assertCurrent() { if (!this.instance.alive || !this.instance.ready || (!this.instance.directIpc && !this.allowedClients.size)) throw new BridgeError('INSTANCE_NOT_READY', '所选实例连接尚未就绪，请稍后核对原操作', this.instance.wasReady === true); }
+  /** 管道身份来自内核。连接断开后，旧编号立即从后续路由中移除。 */
+  refreshRouterClients() {
+    if (this.instance.routerManaged) this.allowedClients = this.instance.routerOwnsConnection(this.clientId) ? this.instance.routerClientIds() : new Set();
+  }
+  assertCurrent() {
+    this.refreshRouterClients();
+    if (!this.instance.alive || !this.instance.ready || (!this.instance.directIpc && !this.allowedClients.size)) throw new BridgeError('INSTANCE_NOT_READY', '所选实例连接尚未就绪，请稍后核对原操作', this.instance.wasReady === true);
+  }
   async findOwner(threadId, hostId = 'local', timeoutMs = this.timeoutMs) {
     this.assertCurrent();
     if (this.instance.directIpc) {
@@ -140,6 +147,8 @@ export class InstanceIpcClient extends IpcClient {
   }
   broadcast(method, params, version, targets) { this.assertCurrent(); if (!targets?.length || targets.some(id => !this.allowedClients.has(id))) throw new BridgeError('INSTANCE_CHANGED', '聊天所属实例已变化，已停止操作'); return super.broadcast(method, params, version, targets); }
   handleMessage(message) {
+    this.refreshRouterClients();
+    if (this.instance.routerManaged && !this.allowedClients.size) this.instance.ready = false;
     if (message.type === 'broadcast' && message.method === 'client-status-changed' && message.params?.status === 'disconnected' && this.allowedClients.delete(message.params.clientId) && !this.allowedClients.size) this.instance.ready = false;
     if (message.type === 'broadcast' && message.method !== 'thread-stream-following-status-requested' && !this.allowedClients.has(message.sourceClientId)) return;
     super.handleMessage(message);

@@ -19,6 +19,7 @@ import { readGoal, updateGoal } from './goals.mjs';
 import { readThreadPlugins, selectThreadPlugins, pluginPrompt } from './plugins.mjs';
 import { threadMentionPrompt } from './thread-mentions.mjs';
 import { CACHE_WATCHER, CACHE_THREAD_LIMIT } from './thread-cache.mjs';
+import { usesWindowsIpcWithoutPage } from './windows-ipc-mode.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
@@ -255,7 +256,7 @@ export class DesktopAdapter extends EventEmitter {
   async refreshReadState(ids){try{await this.native?.refresh(ids);}catch{}}
 
   /** 文件汇总能力由已核验的本机原生算法或页面通道决定。 */
-  get supportsFileReports() { return this.nativeFileReportAvailable?.()??(process.platform==='win32'&&!this.client.instance?.directIpc); }
+  get supportsFileReports() { return this.nativeFileReportAvailable?.()??(process.platform==='win32'&&!usesWindowsIpcWithoutPage(this.client.instance)); }
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
     const snapshot={...normalizeConversation(state,options),supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
@@ -306,7 +307,7 @@ export class DesktopAdapter extends EventEmitter {
   /** 发送首条消息前以当前绑定和最新快照核对空会话，并返回本次明确使用的权限。 */
   firstMessageContext(threadId,deviceId,guard,expected=null) {
     const instance=this.client.instance;
-    if(instance?.directIpc!==true||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通单实例连接已变化，请重新连接');
+    if(!usesWindowsIpcWithoutPage(instance)||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通桌面连接已变化，请重新连接');
     const entry=this.subscribed(threadId,deviceId), owner=entry.owner;
     const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd;
     if(expected&&(expected.instance!==instance||expected.generation!==instance.generation||expected.entry!==entry||expected.ownerId!==owner.clientId||expected.hostId!==owner.hostId||expected.cwd!==cwd)){
@@ -349,7 +350,7 @@ export class DesktopAdapter extends EventEmitter {
     const selection=['turn.send','turn.steer'].includes(method)&&params.pluginIds?.length?await this.selectPlugins(params.threadId,deviceId,params.pluginIds):null;
     selection?.check();
     const plugins=selection?.plugins??[];
-    const mentions=['turn.send','turn.steer'].includes(method)&&params.threadMentionIds?.length?await this.threadMentions?.select(params.threadMentionIds,params.threadId,deviceId):null;
+    const mentions=['turn.send','turn.steer'].includes(method)&&params.threadMentionIds?.length?await this.threadMentions?.select(params.threadMentionIds,params.threadId,deviceId,{savedContext:firstMessage!==null}):null;
     if(params.threadMentionIds?.length&&!mentions)throw new BridgeError('THREAD_MENTIONS_UNAVAILABLE','请更新电脑连接服务后引用聊天');
     selection?.check(); mentions?.check();
     const entry=this.conversations.get(params.threadId), snapshot=normalizeConversation(entry.state), base={conversationId:params.threadId};
@@ -359,7 +360,7 @@ export class DesktopAdapter extends EventEmitter {
     const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd??'/';
     const prompt=threadMentionPrompt(pluginPrompt(text,plugins),mentions);
     const restoreMessage={id:commandId,text:prompt,cwd,createdAt:Date.now(),context:{prompt,addedFiles:[],fileAttachments:[],ideContext:null,imageAttachments:[],workspaceRoots:[cwd]}};
-    if(mentions?.references.length)restoreMessage.context.threadReferences=mentions.references;
+    if(mentions?.references.length&&mentions.mode!=='savedContext')restoreMessage.context.threadReferences=mentions.references;
     let input;
     if(method==='turn.send'||method==='turn.steer') {
       const images=validateImages(params.images);
@@ -420,6 +421,7 @@ export class DesktopAdapter extends EventEmitter {
       // 初始快照强制刷新，插件解析和附件落盘后再次核对当前订阅收到的最新状态。
       const current=this.firstMessageContext(params.threadId,deviceId,firstMessageGuard,firstMessage);
       Object.assign(payload.turnStart.request,current.permissions);
+      if(mentions?.additionalContext) payload.turnStart.request.additionalContext=mentions.additionalContext;
     }
     selection?.check(); mentions?.check();
     const response=await this.client.request(ipcMethod,payload,version,{targetClientId:entry.owner.clientId,timeoutMs:15000});

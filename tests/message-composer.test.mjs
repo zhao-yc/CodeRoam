@@ -86,9 +86,9 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
   const pending = [], events = [], ref = value => ({value});
   const c = {props: {expanded: true}, projectReady: ref(true), existingDraft: ref(null),
     connection: {configurationRevision: 1}, newConversationMode: ref('nativeDraft'), outcomeUnknown: ref(false),
-    hasCompletedConversation: ref(false), direct: ref({threadId: ''}),
+    hasCompletedConversation: ref(false), direct: ref({threadId: ''}), mentionsAvailable: ref(true),
     busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), settingsLoading: ref(false),
-    draft: ref({text: '保留的合成草稿', images: [], files: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
+    draft: ref({text: '保留的合成草稿', images: [], files: [], threadMentions: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
     computed: read => ({get value() { return read(); }}), closeMenus() {}, uni: {hideKeyboard() {}},
     emit: (...event) => events.push(event), sendNewConversation: () => new Promise((resolve, reject) => pending.push({resolve, reject}))};
   c.operationBusy = c.busy;

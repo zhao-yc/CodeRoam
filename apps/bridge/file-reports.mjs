@@ -7,6 +7,7 @@ import {ComposerPredictionReader} from './composer-prediction.mjs';
 import {fileReportExpression} from './file-report-expression.mjs';
 import {fileReportSource} from './file-report-source.mjs';
 import {NativeFileReportRuntime} from './native-report-runtime.mjs';
+import {usesWindowsIpcWithoutPage} from './windows-ipc-mode.mjs';
 
 /** 从已核验的原桌面安装包定位现成模块，只读取索引，不执行或复制安装包源码。 */
 export function desktopDiffModules(executable) {
@@ -46,13 +47,13 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
   /** 普通启动复用官方离线计算能力；其它启动模式继续保留原有页面接口。 */
   supports(adapter) {
     if(this.closed)return false;
-    return this.nativeRuntime.supports(this.nativeExecutable(adapter))||process.platform==='win32'&&!adapter.client?.instance?.directIpc;
+    return this.nativeRuntime.supports(this.nativeExecutable(adapter))||process.platform==='win32'&&!usesWindowsIpcWithoutPage(adapter.client?.instance);
   }
   /** 优先在隔离线程执行同版本原生算法，兼容既有页面调用，不修改桌面会话。 */
   async nativeReport(adapter,source) {
     const executable=this.nativeExecutable(adapter);
     if(this.nativeRuntime.supports(executable))return this.nativeRuntime.calculate(executable,source.batches);
-    if(adapter.client?.instance?.directIpc)throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
+    if(usesWindowsIpcWithoutPage(adapter.client?.instance))throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
     if(!adapter.native?.processId)await adapter.native?.connect();
     const ports=(await this.endpoints()).filter(port=>port.pid===adapter.native?.processId);
     if(ports.length!==1)throw new BridgeError('REPORT_UNAVAILABLE','电脑原生文件汇总暂不可用，请确认桌面端正在运行');
@@ -75,7 +76,7 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
     if(!source&&adapter.index?.readHistory){const saved=await adapter.index.readHistory(threadId,{reportId,rawTurns:true});source=fileReportSource(saved,reportId);}
     if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的文件查看已取消');
     // 安装包原地升级后也要重新确认能力，不能从旧报告缓存绕过版本核验。
-    if(instance?.directIpc&&!this.supports(adapter))throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
+    if(usesWindowsIpcWithoutPage(instance)&&!this.supports(adapter))throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
     if(!source)throw new BridgeError('REPORT_NOT_FOUND','这份报告的修改记录暂不可用');
     if(!source.batches.length)return {report:null};
     const revision=createHash('sha256').update(JSON.stringify(source.batches)).digest('hex'),key=JSON.stringify([ownerId,threadId,reportId,revision]);

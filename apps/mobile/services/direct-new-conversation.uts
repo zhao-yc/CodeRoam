@@ -7,9 +7,10 @@ import { FILE_CHUNK_BYTES, readFileBase64 } from './files.uts'
 import type { NewDraft, NewDraftChoices, NewProject } from './new-conversation.uts'
 import type { PermissionState } from './permissions.uts'
 import type { SelectedPlugin } from './plugins.uts'
+import { copyThreadMentions, SelectedThreadMention } from './thread-mentions.uts'
 
 type DirectCheckpoint = { threadId: string, pendingAction: string, pendingCommandId: string, completedThreadId: string }
-type DirectSubmission = { text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], choices: NewDraftChoices }
+type DirectSubmission = { text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], choices: NewDraftChoices, threadMentionIds: string[], threadMentionRevision: number }
 type DirectTarget = { hostId: string, cacheNamespace: string, configurationRevision: number, generation: string }
 export type DirectNewConversationState = { key: string, threadId: string, pendingAction: string, pendingCommandId: string, completedThreadId: string, busy: boolean, outcomeUnknown: boolean, error: string }
 
@@ -90,11 +91,12 @@ function directPath(value: string): string {
 }
 
 // 重试或核对时重新读取所选项目，禁止把旧会话绑定到已切换目录的同名项目。
-async function directProject(draft: NewDraft, target: DirectTarget): Promise<NewProject> {
+async function directProject(draft: NewDraft, target: DirectTarget, requireThreadMentions: boolean = false): Promise<NewProject> {
   assertDirectTarget(target)
   const result = await bridge.request('projects.list', {})
   assertDirectTarget(target)
   if (result.getString('newConversationMode') != 'desktopIpc') throw new Error('所选电脑的普通连接模式已变化，请重新读取项目')
+  if (requireThreadMentions && result.getBoolean('supportsNewChatMentions') != true) throw new Error('当前电脑连接方式暂不支持随新聊天发送聊天引用，输入和引用已保留')
   const projects = JSON.parse<NewProject[]>(JSON.stringify(result['projects'])) ?? [] as NewProject[]
   const project = projects.find((item: NewProject): boolean => item.id == draft.projectId)
   if (project == null || project.cwd.length == 0) throw new Error('原项目已变化，请重新选择电脑项目')
@@ -108,6 +110,11 @@ function consumeDirectSubmission(draft: NewDraft, state: DirectNewConversationSt
   draft.images = draft.images.filter((image: DraftImage): boolean => !sent.images.some((item: DraftImage): boolean => item.id == image.id))
   draft.files = draft.files.filter((file: DraftFile): boolean => !sent.files.some((item: DraftFile): boolean => item.id == file.id))
   draft.plugins = draft.plugins.filter((plugin: SelectedPlugin): boolean => !sent.plugins.some((item: SelectedPlugin): boolean => item.id == plugin.id))
+  // 核对成功只消费提交时的引用，迟到回执不能清除重新选择的同一标签。
+  if (sent.threadMentionIds.length > 0 && draft.threadMentionRevision == sent.threadMentionRevision) {
+    draft.threadMentions = draft.threadMentions.filter((mention: SelectedThreadMention): boolean => !sent.threadMentionIds.includes(mention.id))
+    draft.threadMentionRevision++
+  }
   if (JSON.stringify(draft.choices) == JSON.stringify(sent.choices)) draft.choices = {} as NewDraftChoices
   directSubmissions.delete(state.key)
 }
@@ -265,14 +272,18 @@ export async function sendDirectNewConversation(draft: NewDraft, progress: (mess
   if (state.completedThreadId.length > 0) { consumeDirectSubmission(draft, state); return state.completedThreadId }
   if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
   if (draft.projectId.length == 0) throw new Error('请先选择项目')
-  if (draft.threadMentions.length > 0) throw new Error('普通启动暂不支持随新聊天发送聊天引用，请移除引用后重试；输入和引用已保留')
-  const submission: DirectSubmission = { text: draft.text.trim(), images: draft.images.slice(), files: draft.files.slice(), plugins: draft.plugins.slice(), choices: { ...draft.choices } as NewDraftChoices }
+  const submission: DirectSubmission = {
+    text: draft.text.trim(), images: draft.images.slice(), files: draft.files.slice(), plugins: draft.plugins.slice(),
+    choices: { ...draft.choices } as NewDraftChoices,
+    threadMentionIds: copyThreadMentions(draft.threadMentions).map((mention: SelectedThreadMention): string => mention.id),
+    threadMentionRevision: draft.threadMentionRevision
+  }
   if (submission.text.length == 0 && submission.images.length == 0 && submission.files.length == 0) throw new Error('请先输入内容或添加附件')
   if (submission.images.length + submission.files.length > 3) throw new Error('每次最多添加3个附件')
   if (submission.choices.permissionMode == 'full-access' && submission.choices.confirmedFullAccess != true) throw new Error('请先确认电脑完整访问权限')
   state.busy = true; state.error = ''
   try {
-    const project = await directProject(draft, target)
+    const project = await directProject(draft, target, submission.threadMentionIds.length > 0)
     if (state.threadId.length == 0) {
       progress('正在创建聊天…')
       const title = submission.text.split('\n')[0].slice(0, 60)
@@ -298,6 +309,7 @@ export async function sendDirectNewConversation(draft: NewDraft, progress: (mess
     assertDirectThread(target, state, project)
     const params: UTSJSONObject = { threadId, text: submission.text, images: submission.images.map((image: DraftImage): string => image.src), attachments: submission.files.map((file: DraftFile): string => file.id) }
     if (submission.plugins.length > 0) params['pluginIds'] = submission.plugins.map((plugin: SelectedPlugin): string => plugin.id)
+    if (submission.threadMentionIds.length > 0) params['threadMentionIds'] = submission.threadMentionIds
     progress('正在发送…')
     directSubmissions.set(state.key, submission)
     // 将最后一次权限核对与首条发送绑定，由电脑再次校验；正文协议保持原样。

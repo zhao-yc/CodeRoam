@@ -9,6 +9,7 @@ import { InstanceHub } from '../apps/bridge/instance-hub.mjs';
 import { InstanceRuntime } from '../apps/bridge/instance-runtime.mjs';
 import { NativeDraftController } from '../apps/bridge/native-draft-controller.mjs';
 import { ThreadMentionDesktop } from '../apps/bridge/thread-mention-desktop.mjs';
+import { InstanceIpcClient } from '../apps/bridge/instance-binding.mjs';
 
 test('中转拒绝连接时保留关闭码，错误原因及私有配置不进入状态事件', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-close-code-'));
@@ -101,6 +102,44 @@ test('普通启动时永久删除在进入操作队列前被拒绝，带端口�
   instance.directIpc = false;
   await request('thread.delete');
   assert.deepEqual(handled, ['threads.list', 'thread.delete']);
+});
+
+test('两个无端口实例仅接受本路由验证的连接，旧进程身份撤销不影响另一个实例', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-router-'));
+  const rows = [{ pid: 101, startedAt: 1, nativePipe: 'pipe-one', codexHome: root }, { pid: 102, startedAt: 2, nativePipe: 'pipe-two', codexHome: path.join(root, 'second') }];
+  const peers = new Map([['101:1', 'first'], ['102:2', 'second']]);
+  const ipcHost = {
+    ready: true,
+    clientIds: row => new Set([peers.get(`${row.pid}:${row.startedAt}`)].filter(Boolean)),
+    ownsConnection: id => id === 'bridge',
+    close() {},
+  };
+  const hub = new InstanceHub({
+    config: { hostId: 'computer', codexHome: root }, dataPath: root, ipcHost,
+    discover: async () => rows.map(row => ({ ...row })),
+    bindOwners: async () => assert.fail('内核身份绑定不能退回全局归属推测'),
+    createRuntime: ({ instance }) => ({
+      instance, agent: new EventEmitter(),
+      async ready() { instance.ready = instance.routerClientIds().size > 0; },
+      async close() { instance.ready = instance.alive = false; },
+    }),
+  });
+  t.after(async () => { await hub.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  await hub.refresh();
+  const [first, second] = [...hub.runtimes.values()].map(runtime => runtime.instance);
+  assert.equal(hub.manifest().every(row => row.online), true);
+  assert.equal(first.directIpc, false);
+  const client = new InstanceIpcClient({ instance: first });
+  client.clientId = 'outside';
+  assert.throws(() => client.assertCurrent(), { code: 'INSTANCE_NOT_READY' });
+  client.clientId = 'bridge';
+  client.assertCurrent();
+  assert.deepEqual([...client.allowedClients], ['first']);
+  assert.throws(() => client.broadcast('test', {}, 0, ['second']), { code: 'INSTANCE_CHANGED' });
+  peers.delete('101:1');
+  await assert.rejects(first.verify(), { code: 'INSTANCE_NOT_READY' });
+  await second.verify();
+  assert.equal(second.ready, true);
 });
 
 test('单实例只读请求和不可用的原生页面能力不扫描进程，写入仍复核', async () => {

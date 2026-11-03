@@ -18,6 +18,7 @@ import { withDesktopUi } from './desktop-ui-coordinator.mjs';
 import { NewThreadService } from './new-thread-service.mjs';
 import { NativeDraftController } from './native-draft-controller.mjs';
 import { ThreadCreationClient, instanceCodexPath } from './thread-creation.mjs';
+import { usesWindowsIpcWithoutPage } from './windows-ipc-mode.mjs';
 
 /** 固定到本次已核验进程和随机管道；管道丢失后不能选择另一个桌面代替。 */
 class InstanceNativeDesktop extends NativeDesktop {
@@ -77,12 +78,22 @@ export class InstanceRuntime {
   /** Windows 单实例复用系统核验的独占 IPC，多实例继续核对页面来源。 */
   async ready() {
     if (this.closed || !this.instance.alive) return false;
+    this.client.refreshRouterClients?.();
     if (this.instance.ready && (this.isMac || this.instance.directIpc || this.client.allowedClients.size)) return true;
     if (!this.bindings) this.bindings = (async () => {
       if (this.isMac) await this.instance.verify();
       try { await this.client.connect(); }
       catch (error) { this.client.close(); throw error; }
-      const ids = this.isMac || this.instance.directIpc ? new Set() : await this.bind(this.client, this.instance);
+      let ids;
+      if (this.isMac || this.instance.directIpc) ids = new Set();
+      else if (this.instance.routerManaged) {
+        this.client.refreshRouterClients();
+        ids = this.client.allowedClients;
+        if (!ids.size) {
+          this.client.close();
+          throw new BridgeError('INSTANCE_NOT_READY', '正在等待所选桌面连接本机管道');
+        }
+      } else ids = await this.bind(this.client, this.instance);
       if (this.closed || !this.instance.alive) return false;
       this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
       this.agent.threadCache.start();
@@ -96,7 +107,7 @@ export class InstanceRuntime {
       throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
     }
     // 永久删除依赖页面确认，普通启动时在停止任务等删除前置步骤之前拒绝。
-    if (this.instance.directIpc && message.method === 'thread.delete') {
+    if (usesWindowsIpcWithoutPage(this.instance) && message.method === 'thread.delete') {
       throw new BridgeError('DELETE_UNSUPPORTED', '普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
     }
     // 读取复用已绑定的实例和运行代次；IPC 接纳新所有者、定向写入和原生导航仍会单独复核。

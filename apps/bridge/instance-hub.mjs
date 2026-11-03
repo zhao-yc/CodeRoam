@@ -16,12 +16,13 @@ const windowsIpc = defaultIpcSocketPath({ platform: 'win32' });
 
 /** 一条电脑鉴权连接承载多个实例，每个实例维护独立账本、订阅及运行代次。 */
 export class InstanceHub extends EventEmitter {
-  constructor({ config, dataPath, discover = discoverInstances, createRuntime = options => new InstanceRuntime(options), bindOwners = bindBackendOwners, intervalMs = 10000, diagnostics = null }) {
+  constructor({ config, dataPath, discover = discoverInstances, createRuntime = options => new InstanceRuntime(options), bindOwners = bindBackendOwners, intervalMs = 10000, diagnostics = null, ipcHost = null }) {
     super(); this.config = config; this.dataPath = dataPath; this.discover = discover; this.createRuntime = createRuntime; this.intervalMs = intervalMs;
     this.registry = new InstanceRegistry({ file: path.join(dataPath, 'instances.json'), hostId: config.hostId, defaultHome: config.codexHome ?? path.join(os.homedir(), '.codex'), label: computerName(config.label), backupDirectory: config.instanceBackupDirectory });
     this.runtimes = new Map(); this.stopped = false; this.socket = null; this.scan = null; this.supported = false; this.retries = 0;
     this.bindOwners=bindOwners;
     this.diagnostics = diagnostics;
+    this.ipcHost = ipcHost;
     this.on('warning', warning => diagnostics?.record('connection.warning', null, { errorCode: warning.code }));
   }
   /** 仅发布匿名编号和显示名称，目录、PID、端口都不进入中转设备资料。 */
@@ -35,6 +36,7 @@ export class InstanceHub extends EventEmitter {
   start() {
     const url = new URL(this.config.relayUrl);
     if (url.username || url.password || url.search || url.hash || url.protocol !== 'wss:' && !(url.protocol === 'ws:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) throw new Error('中转连接配置无效');
+    this.ipcHost?.start().catch(() => this.ipcHost.close());
     this.connect();
   }
   connect() {
@@ -81,14 +83,19 @@ export class InstanceHub extends EventEmitter {
       rows.sort((a, b) => Number(!!a.userData) - Number(!!b.userData) || a.startedAt - b.startedAt);
       for (const row of rows) {
         const identity = this.registry.identify(row);
-        const directIpc = rows.length === 1 && row.soleIpc === true && !row.port && (this.config.ipcSocketPath ?? windowsIpc) === windowsIpc;
+        const routerManaged = row.platform !== 'darwin' && this.ipcHost?.ready === true;
+        const directIpc = !routerManaged && rows.length === 1 && row.soleIpc === true && !row.port && (this.config.ipcSocketPath ?? windowsIpc) === windowsIpc;
         // 同一用户数据目录意外对应多个活动进程时拒绝混用，而不是覆盖正在工作的实例。
         if (seen.has(identity.id)) { const duplicate = this.runtimes.get(identity.id); if (duplicate) duplicate.instance.ready = false; continue; }
         seen.add(identity.id);
         let runtime = this.runtimes.get(identity.id);
-        if (runtime && (runtime.instance.pid !== row.pid || runtime.instance.startedAt !== row.startedAt || runtime.instance.nativePipe !== row.nativePipe || runtime.instance.port !== row.port || runtime.instance.directIpc !== directIpc)) { await runtime.close(); this.runtimes.delete(identity.id); runtime = null; }
+        if (runtime && (runtime.instance.pid !== row.pid || runtime.instance.startedAt !== row.startedAt || runtime.instance.nativePipe !== row.nativePipe || runtime.instance.port !== row.port || runtime.instance.directIpc !== directIpc || runtime.instance.routerManaged !== routerManaged)) { await runtime.close(); this.runtimes.delete(identity.id); runtime = null; }
         if (!runtime) {
-          const instance = { ...row, directIpc, id: identity.id, label: identity.label, generation: randomUUID(), alive: true, ready: false, refreshOwners: () => this.refreshOwners() };
+          const instance = { ...row, directIpc, routerManaged, id: identity.id, label: identity.label, generation: randomUUID(), alive: true, ready: false, refreshOwners: () => this.refreshOwners() };
+          if (routerManaged) {
+            instance.routerClientIds = () => this.ipcHost.clientIds(instance);
+            instance.routerOwnsConnection = clientId => this.ipcHost.ownsConnection(clientId);
+          }
           instance.verify = () => instance.platform === 'darwin' ? this.verifyMacInstance(instance) : this.verifyWindowsInstance(instance);
           const directory = identity.id === this.config.hostId ? this.dataPath : path.join(this.dataPath, 'instances', identity.id.slice(this.config.hostId.length + 1));
           fs.mkdirSync(directory, { recursive: true });
@@ -126,6 +133,7 @@ export class InstanceHub extends EventEmitter {
         const [row] = rows;
         if (rows.length !== 1 || row.soleIpc !== true || row.port || row.pid !== instance.pid || row.startedAt !== instance.startedAt || row.nativePipe !== instance.nativePipe) throw new Error();
       }
+      if (instance.routerManaged && !instance.routerClientIds().size) throw new Error();
       if (this.stopped || !instance.alive || !instance.ready || this.runtimes.get(instance.id)?.instance !== instance) throw new Error();
     } catch {
       instance.ready = false;
@@ -145,6 +153,6 @@ export class InstanceHub extends EventEmitter {
     } catch { instance.ready = false; throw new BridgeError('INSTANCE_NOT_READY', '所选 Mac 实例身份已变化或配置目录被共用，请在电脑核对后重连'); }
   }
   /** 导航与后台发现共用一次身份复核，不能并发重写客户端集合。 */
-  refreshOwners() { return this.ownerScan ??= Promise.resolve().then(() => { const runtimes = [...this.runtimes.values()].filter(runtime => runtime.instance.platform !== 'darwin' && !runtime.instance.directIpc); return runtimes.length ? this.bindOwners(runtimes) : undefined; }).finally(() => { this.ownerScan = null; }); }
-  async close() { this.stopped = true; clearInterval(this.timer); clearTimeout(this.reconnect); this.socket?.terminate(); if (this.scan) await this.scan.catch(() => {}); await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.close())); this.runtimes.clear(); }
+  refreshOwners() { return this.ownerScan ??= Promise.resolve().then(() => { const runtimes = [...this.runtimes.values()].filter(runtime => runtime.instance.platform !== 'darwin' && !runtime.instance.directIpc && !runtime.instance.routerManaged); return runtimes.length ? this.bindOwners(runtimes) : undefined; }).finally(() => { this.ownerScan = null; }); }
+  async close() { this.stopped = true; clearInterval(this.timer); clearTimeout(this.reconnect); this.socket?.terminate(); if (this.scan) await this.scan.catch(() => {}); await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.close())); this.runtimes.clear(); this.ipcHost?.close(); }
 }

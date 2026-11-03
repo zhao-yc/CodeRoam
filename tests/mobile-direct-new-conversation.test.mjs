@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { Journal } from '../apps/bridge/journal.mjs';
 import { BridgeError } from '../packages/protocol/contracts.mjs';
 
-const source = stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/direct-new-conversation.uts', 'utf8')
+const source = stripTypeScriptTypes(['thread-mentions', 'direct-new-conversation'].map(name => fs.readFileSync('apps/mobile/services/' + name + '.uts', 'utf8')).join('\n')
   .replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, ''), { mode: 'transform' });
 const cwd = '/example/project';
 const threadId = '00000000-0000-4000-8000-000000000001';
@@ -36,7 +36,7 @@ function fixture(t) {
       },
       async request(method, params) {
         calls.push({ method, params: plain(params) });
-        if (method === 'projects.list') return json({ newConversationMode: 'desktopIpc', projects: [{ id: 'project-a', cwd }] });
+        if (method === 'projects.list') return json({ newConversationMode: 'desktopIpc', supportsNewChatMentions: desktop.supportsNewChatMentions, projects: [{ id: 'project-a', cwd }] });
         if (method === 'thread.history') return json({ snapshot: { threadId, cwd } });
         if (method === 'thread.settings.read') return json({ settings: { ...desktop.settings }, models: [{ id: desktop.settings.model, supportsImages: true }] });
         if (method === 'thread.permissions.read') return json({ mode: desktop.mode, revision: desktop.revision });
@@ -71,7 +71,7 @@ function fixture(t) {
     } };
     const context = vm.createContext({ connection, bridge, uni, reactive: value => value, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj' });
     vm.runInContext(source + '\nglobalThis.subject={sendDirectNewConversation,checkDirectNewConversation,directNewConversationState,acknowledgeDirectNewConversation};', context);
-    const draft = { hostId: connection.hostId, cacheNamespace: connection.cacheNamespace, projectId: 'project-a', text, images: [], files: [], plugins: [], threadMentions: [], choices: {} };
+    const draft = { hostId: connection.hostId, cacheNamespace: connection.cacheNamespace, projectId: 'project-a', text, images: [], files: [], plugins: [], threadMentions: [], threadMentionRevision: 0, choices: {} };
     const subject = context.subject;
     return { ...subject, connection, draft, state: subject.directNewConversationState(draft), send: () => subject.sendDirectNewConversation(draft, () => {}), check: () => subject.checkDirectNewConversation(draft) };
   };
@@ -207,9 +207,10 @@ test('发送期间切换电脑，迟到成功只结算原草稿，不能给新�
 test('跟随桌面也须显式确认完整访问，已有聊天引用时原样保留', async t => {
   const f = fixture(t);
   f.desktop.mode = 'full-access';
-  f.draft.threadMentions = [{ id: 'reference' }];
+  f.draft.threadMentions = [{ id: 'reference', title: '合成引用' }];
   await assert.rejects(f.send(), /输入和引用已保留/);
-  assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.calls.map(call => call.method), ['projects.list']);
+  assert.equal(f.draft.threadMentions[0].id, 'reference');
   f.draft.threadMentions = [];
   await assert.rejects(f.send(), /完整访问/);
   assert.equal(f.calls.some(call => call.method === 'turn.send'), false);
@@ -217,6 +218,38 @@ test('跟随桌面也须显式确认完整访问，已有聊天引用时原样�
   assert.equal(await f.send(), threadId);
   assert.equal(f.calls.filter(call => call.method === 'thread.create').length, 1);
   assert.deepEqual(f.calls.find(call => call.method === 'turn.send').firstMessageGuard, { permissionRevision: 'permissions-a', confirmedFullAccess: true });
+});
+
+test('直连首条只发送去重后的引用编号，已确认后消费该批引用', async t => {
+  const f = fixture(t);
+  f.desktop.supportsNewChatMentions = true;
+  f.draft.threadMentions = [{ id: 'reference-a', title: '合成引用' }, { id: 'reference-a', title: '合成重复' }];
+  f.draft.threadMentionRevision = 2;
+  assert.equal(await f.send(), threadId);
+  assert.deepEqual(f.calls.find(call => call.method === 'turn.send').params.threadMentionIds, ['reference-a']);
+  assert.equal(f.draft.threadMentions.length, 0);
+  assert.equal(f.draft.threadMentionRevision, 3);
+  assert.equal([...f.storage.values()].some(value => value.includes('reference-a') || value.includes('合成引用')), false);
+});
+
+test('旧回执保留重新选择的同一引用，未知发送与查账期间也不清除原引用', async t => {
+  const f = fixture(t), chosen = { id: 'reference-a', title: '合成引用' };
+  f.desktop.supportsNewChatMentions = true;
+  f.draft.threadMentions = [chosen]; f.draft.threadMentionRevision++;
+  f.desktop.hooks.set('turn.send', commandId => {
+    f.draft.threadMentions = [{ ...chosen, title: '重新选择的引用' }];
+    f.draft.threadMentionRevision++;
+    return { ok: true, commandId };
+  });
+  assert.equal(await f.send(), threadId);
+  assert.equal(f.draft.threadMentions[0].title, '重新选择的引用');
+  f.acknowledgeDirectNewConversation(f.draft, threadId);
+  f.draft.text = '待核对的合成正文';
+  f.desktop.hooks.set('turn.send', () => { throw new BridgeError('OUTCOME_UNKNOWN', '合成发送超时', true); });
+  await assert.rejects(f.send(), /核对/);
+  await assert.rejects(f.check(), /尚未确认/);
+  assert.equal(f.draft.threadMentions[0].title, '重新选择的引用');
+  assert.equal(f.calls.filter(call => call.method === 'turn.send').length, 2);
 });
 
 test('重复点击只进入一次创建，本地检查点写失败时不会发出写请求', async t => {

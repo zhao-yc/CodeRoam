@@ -23,6 +23,7 @@ import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
 import { ThreadMentionService } from './thread-mentions.mjs';
+import { usesWindowsIpcWithoutPage } from './windows-ipc-mode.mjs';
 
 /** 更新时间是本次规范化的生成时间，不单独推进传输游标。 */
 function sameSnapshot(snapshot, previous) {
@@ -159,12 +160,12 @@ export class BridgeAgent extends EventEmitter {
       const guard=message.firstMessageGuard;
       if(guard!==undefined){
         // 首条消息保护只适用于已核验的普通单实例，不能绕过计划或排队入口。
-        if(message.method!=='turn.send'||Object.keys(message.params).some(key=>!['threadId','text','images','attachments','pluginIds'].includes(key))||
+        if(message.method!=='turn.send'||Object.keys(message.params).some(key=>!['threadId','text','images','attachments','pluginIds','threadMentionIds'].includes(key))||
             guard==null||typeof guard!=='object'||Array.isArray(guard)||Object.keys(guard).length!==2||
             typeof guard.permissionRevision!=='string'||!/^[a-f0-9]{64}$/.test(guard.permissionRevision)||typeof guard.confirmedFullAccess!=='boolean'){
           throw new BridgeError('BAD_PARAMS','首条消息保护参数无效');
         }
-        if(instance?.directIpc!==true||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通单实例连接已变化，请重新连接');
+        if(!usesWindowsIpcWithoutPage(instance)||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通桌面连接已变化，请重新连接');
       }
       let deletionTarget = null;
       let lockQueued = false;
@@ -186,9 +187,10 @@ export class BridgeAgent extends EventEmitter {
           const projects=this.newThreads.projects();
           const instance=this.adapter.client?.instance;
           // 只有完成独占 IPC 绑定的普通单实例可使用直接创建，原生共享草稿仍需要桌面页面。
-          if(instance?.directIpc===true){
+          if(usesWindowsIpcWithoutPage(instance)){
             const ready=instance.alive===true&&instance.ready===true;
-            return {...projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,...(ready?{newConversationMode:'desktopIpc'}:{})};
+            const supportsNewChatMentions=ready&&this.adapter.threadMentions.savedContextAvailable?.()===true;
+            return {...projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,...(ready?{newConversationMode:'desktopIpc'}:{}),...(supportsNewChatMentions?{supportsNewChatMentions:true}:{})};
           }
           const supportsNativeNewDraft=await this.nativeDrafts.controller.capabilities();
           return {...projects,supportsNativeNewDraft,...(supportsNativeNewDraft?{newConversationMode:'nativeDraft'}:{})};

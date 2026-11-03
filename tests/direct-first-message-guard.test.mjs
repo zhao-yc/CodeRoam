@@ -91,3 +91,18 @@ test('转发标记是新代次时仍拒绝手机预期旧代次的请求',async(
     generation,expectedGeneration:'00000000-0000-4000-8000-000000000003',method:'thread.create',
   }),{code:'INSTANCE_CHANGED'});
 });
+
+test('普通首条消息保留引用链接，历史正文通过独立的不可信上下文交给原桌面', async context => {
+  const f=adapterFixture(context);
+  const id='00000000-0000-4000-8000-000000000099';
+  const content={reference:{kind:'untrusted',value:'合成历史正文'}};
+  f.adapter.threadMentions={async select(ids, destination, device, options){
+    assert.deepEqual([ids,destination,device,options],[[id],threadId,phone,{savedContext:true}]);
+    return {mentions:[{id,title:'示例引用'}],references:[{threadId:id,hostId:'local'}],contextText:'',additionalContext:content,check(){}};
+  }};
+  await f.adapter.operate('turn.send',{...params,threadMentionIds:[id]},command,phone,()=>{},f.guard);
+  const {request,context:restore}=f.requests[0][1].turnStart;
+  assert.deepEqual(request.additionalContext,content);
+  assert.ok(request.input[0].text.includes('thread://'+id));
+  assert.equal(JSON.stringify([request.input,restore]).includes('合成历史正文'),false);
+});
