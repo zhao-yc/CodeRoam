@@ -42,5 +42,17 @@ button { display: flex; }
 button::after { border: none; }
 /* 禁用态仍由外层表达；覆盖 Web 默认禁用底色，避免加载时遮住权限图标或给加号加上方块。 */
 .page .action-hitbox[disabled], .page .add-image[disabled], .page .permission-trigger-hit[disabled], .page .permission-hit[disabled], .page .permission-close-hit[disabled] { background-color: transparent; }
+
+/* 仅在宽屏 Web 双栏应用设计稿的圆角，窄屏和原生端由组件样式管理。 */
+.chat-workspace.workspace-wide .computer-tab { border-radius: 6px; }
+.chat-workspace.workspace-wide .header-button,
+.chat-workspace.workspace-wide .round-button { border-radius: 7px; }
+.chat-workspace.workspace-wide .search-field,
+.chat-workspace.workspace-wide .thread-selected,
+.chat-workspace.workspace-wide .list-new-button,
+.chat-workspace.workspace-wide .process-toggle,
+.chat-workspace.workspace-wide .composer-panel .primary-action { border-radius: 8px; }
+.chat-workspace.workspace-wide .composer-panel { border-radius: 13px; }
+.chat-workspace.workspace-wide .message-user { border-radius: 13px 13px 4px 13px; }
 /* #endif */
 </style>
