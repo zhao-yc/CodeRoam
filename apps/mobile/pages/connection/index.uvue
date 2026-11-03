@@ -82,10 +82,21 @@ function reconnect() { bridge.resume() }
 // 页面离开后不保留含凭据的输入草稿；持久化统一由连接服务管理。
 onUnload(() => { configuration.value = '' })
 
-// 提交中的写操作会暂时阻止更换配置，成功导入后立即清空输入并返回会话列表。
+// 提交中的写操作会暂时阻止更换配置，成功导入后立即清空含凭据的输入。
 function importConfig() {
   if (hasPendingCommands.value) { notify('操作正在提交，请稍后再更换连接'); return }
-  try { bridge.configure(configuration.value); configuration.value = ''; goBack() }
+  try {
+    bridge.configure(configuration.value)
+    configuration.value = ''
+    // #ifdef APP-IOS
+    // 启动连接会更新本页图标。保留页面供用户查看状态，避免同时卸载原生图片组件。
+    uni.hideKeyboard()
+    notify('配置已保存，可返回聊天列表')
+    // #endif
+    // #ifndef APP-IOS
+    goBack()
+    // #endif
+  }
   catch (error) { notify(error instanceof Error && error.message == '无法保存连接配置，请检查浏览器存储权限' ? error.message : '配置无效，请核对电脑生成的内容') }
 }
 
