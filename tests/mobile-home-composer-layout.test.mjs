@@ -45,7 +45,7 @@ test('收起、快速重开及卸载阻止旧聚焦和旧动画回写，保留�
 });
 
 test('收起状态的常驻组件不发起项目或模型读取',()=>{
-  const settings=component.slice(component.indexOf('function loadSettings()'),component.indexOf('// 项目来自电脑'));
+  const settings=component.slice(component.indexOf('function loadSettings('),component.indexOf('// 项目来自电脑'));
   const projects=component.slice(component.indexOf('function loadProjects()'),component.indexOf('function chooseComputer('));
   const c={props:{expanded:false}};
   vm.runInNewContext(stripTypeScriptTypes(settings+projects+';loadSettings();loadProjects();',{mode:'transform'}),c);

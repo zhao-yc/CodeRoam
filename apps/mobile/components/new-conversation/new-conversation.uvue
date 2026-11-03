@@ -122,14 +122,18 @@ function openOptions(section: string) { if (!props.expanded || busy.value || ima
 function changeSection(section: string) { menu.value = section }
 
 // 显式展开或选择新项目才触发原生新聊天；网络恢复只读原绑定，不自动重放新建。
-function loadSettings() { if (!props.expanded) return; const open = nativeOpenRequested; nativeOpenRequested = false; connectDraft(open) }
+function loadSettings(focusAfter: boolean = false) { if (!props.expanded) return; const open = nativeOpenRequested; nativeOpenRequested = false; connectDraft(open, focusAfter) }
 function reconnectDraft() { connectDraft(true) }
 // 仅展开并确定合法项目后打开原生新聊天；回读和重连入口明确分开。
-async function connectDraft(reconnect: boolean) {
+async function connectDraft(reconnect: boolean, focusAfter: boolean = false) {
   if (!props.expanded || projectId.value.length == 0 || !connection.connected || !computerOnline.value || busy.value) return
   const hostId = connection.hostId, id = projectId.value, request = ++settingsRequest
   settingsLoading.value = true; settingsError.value = ''
-  try { await watchNativeDraft(hostId, id, reconnect) }
+  try {
+    await watchNativeDraft(hostId, id, reconnect)
+    // 仅用户选择项目后的当前成功回执恢复焦点，自动刷新和迟到响应不抢输入。
+    if (focusAfter && alive && props.expanded && hostId == connection.hostId && id == projectId.value && request == settingsRequest && nativeReady.value) focusDraftInput()
+  }
   catch (reason) { if (alive && props.expanded && hostId == connection.hostId && id == projectId.value && request == settingsRequest) { settingsError.value = (reason as Error).message; error.value = (reason as Error).message } }
   finally { if (alive && hostId == connection.hostId && id == projectId.value && request == settingsRequest) settingsLoading.value = false }
 }
@@ -159,7 +163,7 @@ function chooseProject(id: string) {
   if (id != projectId.value) { closeNativeDraft(connection.hostId, projectId.value); nativeOpenRequested = true }
   projectId.value = id; settingsRequest++; settingsLoading.value = false; closeMenus(); error.value = ''
   try { uni.setStorageSync('codex-mobile-new-project-' + connection.hostId, id) } catch (_) {}
-  loadSettings()
+  loadSettings(true)
 }
 function reloadOptions() { if (projects.value.length == 0) loadProjects(); else loadSettings() }
 // 不修改本地显示设置，等待 UPDATE 和只读确认后由原生快照驱动界面。
