@@ -357,7 +357,8 @@ function openNewConversation() { emit('create', selectedComputerId.value) }
 // 只有首条消息确认发送成功后才进入现有会话页。
 // 刷新与重连只恢复读取，不自动提交任何会话指令。
 const manualListRefresh = ref('')
-const { reconnecting: listReconnecting, reconnect: reconnectList } = useManualReconnect()
+const listReconnecting = ref(false)
+const reconnectList = useManualReconnect((pending: boolean) => { listReconnecting.value = pending })
 // 手动刷新复用列表读取和握手状态；自动加载不占用按钮。
 const listRefreshPending = computed((): boolean => listReconnecting.value || threadList.computers.some((entry: ComputerThreads): boolean => entry.loading && (selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value)))
 watch(listRefreshPending, (pending: boolean) => { if (!pending) manualListRefresh.value = '' }, { flush: 'sync' })

@@ -24,7 +24,12 @@ function priority(thread: ComputerThread): number {
 
 // 保留完整规范路径作分组键；末级名称相同的不同路径、不同电脑不会误合并。
 export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: boolean, recent: RecentThread[], dayStart: number): ThreadGroup[] {
-  const threads = rows.slice().sort((left: ComputerThread, right: ComputerThread): number => right.updatedAt - left.updatedAt || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0))
+  const threads = rows.slice().sort((left: ComputerThread, right: ComputerThread): number => {
+    const timeOrder = right.updatedAt - left.updatedAt
+    // UTS 的逻辑条件需要布尔值，同一时间的聊天按原键排序。
+    if (timeOrder < 0 || timeOrder > 0) return timeOrder
+    return left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+  })
   const result = [] as ThreadGroup[]
   const recentRows = recentFirst ? recent.map((entry: RecentThread): ComputerThread | null => threads.find((thread: ComputerThread): boolean => thread.key == entry.key) ?? null).filter((thread: ComputerThread | null): boolean => thread != null) as ComputerThread[] : [] as ComputerThread[]
   if (recentRows.length > 0) result.push({ key: 'recent', title: '最近', threads: recentRows } as ThreadGroup)

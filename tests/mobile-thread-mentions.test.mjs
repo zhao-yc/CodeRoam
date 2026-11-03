@@ -130,7 +130,7 @@ function pageFixture() {
   c.draftMentions = computed(() => c.readDraftThreadMentions(c.pageHostId.value, c.pageThreadId.value));
   c.draftPlugins = computed(() => c.readDraftPlugins('pc', 'current')); c.draftImages = computed(() => c.readDraftImages('pc', 'current')); c.draftFiles = computed(() => c.readDraftFiles('pc', 'current'));
   const save = c.saveDraft; c.saveDraft = (...args) => { save(...args); c.mentionDraftRevision++; };
-  vm.runInContext(compile(between(page, 'function updateDraft(', '// 选图完成后')), c);
+  vm.runInContext(compile(between(page, 'function resetThreadMention(', '// 只在会话页可见时') + between(page, 'function updateDraft(', '// 选图完成后')), c);
   vm.runInContext(compile(between(page, 'function send() {', '// 追加和取消都指向')), c);
   vm.runInContext(compile(between(page, 'function editQueuedMessage(', 'let stopPromptOpen')), c);
   return { c, calls, pending, notices };

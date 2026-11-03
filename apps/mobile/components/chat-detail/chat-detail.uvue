@@ -150,7 +150,7 @@ import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, rea
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
-import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, Approval, conversationTaskState, computerIcon } from '../../services/bridge.uts'
+import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
@@ -251,27 +251,9 @@ let settingsSnapshotRevision = 0
 const hiddenPlanId = ref('')
 const planFeedback = ref('')
 const planEditing = ref(false)
-const pendingPlan = computed(() => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.readOnly != true ? connection.snapshot?.pendingPlan ?? null : null)
+const pendingPlan = computed((): PendingPlan | null => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.readOnly != true ? connection.snapshot?.pendingPlan ?? null : null)
 // 切换会话或计划时清空旧反馈。
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + (pendingPlan.value?.id ?? ''), () => { planFeedback.value = ''; hiddenPlanId.value = ''; planEditing.value = false })
-// 取消只收起编辑区，重新进入时保留尚未发送的意见。
-function editPlan() { if (!busy.value && canWrite.value) planEditing.value = true }
-function cancelPlanFeedback() { if (!busy.value) planEditing.value = false }
-function hidePlan() { hiddenPlanId.value = pendingPlan.value?.id ?? '' }
-// 使用幂等写入通道；未知结果由命令状态核对，不自动重发。
-function replyPlan(action: string) {
-  if (!canWrite.value || busy.value || pendingPlan.value == null) return
-  if (action != 'implement' && action != 'feedback') return
-  if (action == 'feedback' && planFeedback.value.trim().length == 0) return
-  const planId = pendingPlan.value!.id
-  const hostId = pageHostId.value
-  const threadId = pageThreadId.value
-  busy.value = true; pendingAction.value = 'plan:' + action; operationError.value = ''
-  bridge.request('turn.send', { threadId, planId, planAction: action, text: planFeedback.value.trim() }, true).then((_: UTSJSONObject) => {
-    busy.value = false; pendingAction.value = ''
-    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && pendingPlan.value?.id == planId) { hiddenPlanId.value = planId; planFeedback.value = ''; planEditing.value = false; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
-  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
-}
 const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
 const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
 // 只有当前会话已同步后才能判断能力，初次加载或切换会话时不显示升级提示。
@@ -292,14 +274,17 @@ const goalExpanded = ref(false)
 const goalOpenRequest = ref(0)
 const goalCloseRequest = ref(0)
 const pageVisible = ref(false)
+// 清理引用选择时不恢复输入焦点，适用于离页和切换会话。
+function resetThreadMention() { mentionOpen.value = false; mentionTrigger.value = null }
 // 只在会话页可见时抑制本聊天通知，页面栈中隐藏的旧窗口不参与判断。
 let noticeViewRevision = 0
 onPaneShow(() => { pageVisible.value = true; noticeViewRevision = showTaskNoticeThread(pageHostId.value, pageThreadId.value) })
-onPaneHide(() => { pageVisible.value = false; hideTaskNoticeThread(noticeViewRevision); pluginOpen.value = false; closeThreadMentions(false) })
+onPaneHide(() => { pageVisible.value = false; hideTaskNoticeThread(noticeViewRevision); pluginOpen.value = false; resetThreadMention() })
 onUnmounted(() => { hideTaskNoticeThread(noticeViewRevision) })
-watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false; closeThreadMentions(false) })
+watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false; resetThreadMention() })
 const pendingAction = ref('')
-const { reconnecting, reconnect } = useManualReconnect()
+const reconnecting = ref(false)
+const reconnect = useManualReconnect((pending: boolean) => { reconnecting.value = pending })
 const refreshSource = ref('')
 let refreshRevision = 0
 const activating = ref(false)
@@ -345,7 +330,6 @@ const displayConversation = computed(() => conversationWithHistory(liveConversat
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
 const messagePresentations = computed((): MessagePresentation[] => presentConversationMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
-const selectedAnnotations = computed((): MessageAnnotation[] => timeline.value.find((entry: TimelineEntry): boolean => entry.id == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 // 只替换新建时间线条目的展示字段，原快照仍用于发送、历史合并和图片读取。
 const timeline = computed((): TimelineEntry[] => {
   const entries = failureTimeline(displayConversation.value, reportTimeline(displayConversation.value, expandedReportIds.value))
@@ -356,6 +340,7 @@ const timeline = computed((): TimelineEntry[] => {
   })
   return entries
 })
+const selectedAnnotations = computed((): MessageAnnotation[] => timeline.value.find((entry: TimelineEntry): boolean => entry.id == selectedAnnotationId.value)?.annotations ?? [] as MessageAnnotation[])
 const expandedExecutionIds = ref<string[]>([])
 const pendingPlanOutsideTimeline = computed((): boolean => pendingPlan.value != null && !timeline.value.some((entry: TimelineEntry): boolean => entry.id == pendingPlan.value!.id))
 const selectedPlanId = ref('')
@@ -420,7 +405,6 @@ const submittedRetryKey = ref('')
 const displayFailureTurnId = computed((): string => latestFailureTurnId(displayConversation.value))
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
-const primaryAvailable = computed((): boolean => canWrite.value && !imageBusy.value && filesReady.value && (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || (draftMentions.value.length == 0 && (activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value)))))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
 
 let cacheWriteTimer = 0
@@ -549,6 +533,24 @@ async function refreshButton(source: string) {
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { refreshRevision++; refreshSource.value = '' })
 watch((): boolean => reconnecting.value, (pending: boolean) => { if (!pending) refreshSource.value = '' })
 function refreshFromMenu() { closeActions(); refresh(); notify('正在同步聊天') }
+// 取消只收起编辑区，重新进入时保留尚未发送的意见。
+function editPlan() { if (!busy.value && canWrite.value) planEditing.value = true }
+function cancelPlanFeedback() { if (!busy.value) planEditing.value = false }
+function hidePlan() { hiddenPlanId.value = pendingPlan.value?.id ?? '' }
+// 使用幂等写入通道；未知结果由命令状态核对，不自动重发。
+function replyPlan(action: string) {
+  if (!canWrite.value || busy.value || pendingPlan.value == null) return
+  if (action != 'implement' && action != 'feedback') return
+  if (action == 'feedback' && planFeedback.value.trim().length == 0) return
+  const planId = pendingPlan.value!.id
+  const hostId = pageHostId.value
+  const threadId = pageThreadId.value
+  busy.value = true; pendingAction.value = 'plan:' + action; operationError.value = ''
+  bridge.request('turn.send', { threadId, planId, planAction: action, text: planFeedback.value.trim() }, true).then((_: UTSJSONObject) => {
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && pendingPlan.value?.id == planId) { hiddenPlanId.value = planId; planFeedback.value = ''; planEditing.value = false; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
+  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+}
 // 打开只读会话即表示请求加载；仅取得真实快照，不发送草稿或其他任务指令。
 function continueConversation(manual: boolean = false) {
   if (!isCurrentPage() || !pageVisible.value || !readOnly.value || connection.snapshot?.threadId != pageThreadId.value || activating.value || !connection.connected || connection.pendingCommandId.length > 0) return
@@ -962,7 +964,7 @@ function threadMentionContext(): string { return [pageHostId.value, pageThreadId
 function closeThreadMentions(restoreFocus: boolean = true) {
   const wasOpen = mentionOpen.value, trigger = mentionTrigger.value
   if (restoreFocus && trigger != null && draft.value == trigger.text && mentionSourceRevision == mentionDraftRevision) mentionCursor.value = trigger.end
-  mentionOpen.value = false; mentionTrigger.value = null
+  resetThreadMention()
   if (wasOpen && restoreFocus && pageVisible.value && mentionContext == threadMentionContext()) focusComposerInput()
 }
 // 选择期间任何异步草稿或目标变化都保留新输入，禁止按旧光标覆盖。
@@ -1308,6 +1310,7 @@ function submitAnswers(questionGroupId: string, turnId: string, answers: Questio
 // 两个重试入口共享轮次占位，成功回执到新轮次广播之间也不能重复点击。
 function retrySubmitting(turnId: string): boolean { return submittedRetryKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
 function canRetryTurn(turnId: string): boolean { return turnId.length > 0 && retryTurnId.value == turnId && canWrite.value && goalHostOnline.value && liveConversation.value?.supportsTurnRetry == true && !retrySubmitting(turnId) }
+
 function retryTurn(turnId: string, fromComposer: boolean = false) {
   if (!canRetryTurn(turnId)) return
   const hostId = pageHostId.value, threadId = pageThreadId.value, key = hostId + ':' + threadId + ':' + turnId
@@ -1453,6 +1456,7 @@ function operateGoal(action: string, objective: string, revision: string) {
 }
 
 // 主按钮随上下文切换：有草稿发送，空草稿运行中停止。
+const primaryAvailable = computed((): boolean => canWrite.value && !imageBusy.value && filesReady.value && (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || (draftMentions.value.length == 0 && (activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value)))))
 function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (draftMentions.value.length > 0) return; else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value, true) }
 function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop(false) }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。

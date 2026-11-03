@@ -79,7 +79,8 @@ const currentComputerOnline = computed((): boolean => connection.computers.some(
 // 返回时先收起键盘，直接打开本页时仍能回到会话首页。
 function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
 // 重连沿用现有配置，不重新导入或重放请求。
-const { reconnecting, reconnect } = useManualReconnect()
+const reconnecting = ref(false)
+const reconnect = useManualReconnect((pending: boolean) => { reconnecting.value = pending })
 // 页面离开后不保留含凭据的输入草稿；持久化统一由连接服务管理。
 onUnload(() => { configuration.value = '' })
 

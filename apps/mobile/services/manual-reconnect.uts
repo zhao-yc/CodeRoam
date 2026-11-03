@@ -1,16 +1,17 @@
-import { ref, watch } from 'vue'
+import { watch } from 'vue'
 import { bridge, connection } from './bridge.uts'
 
 // 只跟踪当前点击对应的握手。进入退避或切换配对后，后续握手交给全局连接状态。
-export function useManualReconnect() {
-  const reconnecting = ref(false)
+export function useManualReconnect(setPending: (pending: boolean) => void): () => void {
   let attempt = 0
-  watch((): number => connection.connectionAttempt, (current: number) => { if (current != attempt) reconnecting.value = false }, { flush: 'sync' })
-  function reconnect() {
-    if (reconnecting.value || connection.connected) return
+  watch((): number => connection.connectionAttempt, (current: number) => {
+    if (attempt == 0 || current == attempt) return
+    attempt = 0; setPending(false)
+  }, { flush: 'sync' })
+  return () => {
+    if (attempt > 0 || connection.connected) return
     bridge.resume()
     attempt = connection.connectionAttempt
-    reconnecting.value = attempt > 0
+    setPending(attempt > 0)
   }
-  return { reconnecting, reconnect }
 }
