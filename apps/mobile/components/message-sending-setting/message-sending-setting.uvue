@@ -1,9 +1,12 @@
 <template>
   <view id="message-sending-preferences" class="setting-section">
     <view class="setting-row action-frame">
-      <view class="setting-copy"><text class="setting-title">新消息发送行为</text><text class="setting-description">选择任务进行中发送新消息时的处理方式。</text></view>
+      <view class="setting-copy">
+        <text class="setting-title">新消息默认发送方式</text>
+        <text class="setting-description">任务进行中，新消息默认按所选方式发送。排队后，可手动追加到当前任务。</text>
+      </view>
       <text class="setting-value">{{ behaviorLabel }}</text><app-icon name="chevron-down" :size="18" tone="muted" />
-      <button class="action-hitbox" :aria-label="'新消息发送行为，当前' + behaviorLabel + '，点击选择'" hover-class="action-pressed" @click="chooseBehavior"></button>
+      <button class="action-hitbox" :aria-label="'新消息默认发送方式，当前为' + behaviorLabel + '，点击选择'" hover-class="action-pressed" @click="chooseBehavior"></button>
     </view>
   </view>
 </template>
