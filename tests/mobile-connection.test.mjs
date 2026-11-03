@@ -120,6 +120,47 @@ function respond(f,request,result={},error=null){
   f.bridge.receive(utsObject({type:'response',requestId:request.requestId,result:utsObject(result),error:error==null?null:utsObject(error)}));
 }
 
+test('图片读取就绪只来自当前聊天订阅回执，旧快照和旧电脑响应不能提前放行',async()=>{
+  const f=connectedFixture();f.connection.snapshot={threadId:'thread',messages:[]};
+  assert.equal(f.connection.subscribedThreadId,'');f.bridge.watch('thread');assert.equal(f.connection.subscribedThreadId,'');
+  respond(f,f.sent[0],{snapshot:{threadId:'thread',messages:[],readOnly:true},epoch:'current',seq:1});await Promise.resolve();
+  assert.equal(f.connection.subscribedHostId,'pc');assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(f.connection.subscriptionRevision,1);
+  f.bridge.disconnect();assert.equal(f.connection.subscribedHostId,'');assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.snapshot.threadId,'thread','旧快照保留阅读但不代表订阅仍有效');
+  f.connection.connected=true;f.bridge.socket={send:options=>f.sent.push(JSON.parse(options.data)),close(){}};f.bridge.watch('thread');assert.equal(f.connection.subscribedThreadId,'');
+  respond(f,f.sent.at(-1),{snapshot:{threadId:'thread',messages:[]},epoch:'reconnected',seq:1});await Promise.resolve();assert.equal(f.connection.subscribedThreadId,'thread');
+  f.bridge.watch('next');assert.equal(f.connection.subscribedThreadId,'');
+  f.bridge.applySnapshot(utsObject({snapshot:{threadId:'next'},epoch:'old',seq:1}),'other-pc','next');assert.equal(f.connection.subscribedThreadId,'');
+});
+
+test('快速从A切到B再返回A时，第一轮A的迟到回执不能恢复图片就绪或结束新订阅',async()=>{
+  for(const failed of [false,true]){
+    const f=connectedFixture();f.connection.activeThreadId='';f.bridge.watch('A');f.bridge.watch('B');f.bridge.watch('A');
+    const reads=f.sent.filter(request=>request.method==='thread.watch');assert.equal(reads.length,3);
+    respond(f,reads[0],{snapshot:{threadId:'A',title:'旧订阅'},epoch:'old',seq:1},failed?{message:'旧订阅读取失败'}:null);await Promise.resolve();
+    assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.bridge.syncingThread,'A');assert.equal(f.connection.conversationError,'');assert.equal(f.connection.snapshot,null);
+    respond(f,reads[2],{snapshot:{threadId:'A',title:'新订阅'},epoch:'current',seq:2});await Promise.resolve();
+    assert.equal(f.connection.subscribedThreadId,'A');assert.equal(f.connection.snapshot.title,'新订阅');assert.equal(f.bridge.syncingThread,'');
+    f.bridge.disconnect();
+  }
+});
+
+test('主动打开应用快照后发起新读取，旧成功结算不能清除新读取的同步锁',async()=>{
+  const f=connectedFixture(),apply=f.bridge.applySnapshot.bind(f.bridge);
+  f.bridge.applySnapshot=(...args)=>{apply(...args);f.bridge.syncingThread='';f.bridge.watch('thread');};
+  const opening=f.bridge.openThread('thread');respond(f,f.sent[0],{snapshot:{threadId:'thread'},epoch:'current',seq:1,desktopActivated:true});await opening;
+  assert.equal(f.bridge.syncingThread,'thread');assert.equal(f.sent.filter(request=>request.method==='thread.watch').length,2);f.bridge.disconnect();
+});
+
+test('有效实时事件也能确认图片订阅，取消、电脑离线及实例换代立即撤销',()=>{
+  const f=connectedFixture();f.connection.computers=[{id:'pc',online:true,instanceGeneration:'g1'}];
+  f.bridge.receive(utsObject({type:'event',hostId:'pc',threadId:'thread',generation:'g1',epoch:'current',seq:1,snapshot:{threadId:'thread',messages:[]}}));
+  assert.equal(f.connection.subscribedThreadId,'thread');
+  f.bridge.receive(utsObject({type:'hosts',hosts:[{id:'pc',online:false,instanceGeneration:'g1'}]}));assert.equal(f.connection.subscribedThreadId,'');
+  f.connection.computers=[{id:'pc',online:true,instanceGeneration:'g1'}];f.bridge.confirmConversationRead();
+  f.bridge.receive(utsObject({type:'hosts',hosts:[{id:'pc',online:true,instanceGeneration:'g2'}]}));assert.equal(f.connection.subscribedThreadId,'');
+  f.bridge.confirmConversationRead();f.bridge.cancelOpen('thread');assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.subscribedHostId,'');
+});
+
 test('永久删除超时、断线和未知回执保留编号，重连恢复后只核对，不允许重复删除',async()=>{
   for(const failure of ['timeout','disconnect','unknown']){
     const f=connectedFixture();const pending=f.bridge.request('thread.delete',{threadId:'thread'},true);const request=f.sent.at(-1);

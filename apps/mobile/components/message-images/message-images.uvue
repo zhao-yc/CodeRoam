@@ -1,19 +1,29 @@
 <template>
   <view class="message-images">
     <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFit" :class="['thumbnail', sources.length == 1 ? 'thumbnail-single' : '', props.large == true ? 'thumbnail-large' : '']" :aria-label="'预览第' + (index + 1) + '张图片'" @load="imageLoaded" @click="preview(source)" /></view>
-    <view v-else :class="['placeholder', (props.count ?? 1) == 1 ? 'placeholder-single' : '']"><text class="hint">{{ error.length > 0 ? error : connected ? '正在加载图片…' : '等待连接后加载图片' }}</text><button v-if="error.length > 0 && connected" class="retry" @click="loadImages">重新加载</button></view>
+    <view v-else :class="['placeholder', (props.count ?? 1) == 1 ? 'placeholder-single' : '']"><text class="hint">{{ error.length > 0 ? error : !connected ? '等待连接后加载图片' : ready == false ? '聊天同步后将自动加载图片' : '正在加载图片…' }}</text><button v-if="error.length > 0 && connected && ready != false" class="retry" @click="loadImages">重新加载</button></view>
   </view>
 </template>
 <script setup lang="uts">
 import { ref, watch, nextTick, onUnmounted } from 'vue'
-import { bridge } from '../../services/bridge.uts'
-const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, count?: number, large?: boolean }>()
+import { bridge, connection } from '../../services/bridge.uts'
+const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, ready?: boolean, subscriptionRevision?: number, scopeId?: string, count?: number, large?: boolean }>()
 const emit = defineEmits<{ (event: 'beforelayout'): void, (event: 'layout'): void }>()
 const sources = ref<string[]>([])
 const error = ref('')
 let loading = false
 let requestVersion = 0
 let alive = true
+let loadScheduled = false
+// 配对、电脑、聊天和消息共同隔离回执；图片只保留在当前组件内，不写入持久缓存。
+function imageIdentity(): string { return JSON.stringify([props.scopeId ?? '', props.hostId, props.threadId, props.messageId, props.count ?? 1, props.large == true]) }
+function imageRequestReady(): boolean { return alive && props.connected && props.ready != false && connection.hostId == props.hostId && connection.activeThreadId == props.threadId && (props.scopeId == null || props.scopeId == connection.cacheNamespace) }
+// 父页可能连续更新就绪标记与订阅代次；合并到下一次渲染后只发起一次读取。
+function scheduleImages() {
+  if (!alive || loadScheduled) return
+  loadScheduled = true
+  nextTick(() => { loadScheduled = false; if (alive && sources.value.length == 0) loadImages() })
+}
 // 占位、错误提示和缩略图替换均通知父页；图片解码完成沿用同一位置保持链。
 function beforeImageLayout() { emit('beforelayout'); nextTick(() => { if (alive) emit('layout') }) }
 // 大图按片读取，避免设计稿超过中转单条消息上限；离页或断线立即停止后续请求。
@@ -23,7 +33,7 @@ async function loadLargeImages(version: number): Promise<string[]> {
     let source = ''
     let chunks = 1
     for (let chunk = 0; chunk < chunks; chunk++) {
-      if (!alive || version != requestVersion || !props.connected) return [] as string[]
+      if (!imageRequestReady() || version != requestVersion) return [] as string[]
       const result = await bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId, imageIndex: index, chunkIndex: chunk })
       chunks = result['chunkCount'] as number
       if (chunks < 1 || chunks > 17) throw new Error('图片分片无效，请重新加载')
@@ -35,27 +45,28 @@ async function loadLargeImages(version: number): Promise<string[]> {
 }
 // 每条消息独立保留图片，进入会话自动加载，不弹出大图或中断滚动。
 function loadImages() {
-  if (!alive || loading || !props.connected || props.threadId.length == 0) return
+  if (!imageRequestReady() || loading || props.threadId.length == 0) return
   loading = true; error.value = ''
   const version = ++requestVersion
+  const identity = imageIdentity()
   if (props.large == true) {
     loadLargeImages(version).then((images: string[]) => {
-      if (!alive || version != requestVersion) return
+      if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
       loading = false; sources.value = images
       if (images.length == 0) error.value = '这条记录未保留图片'
     }, (failure: Error) => {
-      if (!alive || version != requestVersion) return
+      if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
       loading = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
     })
     return
   }
   bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId }).then((result: UTSJSONObject) => {
-    if (!alive || version != requestVersion) return
+    if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
     loading = false
     sources.value = JSON.parse<string[]>(JSON.stringify(result['images'])) ?? [] as string[]
     if (sources.value.length == 0) error.value = '这条记录未保留图片'
   }, (failure: Error) => {
-    if (!alive || version != requestVersion) return
+    if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
     loading = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
   })
 }
@@ -64,13 +75,18 @@ function preview(source: string) { uni.previewImage({ urls: sources.value, curre
 // 异步图片出现后由会话页维护滚动位置。
 function imageLoaded() { emit('layout') }
 // 消息归属变化及卸载后使旧请求失效，避免图片串入其他会话。
-watch((): string => props.hostId + ':' + props.threadId + ':' + props.messageId, () => {
-  requestVersion++; loading = false; sources.value = [] as string[]; error.value = ''; loadImages()
-}, { immediate: true })
+watch((): string => imageIdentity(), () => {
+  requestVersion++; loading = false; sources.value = [] as string[]; error.value = ''; scheduleImages()
+}, { immediate: true, flush: 'sync' })
 watch((): boolean => props.connected, (connected: boolean) => {
   requestVersion++; loading = false
-  if (connected && sources.value.length == 0) loadImages()
+  if (connected && sources.value.length == 0) scheduleImages()
 })
+// 等待订阅不算加载失败；重订阅后自动恢复未加载的图片，不要求用户再点重试。
+watch((): string => (props.ready != false).toString() + ':' + (props.subscriptionRevision ?? 0).toString(), () => {
+  requestVersion++; loading = false; error.value = ''
+  if (sources.value.length == 0) scheduleImages()
+}, { flush: 'sync' })
 watch(sources, () => { beforeImageLayout() }, { flush: 'pre' })
 watch(error, () => { beforeImageLayout() }, { flush: 'pre' })
 onUnmounted(() => { alive = false; requestVersion++ })

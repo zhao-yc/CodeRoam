@@ -81,7 +81,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
-  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend' : '') + '};', context);
+  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend,focused' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
   return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
@@ -446,4 +446,43 @@ test('显式重新展开仍调用原生新聊天，连接恢复读取不能自�
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
   f.loadProjects();await tick();await tick();
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
+});
+
+/** 同一电脑的两个合成项目，沿用真实原生草稿协议验证焦点与草稿隔离。 */
+async function projectPickerFixture() {
+  const f=fixture({component:true});
+  f.hooks.set('projects.list',()=>({supportsNativeNewDraft:true,projects:[
+    {id:'project-a',label:'示例项目甲',cwd:'/example/a'},
+    {id:'project-b',label:'示例项目乙',cwd:'/example/b'},
+  ],selectedProjectId:'project-a'}));
+  f.props.expanded=true;f.loadProjects();await tick();await tick();f.focused.value=false;
+  return f;
+}
+test('选择项目确认成功后聚焦，切回原项目仍保留各自草稿且不发送消息',async()=>{
+  const f=await projectPickerFixture();
+  f.newDraft('pc-a','project-a').text='项目甲合成草稿';f.newDraft('pc-a','project-b').text='项目乙合成草稿';
+  f.chooseProject('project-b');assert.equal(f.focused.value,false);
+  await tick();await tick();assert.equal(f.focused.value,true);assert.equal(f.projectId.value,'project-b');assert.equal(f.draft.value.text,'项目乙合成草稿');
+  f.focused.value=false;f.chooseProject('project-a');await tick();await tick();
+  assert.equal(f.focused.value,true);assert.equal(f.draft.value.text,'项目甲合成草稿');
+  assert.equal(f.calls.some(call=>['thread.draft.send','turn.send','turn.steer'].includes(call.method)),false);
+});
+test('项目加载失败、收起、换电脑或再次选择后，迟到回执不恢复输入焦点',async()=>{
+  for(const change of ['失败','收起','电脑','项目','断线']){
+    const f=await projectPickerFixture(),wait=deferred(),value={...snapshot('project-b','draft-b'),hostId:'pc-a'};
+    f.backend.set('pc-a:draft-b',value);f.hooks.set('thread.draft.open',()=>wait.promise);
+    f.chooseProject('project-b');await tick();assert.equal(f.focused.value,false);
+    if(change==='收起'){f.props.expanded=false;f.syncEditorVisibility(false);}
+    if(change==='电脑')f.connection.hostId='pc-b';
+    if(change==='项目')f.chooseProject('project-a');
+    if(change==='断线')f.connection.connected=false;
+    if(change==='失败')wait.reject(Error('项目切换失败'));else wait.resolve({snapshot:value});
+    await tick();await tick();assert.equal(f.focused.value,false,change);
+  }
+});
+test('后台项目刷新不抢输入焦点，明确重选当前项目则恢复焦点且只读原草稿',async()=>{
+  const f=await projectPickerFixture(),opened=f.calls.filter(call=>call.method==='thread.draft.open').length;
+  f.loadProjects();await tick();await tick();assert.equal(f.focused.value,false);
+  f.chooseProject('project-a');await tick();await tick();assert.equal(f.focused.value,true);
+  assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,opened);
 });
