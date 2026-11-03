@@ -56,13 +56,35 @@ test('不同电脑同号会话独立，撤回和换代清理旧通知，恢复�
  c.reset();c.observe('two','g2',[row('completed',[action('approval','a')]),row('failed',[],'old')],3);assert.equal(c.current.kind,'approval');assert.equal(c.queue.length,0);
 });
 
+test('当前聊天的五类通知均略过，离开不补发，后续新事项仍提醒',()=>{
+ for(const kind of ['question','approval','plan','completed','failed']){
+  const c=fixture();c.setVisibleThread('one','thread',0);c.observe('one','g',[row()],1);
+  const terminal=kind==='completed'||kind==='failed',updated=row(terminal?kind:'inProgress',terminal?[]:[action(kind)]);
+  c.observe('one','g',[updated],2);assert.equal(c.current,null,kind);assert.equal(c.queue.length,0);
+  c.setVisibleThread('','',3);c.observe('one','g',[updated],4);assert.equal(c.current,null,'离开后不能补发 '+kind);
+  c.observe('one','g',[row('inProgress')],5);
+  c.observe('one','g',[row(terminal?kind:'inProgress',terminal?[]:[action(kind,'new','next')],'thread','next')],6);
+  assert.equal(c.current.kind,kind,'离开后新事项应提醒');
+ }
+});
+
+test('进入聊天立即清除已显示和排队的本聊天通知，其他聊天和电脑保留',()=>{
+ const c=fixture();c.observe('one','g',[row('inProgress',[action(),action('approval','a')]),row('inProgress',[action('plan','p')],'other')],0);
+ c.observe('two','g',[row('inProgress',[action()])],1);assert.equal(c.queue.length,3);
+ c.setVisibleThread('one','thread',2);assert.equal(c.current.threadId,'other');assert.equal(c.queue.length,1);assert.equal(c.queue[0].hostId,'two');
+ c.dismiss(3);assert.equal(c.current.hostId,'two');c.dismiss(4);assert.equal(c.current,null);
+ c.setVisibleThread('','',5);c.observe('one','g',[row('inProgress',[action(),action('approval','a')])],6);assert.equal(c.current,null);
+ c.setVisibleThread('one','thread',7);c.reset();c.observe('one','new',[row('inProgress',[action()])],8);assert.equal(c.current,null,'重连后前台页面仍然抑制提醒');
+ c.observe('two','g',[row('inProgress',[action()])],9);assert.equal(c.current.hostId,'two','其他电脑的同号聊天仍提醒');
+});
+
 /** 模拟框架导航与连接生命周期，确认点击只读打开一次，订阅不依赖首页。 */
 function serviceFixture(){
  const watchers=[],ticks=[],calls=[];
  const connection={configurationRevision:1,configured:true,connected:true,hostId:'one',computers:[{id:'one',online:true,label:'示例电脑',instanceGeneration:'g'}]};
  const threadList={computers:[{hostId:'one',instanceGeneration:'g',online:true,subscribed:true,threads:[row('inProgress',[action()])]}]};
  const context=vm.createContext({TaskNotificationCenter:fixture().constructor,reactive:value=>value,connection,threadList,watch:(_read,changed,options)=>{watchers.push(changed);if(options?.immediate)changed();},nextTick:fn=>ticks.push(fn),setTimeout:()=>1,clearTimeout(){},Date,JSON,getCurrentPages:()=>[{route:'pages/connection/index'}],syncThreadComputers:()=>calls.push('sync'),refreshComputerThreads:()=>calls.push('subscribe'),disconnectThreadLists:()=>calls.push('disconnect'),bridge:{selectComputer:id=>calls.push(['computer',id]),openThread:id=>{calls.push(['open',id]);return Promise.resolve({});}},uni:{showToast:options=>calls.push(['toast',options.title]),navigateTo:options=>calls.push(['navigate',options]),redirectTo:options=>calls.push(['replace',options])}});
- const source=fs.readFileSync('apps/mobile/services/task-notifications.uts','utf8').replace(/^import .*\r?\n/gm,'').replaceAll('export ','');vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.f={startTaskNotifications,resetTaskNotifications,openTaskNotice,pendingTaskNotice,taskNotifications};',context);
+ const source=fs.readFileSync('apps/mobile/services/task-notifications.uts','utf8').replace(/^import .*\r?\n/gm,'').replaceAll('export ','');vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.f={startTaskNotifications,resetTaskNotifications,openTaskNotice,pendingTaskNotice,taskNotifications,showTaskNoticeThread,hideTaskNoticeThread};',context);
  return {...context.f,connection,threadList,calls,watchers,ticks};
 }
 
@@ -76,4 +98,14 @@ test('当前会话点击只定位；离线、换代或旧导航回调不切换�
  const f=serviceFixture();f.startTaskNotifications();const notice=f.taskNotifications.current;f.openTaskNotice(notice,'one','thread');assert.equal(f.taskNotifications.focusRevision,1);assert.equal(f.calls.some(call=>Array.isArray(call)&&call[0]==='navigate'),false);
  f.openTaskNotice(notice);const navigation=f.calls.find(call=>call[0]==='navigate')[1];navigation.success();f.resetTaskNotifications();f.ticks.shift()();assert.equal(f.calls.some(call=>call[0]==='open'),false);
  f.connection.computers[0].instanceGeneration='new';f.openTaskNotice(notice);assert.ok(f.calls.some(call=>call[0]==='toast'));assert.equal(f.calls.some(call=>call[0]==='computer'),false);
+});
+
+test('页面可见登记清理通知，旧页面卸载不误清新窗口，返回列表后恢复提醒',()=>{
+ const f=serviceFixture();f.startTaskNotifications();assert.equal(f.taskNotifications.current.kind,'question');
+ const old=f.showTaskNoticeThread('one','thread');assert.equal(f.taskNotifications.current,null);
+ const current=f.showTaskNoticeThread('one','thread');f.hideTaskNoticeThread(old);
+ f.threadList.computers[0].threads=[row('inProgress',[action('approval','new')])];f.watchers[1]();assert.equal(f.taskNotifications.current,null,'旧页面清理不能撤销新页面登记');
+ f.resetTaskNotifications();f.watchers[1]();assert.equal(f.taskNotifications.current,null,'重连后仍识别当前窗口');
+ f.hideTaskNoticeThread(current);f.watchers[1]();assert.equal(f.taskNotifications.current,null,'离开后不补发已有事项');
+ f.threadList.computers[0].threads=[row('inProgress',[action('plan','new-plan')])];f.watchers[1]();assert.equal(f.taskNotifications.current.kind,'plan','列表保留连接订阅时也应正常提醒');
 });

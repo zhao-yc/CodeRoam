@@ -12,9 +12,22 @@ export class TaskNotificationCenter {
   phase = 'idle'
   deadline = 0
   durationMs = 5000
+  visibleHostId = ''
+  visibleThreadId = ''
 
-  // 连接代次结束时整体清空，恢复后重新建立基线。
+  // 连接代次结束时清空事件，保留仍在前台的页面身份，恢复后重新建立基线。
   reset() { this.hosts = [] as NoticeHost[]; this.seen.clear(); this.queue = [] as TaskNotice[]; this.current = null; this.phase = 'idle'; this.deadline = 0 }
+
+  // 进入聊天即移除该窗口已显示和排队的通知，其他电脑的同号聊天继续提醒。
+  setVisibleThread(hostId: string, threadId: string, now: number) {
+    this.visibleHostId = hostId; this.visibleThreadId = threadId
+    this.queue = this.queue.filter((notice: TaskNotice): boolean => !this.isVisibleThread(notice.hostId, notice.threadId))
+    if (this.current != null && this.isVisibleThread(this.current!.hostId, this.current!.threadId)) { this.current = null; this.phase = 'idle'; this.deadline = 0 }
+    this.tick(now)
+  }
+
+  // 前台页面独立于连接当前订阅；首页保留的旧订阅不能被当成正在阅读。
+  private isVisibleThread(hostId: string, threadId: string): boolean { return hostId.length > 0 && threadId.length > 0 && this.visibleHostId == hostId && this.visibleThreadId == threadId }
 
   // 授权撤回或实例换代后，旧通知不可继续打开其他实例的同号会话。
   retainHosts(keys: string[]) {
@@ -51,6 +64,8 @@ export class TaskNotificationCenter {
     const key = JSON.stringify([hostId, generation, thread.id, kind, turnId, targetId])
     if (this.seen.has(key)) return
     this.seen.add(key)
+    // 已在聊天内看到的事件也记为已读，离开页面后不补发同一事项。
+    if (this.isVisibleThread(hostId, thread.id)) return
     this.queue.push({ key, hostId, generation, threadId: thread.id, threadTitle: thread.title, turnId, kind, targetId } as TaskNotice)
   }
 

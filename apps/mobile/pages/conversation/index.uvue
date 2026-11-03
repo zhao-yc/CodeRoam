@@ -172,7 +172,7 @@ import PlanSheet from '../../components/plan-sheet/plan-sheet.uvue'
 import MessageImages from '../../components/message-images/message-images.uvue'
 import PermissionsControl from '../../components/permissions-control/permissions-control.uvue'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
-import { taskNotifications, pendingTaskNotice } from '../../services/task-notifications.uts'
+import { taskNotifications, pendingTaskNotice, showTaskNoticeThread, hideTaskNoticeThread } from '../../services/task-notifications.uts'
 import { taskNoticeAnchor } from '../../services/task-notification-state.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import ComposerPlus from '../../components/composer-plus/composer-plus.uvue'
@@ -275,8 +275,11 @@ const goalExpanded = ref(false)
 const goalOpenRequest = ref(0)
 const goalCloseRequest = ref(0)
 const pageVisible = ref(false)
-onShow(() => { pageVisible.value = true })
-onHide(() => { pageVisible.value = false; pluginOpen.value = false; closeThreadMentions(false) })
+// 只在会话页可见时抑制本聊天通知，页面栈中隐藏的旧窗口不参与判断。
+let noticeViewRevision = 0
+onShow(() => { pageVisible.value = true; noticeViewRevision = showTaskNoticeThread(pageHostId.value, pageThreadId.value) })
+onHide(() => { pageVisible.value = false; hideTaskNoticeThread(noticeViewRevision); pluginOpen.value = false; closeThreadMentions(false) })
+onUnload(() => { hideTaskNoticeThread(noticeViewRevision) })
 watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false; closeThreadMentions(false) })
 const pendingAction = ref('')
 const activating = ref(false)

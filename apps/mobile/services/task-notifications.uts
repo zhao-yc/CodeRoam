@@ -11,7 +11,22 @@ let displayTimer = 0
 let configuration = -1
 let navigationRevision = 0
 let navigationNotice: TaskNotice | null = null
+let visibleThreadRevision = 0
 const durationStorageKey = 'codex-mobile-notice-duration-ms'
+
+// 仅由会话页显示生命周期登记，不能用连接残留的 activeThreadId 推断可见窗口。
+export function showTaskNoticeThread(hostId: string, threadId: string): number {
+  const revision = ++visibleThreadRevision
+  center.setVisibleThread(hostId, threadId, Date.now()); publishNotice()
+  return revision
+}
+
+// 页面隐藏或卸载后恢复提醒；旧页面迟到的清理不能覆盖新页面登记。
+export function hideTaskNoticeThread(revision: number) {
+  if (revision != visibleThreadRevision) return
+  visibleThreadRevision++
+  center.setVisibleThread('', '', Date.now()); publishNotice()
+}
 
 // 本机偏好只接受三个明确选项；缺失、损坏或无法读取时沿用默认 5 秒。
 function restoreNoticeDuration() {
