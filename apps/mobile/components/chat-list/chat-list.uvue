@@ -1,7 +1,7 @@
 <template>
   <view id="home-page" class="page">
     <view id="home-header" class="header">
-      <template v-if="searchVisible && !desktopList">
+      <template v-if="searchVisible">
         <view class="search-field header-search"><app-icon name="search" :size="20" tone="muted" /><input v-model="search" class="search-input" :focus="searchFocused" placeholder="搜索聊天或项目" :maxlength="100" confirm-type="search" @blur="searchFocused = false" /></view>
         <view v-if="liquidGlass" class="header-glass-close"><liquid-glass-control symbol="xmark" label="关闭搜索" @activate="closeSearch" /></view>
         <view v-else class="header-button action-frame"><app-icon name="close" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭搜索" @click="closeSearch"></button></view>
@@ -9,7 +9,7 @@
       <template v-else>
         <view class="list-title">
           <view class="list-title-trigger action-frame" hover-class="action-pressed" @click="toggleMenu">
-            <view v-if="desktopList" class="desktop-brand-mark"><app-icon name="terminal" :size="18" tone="light" /></view><text class="list-title-text">{{ desktopList ? '掌上 Codex' : '掌上Codex' }}</text><view class="list-menu-arrow" :class="{ 'list-menu-arrow-open': menuVisible }"><app-icon name="chevron-down" :size="18" /></view>
+            <text class="list-title-text">掌上Codex</text><view class="list-menu-arrow" :class="{ 'list-menu-arrow-open': menuVisible }"><app-icon name="chevron-down" :size="18" /></view>
             <!-- iOS 由可见的标题和箭头所在容器接收点击，避免透明按钮的触摸范围塌陷。 -->
             <!-- #ifndef APP-IOS -->
             <button class="action-hitbox" aria-label="掌上Codex列表菜单" :aria-expanded="menuVisible" hover-class="action-pressed" @click="toggleMenu"></button>
@@ -19,13 +19,8 @@
         <view v-if="liquidGlass" class="header-glass-group">
           <liquid-glass-control symbol="magnifyingglass" label="搜索聊天" secondary-symbol="gearshape" secondary-label="电脑连接设置" :secondary-disabled="creatingConversation" @activate="openSearch" @secondary="openConnection" />
         </view>
-        <view v-else class="header-actions"><view v-if="!desktopList" class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="desktopList ? 18 : 23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="电脑连接设置" @click="openConnection"></button></view></view>
+        <view v-else class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="电脑连接设置" @click="openConnection"></button></view></view>
       </template>
-    </view>
-    <view v-if="desktopList" class="search-field desktop-search">
-      <app-icon name="search" :size="16" tone="muted" />
-      <input v-model="search" class="search-input" aria-label="搜索聊天或项目" placeholder="搜索聊天或项目" :maxlength="100" confirm-type="search" />
-      <view v-if="search.length > 0" class="desktop-search-clear action-frame"><app-icon name="close" :size="15" tone="muted" /><button class="action-hitbox" aria-label="清除搜索" @click="search = ''"></button></view>
     </view>
     <view class="list-shell" :class="{ 'list-shell-glass': liquidGlass }">
     <deletion-task-list :visible-thread-keys="visibleDeletionThreadKeys" />
@@ -65,15 +60,14 @@
       <liquid-glass-control symbol="plus" :title="props.wide ? '新聊天' : '问问 Codex'" :label="props.wide ? '新聊天' : '问问 Codex，开启新聊天'" :disabled="creatingConversation" @activate="openNewConversation" />
     </view>
     </view>
-    <view v-if="desktopList && connection.configured" class="desktop-connection"><view class="desktop-connection-dot" :class="{ 'desktop-connection-online': onlineComputerCount > 0 }"></view><text>{{ onlineComputerCount }} 台电脑在线</text></view>
     <view v-if="!liquidGlass && props.wide" class="list-new-button action-frame">
-      <composer-plus v-if="!desktopList" /><text v-else class="desktop-new-plus" aria-hidden="true">+</text><text class="list-new-button-label">新聊天</text>
+      <composer-plus /><text class="list-new-button-label">新聊天</text>
       <button class="action-hitbox" hover-class="action-pressed" aria-label="新聊天" :disabled="creatingConversation" @click="openNewConversation"></button>
     </view>
     <view v-else-if="!liquidGlass" class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
     <view class="list-safe-area"></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
-    <home-menu v-if="menuMounted" :visible="menuVisible" :sort="effectiveListSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="closeMenu" @closed="finishMenuClose" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
+    <home-menu v-if="menuMounted" :visible="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="closeMenu" @closed="finishMenuClose" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
   </view>
 </template>
 
@@ -96,15 +90,12 @@ import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
 import { groupThreads, limitThreadGroups, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
-import { workspaceDesktopStyle } from '../../services/workspace-layout.uts'
 
 const liquidGlass = useLiquidGlass()
 // 列表模板通过本地方法读取删除任务。
 function deletionTask(hostId: string, threadId: string): DeleteTask | null { return findDeletionTask(hostId, threadId) }
 function deletionLabel(task: DeleteTask): string { return formatDeletionLabel(task) }
 const props = withDefaults(defineProps<{ active: boolean, wide?: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean }>(), { wide: false, selectedHostId: '', selectedThreadId: '', busy: false })
-const desktopList = computed((): boolean => props.wide && workspaceDesktopStyle())
-const onlineComputerCount = computed((): number => connection.connected ? connection.computers.filter((computer: Computer): boolean => computer.online).length : 0)
 const emit = defineEmits<{ open: [thread: ComputerThread], create: [hostId: string] }>()
 const paneShowCallbacks = [] as (() => void)[]
 const paneHideCallbacks = [] as (() => void)[]
@@ -182,9 +173,7 @@ function toggleMenu(event: UniPointerEvent) {
   if (menuMounted.value) closeMenu()
   else openMenu()
 }
-const listSort = ref('')
-// 桌面默认按日期分组，已有的排序偏好优先，窄屏默认仍按项目分组。
-const effectiveListSort = computed((): string => listSort.value.length > 0 ? listSort.value : desktopList.value ? 'time' : 'project')
+const listSort = ref('project')
 const recentFirst = ref(false)
 const recentThreads = ref([] as RecentThread[])
 // 偏好与最近访问独立存储；存储受限时仍保持当前页面可用。
@@ -192,12 +181,12 @@ function restoreListPreferences() {
   try {
     const raw = uni.getStorageSync('codex-mobile-list-preferences') as string
     const saved = normalizeListPreferences(raw.length > 0 ? JSON.parse<ListPreferences>(raw) : null)
-    listSort.value = raw.length > 0 ? saved.sort : ''; recentFirst.value = saved.recentFirst
+    listSort.value = saved.sort; recentFirst.value = saved.recentFirst
     const recent = uni.getStorageSync('codex-mobile-list-recent') as string
     recentThreads.value = recent.length > 0 ? (JSON.parse<RecentThread[]>(recent) ?? [] as RecentThread[]).filter((entry: RecentThread): boolean => entry.key.length > 0 && entry.viewedAt > 0).slice(0, 30) : [] as RecentThread[]
-  } catch (_) { listSort.value = ''; recentFirst.value = false; recentThreads.value = [] as RecentThread[] }
+  } catch (_) { listSort.value = 'project'; recentFirst.value = false; recentThreads.value = [] as RecentThread[] }
 }
-function saveListPreferences() { try { uni.setStorageSync('codex-mobile-list-preferences', JSON.stringify({ sort: effectiveListSort.value, recentFirst: recentFirst.value })) } catch (_) { uni.showToast({ title: '当前选择已生效，暂无法保存偏好', icon: 'none' }) } }
+function saveListPreferences() { try { uni.setStorageSync('codex-mobile-list-preferences', JSON.stringify({ sort: listSort.value, recentFirst: recentFirst.value })) } catch (_) { uni.showToast({ title: '当前选择已生效，暂无法保存偏好', icon: 'none' }) } }
 restoreListPreferences()
 const search = ref('')
 const searchVisible = ref(false)
@@ -313,7 +302,7 @@ onUnmounted(() => { stopComputerPulse() })
 // 默认按项目展示，切换排序和最近开关只影响当前筛选后的会话。
 const groups = computed((): ThreadGroup[] => {
   const threads = visibleComputerThreads(selectedComputerId.value, search.value)
-  return groupThreads(threads, effectiveListSort.value, recentFirst.value, recentThreads.value, dayStart.value)
+  return groupThreads(threads, listSort.value, recentFirst.value, recentThreads.value, dayStart.value)
 })
 
 // 大列表先挂载足够覆盖视口的行，首帧后补齐；返回列表继续复用已有节点。

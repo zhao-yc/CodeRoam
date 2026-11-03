@@ -2,17 +2,7 @@ export type WorkspaceTarget = { hostId: string, threadId: string, title: string,
 
 // 使用逻辑像素决定布局，避免设备识别误伤分屏窗口和桌面浏览器。
 export function workspaceIsWide(width: number): boolean { return width >= 900 }
-
-// 桌面方案仅用于 Web 宽屏，原生平板保留现有侧栏尺寸和触摸布局。
-export function workspaceDesktopStyle(): boolean {
-  let enabled = false
-  // #ifdef WEB
-  enabled = true
-  // #endif
-  return enabled
-}
-export function workspaceSidebarWidth(): number { return workspaceDesktopStyle() ? 256 : 340 }
-export function workspaceDetailWidth(width: number): number { return workspaceIsWide(width) ? Math.max(0, width - workspaceSidebarWidth() - 1) : width }
+export function workspaceDetailWidth(width: number): number { return workspaceIsWide(width) ? Math.max(0, width - 341) : width }
 
 // 身份包含配对和电脑，同名聊天编号不能复用其他目标的面板或异步结果。
 export function workspaceTargetKey(target: WorkspaceTarget | null): string {

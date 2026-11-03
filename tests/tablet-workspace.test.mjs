@@ -5,7 +5,7 @@ import {workspaceFixture} from './helpers/workspace-fixture.mjs';
 test('900 逻辑像素启用固定列表分栏，缩窄和恢复不切换聊天或重新导航电脑',async()=>{
   const f=workspaceFixture();assert.equal(f.mode.value,'list');assert.equal(f.selected.value,null);
   await f.selectConversation(f.target(),true);const target=f.selected.value;
-  for(const width of [320,390,820,899,900,1024,1366,1600]) { f.props.windowWidth=width;assert.equal(f.wide.value,width>=900);assert.equal(f.detailWidth.value,width>=900?width-257:width);assert.equal(f.selected.value,target);assert.equal(f.detailMounted.value,true); }
+  for(const width of [320,390,820,899,900,1024,1366,1600]) { f.props.windowWidth=width;assert.equal(f.wide.value,width>=900);assert.equal(f.detailWidth.value,width>=900?width-341:width);assert.equal(f.selected.value,target);assert.equal(f.detailMounted.value,true); }
   assert.equal(f.calls.filter(row=>row[0]==='open').length,1);
 });
 test('重复选择当前聊天不重开；快速切换只挂载最后目标，电脑与配对属于身份',async()=>{

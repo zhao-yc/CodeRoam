@@ -31,9 +31,8 @@
         <view v-if="cacheOnly && displayConversation == null" class="empty"><text class="empty-title">此聊天暂无本地正文</text><text class="empty-detail">连接电脑后可以查看。</text></view>
         <loading-skeleton v-else-if="displayConversation == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
         <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得聊天内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步聊天。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
-        <view v-for="entry in renderedTimeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: desktopDetail ? (entry.role == 'user' ? '85%' : '100%') : (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
+        <view v-for="entry in renderedTimeline" :id="entryAnchor(entry)" :key="entry.id" :class="['message', entry.role == 'user' ? 'message-user' : entry.role == 'assistant' ? 'message-agent' : 'message-execution']" :style="{ maxWidth: (entry.role == 'user' ? userBubbleWidth : userBubbleWidth + 48) + 'px' }">
           <template v-if="entry.role == 'user' || entry.role == 'assistant'">
-            <view v-if="desktopDetail && entry.role == 'assistant'" class="desktop-reply-header"><view class="desktop-reply-mark"><app-icon name="terminal" :size="13" tone="dark" /></view><text>Codex</text></view>
             <message-images v-if="entry.role == 'user' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="!cacheOnly && connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :style="{ marginBottom: entry.text.trim().length > 0 || (entry.attachments?.length ?? 0) > 0 ? '8px' : '0px' }" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
             <view v-if="entry.role == 'user' && (entry.attachments?.length ?? 0) > 0" class="message-files" :style="{ marginBottom: entry.text.trim().length > 0 ? '8px' : '0px' }"><view v-for="(file, fileIndex) in entry.attachments ?? []" :key="fileIndex" class="message-file" :aria-label="file.name"><app-icon name="file" :size="18" tone="muted" /><text class="message-file-name" selectable>{{ file.name }}</text></view></view>
             <!-- 注释入口先于正文显示，方便先查看引用再阅读补充文字。 -->
@@ -52,7 +51,7 @@
             <view class="turn-failure-copy"><text class="turn-failure-text" selectable>{{ entry.text }}</text><text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingCachedContent" class="turn-failure-hint">更新电脑连接服务后可重试</text></view>
             <view v-if="!cacheOnly && entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
           </view>
-          <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><app-icon v-if="desktopDetail" class="desktop-process-icon" name="clock" :size="13" tone="muted" /><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
+          <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
           <template v-else>
             <view class="execution-toggle action-frame"><app-icon name="edit" :size="19" tone="muted" /><text class="execution-summary">{{ entry.label }}</text><app-icon :name="isExecutionExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="(isExecutionExpanded(entry) ? '收起' : '展开') + entry.label" @click="toggleExecutions(entry)"></button></view>
             <scroll-view v-if="isExecutionExpanded(entry)" direction="vertical" class="execution-list" :style="{ height: Math.min(240, entry.executions.length * 44) + 'px' }" @touchstart.stop="beginExecutionTouch" @touchend.stop="endExecutionTouch" @touchcancel.stop="endExecutionTouch">
@@ -195,10 +194,8 @@ import ComposerOptions from '../../components/composer-options/composer-options.
 import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel, mergeSettingsSnapshot, mergeSettingsRead, resolveSettingsEffort } from '../../services/execution-settings.uts'
 import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '../../services/files.uts'
 import type { WorkspaceTarget } from '../../services/workspace-layout.uts'
-import { workspaceDesktopStyle } from '../../services/workspace-layout.uts'
 const liquidGlass = useLiquidGlass()
 const props = withDefaults(defineProps<{ target: WorkspaceTarget, active: boolean, paneWidth: number, paneHeight: number, embedded?: boolean, paneLeft?: number }>(), { embedded: false, paneLeft: 0 })
-const desktopDetail = computed((): boolean => props.embedded && workspaceDesktopStyle())
 const emit = defineEmits<{ close: [], removed: [kind: string], 'connect-cached': [] }>()
 // 缓存与实时详情使用不同的工作区键，连接时重新挂载正常面板。
 const cacheOnly = props.target.cacheOnly == true
@@ -382,7 +379,7 @@ const timelineStart = computed((): number => {
   const entries = timeline.value
   const boundary = timelineBoundary.value
   const start = boundary.length > 0 ? entries.findIndex((entry: TimelineEntry): boolean => entry.id == boundary) : -1
-  return start >= 0 ? start : firstScreenTimelineStart(entries, desktopDetail.value ? Math.min(648, props.paneWidth) : props.paneWidth, props.paneHeight)
+  return start >= 0 ? start : firstScreenTimelineStart(entries, props.paneWidth, props.paneHeight)
 })
 const visibleTimeline = computed((): TimelineEntry[] => timeline.value.slice(timelineStart.value))
 const messagePresentations = computed((): MessagePresentation[] => {

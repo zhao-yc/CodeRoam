@@ -1,18 +1,18 @@
 <template>
   <view class="chat-workspace" :class="{ 'workspace-wide': wide }">
-    <view v-if="!props.detailRoute || wide || (mode == 'list' && !openingRouteDetail)" v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? sidebarWidth + 'px' : '100%' }">
+    <view v-if="!props.detailRoute || wide || (mode == 'list' && !openingRouteDetail)" v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? '340px' : '100%' }">
       <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :wide="wide" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="createFromList" />
     </view>
     <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
       <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
-      <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="detailLeft" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" @connect-cached="connectCachedConversation" />
+      <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" @connect-cached="connectCachedConversation" />
       <view v-if="!props.detailRoute || wide || mode == 'new'" v-show="mode == 'new'" class="workspace-new">
         <view class="workspace-status-space"></view>
         <view id="new-conversation-header" class="workspace-new-header"><view class="workspace-header-button"><app-icon :name="wide ? 'close' : 'back'" :size="23" /><button class="workspace-hitbox" :disabled="creating" aria-label="关闭新聊天" @click="closeNewConversation"></button></view><text class="workspace-new-title">新聊天</text><view class="workspace-header-button"></view></view>
-        <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="detailLeft" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
+        <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
       </view>
     </view>
-    <task-notice :active="props.active && !(mode == 'conversation' && selected?.cacheOnly == true)" :header-id="mode == 'conversation' ? 'conversation-header' : mode == 'new' ? 'new-conversation-header' : 'home-header'" :host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" :pane-left="mode == 'list' ? 0 : detailLeft" :pane-width="wide && mode == 'list' ? sidebarWidth : detailWidth" />
+    <task-notice :active="props.active && !(mode == 'conversation' && selected?.cacheOnly == true)" :header-id="mode == 'conversation' ? 'conversation-header' : mode == 'new' ? 'new-conversation-header' : 'home-header'" :host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" :pane-left="wide && mode != 'list' ? 341 : 0" :pane-width="wide && mode == 'list' ? 340 : wide ? detailWidth : props.windowWidth" />
   </view>
 </template>
 
@@ -30,12 +30,10 @@ import { canReadCachedThread, cachedThreadGeneration, isCachedThreadScopeAllowed
 import { peekConversationPreview, primeConversationPreview } from '../../services/conversation-cache.uts'
 import { bindWorkspaceNoticeNavigation } from '../../services/task-notifications.uts'
 import type { TaskNotice as TaskNoticeTarget } from '../../services/task-notification-state.uts'
-import { workspaceIsWide, workspaceSidebarWidth, workspaceDetailWidth, workspaceTarget, workspaceTargetKey, WorkspaceTarget } from '../../services/workspace-layout.uts'
+import { workspaceIsWide, workspaceDetailWidth, workspaceTarget, workspaceTargetKey, WorkspaceTarget } from '../../services/workspace-layout.uts'
 
 const props = withDefaults(defineProps<{ initialTarget?: WorkspaceTarget | null, active: boolean, windowWidth: number, windowHeight: number, detailRoute?: boolean }>(), { initialTarget: null, detailRoute: false })
 const wide = computed((): boolean => workspaceIsWide(props.windowWidth))
-const sidebarWidth = workspaceSidebarWidth()
-const detailLeft = computed((): number => wide.value ? sidebarWidth + 1 : 0)
 const detailWidth = computed((): number => workspaceDetailWidth(props.windowWidth))
 const selected = ref<WorkspaceTarget | null>(null)
 const selectedKey = computed((): string => workspaceTargetKey(selected.value))
