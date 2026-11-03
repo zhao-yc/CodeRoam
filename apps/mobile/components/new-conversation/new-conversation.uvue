@@ -7,10 +7,10 @@
     <view class="new-dock">
       <!-- 提示放在面板上方，连接、发送和错误状态均不挤动底部图标。 -->
       <view v-if="props.expanded && (busy || native.busy || error.length > 0 || native.error.length > 0 || connection.error.length > 0)" class="editor-feedback"><text v-if="busy || native.busy" class="editor-note">{{ busy ? progress : '正在同步电脑草稿…' }}</text><text v-else class="editor-error">{{ native.error.length > 0 ? native.error : error.length > 0 ? error : connection.error }}</text></view>
-      <view v-if="props.expanded && (!busy && !native.busy && (error.length > 0 || native.error.length > 0) && !native.outcomeUnknown && !projectsLoading || pendingReadAction == 'reload')" class="retry-button inline-progress-button"><action-progress :busy="pendingReadAction == 'reload'" /><text class="inline-progress-caption" style="font-size: 13px; color: #285c49;">{{ pendingReadAction == 'reload' ? pendingReadLabel : reloadLabel }}</text><button class="inline-progress-hitbox" :disabled="pendingReadAction.length > 0" :aria-label="pendingReadAction == 'reload' ? '正在连接电脑草稿' : pendingReadAction == 'reload' ? pendingReadLabel : reloadLabel" @click="runDraftRead('reload')"></button></view>
+      <view v-if="props.expanded && (!busy && !native.busy && (error.length > 0 || native.error.length > 0) && !native.outcomeUnknown && !projectsLoading || reloading)" class="retry-button inline-progress-button"><action-progress :busy="reloading" /><text class="inline-progress-caption" style="font-size: 13px; color: #285c49;">重新读取</text><button class="inline-progress-hitbox" :disabled="reloading" :aria-label="reloading ? '正在重新读取' : '重新读取'" @click="runDraftRead"></button></view>
       <text v-if="props.expanded && native.snapshot?.hasDesktopText && native.snapshot?.status == 'ready'" class="editor-note">电脑草稿已有内容，请先在电脑处理；手机输入会保留。</text>
       <text v-if="props.expanded && draft.plugins.length > 0" class="editor-note">原生草稿暂不支持插件，请先移除插件后发送；已选插件会保留。</text>
-      <view v-if="props.expanded && (!busy && !native.busy && native.snapshot?.status == 'detached' && !native.outcomeUnknown || pendingReadAction == 'reconnect')" class="retry-button inline-progress-button"><action-progress :busy="pendingReadAction == 'reconnect'" /><text class="inline-progress-caption" style="font-size: 13px; color: #285c49;">{{ '重新连接电脑草稿' }}</text><button class="inline-progress-hitbox" :disabled="pendingReadAction.length > 0" :aria-label="pendingReadAction == 'reconnect' ? '正在连接电脑草稿' : '重新连接电脑草稿'" @click="runDraftRead('reconnect')"></button></view>
+      <button v-if="props.expanded && projectReady && !busy && !native.busy && !native.outcomeUnknown && native.snapshot?.status != 'promoted' && native.draftId.length > 0 && native.error.length > 0" class="retry-button" @click="resetDraftBinding">下次发送时打开新草稿</button>
       <view v-if="props.expanded && (!busy || pendingNewAction == 'check') && native.outcomeUnknown" class="retry-button inline-progress-button"><action-progress :busy="pendingNewAction == 'check'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">核对原操作结果</text><button class="inline-progress-hitbox" :disabled="native.busy || (pendingNewAction == 'check')" @click="checkDraftOutcome" :aria-label="(pendingNewAction == 'check') ? '正在核对原操作结果' : '核对原操作结果'"></button></view>
       <view v-if="props.expanded && (!busy || pendingNewAction == 'open') && native.snapshot?.status == 'promoted' && !native.outcomeUnknown" class="retry-button inline-progress-button"><action-progress :busy="pendingNewAction == 'open'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">打开电脑已发送的聊天</text><button class="inline-progress-hitbox" @click="followPromotion" :disabled="pendingNewAction == 'open'" :aria-label="(pendingNewAction == 'open') ? '正在打开聊天' : '打开电脑已发送的聊天'"></button></view>
       <message-composer :instance-id="composerInstanceId" :reset-key="connection.hostId + ':' + projectId" :cursor="mentionCursor" :model-label="modelLabel" :layout-width="props.paneWidth"
@@ -18,13 +18,13 @@
         :images="draft.images" :files="draft.files" :plugins="draft.plugins" :mentions="draft.threadMentions"
         :disabled="busy || !props.expanded" :chips-disabled="busy" :images-disabled="busy" :files-disabled="busy"
         :add-disabled="busy || imageBusy || !props.expanded" :primary-disabled="!canSend" primary-label="发送并开启新聊天" :primary-pending-label="pendingNewAction == 'send' ? '正在发送' : ''"
-        :settings-disabled="busy || !nativeReady || models.length == 0" :plan-enabled="settings?.mode == 'plan'" :plan-disabled="busy || !nativeReady || creationPendingId.length > 0"
+        :settings-disabled="busy || !projectReady || models.length == 0" :plan-enabled="settings?.mode == 'plan'" :plan-disabled="busy || !projectReady"
         :content-height="visibleContentHeight" :content-target="contentTarget" :entry-only="true"
         @input="updateText" @focus="onDraftFocus" @blur="focused = false" @linechange="onLineChange" @keyboardheightchange="onKeyboardChange"
         @syncinput="syncComposerText" @submit="send" @primary="send" @add="openOptions('add')" @settings="openOptions('settings')" @toggleplan="composerAction('plan')"
         @expand="expandEditor" @layout="showDraftInput"
         @removeimage="removeImage" @previewimage="previewImage" @removefile="removeFile" @removeplugin="removePlugin" @removemention="removeThreadMention">
-        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded" :project-id="projectId" :native-draft="true" :draft-id="native.draftId" :native-state="native.snapshot?.permissions ?? null" :native-status="native.snapshot?.status ?? ''" :native-busy="native.busy" :disabled="busy || creationPendingId.length > 0 || !nativeReady" @select="selectPermission" @refresh="loadSettings" /></template>
+        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded && projectReady" :project-id="projectId" :selected-mode="draft.choices.permissionMode ?? 'desktop-default'" :disabled="busy || native.busy" @select="selectPermission" /></template>
       </message-composer>
     </view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
@@ -36,9 +36,9 @@
           <template v-else><text v-if="projectsLoading" class="picker-note">正在读取项目…</text><text v-else-if="projects.length == 0" class="picker-note">{{ !connection.configured ? '请先连接电脑' : '请在电脑端添加项目，或重新读取' }}</text><view v-for="project in projects" :key="project.id" class="picker-row action-frame"><app-icon name="folder" :size="20" /><view class="project-copy"><text class="picker-label">{{ project.label }}</text><text class="project-path">{{ project.cwd }}</text></view><app-icon v-if="project.id == projectId" name="check" :size="20" /><button class="action-hitbox" :aria-label="'选择项目 ' + project.label" @click="chooseProject(project.id)"></button></view></template>
         </scroll-view>
       </view>
-      <view v-else class="new-options" @click.stop><composer-options :section="menu" :settings="settings" :models="models" :loading="settingsLoading" :busy="busy || native.busy" :pending-choice="native.busy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="pickerHeight" :images-enabled="!imageBusy && draft.images.length + draft.files.length < 3 && modelSupportsImages" :files-enabled="!imageBusy && draft.images.length + draft.files.length < 3" :settings-enabled="nativeReady && settings != null && models.length > 0" :plan-disabled="!nativeReady" note="附件最多3个，首次发送时上传到所选电脑" @section="changeSection" @action="composerAction" @select="selectSetting" @dismiss="closeMenus" @retry="loadSettings" /></view>
+      <view v-else class="new-options" @click.stop><composer-options :section="menu" :settings="settings" :models="models" :loading="settingsLoading" :busy="busy || native.busy" :error="settingsError" :width="menuWidth" :height="pickerHeight" :images-enabled="!imageBusy && draft.images.length + draft.files.length < 3 && modelSupportsImages" :files-enabled="!imageBusy && draft.images.length + draft.files.length < 3" :settings-enabled="projectReady && settings != null && models.length > 0" :plan-disabled="!projectReady" note="附件最多3个，首次发送时上传到所选电脑" @section="changeSection" @action="composerAction" @select="selectSetting" @dismiss="closeMenus" @retry="loadSettings" /></view>
     </view>
-    <thread-mention-picker v-if="mentionOpen && props.expanded && native.snapshot?.supportsThreadMentions == true" :host-id="connection.hostId" thread-id="" :scope-id="projectId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draft.threadMentions" @confirm="selectThreadMentions" @close="closeThreadMentions" />
+    <thread-mention-picker v-if="mentionOpen && props.expanded && projectReady" :host-id="connection.hostId" thread-id="" :scope-id="projectId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draft.threadMentions" @confirm="selectThreadMentions" @close="closeThreadMentions" />
     <plugin-picker v-if="pluginOpen && props.expanded" :host-id="connection.hostId" thread-id="" :project-id="projectId" :plugins="draft.plugins" @confirm="selectPlugins" @close="pluginOpen = false" />
   </view>
 </template>
@@ -55,17 +55,14 @@ import { setNewDraftThreadMentions } from '../../services/new-conversation.uts'
 import PluginPicker from '../plugin-picker/plugin-picker.uvue'
 import type { SelectedPlugin } from '../../services/plugins.uts'
 import { bridge, connection, computerIcon, Computer } from '../../services/bridge.uts'
-import { NewProject, NewDraft, newDraft, beginNewConversation, assignUnselectedDraft, sendNewConversation, finishNewDraft } from '../../services/new-conversation.uts'
+import { NewProject, NewDraft, newDraft, assignUnselectedDraft, sendNewConversation, finishNewDraft } from '../../services/new-conversation.uts'
 import { DraftImage, DraftFile } from '../../services/composer.uts'
-import { ModelOption, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
-import { nativeDraftState, watchNativeDraft, closeNativeDraft, updateNativeDraft, checkNativeDraftCommand } from '../../services/native-draft.uts'
+import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
+import { nativeDraftState, watchNativeDraft, closeNativeDraft, resetNativeDraftBinding, checkNativeDraftCommand } from '../../services/native-draft.uts'
 import { openPromotedConversation } from '../../services/new-conversation.uts'
 import { prepareImage } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
 import { validateFile } from '../../services/files.uts'
-
-// 展开只恢复原生草稿订阅，手机输入和插件选择始终按电脑、项目隔离。
-beginNewConversation()
 
 const props = withDefaults(defineProps<{ expanded?: boolean, paneWidth?: number, paneLeft?: number }>(), { expanded: false, paneWidth: 0, paneLeft: 0 })
 const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadId: string], dismiss: [] }>()
@@ -73,9 +70,9 @@ const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadI
 const composerInstanceId = 'composer-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
 const projectId = ref(''), projects = ref<NewProject[]>([])
 const pendingNewAction = ref('')
-const pendingReadAction = ref(''), pendingReadLabel = ref('')
-const settingChoice = ref('')
+const reloading = ref(false)
 const projectsLoading = ref(false), settingsLoading = ref(false)
+const projectSettings = ref<SettingsResponse | null>(null)
 const error = ref(''), settingsError = ref(''), busy = ref(false), imageBusy = ref(false), progress = ref('')
 const focused = ref(false), draftHeight = ref(64), keyboardInset = ref(0), picker = ref(''), menu = ref('')
 const menuWidth = computed((): number => Math.min(330, (props.paneWidth > 0 ? props.paneWidth : uni.getWindowInfo().windowWidth) - 28))
@@ -86,23 +83,27 @@ const pluginOpen = ref(false)
 const mentionOpen = ref(false), mentionCursor = ref(-1), mentionTrigger = ref<ThreadMentionTrigger | null>(null)
 let mentionDraftRevision = 0, mentionSourceRevision = 0, mentionContext = '', mentionSelectionRevision = 0
 let projectRequest = 0, settingsRequest = 0
-let nativeOpenRequested = false
 let alive = true
 let editorRevision = 0, editorLayoutTimer = 0
 const draft = computed((): NewDraft => newDraft(connection.hostId, projectId.value))
 const native = computed(() => nativeDraftState(connection.hostId, projectId.value))
-const models = computed((): ModelOption[] => native.value.snapshot?.models ?? [] as ModelOption[])
-const settings = computed(() => native.value.snapshot?.settings ?? null)
-const creationPendingId = computed((): string => native.value.pendingCommandId)
-const nativeReady = computed((): boolean => native.value.watching && native.value.snapshot?.status == 'ready' && !native.value.busy && !native.value.outcomeUnknown && !native.value.needsReadback)
+const existingDraft = computed(() => native.value.snapshot?.status == 'ready' ? native.value.snapshot : null)
+const models = computed((): ModelOption[] => existingDraft.value?.models ?? projectSettings.value?.models ?? [] as ModelOption[])
+const settings = computed((): ExecutionSettings | null => {
+  const defaults = existingDraft.value?.settings ?? projectSettings.value?.settings
+  const choices = draft.value.choices
+  if (defaults == null) return null
+  return { model: choices.model ?? defaults.model, effort: choices.effort ?? defaults.effort, serviceTier: choices.serviceTier ?? defaults.serviceTier, mode: choices.mode ?? defaults.mode } as ExecutionSettings
+})
 const computerOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online))
+const projectReady = computed((): boolean => connection.connected && computerOnline.value && !projectsLoading.value && projects.value.some((project: NewProject): boolean => project.id == projectId.value))
 const currentComputerIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId) ?? null))
 function iconForComputer(computer: Computer): string { return computerIcon(computer) }
 const computerLabel = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)?.label ?? '选择电脑')
 const projectLabel = computed((): string => projectsLoading.value ? '正在读取项目…' : projects.value.find((project: NewProject): boolean => project.id == projectId.value)?.label ?? '选择项目')
 const modelSupportsImages = computed((): boolean => models.value.find((model: ModelOption): boolean => model.id == settings.value?.model)?.supportsImages == true)
-const modelLabel = computed((): string => settingsLoading.value ? '正在读取设置…' : settings.value == null ? '等待电脑草稿' : shortModelLabel(models.value.find((model: ModelOption): boolean => model.id == settings.value?.model)?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort))
-const canSend = computed((): boolean => props.expanded && nativeReady.value && native.value.snapshot?.hasDesktopText != true && !busy.value && !imageBusy.value && !projectsLoading.value && !settingsLoading.value && connection.connected && computerOnline.value && creationPendingId.value.length == 0 && projectId.value.length > 0 && (draft.value.text.trim().length > 0 || draft.value.images.length > 0 || draft.value.files.length > 0) && (draft.value.images.length == 0 || modelSupportsImages.value))
+const modelLabel = computed((): string => settingsLoading.value ? '正在读取设置…' : settings.value == null ? '跟随电脑模型' : shortModelLabel(models.value.find((model: ModelOption): boolean => model.id == settings.value?.model)?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort))
+const canSend = computed((): boolean => props.expanded && projectReady.value && !native.value.busy && !native.value.outcomeUnknown && native.value.snapshot?.status != 'promoted' && existingDraft.value?.hasDesktopText != true && !busy.value && !imageBusy.value && !settingsLoading.value && (draft.value.text.trim().length > 0 || draft.value.images.length > 0 || draft.value.files.length > 0) && (draft.value.images.length == 0 || modelSupportsImages.value))
 const pickerHeight = computed((): number => Math.max(100, Math.min(340, currentWindowHeight.value - keyboardInset.value - 270)))
 const editorContentHeight = computed((): number => Math.min(draftHeight.value + (draft.value.images.length > 0 ? 70 : 0) + draft.value.files.length * 56 + (draft.value.plugins.length > 0 ? Math.ceil(draft.value.plugins.length / 2) * 44 : 0) + (draft.value.threadMentions.length > 0 ? draft.value.threadMentions.length * 44 : 0), Math.max(64, currentWindowHeight.value - keyboardInset.value - 300)))
 // 常驻编辑节点在收起时只占一行，工具栏始终预留相同的底部高度。
@@ -119,19 +120,23 @@ function openPicker(section: string) { if (busy.value) return; focused.value = f
 function openOptions(section: string) { if (!props.expanded || busy.value || imageBusy.value) return; picker.value = ''; menu.value = menu.value == section ? '' : section }
 function changeSection(section: string) { menu.value = section }
 
-// 显式展开或选择新项目才触发原生新聊天；网络恢复只读原绑定，不自动重放新建。
-function loadSettings(focusAfter: boolean = false) { if (!props.expanded) return; const open = nativeOpenRequested; nativeOpenRequested = false; return connectDraft(open, focusAfter) }
-// 仅展开并确定合法项目后打开原生新聊天；回读和重连入口明确分开。
-async function connectDraft(reconnect: boolean, focusAfter: boolean = false) {
-  if (!props.expanded || projectId.value.length == 0 || !connection.connected || !computerOnline.value || busy.value) return
-  const hostId = connection.hostId, id = projectId.value, request = ++settingsRequest
+// 编辑时只读项目设置。已有草稿可恢复观察，打开新草稿只能由发送触发。
+async function loadSettings(focusAfter: boolean = false) {
+  if (!props.expanded || !projectReady.value || busy.value) return
+  const hostId = connection.hostId, id = projectId.value, request = ++settingsRequest, state = native.value
+  const current = (): boolean => alive && props.expanded && projectReady.value && hostId == connection.hostId && id == projectId.value && request == settingsRequest && state == native.value
   settingsLoading.value = true; settingsError.value = ''
   try {
-    await watchNativeDraft(hostId, id, reconnect)
-    // 仅用户选择项目后的当前成功回执恢复焦点，自动刷新和迟到响应不抢输入。
-    if (focusAfter && alive && props.expanded && hostId == connection.hostId && id == projectId.value && request == settingsRequest && nativeReady.value) focusDraftInput()
+    const result = await bridge.request('thread.create.settings', { projectId: id })
+    if (!current()) return
+    const value = JSON.parse<SettingsResponse>(JSON.stringify(result))
+    if (value == null || value.settings == null || !Array.isArray(value.models)) throw new Error('暂时无法读取电脑模型设置，请重新读取')
+    projectSettings.value = value
+    if (state.outcomeUnknown && state.pendingCommandId.length > 0 && !state.busy) await checkDraftOutcome()
+    else if (state.draftId.length > 0 && !state.outcomeUnknown && !state.busy) await watchNativeDraft(hostId, id, false, true)
+    if (focusAfter && current()) focusDraftInput()
   }
-  catch (reason) { if (alive && props.expanded && hostId == connection.hostId && id == projectId.value && request == settingsRequest) { settingsError.value = (reason as Error).message; error.value = (reason as Error).message } }
+  catch (reason) { if (current()) { settingsError.value = (reason as Error).message; error.value = (reason as Error).message } }
   finally { if (alive && hostId == connection.hostId && id == projectId.value && request == settingsRequest) settingsLoading.value = false }
 }
 
@@ -145,6 +150,7 @@ async function loadProjects() {
     projectsLoading.value = false
     if (result.getBoolean('supportsNativeNewDraft') != true) {
       closeNativeDraft(hostId, projectId.value)
+      projects.value = [] as NewProject[]; projectSettings.value = null
       // 缺少页面连接和旧桥接未声明能力需要不同的处理。
       error.value = result.getBoolean('nativeNewDraftNeedsDesktopPage') == true ? '请在电脑用掌上 Codex 启动入口重新打开 Codex，再使用原生新聊天' : '请更新电脑连接服务后使用原生新聊天'
       return
@@ -153,7 +159,9 @@ async function loadProjects() {
     let remembered = ''
     try { const value = uni.getStorageSync('codex-mobile-new-project-' + hostId); if (typeof value == 'string') remembered = value } catch (_) {}
     const candidate = projectId.value.length > 0 ? projectId.value : remembered.length > 0 ? remembered : result.getString('selectedProjectId') ?? ''
-    projectId.value = projects.value.some((project: NewProject): boolean => project.id == candidate) ? candidate : ''
+    const selected = projects.value.some((project: NewProject): boolean => project.id == candidate) ? candidate : ''
+    if (selected != projectId.value) { closeNativeDraft(hostId, projectId.value); projectSettings.value = null }
+    projectId.value = selected
     if (projectId.value.length > 0) { assignUnselectedDraft(hostId, projectId.value); loadSettings() }
     else if (projects.value.length == 0) error.value = '请先在电脑端添加项目'
   }, (reason: Error) => { if (alive && hostId == connection.hostId && request == projectRequest) { projectsLoading.value = false; error.value = reason.message + '，请确认电脑连接服务已更新' } })
@@ -162,41 +170,47 @@ function chooseComputer(id: string) { if (busy.value) return; try { if (id != co
 function chooseProject(id: string) {
   if (busy.value || !projects.value.some((project: NewProject): boolean => project.id == id)) return
   if (projectId.value.length == 0) assignUnselectedDraft(connection.hostId, id)
-  if (id != projectId.value) { closeNativeDraft(connection.hostId, projectId.value); nativeOpenRequested = true }
+  if (id != projectId.value) { closeNativeDraft(connection.hostId, projectId.value); projectSettings.value = null }
   projectId.value = id; settingsRequest++; settingsLoading.value = false; closeMenus(); error.value = ''
   try { uni.setStorageSync('codex-mobile-new-project-' + connection.hostId, id) } catch (_) {}
   loadSettings(true)
 }
-const reloadLabel = computed((): string => native.value.snapshot == null && native.value.draftId.length == 0 && projects.value.length > 0 ? '重新连接电脑草稿' : '重新读取')
 // 复用项目和草稿原有请求，只标记手动点击的入口。
-async function runDraftRead(action: string) {
-  if (pendingReadAction.value.length > 0 || busy.value || native.value.busy) return
+async function runDraftRead() {
+  if (reloading.value || busy.value || native.value.busy) return
   const hostId = connection.hostId, revision = editorRevision
-  pendingReadLabel.value = reloadLabel.value; pendingReadAction.value = action
+  reloading.value = true
   try {
-    if (action == 'reconnect') await connectDraft(true)
-    else if (projects.value.length == 0) await loadProjects()
+    if (projects.value.length == 0) await loadProjects()
     else await loadSettings()
-  } finally { if (hostId == connection.hostId && revision == editorRevision) pendingReadAction.value = '' }
+  } finally { if (hostId == connection.hostId && revision == editorRevision) reloading.value = false }
 }
-// 不修改本地显示设置，等待 UPDATE 和只读确认后由原生快照驱动界面。
-async function selectSetting(key: string, value: string) {
-  if (busy.value || !nativeReady.value || ['model', 'effort', 'serviceTier'].indexOf(key) < 0) return
-  const changes: UTSJSONObject = {}; changes[key] = value
-  // 模型、强度和速度共用确认后的焦点恢复，仍等待电脑草稿同步成功。
-  await changeNativeSettings(changes, false, true, key + ':' + value)
-}
-async function changeNativeSettings(changes: UTSJSONObject, confirmed: boolean = false, focusAfter: boolean = false, choice: string = '') {
-  const state = native.value, hostId = connection.hostId, id = projectId.value
-  // 只在原草稿确认成功且仍展开时恢复焦点，失败继续保留错误提示。
-  settingChoice.value = choice
-  try { settingsError.value = ''; await updateNativeDraft(state, changes, confirmed); if (alive && hostId == connection.hostId && id == projectId.value) { error.value = ''; closeMenus(); if (focusAfter && props.expanded) focusDraftInput() } }
-  catch (reason) { if (alive && hostId == connection.hostId && id == projectId.value) { settingsError.value = (reason as Error).message; error.value = (reason as Error).message } }
-  finally { if (alive && hostId == connection.hostId && id == projectId.value) settingChoice.value = '' }
+// 手动恢复只重置手机绑定，桌面仍停留在当前页面。
+function resetDraftBinding() { resetNativeDraftBinding(native.value); error.value = '' }
+// 编辑选项只改手机草稿，模型切换时同时更新适用于新模型的强度和速度。
+function selectSetting(key: string, value: string) {
+  if (busy.value || !projectReady.value || settings.value == null) return
+  const model = models.value.find((option: ModelOption): boolean => option.id == (key == 'model' ? value : settings.value?.model))
+  if (model == null) return
+  const choices = draft.value.choices
+  if (key == 'model') {
+    if (value != settings.value!.model) {
+      choices.effort = model.defaultEffort.length > 0 && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : undefined
+      if (!model.speeds.some(option => option.id == settings.value!.serviceTier)) choices.serviceTier = ''
+    }
+    choices.model = value
+  } else if (key == 'effort' && model.efforts.includes(value)) { choices.model = model.id; choices.effort = value }
+  else if (key == 'serviceTier' && model.speeds.some(option => option.id == value)) { choices.model = model.id; choices.serviceTier = value }
+  else return
+  closeMenus(); focusDraftInput()
 }
 function imageId(): string { return Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2) }
-// 完整访问的确认来自权限组件，权限与模型使用同一个原生草稿版本。
-function selectPermission(mode: string, confirmed: boolean) { if (nativeReady.value && !busy.value) changeNativeSettings({ permissionMode: mode }, confirmed, true) }
+// 完整访问仍须在权限选择器中确认，确认只用于当前电脑和项目的这条草稿。
+function selectPermission(mode: string, confirmed: boolean) {
+  if (!projectReady.value || busy.value || (mode == 'full-access' && !confirmed)) return
+  draft.value.choices.permissionMode = mode; draft.value.choices.confirmedFullAccess = mode == 'full-access' && confirmed
+  focusDraftInput()
+}
 function remaining(): number { return Math.max(0, 3 - draft.value.images.length - draft.value.files.length) }
 async function acceptImages(target: NewDraft, paths: string[]) {
   imageBusy.value = true
@@ -235,9 +249,9 @@ function composerAction(action: string) {
   // 目标属于真实会话，首次发送前只说明入口，保留尚未发送的草稿。
   if (action == 'goal') { closeMenus(); uni.showModal({ title: '追求目标', content: '请先发送消息创建聊天，再从加号菜单设置目标。', showCancel: false, confirmText: '知道了' }); return }
   if (action == 'plan') {
-    if (!nativeReady.value || settings.value == null) return
-    // 开启和关闭都等待电脑确认，失败或目标切换时不抢回输入焦点。
-    changeNativeSettings({ mode: settings.value!.mode == 'plan' ? 'default' : 'plan' }, false, true, 'mode')
+    if (!projectReady.value || settings.value == null) return
+    draft.value.choices.mode = settings.value!.mode == 'plan' ? 'default' : 'plan'
+    closeMenus(); focusDraftInput()
     return
   }
   closeMenus(); if (action == 'camera' || action == 'album') chooseImages(action); else if (action == 'file') chooseFiles()
@@ -261,7 +275,7 @@ function syncComposerText(text: string) { if (props.expanded && !busy.value) { d
 function updateText(event: UniInputEvent) {
   if (!props.expanded) return
   draft.value.text = event.detail.value; mentionCursor.value = -1
-  if (busy.value || native.value.snapshot?.supportsThreadMentions != true || mentionOpen.value) return
+  if (busy.value || !projectReady.value || mentionOpen.value) return
   const trigger = findThreadMentionTrigger(event.detail.value, event.detail.cursor ?? -1)
   if (trigger == null) return
   closeMenus(); mentionTrigger.value = trigger; mentionSourceRevision = mentionDraftRevision
@@ -278,7 +292,7 @@ function closeThreadMentions(restoreFocus: boolean = true) {
 // 不接管迟到选择；电脑、项目、草稿正文及标签版本必须仍与打开时一致。
 function selectThreadMentions(mentions: SelectedThreadMention[]) {
   const trigger = mentionTrigger.value
-  if (busy.value || native.value.snapshot?.supportsThreadMentions != true || trigger == null || mentionContext != threadMentionContext() || mentionSourceRevision != mentionDraftRevision || mentionSelectionRevision != draft.value.threadMentionRevision) { closeThreadMentions(false); notify('草稿已变化，请在当前位置重新引用聊天'); return }
+  if (busy.value || !projectReady.value || trigger == null || mentionContext != threadMentionContext() || mentionSourceRevision != mentionDraftRevision || mentionSelectionRevision != draft.value.threadMentionRevision) { closeThreadMentions(false); notify('草稿已变化，请在当前位置重新引用聊天'); return }
   const replacement = replaceThreadMentionTrigger(draft.value.text, trigger)
   if (replacement == null) { closeThreadMentions(false); notify('草稿已变化，正文已保留'); return }
   setNewDraftThreadMentions(draft.value, mentions); draft.value.text = replacement.text
@@ -303,8 +317,8 @@ async function send() {
 function syncEditorVisibility(expanded: boolean) {
   const revision = ++editorRevision
   clearTimeout(editorLayoutTimer); focused.value = false; closeMenus()
-  if (!expanded) { pendingReadAction.value = ''; nativeOpenRequested = false; closeNativeDraft(connection.hostId, projectId.value); projectRequest++; settingsRequest++; projectsLoading.value = false; settingsLoading.value = false; keyboardInset.value = 0; return }
-  nativeOpenRequested = true; beginNewConversation(); error.value = ''; settingsError.value = ''
+  if (!expanded) { reloading.value = false; closeNativeDraft(connection.hostId, projectId.value); projectRequest++; settingsRequest++; projectsLoading.value = false; settingsLoading.value = false; keyboardInset.value = 0; return }
+  error.value = ''; settingsError.value = ''
   baseWindowHeight = uni.getWindowInfo().windowHeight; currentWindowHeight.value = baseWindowHeight
   loadProjects()
   nextTick(() => { if (alive && props.expanded && revision == editorRevision) focused.value = true })
@@ -329,7 +343,7 @@ onUnmounted(() => { unbindImagePaste() })
 watch((): string => connection.hostId, (hostId: string, previous: string) => {
   closeNativeDraft(previous, projectId.value)
   if (previous.length == 0 && hostId.length > 0) { const source = newDraft('', ''), target = newDraft(hostId, ''); if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.plugins.length == 0 && target.threadMentions.length == 0) { target.text = source.text; target.images = source.images; target.files = source.files; target.plugins = source.plugins; target.threadMentions = source.threadMentions; target.threadMentionRevision++; source.threadMentions = [] as SelectedThreadMention[]; source.threadMentionRevision++; source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]; source.plugins = [] as SelectedPlugin[] } }
-  pendingReadAction.value = ''; settingChoice.value = ''; projectId.value = ''; projects.value = [] as NewProject[]
+  reloading.value = false; projectId.value = ''; projects.value = [] as NewProject[]; projectSettings.value = null
   projectRequest++; settingsRequest++; settingsLoading.value = false; projectsLoading.value = false; closeMenus(); loadProjects()
 })
 watch((): string => connection.connected.toString() + ':' + computerOnline.value.toString(), (_current: string, _previous: string) => { if (connection.connected && computerOnline.value) loadProjects(); else closeNativeDraft(connection.hostId, projectId.value) })

@@ -64,7 +64,7 @@ function fixture(storage = new Map()) {
     uni: { getStorageSync: key => storage.get(key) ?? '', removeStorageSync: key => storage.delete(key), setStorageSync: (key, value) => { if (denied) throw Error('存储不可用'); storage.set(key, value); } },
   });
   const source = ['composer', 'native-draft', 'new-conversation'].map(name => fs.readFileSync('apps/mobile/services/' + name + '.uts', 'utf8')).join('\n').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
-  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={newDraft,beginNewConversation,assignUnselectedDraft,sendNewConversation,nativeDraftState,watchNativeDraft,closeNativeDraft,checkNativeDraftCommand,openPromotedConversation,applyNativeDraftSnapshot,readDraft};', c);
+  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={newDraft,assignUnselectedDraft,sendNewConversation,nativeDraftState,watchNativeDraft,closeNativeDraft,checkNativeDraftCommand,openPromotedConversation,applyNativeDraftSnapshot,readDraft};', c);
   return { ...c.subject, storage, calls, connection, snapshots, commands,
     denyStorage() { denied = true; }, fail(method, unknown = false, index = null) { failure = { method, unknown, index }; },
     async open(projectId = 'project') { await c.subject.watchNativeDraft('pc', projectId); return c.subject.nativeDraftState('pc', projectId); },
@@ -90,13 +90,14 @@ test('打开只取得原生草稿，首条确认后一次 native send 再订阅�
   assert.equal(f.calls.find(call => call.method === 'thread.draft.send').params.expectedRevision, 1); assert.equal(state.watching, false);
 });
 
-test('连续点击只发送一次，未选择项目、离线和未打开原生草稿均不隐式 open', async () => {
+test('连续点击只发送一次，未选择项目或离线不打开草稿，显式发送才首次打开', async () => {
   const f = fixture(); await f.open(); const draft = f.newDraft('pc', 'project'); draft.text = '合成消息';
   const sending = f.sendNewConversation(draft, () => {}); await assert.rejects(f.sendNewConversation(draft, () => {}), /正在提交/); await sending;
   const empty = f.newDraft('pc', ''); empty.text = '未选项目'; await assert.rejects(f.sendNewConversation(empty, () => {}), /选择项目/);
-  const unopened = f.newDraft('pc', 'other'); unopened.text = '未打开'; await assert.rejects(f.sendNewConversation(unopened, () => {}), /暂停/);
+  const unopened = f.newDraft('pc', 'other'); unopened.text = '未打开'; await f.sendNewConversation(unopened, () => {});
+  assert.equal(f.calls.filter(call => call.method === 'thread.draft.open' && call.params.projectId === 'other').length, 1);
   f.connection.connected = false; await assert.rejects(f.sendNewConversation(draft, () => {}), /连接已变化/);
-  assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 1); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
+  assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 2); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 2);
 });
 
 test('明确发送失败先核对原命令，失败确认后用户重试仍复用同草稿，不自动发送', async () => {
@@ -138,7 +139,7 @@ test('收起重开同原生草稿保留上传完成状态、文字与插件，�
   const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.text = '未发送内容'; draft.files = [file()];
   f.fail('thread.draft.send'); await assert.rejects(f.sendNewConversation(draft, () => {}), /明确失败/); await f.checkNativeDraftCommand(state);
   assert.equal(draft.files[0].status, 'ready');
-  f.closeNativeDraft('pc', 'project'); f.beginNewConversation(); await f.open();
+  f.closeNativeDraft('pc', 'project'); await f.open();
   assert.equal(draft.text, '未发送内容'); assert.equal(draft.files[0].status, 'ready');
   await f.sendNewConversation(draft, () => {});
   assert.equal(f.calls.filter(call => call.method === 'attachment.begin').length, 1); assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 1);

@@ -84,9 +84,8 @@ test('面板只保留一个输入节点，附件状态覆盖本地、上传、�
 test('新聊天回车与按钮共用创建流程，提交中不重复创建，失败保留草稿，仅附件也能发送', async () => {
   const parent = fs.readFileSync('apps/mobile/components/new-conversation/new-conversation.uvue', 'utf8');
   const pending = [], events = [], ref = value => ({value});
-  const c = {props: {expanded: true}, nativeReady: ref(true), native: ref({snapshot: {hasDesktopText: false}}),
-    busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), projectsLoading: ref(false), settingsLoading: ref(false),
-    connection: {connected: true}, computerOnline: ref(true), creationPendingId: ref(''), projectId: ref('example-project'),
+  const c = {props: {expanded: true}, projectReady: ref(true), native: ref({snapshot: null}), existingDraft: ref(null),
+    busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), settingsLoading: ref(false),
     draft: ref({text: '保留的合成草稿', images: [], files: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
     computed: read => ({get value() { return read(); }}), closeMenus() {}, uni: {hideKeyboard() {}},
     emit: (...event) => events.push(event), sendNewConversation: () => new Promise((resolve, reject) => pending.push({resolve, reject}))};
@@ -101,7 +100,7 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
   c.draft.value.images = [{id: 'example-image'}]; enter(); assert.equal(pending.length, 1);
   pending.shift().resolve('example-thread'); await new Promise(resolve => setImmediate(resolve));
   assert.ok(events.some(event => event[0] === 'created' && event[1] === 'example-thread'));
-  c.nativeReady.value = false; enter(); assert.equal(pending.length, 0);
+  c.projectReady.value = false; enter(); assert.equal(pending.length, 0);
 });
 
 test('详情回车只采纳预测或发送内容，空输入不触发停止和重试，禁用或附件未就绪时保留输入', () => {

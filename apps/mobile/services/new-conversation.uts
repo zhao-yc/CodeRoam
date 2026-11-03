@@ -5,10 +5,11 @@ import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
 import type { SelectedPlugin } from './plugins.uts'
 import { SelectedThreadMention, copyThreadMentions } from './thread-mentions.uts'
 import { readDraftThreadMentions, saveDraftThreadMentions } from './composer.uts'
-import { NativeDraftState, nativeDraftState, readNativeDraft, assertNativeDraftReady, sendNativeDraft, acknowledgeNativeDraftPromotion } from './native-draft.uts'
+import { NativeDraftState, nativeDraftState, watchNativeDraft, readNativeDraft, assertNativeDraftReady, updateNativeDraft, sendNativeDraft, acknowledgeNativeDraftPromotion } from './native-draft.uts'
 
 export type NewProject = { id: string, label: string, cwd: string }
-export type NewDraft = { hostId: string, projectId: string, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], threadMentions: SelectedThreadMention[], threadMentionRevision: number, attachmentDraftId: string, threadId: string, pendingAction: string, pendingCommandId: string }
+export type NewDraftChoices = { model?: string, effort?: string, serviceTier?: string, mode?: string, permissionMode?: string, confirmedFullAccess?: boolean }
+export type NewDraft = { hostId: string, projectId: string, cacheNamespace: string, choices: NewDraftChoices, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], threadMentions: SelectedThreadMention[], threadMentionRevision: number, attachmentDraftId: string, threadId: string, pendingAction: string, pendingCommandId: string }
 const drafts = reactive<NewDraft[]>([])
 const submitting = new Set<string>()
 type NewDraftSubmission = { text: string, imageIds: string[], fileIds: string[], threadMentionRevision: number }
@@ -21,16 +22,14 @@ export function setNewDraftThreadMentions(draft: NewDraft, mentions: SelectedThr
 
 // 手机文字和插件选择仅存在本地内存，电脑文字不会进入此草稿。
 export function newDraft(hostId: string, projectId: string): NewDraft {
-  const found = drafts.find((draft: NewDraft): boolean => draft.hostId == hostId && draft.projectId == projectId)
+  const cacheNamespace = connection.cacheNamespace ?? ''
+  const found = drafts.find((draft: NewDraft): boolean => draft.hostId == hostId && draft.projectId == projectId && draft.cacheNamespace == cacheNamespace)
   if (found != null) return found
   try { uni.removeStorageSync('codex-mobile-new-' + hostId + '-' + projectId) } catch (_) {}
-  const draft: NewDraft = { hostId, projectId, text: '', images: [] as DraftImage[], files: [] as DraftFile[], plugins: [] as SelectedPlugin[], threadMentions: [] as SelectedThreadMention[], threadMentionRevision: 0, attachmentDraftId: '', threadId: '', pendingAction: '', pendingCommandId: '' }
+  const draft: NewDraft = { hostId, projectId, cacheNamespace, choices: {} as NewDraftChoices, text: '', images: [] as DraftImage[], files: [] as DraftFile[], plugins: [] as SelectedPlugin[], threadMentions: [] as SelectedThreadMention[], threadMentionRevision: 0, attachmentDraftId: '', threadId: '', pendingAction: '', pendingCommandId: '' }
   drafts.push(draft)
   return drafts[drafts.length - 1]
 }
-
-// 展开不会解除原生编号、清空输入或重放写请求，订阅由 native-draft 管理。
-export function beginNewConversation() {}
 
 // 首次选项目接住未分配的文字、附件和已有插件选择。
 export function assignUnselectedDraft(hostId: string, projectId: string) {
@@ -44,7 +43,28 @@ export function assignUnselectedDraft(hostId: string, projectId: string) {
 
 function assertDraftDestination(draft: NewDraft, state: NativeDraftState, draftId: string) {
   assertNativeDraftReady(state, true)
-  if (connection.hostId != draft.hostId || state.projectId != draft.projectId || state.draftId != draftId) throw new Error('草稿目标已切换，附件和输入已保留')
+  if (connection.hostId != draft.hostId || (connection.cacheNamespace ?? '') != draft.cacheNamespace || state.projectId != draft.projectId || state.draftId != draftId) throw new Error('草稿目标已切换，附件和输入已保留')
+}
+
+// 手机选项只是本地意图，打开原生草稿后按模型、强度、速度、模式、权限的顺序确认。
+async function applyNewDraftChoices(state: NativeDraftState, choices: NewDraftChoices) {
+  const settings = state.snapshot!.settings
+  const changes: UTSJSONObject = {}
+  if (choices.model != null && choices.model != settings.model) changes['model'] = choices.model
+  // 模型切换可能重置强度和速度，显式选择须在新模型上再次落实。
+  if (choices.effort != null && (changes['model'] != null || choices.effort != settings.effort)) changes['effort'] = choices.effort
+  if (choices.serviceTier != null && (changes['model'] != null || choices.serviceTier != settings.serviceTier)) changes['serviceTier'] = choices.serviceTier
+  if (choices.mode != null && choices.mode != settings.mode) changes['mode'] = choices.mode
+  if (choices.permissionMode != null && choices.permissionMode != state.snapshot!.permissions.mode) changes['permissionMode'] = choices.permissionMode
+  if (Object.keys(changes).length > 0) await updateNativeDraft(state, changes, choices.confirmedFullAccess == true)
+}
+
+// 上传期间桌面仍可能更改选项；以实际发送版本核对，任何不一致都保留手机草稿。
+function assertNewDraftChoices(state: NativeDraftState, choices: NewDraftChoices) {
+  const snapshot = state.snapshot!, settings = snapshot.settings
+  if (choices.model != null && choices.model != settings.model || choices.effort != null && choices.effort != settings.effort || choices.serviceTier != null && choices.serviceTier != settings.serviceTier || choices.mode != null && choices.mode != settings.mode) throw new Error('电脑草稿的模型或执行设置与手机选择不同，请重新选择后发送')
+  if (choices.permissionMode != null && choices.permissionMode != snapshot.permissions.mode) throw new Error('电脑草稿权限与手机选择不同，请重新选择后发送')
+  if (snapshot.permissions.mode == 'full-access' && (choices.permissionMode != 'full-access' || choices.confirmedFullAccess != true)) throw new Error('电脑草稿为完整访问，请在手机上选择并确认权限后发送')
 }
 
 // 草稿范围变化后必须重新上传，已完成的附件不能跨原生草稿复用。
@@ -80,12 +100,13 @@ async function uploadDraftAttachment(draft: NewDraft, state: NativeDraftState, d
 
 // 只有明确成功回执才消费发送快照，保留发送期间新增的输入和引用。
 export function finishNewDraft(draft: NewDraft) {
-  const key = draft.hostId + ':' + draft.projectId, sent = newSubmissions.get(key)
+  const key = JSON.stringify([draft.cacheNamespace, draft.hostId, draft.projectId]), sent = newSubmissions.get(key)
   if (sent != null) {
     if (draft.text.trim() == sent.text) draft.text = ''
     draft.images = draft.images.filter((image: DraftImage): boolean => sent.imageIds.indexOf(image.id) < 0)
     draft.files = draft.files.filter((file: DraftFile): boolean => sent.fileIds.indexOf(file.id) < 0)
     if (draft.threadMentionRevision == sent.threadMentionRevision) { draft.threadMentions = [] as SelectedThreadMention[]; draft.threadMentionRevision++ }
+    draft.choices = {} as NewDraftChoices
     newSubmissions.delete(key)
   }
   draft.attachmentDraftId = ''; draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''
@@ -94,7 +115,7 @@ export function finishNewDraft(draft: NewDraft) {
 // promotion 只订阅正式聊天，不接管空会话、不重写执行设置、更不补发消息。
 export async function openPromotedConversation(draft: NewDraft, preserveInput: boolean = true): Promise<string> {
   const state = nativeDraftState(draft.hostId, draft.projectId)
-  if (state.snapshot?.status != 'promoted' || connection.hostId != draft.hostId || !state.watching) throw new Error('草稿目标已变化，请重新读取')
+  if (state.snapshot?.status != 'promoted' || connection.hostId != draft.hostId || (connection.cacheNamespace ?? '') != draft.cacheNamespace || !state.watching) throw new Error('草稿目标已变化，请重新读取')
   const threadId = state.snapshot!.threadId ?? ''
   if (threadId.length == 0) throw new Error('尚未取得电脑聊天编号')
   if (preserveInput) {
@@ -114,24 +135,34 @@ export async function openPromotedConversation(draft: NewDraft, preserveInput: b
 
 // 重复点击只允许一个提交流程；关闭、重连和事件回调均不能调用此入口。
 export async function sendNewConversation(draft: NewDraft, progress: (message: string) => void): Promise<string> {
-  const key = draft.hostId + ':' + draft.projectId
+  const key = JSON.stringify([draft.cacheNamespace, draft.hostId, draft.projectId])
   if (submitting.has(key)) throw new Error('正在提交，请勿重复发送')
   submitting.add(key)
   draft.pendingAction = 'send'
   try {
     const state = nativeDraftState(draft.hostId, draft.projectId)
     if (draft.projectId.length == 0) throw new Error('请先选择项目')
-    assertNativeDraftReady(state, true)
+    if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
+    if (connection.hostId != draft.hostId || (connection.cacheNamespace ?? '') != draft.cacheNamespace || !connection.connected) throw new Error('电脑连接已变化，请重新连接后发送')
+    if (state.snapshot?.status == 'promoted') throw new Error('电脑已发送此草稿，请打开对应聊天；手机输入已保留')
     const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), plugins = draft.plugins.slice()
+    const choices = { ...draft.choices } as NewDraftChoices
     const mentions = draft.threadMentions.length > 0 ? copyThreadMentions(draft.threadMentions) : [] as SelectedThreadMention[], threadMentionRevision = draft.threadMentionRevision
     if (text.length == 0 && images.length == 0 && files.length == 0) throw new Error('请先输入内容或添加附件')
     if (images.length + files.length > 3) throw new Error('每次最多添加3个附件')
     if (plugins.length > 0) throw new Error('原生草稿暂不支持插件，请先移除插件后发送')
-    if (mentions.length > 0 && state.snapshot?.supportsThreadMentions != true) throw new Error('请更新电脑连接服务后引用聊天')
-    progress('正在核对电脑草稿…')
-    await readNativeDraft(state)
+    if (mentions.length > 0 && state.snapshot?.status == 'ready' && state.snapshot!.supportsThreadMentions != true) throw new Error('请更新电脑连接服务后引用聊天')
+    // 只有用户点发送才允许打开原生页面；重试优先复用已核验的草稿编号。
+    progress('正在准备电脑草稿…')
+    if (!state.watching || state.draftId.length == 0) await watchNativeDraft(draft.hostId, draft.projectId)
+    else await readNativeDraft(state)
+    if (state.snapshot?.status == 'detached') await watchNativeDraft(draft.hostId, draft.projectId, true)
     const draftId = state.draftId
     assertDraftDestination(draft, state, draftId)
+    if (mentions.length > 0 && state.snapshot?.supportsThreadMentions != true) throw new Error('请更新电脑连接服务后引用聊天')
+    await applyNewDraftChoices(state, choices)
+    assertDraftDestination(draft, state, draftId)
+    assertNewDraftChoices(state, choices)
     if (images.length > 0 && state.snapshot!.models.find((model): boolean => model.id == state.snapshot!.settings.model)?.supportsImages != true) throw new Error('当前模型不支持图片，请切换模型')
     bindDraftAttachments(draft, draftId)
     progress('正在上传草稿附件…')
@@ -140,6 +171,7 @@ export async function sendNewConversation(draft: NewDraft, progress: (message: s
     await readNativeDraft(state)
     assertDraftDestination(draft, state, draftId)
     progress('正在发送…')
+    assertNewDraftChoices(state, choices)
     // 图片沿用已有发送协议：prepareImage 产出每张最多320 KiB的PNG/JPEG data URI。
     const message: UTSJSONObject = { text, images: images.map((image: DraftImage): string => image.src), attachments: files.map((file: DraftFile): string => file.id) }
     if (mentions.length > 0) message['threadMentionIds'] = mentions.map((mention: SelectedThreadMention): string => mention.id)

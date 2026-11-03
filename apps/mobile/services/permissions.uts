@@ -3,6 +3,7 @@ export type PermissionState = { mode: string, revision: string, options?: Permis
 
 // 缺失和自定义状态明确展示，不能把未知权限当作默认权限。
 export function permissionLabel(mode: string): string {
+  if (mode == 'desktop-default') return '跟随电脑权限'
   if (mode == 'default') return '默认权限'
   if (mode == 'auto-review') return '自动审查'
   if (mode == 'read-only') return '只读'

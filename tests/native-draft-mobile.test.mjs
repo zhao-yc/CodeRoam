@@ -41,6 +41,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
       const run = async () => {
         if (hooks.has(method)) return hooks.get(method)(params, hostId);
         if (method === 'projects.list') return { supportsNativeNewDraft: true, projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a' };
+        if (method === 'thread.create.settings') { const { settings, models } = snapshot(params.projectId); return { settings, models }; }
         if (method === 'thread.draft.open') {
           let value = [...backend.values()].find(entry => entry.hostId === hostId && entry.projectId === params.projectId && entry.status !== 'promoted');
           if (!value) { value = { ...snapshot(params.projectId, 'draft-' + ++created), hostId }; backend.set(hostId + ':' + value.draftId, value); }
@@ -81,7 +82,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
-  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,projectId,draft,native,settings,canSend,focused,error' : '') + '};', context);
+  vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,send,projectId,draft,native,settings,canSend,focused,error' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
   return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
@@ -424,28 +425,54 @@ test('完整访问弹窗期间切电脑或权限版本变化取消旧确认，�
   assert.deepEqual(existing.calls.map(call => call.method), ['thread.permissions.read', 'thread.permissions.update']); assert.equal(existing.calls[1].write, true);
 });
 
-test('新建组件只在展开并通过 projects 能力检查后 open，设置选择不提前改变显示', async () => {
+test('展开与本地选择不打开电脑草稿，显式发送才打开并落实设置', async () => {
   const f = fixture({ component: true }); f.loadProjects(); await tick(); assert.equal(f.calls.length, 0);
   f.props.expanded = true; f.loadProjects(); await tick(); await tick();
-  assert.equal(f.projectId.value, 'project-a'); assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 1);
-  const wait = deferred(); f.hooks.set('thread.draft.update', () => wait.promise);
-  const selecting = f.selectSetting('effort', 'high'); await tick(); assert.equal(f.settings.value.effort, 'medium');
-  f.current().settings.effort = 'high'; f.current().revision++; wait.resolve({}); await selecting;
-  assert.equal(f.settings.value.effort, 'high');
+  assert.equal(f.projectId.value, 'project-a');
+  f.draft.value.text = '首条合成消息'; f.selectSetting('model', 'model-b'); f.selectPermission('full-access', false);
+  assert.equal(f.draft.value.choices.permissionMode, undefined);
+  f.selectPermission('read-only', false); f.composerAction('plan'); await tick();
+  assert.deepEqual(plain(f.settings.value), { model: 'model-b', effort: 'high', serviceTier: '', mode: 'plan' });
+  assert.equal(f.focused.value, true); assert.equal(f.canSend.value, true);
+  assert.equal(f.calls.some(call => call.method.startsWith('thread.draft.')), false);
+  await f.send();
+  assert.deepEqual(f.calls.filter(call => call.write).map(call => call.method), ['thread.draft.open', 'thread.draft.update', 'thread.draft.send']);
+  assert.deepEqual(f.calls.find(call => call.method === 'thread.draft.update').params.changes, { model: 'model-b', effort: 'high', mode: 'plan', permissionMode: 'read-only' });
+  assert.ok(f.emitted.some(event => event[0] === 'created'));
   const legacy = fixture({ component: true }); legacy.props.expanded = true; legacy.hooks.set('projects.list', () => ({ supportsThreadCreation: true, projects: [] }));
   legacy.loadProjects(); await tick(); assert.equal(legacy.calls.some(call => call.method === 'thread.draft.open'), false);
 });
 
-test('显式重新展开仍调用原生新聊天，连接恢复读取不能自动重复打开', async () => {
+test('重新展开和连接恢复仅刷新项目，保留本地选择且不打开电脑新聊天', async () => {
   const f=fixture({component:true});
   f.props.expanded=true;f.syncEditorVisibility(true);await tick();await tick();await tick();
-  const first=f.calls.filter(call=>call.method==='thread.draft.open').length;
-  assert.equal(first,1);
+  f.selectSetting('effort','high'); f.selectPermission('read-only',false);
   f.props.expanded=false;f.syncEditorVisibility(false);await tick();
   f.props.expanded=true;f.syncEditorVisibility(true);await tick();await tick();await tick();
-  assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
   f.loadProjects();await tick();await tick();
-  assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,first+1);
+  assert.equal(f.settings.value.effort,'high'); assert.equal(f.draft.value.choices.permissionMode,'read-only');
+  assert.equal(f.calls.some(call=>call.method.startsWith('thread.draft.')),false);
+});
+
+test('电脑实际权限与手机选择不同，保留首条输入和设置，不调用原生发送', async () => {
+  const f=fixture({component:true}); f.props.expanded=true; await f.loadProjects(); await tick();
+  f.draft.value.text='保留合成草稿'; f.selectPermission('read-only',false);
+  f.hooks.set('thread.draft.update',()=>({}));
+  await f.send();
+  assert.match(f.error.value,/权限与手机选择不同/);
+  assert.equal(f.draft.value.text,'保留合成草稿'); assert.equal(f.draft.value.choices.permissionMode,'read-only');
+  assert.equal(f.calls.some(call=>call.method==='thread.draft.send'),false);
+});
+
+test('电脑默认完整访问时也需要手机确认，确认后复用同一草稿发送', async () => {
+  const f=fixture({component:true}); f.props.expanded=true; await f.loadProjects(); await tick();
+  const value={...snapshot(),hostId:'pc-a'}; value.permissions.mode='full-access'; f.backend.set('pc-a:draft-a',value);
+  f.draft.value.text='合成草稿'; await f.send();
+  assert.match(f.error.value,/选择并确认权限/); assert.equal(f.draft.value.text,'合成草稿');
+  assert.equal(f.calls.some(call=>call.method==='thread.draft.send'),false);
+  f.selectPermission('full-access',true); await f.send();
+  assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,1);
+  assert.equal(f.calls.filter(call=>call.method==='thread.draft.send').length,1);
 });
 
 test('普通启动时提示用专用入口打开桌面，保留本地输入且不创建会话',async()=>{
@@ -461,7 +488,7 @@ test('普通启动时提示用专用入口打开桌面，保留本地输入且�
   assert.equal(f.calls.some(call=>call.method==='thread.draft.open'||call.method==='thread.create'),false);
 });
 
-/** 同一电脑的两个合成项目，沿用真实原生草稿协议验证焦点与草稿隔离。 */
+/** 同一电脑的两个合成项目，使用只读设置回执验证焦点与草稿隔离。 */
 async function projectPickerFixture() {
   const f=fixture({component:true});
   f.hooks.set('projects.list',()=>({supportsNativeNewDraft:true,projects:[
@@ -482,14 +509,14 @@ test('选择项目确认成功后聚焦，切回原项目仍保留各自草稿�
 });
 test('项目加载失败、收起、换电脑或再次选择后，迟到回执不恢复输入焦点',async()=>{
   for(const change of ['失败','收起','电脑','项目','断线']){
-    const f=await projectPickerFixture(),wait=deferred(),value={...snapshot('project-b','draft-b'),hostId:'pc-a'};
-    f.backend.set('pc-a:draft-b',value);f.hooks.set('thread.draft.open',()=>wait.promise);
+    const f=await projectPickerFixture(),wait=deferred(),value=snapshot('project-b','draft-b');
+    f.hooks.set('thread.create.settings',params=>params.projectId==='project-b'?wait.promise:snapshot());
     f.chooseProject('project-b');await tick();assert.equal(f.focused.value,false);
     if(change==='收起'){f.props.expanded=false;f.syncEditorVisibility(false);}
     if(change==='电脑')f.connection.hostId='pc-b';
-    if(change==='项目')f.chooseProject('project-a');
+    if(change==='项目'){f.chooseProject('project-a');await tick();f.focused.value=false;}
     if(change==='断线')f.connection.connected=false;
-    if(change==='失败')wait.reject(Error('项目切换失败'));else wait.resolve({snapshot:value});
+    if(change==='失败')wait.reject(Error('项目切换失败'));else wait.resolve(value);
     await tick();await tick();assert.equal(f.focused.value,false,change);
   }
 });

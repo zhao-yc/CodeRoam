@@ -71,7 +71,7 @@ function draftFixture() {
   const calls = [];
   const connection = { hostId: 'computer-a', connected: true, computers: [{ id: 'computer-a', online: true }], snapshot: null };
   // 此处模拟已展开并连接的原生草稿，只替换新建编排导入的状态 API。
-  const native = { hostId: 'computer-a', projectId: 'project', draftId: 'example-native-draft', watching: true, snapshot: { status: 'ready', revision: 1, hasDesktopText: false } };
+  const native = { hostId: 'computer-a', projectId: 'project', draftId: 'example-native-draft', watching: true, snapshot: { status: 'ready', revision: 1, hasDesktopText: false, settings: {}, permissions: { mode: 'default' } } };
   const bridge = { async openThread(threadId) { calls.push({ method: 'thread.watch', params: { threadId } }); } };
   const c = vm.createContext({ reactive: value => value, connection, bridge, uni: { removeStorageSync() {} },
     nativeDraftState: () => native,
@@ -80,7 +80,7 @@ function draftFixture() {
     async sendNativeDraft(state, message) { calls.push({ method: 'thread.draft.send', params: plain(message) }); state.snapshot = { ...state.snapshot, status: 'promoted', threadId: 'created-thread' }; return 'created-thread'; },
     acknowledgeNativeDraftPromotion(state) { state.watching = false; },
   });
-  vm.runInContext(compile(read('apps/mobile/services/composer.uts') + '\n' + read('apps/mobile/services/new-conversation.uts')) + '\nglobalThis.subject={readDraftPlugins,saveDraftPlugins,rememberSubmission,settleSubmission,clearDeletedDrafts,newDraft,sendNewConversation,beginNewConversation};', c);
+  vm.runInContext(compile(read('apps/mobile/services/composer.uts') + '\n' + read('apps/mobile/services/new-conversation.uts')) + '\nglobalThis.subject={readDraftPlugins,saveDraftPlugins,rememberSubmission,settleSubmission,clearDeletedDrafts,newDraft,sendNewConversation};', c);
   return { ui: c.subject, calls };
 }
 

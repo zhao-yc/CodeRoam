@@ -153,5 +153,6 @@ test('原生权限完整访问在手机确认后写入真实服务，权限与�
   await f.updateNativeDraft(f.state, { permissionMode: 'full-access' }, true);
   assert.equal(f.state.snapshot.permissions.mode, 'full-access'); assert.equal(f.state.snapshot.revision, 2);
   const update = f.desktop.calls.find(call => call.action === 'update'); assert.equal(update.options.confirmedFullAccess, true); assert.equal(update.options.expectedRevision, 1);
+  f.draft.choices = { permissionMode: 'full-access', confirmedFullAccess: true };
   await f.send(); assert.equal(f.desktop.calls.find(call => call.action === 'send').options.expectedRevision, 2);
 });

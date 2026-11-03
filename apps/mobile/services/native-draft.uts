@@ -74,6 +74,13 @@ export function closeNativeDraft(hostId: string, projectId: string) {
   }
 }
 
+// 放弃失效的绑定只结束观察。下一次发送才允许打开新草稿，未决操作仍须核对。
+export function resetNativeDraftBinding(state: NativeDraftState) {
+  if (state.busy || state.outcomeUnknown || state.snapshot?.status == 'promoted') return
+  closeNativeDraft(state.hostId, state.projectId)
+  state.draftId = ''; state.snapshot = null; state.needsReadback = false; state.error = ''
+}
+
 // 所有写操作保留原始命令编号；异常只能查账，禁止自动重放 open/update/send。
 async function writeNativeDraft(state: NativeDraftState, action: string, method: string, params: UTSJSONObject): Promise<UTSJSONObject> {
   assertNativeHost(state)
@@ -101,7 +108,9 @@ export async function readNativeDraft(state: NativeDraftState): Promise<NativeDr
   assertNativeHost(state)
   if (!state.watching || state.draftId.length == 0) throw new Error('请先连接电脑原生草稿')
   const session = state.session, version = state.version
-  const result = await bridge.request('thread.draft.read', { draftId: state.draftId })
+  let result: UTSJSONObject
+  try { result = await bridge.request('thread.draft.read', { draftId: state.draftId }) }
+  catch (reason) { if (currentNativeSession(state, session)) state.error = (reason as Error).message; throw reason }
   if (!currentNativeSession(state, session)) throw new Error('草稿目标已切换，已忽略旧读取结果')
   const snapshot = parseNativeSnapshot(result, state.projectId)
   if (snapshot.draftId != state.draftId) throw new Error('电脑草稿已变化，请手动重新连接')
@@ -110,13 +119,19 @@ export async function readNativeDraft(state: NativeDraftState): Promise<NativeDr
   return state.snapshot ?? snapshot
 }
 
-// 仅在用户展开并确定项目或点击重新连接时调用。重开同一草稿只 read。
-export async function watchNativeDraft(hostId: string, projectId: string, reconnect: boolean = false): Promise<NativeDraftSnapshot> {
+// 恢复旧草稿或核对命令时只切换本地订阅范围。
+function observeNativeDraft(state: NativeDraftState) {
+  for (const previous of nativeDrafts) if (previous.watching && previous != state) closeNativeDraft(previous.hostId, previous.projectId)
+  if (!state.watching) { state.watching = true; state.session++ }
+}
+
+// 编辑阶段仅可读取已有编号，只有发送入口允许打开或重建电脑草稿。
+export async function watchNativeDraft(hostId: string, projectId: string, reconnect: boolean = false, readOnly: boolean = false): Promise<NativeDraftSnapshot> {
   const state = nativeDraftState(hostId, projectId)
   assertNativeHost(state)
   if (projectId.length == 0) throw new Error('请先选择项目')
-  for (const previous of nativeDrafts) if (previous.watching && previous != state) closeNativeDraft(previous.hostId, previous.projectId)
-  if (!state.watching) { state.watching = true; state.session++ }
+  if (readOnly && !state.outcomeUnknown && state.draftId.length == 0) throw new Error('暂无已打开的电脑草稿')
+  observeNativeDraft(state)
   const session = state.session
   if (state.outcomeUnknown) {
     // 刷新或重新展开先查原命令，不自动重放；已失效的旧 open 只交给用户手动重新连接。
@@ -129,7 +144,7 @@ export async function watchNativeDraft(hostId: string, projectId: string, reconn
   if (state.busy && !openingDrafts.has(key)) throw new Error('原生草稿正在同步，请稍后再试')
   beginNativeOperation(state); state.error = ''
   try {
-    if (state.draftId.length == 0 || reconnect || openingDrafts.has(key)) {
+    if (!readOnly && (state.draftId.length == 0 || reconnect || openingDrafts.has(key))) {
       let request = openingDrafts.get(key)
       if (request == null) {
         request = writeNativeDraft(state, 'open', 'thread.draft.open', { projectId })
@@ -206,6 +221,7 @@ export async function sendNativeDraft(state: NativeDraftState, message: UTSJSONO
 export async function checkNativeDraftCommand(state: NativeDraftState): Promise<string> {
   assertNativeHost(state)
   if (!state.outcomeUnknown || state.pendingCommandId.length == 0 || state.busy) throw new Error('暂无可核对的原操作编号，请核对电脑端')
+  observeNativeDraft(state)
   const session = state.session, action = state.pendingAction, commandId = state.pendingCommandId
   beginNativeOperation(state)
   try {

@@ -218,7 +218,8 @@ function newFixture() {
 
 test('新建输入同样保留光标后正文，取消不删触发片段，迟到选择不覆盖新项目或新草稿', async () => {
   for (const action of ['confirm', 'cancel', 'changed', 'reverted', 'project']) {
-    const f = newFixture(); await f.open(); const c = f.c, watches = [];
+    const f = newFixture(); const c = f.c, watches = [];
+    c.projectReady = ref(true);
     Object.assign(c, { ref, props: { expanded: true }, busy: ref(false), focused: ref(false), mentionOpen: ref(false), mentionCursor: ref(-1), mentionTrigger: ref(null), mentionDraftRevision: 0, mentionSourceRevision: 0, mentionContext: '', mentionSelectionRevision: 0, projectId: ref('project'), watch: (_, run) => watches.push(run), notify() {}, focusDraftInput() {}, closeMenus() {} });
     c.connection.configurationRevision = 1; c.uni.hideKeyboard = () => {};
     c.draft = computed(() => c.newDraft('pc', c.projectId.value)); c.native = computed(() => c.nativeDraftState('pc', c.projectId.value));
@@ -281,7 +282,7 @@ test('历史可见引用保持普通正文、插件及普通链接，不显示 t
 test('页面将标签计入展开及预测抑制，队列展示和增量快照保留能力字段', () => {
   const prediction = page.match(/const predictionAllowed = computed\(.*$/m)[0]; assert.match(prediction, /draftMentions\.value\.length == 0/);
   const expanded = page.match(/const composerExpanded = computed\(.*$/m)[0]; assert.match(expanded, /draftMentions\.value\.length > 0/);
-  assert.match(newEditor, /draft\.value\.threadMentions\.length \* 44/); assert.match(newEditor, /native\.snapshot\?\.supportsThreadMentions == true/);
+  assert.match(newEditor, /draft\.value\.threadMentions\.length \* 44/); assert.match(newEditor, /mentionOpen && props\.expanded && projectReady/);
   assert.match(read('apps/mobile/components/message-queue/message-queue.uvue'), /message\.threadMentions/);
   assert.match(service('bridge'), /supportsThreadMentions: update\.supportsThreadMentions == true/);
   assert.match(read('apps/mobile/components/thread-mention-picker/thread-mention-picker.uvue'), /height: Math\.min\(88, selected\.length \* 44\) \+ 'px'/);
