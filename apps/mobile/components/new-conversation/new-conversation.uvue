@@ -7,7 +7,7 @@
     <view class="new-dock">
       <!-- 提示放在面板上方，连接、发送和错误状态均不挤动底部图标。 -->
       <view v-if="props.expanded && (busy || native.busy || error.length > 0 || native.error.length > 0 || connection.error.length > 0)" class="editor-feedback"><text v-if="busy || native.busy" class="editor-note">{{ busy ? progress : '正在同步电脑草稿…' }}</text><text v-else class="editor-error">{{ native.error.length > 0 ? native.error : error.length > 0 ? error : connection.error }}</text></view>
-      <button v-if="props.expanded && !busy && !native.busy && (error.length > 0 || native.error.length > 0) && !native.outcomeUnknown && !projectsLoading" class="retry-button" @click="reloadOptions">重新读取</button>
+      <button v-if="props.expanded && !busy && !native.busy && (error.length > 0 || native.error.length > 0) && !native.outcomeUnknown && !projectsLoading" class="retry-button" @click="reloadOptions">{{ native.snapshot == null && native.draftId.length == 0 && projects.length > 0 ? '重新连接电脑草稿' : '重新读取' }}</button>
       <text v-if="props.expanded && native.snapshot?.hasDesktopText && native.snapshot?.status == 'ready'" class="editor-note">电脑草稿已有内容，请先在电脑处理；手机输入会保留。</text>
       <text v-if="props.expanded && draft.plugins.length > 0" class="editor-note">原生草稿暂不支持插件，请先移除插件后发送；已选插件会保留。</text>
       <button v-if="props.expanded && !busy && !native.busy && native.snapshot?.status == 'detached' && !native.outcomeUnknown" class="retry-button" @click="reconnectDraft">重新连接电脑草稿</button>

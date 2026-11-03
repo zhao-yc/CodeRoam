@@ -63,7 +63,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
         if (method === 'command.status') return { state: 'unknown' };
         throw Error('测试不允许其他协议：' + method);
       };
-      return Promise.resolve().then(run).then(result => { if (write) pending.delete(scope); return json(result); }, error => { if (write) pending.delete(scope); throw error; });
+      return Promise.resolve().then(run).then(result => { if (write) pending.delete(scope); return json(result); }, error => { if (write && error.outcomeUnknown === false) pending.delete(scope); throw error; });
     },
     async openThread(threadId) { calls.push({ hostId: connection.hostId, method: 'thread.watch', params: { threadId, activate: true } }); if (hooks.has('thread.watch')) await hooks.get('thread.watch')(); connection.activeThreadId = threadId; },
     selectComputer(id) { connection.hostId = id; },
@@ -303,6 +303,41 @@ test('新建已完成但升级后草稿 token 过期时解除未知保护，只�
   await f.watchNativeDraft('pc-a', 'project-a', true);
   assert.equal(state.snapshot.status, 'ready'); assert.equal(state.needsReadback, false);
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 2);
+});
+
+test('旧新建查账明确连接失效时清除过期 token，保留文字且不自动再次打开', async () => {
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '保留的合成输入';
+  f.hooks.set('thread.draft.open', () => { throw Error('原生连接中断'); });
+  await assert.rejects(f.watchNativeDraft('pc-a', 'project-a', true), /核对/);
+  const opens = f.calls.filter(call => call.method === 'thread.draft.open').length;
+  f.hooks.set('command.status', () => ({ state: 'done', error: { code: 'DRAFT_OPEN_EXPIRED', message: '连接失效', outcomeUnknown: false } }));
+  await f.checkNativeDraftCommand(state);
+  assert.equal(state.outcomeUnknown, false); assert.equal(state.draftId, ''); assert.equal(state.snapshot, null); assert.equal(state.pendingCommandId, '');
+  assert.equal(draft.text, '保留的合成输入'); assert.match(state.error, /手动重新连接/);
+  assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, opens);
+  f.hooks.delete('thread.draft.open'); await f.watchNativeDraft('pc-a', 'project-a', true);
+  assert.equal(state.snapshot.status, 'ready'); assert.equal(draft.text, '保留的合成输入');
+});
+
+test('桥接明确拒绝且已释放操作编号时不制造永久未知保护', async () => {
+  const f = fixture();
+  f.hooks.set('thread.draft.open', () => { throw Object.assign(Error('电脑暂不可用'), { outcomeUnknown: false }); });
+  await assert.rejects(f.watchNativeDraft('pc-a', 'project-a'), /电脑暂不可用/);
+  const state = f.nativeDraftState('pc-a', 'project-a');
+  assert.equal(state.outcomeUnknown, false); assert.equal(state.pendingCommandId, ''); assert.equal(f.storage.size, 0);
+  f.hooks.delete('thread.draft.open'); await f.watchNativeDraft('pc-a', 'project-a', true);
+  assert.equal(state.snapshot.status, 'ready');
+});
+
+test('刷新恢复旧新建记录后自动只查原命令，失效时停在手动重连且文字保留', async () => {
+  const original=fixture();original.hooks.set('thread.draft.open',()=>{throw Error('合成断线');});
+  await assert.rejects(original.watchNativeDraft('pc-a','project-a'));
+  const restored=fixture({storage:original.storage}),draft=restored.newDraft('pc-a','project-a');draft.text='刷新后保留的合成输入';
+  restored.hooks.set('command.status',()=>({state:'done',error:{code:'DRAFT_OPEN_EXPIRED',outcomeUnknown:false}}));
+  await assert.rejects(restored.watchNativeDraft('pc-a','project-a'),/手动重新连接/);
+  assert.equal(restored.nativeDraftState('pc-a','project-a').outcomeUnknown,false);
+  assert.equal(draft.text,'刷新后保留的合成输入');assert.equal(restored.calls.length,1);assert.equal(restored.calls[0].method,'command.status');
+  await restored.watchNativeDraft('pc-a','project-a',true);assert.equal(restored.calls.filter(call=>call.method==='thread.draft.open').length,1);
 });
 
 test('手机提交成功时切换电脑，迟到成功仍保护原草稿，返回后不能再 send', async () => {

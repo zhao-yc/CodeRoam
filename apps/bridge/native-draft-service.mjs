@@ -256,7 +256,8 @@ export class NativeDraftService extends EventEmitter {
     if (original.state !== 'unknown' || this.closed) return original;
     const command = this.commands.get(JSON.stringify([deviceId, commandId]));
     const fingerprint = journal.unknownFingerprint?.(deviceId, commandId);
-    if (!command || command.fingerprint !== fingerprint) return original;
+    if (!command) return this.expiredOpenStatus(journal, deviceId, commandId, original, fingerprint);
+    if (command.fingerprint !== fingerprint) return original;
     const projectId = command.entry?.projectId ?? command.project?.id;
     if (!projectId) return original;
     try {
@@ -291,6 +292,24 @@ export class NativeDraftService extends EventEmitter {
         if (command.method === 'thread.draft.open' && this.unknownOpens.get(command.key) === command) { this.unknownOpens.delete(command.key); this.current.set(command.key, entry.draftId); }
         return journal.status(deviceId, commandId);
       });
+    } catch { return original; }
+  }
+
+  /** 重启丢失内存绑定时，只关闭可由原指纹证明的 open 连接；不能据此收口 update 或 send。 */
+  expiredOpenStatus(journal, deviceId, commandId, original, fingerprint) {
+    if (typeof fingerprint !== 'string' || !journal.db?.prepare || typeof this.projects.projects !== 'function') return original;
+    try {
+      const projects = this.projects.projects().projects;
+      if (!Array.isArray(projects) || projects.filter(project => typeof project?.id === 'string' && requestFingerprint('thread.draft.open', { projectId: project.id }) === fingerprint).length !== 1) return original;
+      // open 本身从不发送消息；保留原检查点和错误，只结束已经失效的连接，不再次调用桌面动作。
+      const payload = {
+        ...original,
+        error: { code: 'DRAFT_OPEN_EXPIRED', message: '上次新建草稿的连接已失效，手机输入已保留，请手动重新连接', outcomeUnknown: false },
+        resolution: { source: 'expired-native-draft-open', confirmedAt: this.now(), previousError: original.error ?? null },
+      };
+      delete payload.state;
+      journal.db.prepare("UPDATE commands SET state='done',payload=? WHERE device_id=? AND command_id=? AND fingerprint=? AND state='unknown'").run(JSON.stringify(payload), deviceId, commandId, fingerprint);
+      return journal.status(deviceId, commandId);
     } catch { return original; }
   }
 

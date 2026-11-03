@@ -88,7 +88,9 @@ async function writeNativeDraft(state: NativeDraftState, action: string, method:
   try { saveNativePending(state) } catch (_) {}
   try { return await request }
   catch (reason) {
-    state.outcomeUnknown = true; state.error = (reason as Error).message + '；请核对原操作结果，勿重复提交'
+    // 仅放行 bridge 已明确拒绝的新建；设置和发送继续先查原命令，超时、断线不能当作失败重放。
+    state.outcomeUnknown = action != 'open' || state.pendingCommandId.length > 0 && (connection.hostId != state.hostId || (connection.cacheNamespace ?? '') != state.cacheNamespace || bridge.pendingCommand(state.hostId, '') == state.pendingCommandId)
+    state.error = (reason as Error).message + (state.outcomeUnknown ? '；请核对原操作结果，勿重复提交' : '')
     throw new Error(state.error)
   }
 }
@@ -116,7 +118,13 @@ export async function watchNativeDraft(hostId: string, projectId: string, reconn
   for (const previous of nativeDrafts) if (previous.watching && previous != state) closeNativeDraft(previous.hostId, previous.projectId)
   if (!state.watching) { state.watching = true; state.session++ }
   const session = state.session
-  if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重新打开草稿')
+  if (state.outcomeUnknown) {
+    // 刷新或重新展开先查原命令，不自动重放；已失效的旧 open 只交给用户手动重新连接。
+    try { await checkNativeDraftCommand(state) }
+    catch (reason) { throw new Error('上次操作结果需要核对：' + (reason as Error).message) }
+    if (state.snapshot != null && !state.needsReadback) return state.snapshot!
+    throw new Error(state.error.length > 0 ? state.error : '请手动重新连接电脑草稿')
+  }
   const key = nativePendingKey(state)
   if (state.busy && !openingDrafts.has(key)) throw new Error('原生草稿正在同步，请稍后再试')
   beginNativeOperation(state); state.error = ''
@@ -220,6 +228,10 @@ export async function checkNativeDraftCommand(state: NativeDraftState): Promise<
     }
     const threadId = outcome == 'done' && action == 'send' ? result.getString('threadId') ?? '' : ''
     if (outcome == 'done' && action == 'send' && threadId.length == 0) throw new Error('原发送回执缺少聊天编号，请继续核对')
+    if (outcome == 'failed' && action == 'open') {
+      // 明确失效的是新建连接，清理旧 token 而保留编辑器内容；下一次新建仍由用户手动触发。
+      state.draftId = ''; state.snapshot = null; state.needsReadback = false
+    }
     let readbackLost = false
     if (state.draftId.length > 0) {
       try { await readNativeDraft(state) }
@@ -238,7 +250,7 @@ export async function checkNativeDraftCommand(state: NativeDraftState): Promise<
     state.outcomeUnknown = false; state.error = ''
     settleNativeWrite(state)
     if (readbackLost) state.error = '原新建已确认，草稿连接已失效，请手动重新连接'
-    if (outcome == 'failed') state.error = '原操作已确认失败，草稿已保留；可由用户重新操作'
+    if (outcome == 'failed') state.error = action == 'open' ? '上次新建连接已失效，手机输入已保留，请手动重新连接电脑草稿' : '原操作已确认失败，草稿已保留；可由用户重新操作'
     return threadId
   } catch (reason) { if (currentNativeSession(state, session)) state.error = (reason as Error).message; throw reason }
   finally { endNativeOperation(state) }
