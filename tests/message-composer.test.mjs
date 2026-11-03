@@ -85,7 +85,7 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
   const parent = fs.readFileSync('apps/mobile/components/new-conversation/new-conversation.uvue', 'utf8');
   const pending = [], events = [], ref = value => ({value});
   const c = {props: {expanded: true}, nativeReady: ref(true), native: ref({snapshot: {hasDesktopText: false}}),
-    busy: ref(false), imageBusy: ref(false), projectsLoading: ref(false), settingsLoading: ref(false),
+    busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), projectsLoading: ref(false), settingsLoading: ref(false),
     connection: {connected: true}, computerOnline: ref(true), creationPendingId: ref(''), projectId: ref('example-project'),
     draft: ref({text: '保留的合成草稿', images: [], files: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
     computed: read => ({get value() { return read(); }}), closeMenus() {}, uni: {hideKeyboard() {}},
@@ -94,9 +94,9 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
   vm.runInNewContext(stripTypeScriptTypes(code, {mode: 'transform'}) + '\nglobalThis.send=send;', c);
   const input = fixture({onSubmit: () => { c.send(); }});
   const enter = () => input.ui.onKeydown({key: 'Enter', preventDefault() {}});
-  enter(); enter(); await c.send(); assert.equal(pending.length, 1);
+  enter(); enter(); await c.send(); assert.equal(pending.length, 1); assert.equal(c.pendingNewAction.value, 'send');
   pending.shift().reject(Error('合成发送失败')); await new Promise(resolve => setImmediate(resolve));
-  assert.equal(c.draft.value.text, '保留的合成草稿'); assert.equal(c.error.value, '合成发送失败'); assert.equal(c.busy.value, false);
+  assert.equal(c.draft.value.text, '保留的合成草稿'); assert.equal(c.error.value, '合成发送失败'); assert.equal(c.busy.value, false); assert.equal(c.pendingNewAction.value, '');
   c.draft.value.text = ''; enter(); assert.equal(pending.length, 0);
   c.draft.value.images = [{id: 'example-image'}]; enter(); assert.equal(pending.length, 1);
   pending.shift().resolve('example-thread'); await new Promise(resolve => setImmediate(resolve));

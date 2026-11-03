@@ -18,6 +18,8 @@ export function componentScope(scope) {
   scope.hideTaskNoticeThread ??= () => {};
   // Node 中执行组件脚本时使用跨平台后备控件。
   scope.useLiquidGlass ??= () => false;
+  // 测试各页面时注入连接入口，握手代次由专门用例执行真实实现。
+  scope.useManualReconnect ??= () => ({reconnecting: {value: false}, reconnect: () => scope.bridge?.resume?.()});
   const watch = scope.watch;
   if (watch != null) scope.watch = (source, callback, options) => {
     if (typeof source === 'function' && /props\.active/.test(source.toString())) {

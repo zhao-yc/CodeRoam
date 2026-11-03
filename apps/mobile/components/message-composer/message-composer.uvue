@@ -17,7 +17,7 @@
             </view>
             <view v-for="file in files" :key="file.id" class="draft-file">
               <app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ fileStatus(file) }}</text></view>
-              <button v-if="retryFiles && (file.status == 'error' || file.status == 'paused')" class="file-retry" :disabled="!active || retryDisabled" @click="emit('retryfile', file.id)">重试</button>
+              <view v-if="retryFiles && (file.status == 'error' || file.status == 'paused' || retryingFileIds.indexOf(file.id) >= 0)" class="file-retry inline-progress-button"><action-progress :busy="retryingFileIds.indexOf(file.id) >= 0" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!active || retryDisabled || (retryingFileIds.indexOf(file.id) >= 0)" @click="emit('retryfile', file.id)" :aria-label="(retryingFileIds.indexOf(file.id) >= 0) ? '正在重试上传' : '重试'"></button></view>
               <button class="file-remove" :disabled="filesDisabled" :aria-label="'移除附件 ' + file.name" @click="emit('removefile', file.id)">×</button>
             </view>
           </view>
@@ -39,8 +39,8 @@
         <view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" aria-label="选择模型、推理强度和速度" @click="emit('settings')"></button></view>
       </view>
       <view v-show="!entryOnly || expanded" class="composer-send">
-        <liquid-glass-control v-if="liquidGlass && expanded" :symbol="primaryIcon == 'stop' ? 'stop.fill' : 'arrow.up'" :label="primaryLabel" prominent :disabled="!active || primaryDisabled" @activate="activateGlassPrimary" />
-        <view v-else class="primary-action action-frame" :style="{ opacity: primaryDisabled ? 0.4 : 1 }"><app-icon :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled" :aria-label="primaryLabel" @click="emit('primary')"></button></view>
+        <liquid-glass-control v-if="liquidGlass && expanded" :symbol="primaryIcon == 'stop' ? 'stop.fill' : 'arrow.up'" :label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" :busy="primaryPendingLabel.length > 0" prominent :disabled="!active || primaryDisabled" @activate="activateGlassPrimary" />
+        <view v-else class="primary-action action-frame" :style="{ opacity: primaryDisabled && primaryPendingLabel.length == 0 ? 0.4 : 1 }"><loading v-if="primaryPendingLabel.length > 0" class="primary-spinner" :paused="!active" /><app-icon v-else :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled || primaryPendingLabel.length > 0" :aria-label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" @click="emit('primary')"></button></view>
       </view>
     </view>
     <button v-if="entryOnly && !expanded" class="action-hitbox entry-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="emit('expand')"></button>
@@ -65,11 +65,11 @@ const props = withDefaults(defineProps<{
   instanceId: string, resetKey: string, active: boolean, text: string, expanded: boolean, inputHeight: number,
   images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], mentions: SelectedThreadMention[],
   disabled: boolean, chipsDisabled: boolean, imagesDisabled: boolean, filesDisabled: boolean,
-  addDisabled: boolean, primaryDisabled: boolean, primaryLabel: string, modelLabel: string,
+  addDisabled: boolean, primaryDisabled: boolean, primaryLabel: string, primaryPendingLabel?: string, modelLabel: string,
   settingsDisabled: boolean, planEnabled: boolean, planDisabled: boolean,
   focus?: boolean, cursor?: number, placeholder?: string, prediction?: string, primaryIcon?: string,
-  contentHeight?: number, maxContentHeight?: number, layoutWidth?: number, contentTarget?: string, entryOnly?: boolean, retryFiles?: boolean, retryDisabled?: boolean
-}>(), { focus: false, cursor: -1, placeholder: '问问 Codex', prediction: '', primaryIcon: 'send', contentHeight: 0, maxContentHeight: 0, layoutWidth: 0, contentTarget: '', entryOnly: false, retryFiles: false, retryDisabled: false })
+  contentHeight?: number, maxContentHeight?: number, layoutWidth?: number, contentTarget?: string, entryOnly?: boolean, retryFiles?: boolean, retryDisabled?: boolean, retryingFileIds?: string[]
+}>(), { focus: false, cursor: -1, placeholder: '问问 Codex', prediction: '', primaryIcon: 'send', primaryPendingLabel: '', contentHeight: 0, maxContentHeight: 0, layoutWidth: 0, contentTarget: '', entryOnly: false, retryFiles: false, retryDisabled: false, retryingFileIds: [] as string[] })
 const emit = defineEmits<{
   input: [event: UniInputEvent], syncinput: [text: string], focus: [], blur: [], linechange: [event: UniTextareaLineChangeEvent],
   keyboardheightchange: [event: UniInputKeyboardHeightChangeEvent], submit: [], acceptprediction: [], primary: [], add: [], settings: [],
@@ -174,6 +174,7 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .composer-actions { position: absolute; left: 44px; right: 40px; bottom: 0; height: 44px; flex-direction: row; align-items: center; }
 .settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
 .settings-trigger-label { flex-shrink: 1; min-width: 0; color: #171717; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
+.primary-spinner { width: 18px; height: 18px; border-color: #ffffff; }
 .primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
 .plan-chip { flex-shrink: 0; height: 28px; padding: 0 8px; margin-left: 4px; border-radius: 14px; flex-direction: row; align-items: center; background-color: #eeeeee; }
 .plan-close { margin-left: 8px; }

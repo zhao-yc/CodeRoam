@@ -22,7 +22,7 @@ test('图片消息同步可点击数量，不把图片内容或电脑文件路�
 
 test('旧电脑没有图片能力标记时，页面发送保护保留草稿且不调用请求',()=>{
   const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
-  const method=page.slice(page.indexOf('function send() {'),page.indexOf('\nfunction stop() {'));
+  const method=page.slice(page.indexOf('function send() {'),page.indexOf('\nfunction stop('));
   const calls=[],context={draft:{value:'消息'},draftImages:{value:[{id:'i',src:image}]},canWrite:{value:true},planResetRequired:{value:false},settings:{value:null},imageBusy:{value:false},filesReady:{value:true},draftFiles:{value:[]},modelSupportsImages:{value:true},connection:{snapshot:{}},notify:message=>calls.push(message),bridge:{request:()=>{throw new Error('不应调用');}}};
   vm.runInNewContext(stripTypeScriptTypes(method,{mode:'transform'})+'\nsend();', componentScope(context));assert.match(calls[0],/更新电脑连接服务/);assert.equal(context.draftImages.value.length,1);
 });

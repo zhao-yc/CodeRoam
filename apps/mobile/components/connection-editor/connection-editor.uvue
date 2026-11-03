@@ -15,7 +15,7 @@
           <view class="last-connected"><app-icon name="clock" :size="17" tone="muted" /><text class="last-label">上次连接：{{ lastConnectedLabel }}</text></view>
           <text v-if="!connection.supportsHostProfiles" class="editor-error">请更新中转服务后再编辑连接。</text>
           <text v-if="error.length > 0" class="editor-error">{{ error }}</text>
-          <button class="save-button" :class="canSave ? 'save-enabled' : 'save-disabled'" :disabled="!canSave" @click="save">{{ saving ? '正在保存…' : '保存' }}</button>
+          <view class="save-button inline-progress-button" :class="canSave || saving ? 'save-enabled' : 'save-disabled'"><action-progress :busy="saving" light /><text class="inline-progress-caption" :style="{ color: canSave || saving ? '#ffffff' : '#94998f' }" style="font-size: 16px;">保存</text><button class="inline-progress-hitbox" :disabled="!canSave" @click="save" :aria-label="(saving) ? '正在保存' : '保存'"></button></view>
         </view>
       </scroll-view>
       <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>

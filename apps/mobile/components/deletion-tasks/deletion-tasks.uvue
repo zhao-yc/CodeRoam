@@ -4,7 +4,7 @@
     <view v-for="task in visibleTasks" :key="task.commandId" class="delete-task">
       <view class="task-copy"><text class="task-title">{{ title(task) }}</text><text class="task-description">{{ computerName(task.hostId) }} · {{ deletionLabel(task) }}{{ task.state == 'running' ? '，可以继续使用其他聊天' : '' }}</text><text v-if="task.error.length > 0" class="task-error">{{ task.error }}</text></view>
       <button v-if="task.state == 'failed'" class="task-button button-secondary" @click="dismissDeletion(task)">关闭</button>
-      <button v-else class="task-button button-secondary" :disabled="!canCheck(task) || task.checking" @click="checkDeletion(task)">{{ task.checking ? '核对中' : '核对结果' }}</button>
+      <view v-else class="task-button button-secondary inline-progress-button"><action-progress :busy="task.checking" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对结果</text><button class="inline-progress-hitbox" :disabled="!canCheck(task) || task.checking || (task.checking)" @click="checkDeletion(task)" :aria-label="(task.checking) ? '正在核对删除结果' : '核对结果'"></button></view>
     </view>
   </view>
 </template>

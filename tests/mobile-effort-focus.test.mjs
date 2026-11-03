@@ -14,7 +14,7 @@ function fixture(newDraft = false) {
   };
   const pending = [], ticks = [], calls = [], ref = value => ({ value });
   const context = componentContext({
-    busy: ref(false), nativeReady: ref(true), native: ref({}), alive: true, props: { expanded: true },
+    busy: ref(false), settingChoice: ref(''), nativeReady: ref(true), native: ref({}), alive: true, props: { expanded: true },
     connection: { hostId: 'computer', activeThreadId: 'thread', snapshot: {} },
     pageHostId: ref('computer'), pageThreadId: ref('thread'), projectId: ref('project'), pageVisible: ref(true),
     settings: ref({ model: 'example', effort: 'medium', mode: 'default' }), models: ref([]), settingsBusy: ref(false),

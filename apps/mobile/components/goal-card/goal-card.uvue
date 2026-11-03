@@ -8,12 +8,12 @@
           <text class="goal-counter">{{ objective.length }} / 4000</text>
         </view>
         <text v-if="editorRevision != revision" class="goal-note">电脑端目标已变化，请取消后重新编辑。</text>
-        <view class="goal-editor-actions"><button class="goal-action goal-cancel" :disabled="busy" @click="cancelEdit">取消</button><view class="goal-save" :class="{ 'goal-save-disabled': disabled || busy || objective.trim().length == 0 || editorRevision != revision }"><text class="goal-save-label">{{ busy ? '正在同步…' : '保存目标' }}</text><text v-if="!busy" class="goal-save-arrow">→</text><button class="action-hitbox" :aria-label="busy ? '正在同步目标' : '保存目标'" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save"></button></view></view>
+        <view class="goal-editor-actions"><button class="goal-action goal-cancel" :disabled="busy" @click="cancelEdit">取消</button><view class="goal-save" :class="{ 'goal-save-disabled': disabled && !busy || objective.trim().length == 0 || editorRevision != revision }"><text class="goal-save-label">保存目标</text><action-progress v-if="busy" :busy="true" light /><text v-else class="goal-save-arrow">→</text><button class="action-hitbox" :aria-label="busy ? '正在同步目标' : '保存目标'" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save"></button></view></view>
       </template>
       <template v-else-if="goal != null">
         <scroll-view direction="vertical" class="goal-body" :style="{ maxHeight: contentHeight + 'px' }"><text class="goal-objective" selectable>{{ goal.objective }}</text></scroll-view>
         <text class="goal-usage">{{ usageLabel }}</text>
-        <view class="goal-actions"><button class="goal-action" :disabled="disabled || busy" @click="edit">编辑</button><button v-if="goal.status == 'active'" class="goal-action" :disabled="disabled || busy" @click="operate('pause')">暂停</button><button v-else-if="canResume" class="goal-action" :disabled="disabled || busy" @click="operate('resume')">继续</button><button class="goal-action" :disabled="disabled || busy" @click="clear">清除</button></view>
+        <view class="goal-actions"><button class="goal-action" :disabled="disabled || busy" @click="edit">编辑</button><view v-if="goal.status == 'active'" class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'pause'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">暂停</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="operate('pause')" :aria-label="(busy && pendingAction == 'pause') ? '正在处理' : '暂停'"></button></view><view v-else-if="canResume" class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'resume'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">继续</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="operate('resume')" :aria-label="(busy && pendingAction == 'resume') ? '正在处理' : '继续'"></button></view><view class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'clear'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">清除</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="clear" :aria-label="(busy && pendingAction == 'clear') ? '正在处理' : '清除'"></button></view></view>
         <text v-if="unavailableReason.length > 0" class="goal-note">{{ unavailableReason }}</text>
         <text v-else-if="busy" class="goal-note">正在同步电脑端目标…</text>
       </template>
@@ -26,7 +26,7 @@
 import { computed, ref, watch } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { ThreadGoal, goalStatusLabel, goalUsageLabel, goalCanResume } from '../../services/goals.uts'
-const props = defineProps<{ goal: ThreadGoal | null, revision: string, disabled: boolean, busy: boolean, unavailableReason: string, openRequest: number, closeRequest: number, resetKey: string, contentHeight: number }>()
+const props = defineProps<{ goal: ThreadGoal | null, revision: string, disabled: boolean, busy: boolean, pendingAction?: string, unavailableReason: string, openRequest: number, closeRequest: number, resetKey: string, contentHeight: number }>()
 const emit = defineEmits<{ operate: [action: string, objective: string, revision: string], expanded: [value: boolean], keyboard: [height: number] }>()
 const expanded = ref(false)
 const editing = ref(false)

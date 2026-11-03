@@ -9,7 +9,7 @@
       <view class="changes-footer action-frame"><text class="footer-text">{{ report!.fileCount > 3 ? '查看另外 ' + (report!.fileCount - 3) + ' 个文件' : '查看代码差异' }}</text><app-icon name="chevron-right" :size="16" tone="muted" /><button class="action-hitbox" aria-label="查看全部修改文件与代码差异" hover-class="action-pressed" @click="open('')"></button></view>
     </template>
   </view>
-  <view v-else-if="error.length > 0" class="changes-error"><text class="error-text">{{ error }}</text><button class="retry" :disabled="!connected || loading" @click="load">重试文件汇总</button></view>
+  <view v-else-if="error.length > 0 || manualRetry" class="changes-error"><text class="error-text">{{ error }}</text><view class="retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重试文件汇总</text><button class="inline-progress-hitbox" :disabled="!connected || loading || (manualRetry)" @click="load(true)" :aria-label="(manualRetry) ? '正在重试文件汇总' : '重试文件汇总'"></button></view></view>
 </template>
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
@@ -23,6 +23,7 @@ const emit = defineEmits<{ (event: 'open', report: FileReport, fileId: string): 
 const report = ref<FileReport | null>(null)
 const error = ref('')
 const loading = ref(false)
+const manualRetry = ref(false)
 const expanded = ref(fileChangePreferences.expanded)
 const preview = computed((): ChangedFile[] => report.value?.files.slice(0, 3) ?? [] as ChangedFile[])
 let requestVersion = 0
@@ -30,22 +31,22 @@ let alive = true
 // 请求与本地缓存都绑定配对及报告，旧请求不能写回其他配对。
 function cacheIdentity(): string { return JSON.stringify([connection.cacheNamespace, props.hostId, props.threadId, props.reportId]) }
 // 汇总正文独立加载，不扩大聊天快照；归属变化后旧回执立即失效。
-function load() {
+function load(manual: boolean = false) {
   if (!alive || loading.value || !props.connected) return
-  loading.value = true; error.value = ''
+  loading.value = true; manualRetry.value = manual; error.value = ''
   const version = ++requestVersion
   const namespace = connection.cacheNamespace
   const identity = cacheIdentity()
   bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.reportId }).then((result: UTSJSONObject) => {
     if (!alive || version != requestVersion || identity != cacheIdentity()) return
-    loading.value = false
+    loading.value = false; manualRetry.value = false
     emit('beforelayout')
     const next = result['report'] == null ? null : JSON.parse<FileReport>(JSON.stringify(result['report']))
     if (next != null && next.reportId != props.reportId) { error.value = '文件汇总暂不可用'; nextTick(() => emit('layout')); return }
     report.value = next
     saveFileReportCache(namespace, props.hostId, props.threadId, props.reportId, report.value)
     nextTick(() => emit('layout'))
-  }, (failure: Error) => { if (!alive || version != requestVersion || identity != cacheIdentity()) return; emit('beforelayout'); loading.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
+  }, (failure: Error) => { if (!alive || version != requestVersion || identity != cacheIdentity()) return; emit('beforelayout'); loading.value = false; manualRetry.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
 }
 // 切换展开状态前记录布局，避免文件行增减时打断原来的阅读位置。
 function setExpanded(value: boolean) {
@@ -57,8 +58,8 @@ function setExpanded(value: boolean) {
 function toggleSummary() { emit('reading'); setExpanded(!expanded.value) }
 function open(fileId: string) { if (report.value == null) return; emit('reading'); emit('open', report.value!, fileId) }
 // 先恢复本地汇总；正文实时订阅就绪后仍后台读取最新版本。
-watch((): string => cacheIdentity(), () => { requestVersion++; loading.value = false; error.value = ''; expanded.value = fileChangePreferences.expanded; const cached = readFileReportCache(connection.cacheNamespace, props.hostId, props.threadId, props.reportId); report.value = cached?.report ?? null; load() }, { immediate: true })
-watch((): boolean => props.connected, (connected: boolean) => { requestVersion++; loading.value = false; if (connected) load() })
+watch((): string => cacheIdentity(), () => { requestVersion++; loading.value = false; manualRetry.value = false; error.value = ''; expanded.value = fileChangePreferences.expanded; const cached = readFileReportCache(connection.cacheNamespace, props.hostId, props.threadId, props.reportId); report.value = cached?.report ?? null; load() }, { immediate: true })
+watch((): boolean => props.connected, (connected: boolean) => { requestVersion++; loading.value = false; manualRetry.value = false; if (connected) load() })
 watch((): boolean => fileChangePreferences.expanded, (value: boolean) => { setExpanded(value) })
 onUnmounted(() => { alive = false; requestVersion++ })
 </script>

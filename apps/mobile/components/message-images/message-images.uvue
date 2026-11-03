@@ -1,8 +1,8 @@
 <template>
   <view class="message-images">
     <view v-if="sources.length > 0" class="thumbnails"><image v-for="(source, index) in sources" :key="index" :src="source" mode="aspectFit" :class="['thumbnail', sources.length == 1 ? 'thumbnail-single' : '', props.large == true ? 'thumbnail-large' : '']" :aria-label="'预览第' + (index + 1) + '张图片'" @load="imageLoaded" @click="preview(source)" /></view>
-    <loading-skeleton v-else-if="connected && error.length == 0" kind="image" :visible="ready != false" :count="props.count" :large="props.large" />
-    <view v-else :class="['placeholder', (props.count ?? 1) == 1 ? 'placeholder-single' : '', props.large == true ? 'placeholder-large' : '']"><text class="hint">{{ error.length > 0 ? error : '等待连接后加载图片' }}</text><button v-if="error.length > 0 && connected && ready != false" class="retry" @click="loadImages">重新加载</button></view>
+    <loading-skeleton v-else-if="connected && error.length == 0 && !manualRetry" kind="image" :visible="ready != false" :count="props.count" :large="props.large" />
+    <view v-else :class="['placeholder', (props.count ?? 1) == 1 ? 'placeholder-single' : '', props.large == true ? 'placeholder-large' : '']"><text class="hint">{{ error.length > 0 ? error : '等待连接后加载图片' }}</text><view v-if="(error.length > 0 || manualRetry) && connected && ready != false" class="retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重新加载</text><button class="inline-progress-hitbox" @click="loadImages(true)" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新加载图片' : '重新加载'"></button></view></view>
   </view>
 </template>
 <script setup lang="uts">
@@ -14,6 +14,7 @@ const emit = defineEmits<{ (event: 'beforelayout'): void, (event: 'layout'): voi
 const sources = ref<string[]>([])
 const error = ref('')
 let loading = false
+const manualRetry = ref(false)
 let requestVersion = 0
 let alive = true
 let loadScheduled = false
@@ -46,30 +47,30 @@ async function loadLargeImages(version: number): Promise<string[]> {
   return images
 }
 // 每条消息独立保留图片，进入会话自动加载，不弹出大图或中断滚动。
-function loadImages() {
+function loadImages(manual: boolean = false) {
   if (!imageRequestReady() || loading || props.threadId.length == 0) return
-  loading = true; error.value = ''
+  loading = true; manualRetry.value = manual; error.value = ''
   const version = ++requestVersion
   const identity = imageIdentity()
   if (props.large == true) {
     loadLargeImages(version).then((images: string[]) => {
       if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-      loading = false; sources.value = images
+      loading = false; manualRetry.value = false; sources.value = images
       if (images.length == 0) error.value = '这条记录未保留图片'
     }, (failure: Error) => {
       if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-      loading = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
+      loading = false; manualRetry.value = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
     })
     return
   }
   bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId }).then((result: UTSJSONObject) => {
     if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-    loading = false
+    loading = false; manualRetry.value = false
     sources.value = JSON.parse<string[]>(JSON.stringify(result['images'])) ?? [] as string[]
     if (sources.value.length == 0) error.value = '这条记录未保留图片'
   }, (failure: Error) => {
     if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-    loading = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
+    loading = false; manualRetry.value = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
   })
 }
 // 仅点击缩略图时打开当前消息的图片组。
@@ -78,15 +79,15 @@ function preview(source: string) { uni.previewImage({ urls: sources.value, curre
 function imageLoaded() { emit('layout') }
 // 消息归属变化及卸载后使旧请求失效，避免图片串入其他会话。
 watch((): string => imageIdentity(), () => {
-  requestVersion++; loading = false; sources.value = [] as string[]; error.value = ''; scheduleImages()
+  requestVersion++; loading = false; manualRetry.value = false; sources.value = [] as string[]; error.value = ''; scheduleImages()
 }, { immediate: true, flush: 'sync' })
 watch((): boolean => props.connected, (connected: boolean) => {
-  requestVersion++; loading = false
+  requestVersion++; loading = false; manualRetry.value = false
   if (connected && sources.value.length == 0) scheduleImages()
 })
 // 等待订阅不算加载失败；重订阅后自动恢复未加载的图片，不要求用户再点重试。
 watch((): string => (props.ready != false).toString() + ':' + (props.subscriptionRevision ?? 0).toString(), () => {
-  requestVersion++; loading = false; error.value = ''
+  requestVersion++; loading = false; manualRetry.value = false; error.value = ''
   if (sources.value.length == 0) scheduleImages()
 }, { flush: 'sync' })
 watch(sources, () => { beforeImageLayout() }, { flush: 'pre' })

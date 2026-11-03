@@ -3,21 +3,28 @@
     <view class="notice-heading"><text class="notice-title">浏览器通知</text><text class="notice-state">{{ status }}</text></view>
     <text class="notice-description">{{ browserNotifications.error.length > 0 ? browserNotifications.error : '切到其他标签页或应用后提醒。网页需保持运行，关闭或被系统挂起后可能无法送达。' }}</text>
     <view class="notice-actions">
-      <button v-if="!browserNotifications.enabled" class="notice-button button-secondary" :disabled="browserNotifications.busy || !browserNotifications.supported" @click="enable">开启浏览器通知</button>
-      <button v-else class="notice-button button-secondary" :disabled="browserNotifications.busy" @click="disableBrowserNotifications">关闭浏览器通知</button>
-      <button v-if="browserNotifications.enabled && !browserNotifications.ready" class="notice-button button-secondary" :disabled="browserNotifications.busy" @click="enable">重新开启</button>
-      <button class="notice-button button-secondary" :disabled="!browserNotifications.ready || browserNotifications.busy" @click="test">发送测试通知</button>
+      <view v-if="!browserNotifications.enabled || noticeAction == 'enable'" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'enable'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 13px;">开启浏览器通知</text><button class="inline-progress-hitbox" :disabled="noticeAction.length > 0 || browserNotifications.busy || !browserNotifications.supported || (noticeAction == 'enable')" @click="enable" :aria-label="(noticeAction == 'enable') ? '正在开启浏览器通知' : '开启浏览器通知'"></button></view>
+      <button v-else class="notice-button button-secondary" :disabled="noticeAction.length > 0 || browserNotifications.busy" @click="disableBrowserNotifications">关闭浏览器通知</button>
+      <view v-if="(browserNotifications.enabled && !browserNotifications.ready && noticeAction != 'enable') || noticeAction == 'retry'" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'retry'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 13px;">重新开启</text><button class="inline-progress-hitbox" :disabled="noticeAction.length > 0 || browserNotifications.busy || (noticeAction == 'retry')" @click="reenable" :aria-label="(noticeAction == 'retry') ? '正在重新开启浏览器通知' : '重新开启'"></button></view>
+      <view class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'test'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 13px;">发送测试通知</text><button class="inline-progress-hitbox" :disabled="!browserNotifications.ready || browserNotifications.busy || (noticeAction == 'test')" @click="test" :aria-label="(noticeAction == 'test') ? '正在发送测试通知' : '发送测试通知'"></button></view>
     </view>
   </view>
 </template>
 
 <script setup lang="uts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { browserNotifications, browserNotificationLabel, enableBrowserNotifications, disableBrowserNotifications, testBrowserNotification } from '../../services/browser-notifications.uts'
+const noticeAction = ref('')
 const status = computed((): string => browserNotificationLabel())
 // 由设置按钮的点击发起权限申请。
-function enable() { enableBrowserNotifications() }
-function test() { testBrowserNotification().then(() => { uni.showToast({ title: '已请求显示测试通知，请查看系统通知', icon: 'none' }) }, (error: Error) => { uni.showToast({ title: error.message, icon: 'none' }) }) }
+function enable() { applyEnable('enable') }
+function reenable() { applyEnable('retry') }
+async function applyEnable(action: string) {
+  if (noticeAction.value.length > 0 || browserNotifications.busy) return
+  noticeAction.value = action
+  try { await enableBrowserNotifications() } finally { noticeAction.value = '' }
+}
+function test() { if (noticeAction.value.length > 0) return; noticeAction.value = 'test'; testBrowserNotification().then(() => { uni.showToast({ title: '已请求显示测试通知，请查看系统通知', icon: 'none' }) }, (error: Error) => { uni.showToast({ title: error.message, icon: 'none' }) }).finally(() => { noticeAction.value = '' }) }
 </script>
 
 <style>

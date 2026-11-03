@@ -12,13 +12,13 @@
       <view v-if="liquidGlass" class="icon-button glass-header-action"><liquid-glass-control symbol="ellipsis" label="聊天菜单" @activate="showActions" /></view>
       <view v-else class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
-    <view v-if="showingCachedContent && !cacheRefreshing" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><button v-if="!connection.connected || detailError.length > 0" class="cache-retry button-secondary" @click="refresh" aria-label="重试同步">重试</button></view>
-    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><button v-if="!autoConnectPending && !activating" class="continue-button button-secondary" :disabled="!connection.connected || connection.pendingCommandId.length > 0" @click="continueConversation">重新连接</button></view>
-    <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><button class="text-button" @click="refresh">重连</button></view>
+    <view v-if="showingCachedContent && (!cacheRefreshing || refreshSource == 'cache')" class="cache-notice"><text class="cache-note">{{ cacheSyncHint }}</text><view v-if="!connection.connected || detailError.length > 0 || refreshSource == 'cache'" class="cache-retry button-secondary inline-progress-button"><action-progress :busy="refreshSource == 'cache'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">重试</text><button class="inline-progress-hitbox" @click="refreshButton('cache')" :aria-label="refreshSource == 'cache' ? '正在重试同步' : '重试同步'" :disabled="refreshSource == 'cache'"></button></view></view>
+    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><view v-if="(!autoConnectPending && !activating) || activationSource == 'continue'" class="continue-button button-secondary inline-progress-button"><action-progress :busy="activationSource == 'continue'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 13px;">重新连接</text><button class="inline-progress-hitbox" :disabled="!connection.connected || connection.pendingCommandId.length > 0 || (activationSource == 'continue')" @click="continueConversation(true)" :aria-label="(activationSource == 'continue') ? '正在连接聊天' : '重新连接'"></button></view></view>
+    <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
     <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
-    <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><button class="check button-secondary" :disabled="!connection.connected || busy" @click="checkRetryOutcome">核对重试结果</button></view>
-    <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><button v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome">核对删除结果</button></view>
-    <view v-if="connection.desktopNavigationError.length > 0" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><button class="check button-secondary" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0" @click="retryDesktopOpen">重试打开聊天</button></view>
+    <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><view class="check button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'check-retry'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对重试结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || busy || (pendingAction == 'check-retry')" @click="checkRetryOutcome" :aria-label="(pendingAction == 'check-retry') ? '正在核对重试结果' : '核对重试结果'"></button></view></view>
+    <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><view v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary inline-progress-button"><action-progress :busy="pageDeleteTask?.checking == true" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对删除结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome" :aria-label="(pageDeleteTask?.checking == true) ? '正在核对删除结果' : '核对删除结果'"></button></view></view>
+    <view v-if="connection.desktopNavigationError.length > 0 || activationSource == 'desktop'" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><view class="check button-secondary inline-progress-button"><action-progress :busy="activationSource == 'desktop'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">重试打开聊天</text><button class="inline-progress-hitbox" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0 || (activationSource == 'desktop')" @click="retryDesktopOpen" :aria-label="(activationSource == 'desktop') ? '正在打开聊天' : '重试打开聊天'"></button></view></view>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch" @wheel="onTimelineWheel">
         <view id="timeline-content" class="timeline-content" :style="{ minHeight: readingFloor + 'px' }">
@@ -45,7 +45,7 @@
           <view v-else-if="entry.role == 'failure'" class="turn-failure-card" aria-label="任务失败">
             <app-icon class="turn-failure-icon" name="alert-circle" :size="16" tone="warning" />
             <view class="turn-failure-copy"><text class="turn-failure-text" selectable>{{ entry.text }}</text><text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingCachedContent" class="turn-failure-hint">更新电脑连接服务后可重试</text></view>
-            <button v-if="entry.turnId == displayFailureTurnId" class="turn-retry" :disabled="!canRetryTurn(entry.turnId)" aria-label="重试失败任务" @click="retryTurn(entry.turnId)">{{ retrySubmitting(entry.turnId) ? '重试中…' : '重试' }}</button>
+            <view v-if="entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
           </view>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
           <template v-else>
@@ -63,25 +63,25 @@
           <view class="plan-confirm-body">
             <template v-if="!planEditing">
               <text class="plan-confirm-note">同意后开始实施，也可以先提出修改。</text>
-              <view class="plan-confirm-actions"><button class="plan-action button-secondary" :disabled="!canWrite || busy" @click="editPlan">修改方案</button><button class="plan-action plan-implement button-primary" :disabled="!canWrite || busy" @click="replyPlan('implement')">{{ pendingAction == 'plan' ? '提交中…' : '同意并实施' }}</button></view>
+              <view class="plan-confirm-actions"><button class="plan-action button-secondary" :disabled="!canWrite || busy" @click="editPlan">修改方案</button><view class="plan-action plan-implement button-primary inline-progress-button"><action-progress :busy="pendingAction == 'plan:implement'" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">同意并实施</text><button class="inline-progress-hitbox" :disabled="!canWrite || busy" @click="replyPlan('implement')" :aria-label="(pendingAction == 'plan:implement') ? '正在处理' : '同意并实施'"></button></view></view>
               <button class="plan-defer" :disabled="busy" @click="hidePlan">稍后处理</button>
             </template>
             <template v-else>
               <text class="plan-confirm-note">补充调整意见，我会据此更新方案。</text>
               <textarea class="plan-feedback" v-model="planFeedback" :disabled="!canWrite || busy" placeholder="告诉我你希望如何调整…" aria-label="方案修改意见" :maxlength="32000"></textarea>
-              <button class="plan-send button-primary" :disabled="!canWrite || busy || planFeedback.trim().length == 0" @click="replyPlan('feedback')">{{ pendingAction == 'plan' ? '发送中…' : '发送修改意见' }}</button>
+              <view class="plan-send button-primary inline-progress-button"><action-progress :busy="pendingAction == 'plan:feedback'" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">发送修改意见</text><button class="inline-progress-hitbox" :disabled="!canWrite || busy || planFeedback.trim().length == 0" @click="replyPlan('feedback')" :aria-label="(pendingAction == 'plan:feedback') ? '正在处理' : '发送修改意见'"></button></view>
               <text class="plan-feedback-note">更新方案后，仍需你确认实施。</text>
             </template>
           </view>
         </view>
         <view id="questions-anchor"></view>
         <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
-        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="busy" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
+        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="pendingAction == 'question:' + group.id" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
         <view id="approvals-anchor"></view>
-        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><button class="approval-button button-secondary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button><button class="approval-button button-primary" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')">{{ pendingAction == 'approval:' + approval.id ? '提交中…' : '本次允许' }}</button></view></view>
+        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><view class="approval-button button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'approval:decline:' + approval.id" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">拒绝</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')" :aria-label="(pendingAction == 'approval:decline:' + approval.id) ? '正在提交拒绝' : '拒绝'"></button></view><view class="approval-button button-primary inline-progress-button"><action-progress :busy="pendingAction == 'approval:accept:' + approval.id" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 14px;">本次允许</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')" :aria-label="(pendingAction == 'approval:accept:' + approval.id) ? '正在提交本次允许' : '本次允许'"></button></view></view></view>
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
-        <message-queue :messages="queuedMessages" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
+        <message-queue :messages="queuedMessages" :pending-action="pendingAction" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
         <view id="timeline-message-end" class="content-end"></view>
         <!-- 同步骨架紧跟缓存消息末尾，与聊天内容一起滚动。 -->
         <view v-if="cacheRefreshing" class="cache-sync-indicator"><loading-skeleton kind="sync" :visible="pageVisible" /></view>
@@ -95,17 +95,17 @@
     </view>
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
-      <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
+      <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :pending-action="pendingAction" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
       <message-composer :instance-id="composerInstanceId" :reset-key="pageHostId + ':' + pageThreadId" :cursor="mentionCursor" :model-label="modelLabel" :layout-width="props.paneWidth"
         :active="pageVisible" :text="draft" :expanded="composerExpanded" :input-height="composerHeight" :focus="predictionFocus"
         :images="draftImages" :files="draftFiles" :plugins="draftPlugins" :mentions="draftMentions"
         :disabled="readOnly || queueEditing" :chips-disabled="!canWrite" :images-disabled="busy || imageBusy || connection.pendingCommandId.length > 0" :files-disabled="busy || connection.pendingCommandId.length > 0"
-        :add-disabled="!canWrite" :primary-disabled="!primaryAvailable"
+        :add-disabled="!canWrite" :primary-disabled="!primaryAvailable" :primary-pending-label="pendingAction == 'send' ? '正在发送' : pendingAction == 'stop' ? '正在停止任务' : pendingAction == 'retry:composer' ? '正在提交重试' : ''"
         :primary-icon="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? 'stop' : 'send'"
         :primary-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? '停止任务' : '发送指令'"
         :settings-disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" :plan-enabled="planEnabled" :plan-disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'"
         :prediction="visiblePrediction" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
-        :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retry-disabled="!canWrite"
+        :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retrying-file-ids="retryingFileIds" :retry-disabled="!canWrite"
         @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange"
         @syncinput="syncComposerText" @submit="applyComposerEnter" @acceptprediction="acceptPrediction(false)" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
         @retryfile="retryFile" @interact="dismissGoal" @layout="updateComposerGeometry"
@@ -118,7 +118,7 @@
         </template>
       </message-composer>
     </view>
-      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
+      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view><view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
@@ -143,6 +143,7 @@ import { pluginMessageText } from '../../services/plugins.uts'
 import { readDraftPlugins, saveDraftPlugins } from '../../services/composer.uts'
 import MessageQueue from '../../components/message-queue/message-queue.uvue'
 import { QueuedMessage } from '../../services/message-queue.uts'
+import { useManualReconnect } from '../../services/manual-reconnect.uts'
 import { messageSendingPreferences } from '../../services/message-sending-preferences.uts'
 import { QueueEditDraft, QueueEditPlugin, isQueueEditing, beginQueueEdit, finishQueueEdit, restoreQueuedDraft } from '../../services/queue-edit.uts'
 import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, readDraftFiles, saveDraftFiles, DraftFile, rememberSubmission, settleSubmission } from '../../services/composer.uts'
@@ -237,6 +238,7 @@ const settings = ref<ExecutionSettings | null>(null)
 const models = ref<ModelOption[]>([])
 const settingsLoading = ref(false)
 const settingsBusy = ref(false)
+const settingChoice = ref('')
 const settingsError = ref('')
 const menuHeight = ref(280)
 const menuBottom = ref(134)
@@ -264,7 +266,7 @@ function replyPlan(action: string) {
   const planId = pendingPlan.value!.id
   const hostId = pageHostId.value
   const threadId = pageThreadId.value
-  busy.value = true; pendingAction.value = 'plan'; operationError.value = ''
+  busy.value = true; pendingAction.value = 'plan:' + action; operationError.value = ''
   bridge.request('turn.send', { threadId, planId, planAction: action, text: planFeedback.value.trim() }, true).then((_: UTSJSONObject) => {
     busy.value = false; pendingAction.value = ''
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && pendingPlan.value?.id == planId) { hiddenPlanId.value = planId; planFeedback.value = ''; planEditing.value = false; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
@@ -297,7 +299,12 @@ onPaneHide(() => { pageVisible.value = false; hideTaskNoticeThread(noticeViewRev
 onUnmounted(() => { hideTaskNoticeThread(noticeViewRevision) })
 watch((): string => [connection.hostId, pageHostId.value, pageThreadId.value, connection.activeThreadId].join(':'), () => { pluginOpen.value = false; closeThreadMentions(false) })
 const pendingAction = ref('')
+const { reconnecting, reconnect } = useManualReconnect()
+const refreshSource = ref('')
+let refreshRevision = 0
 const activating = ref(false)
+const activationSource = ref('')
+const retryingFileIds = ref<string[]>([])
 const autoConnectPending = ref(false)
 let activationRequest = 0
 const actionsVisible = ref(false)
@@ -524,22 +531,38 @@ function closeActions() { actionsVisible.value = false }
 function showActions() { dismissGoal(); closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
 // 重试仅恢复电脑导航，草稿不会被发送。
-function retryDesktopOpen() { if (!isCurrentPage() || activating.value) return; activating.value = true; bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => { if (isCurrentPage()) activating.value = false }, (_: Error) => { if (isCurrentPage()) activating.value = false }) }
+function retryDesktopOpen() { if (!isCurrentPage() || activating.value) return; activating.value = true; activationSource.value = 'desktop'; bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => { if (isCurrentPage()) { activating.value = false; activationSource.value = '' } }, (_: Error) => { if (isCurrentPage()) { activating.value = false; activationSource.value = '' } }) }
+// 只标记用户点击的同步入口，回执交给现有会话订阅处理。
+async function refreshButton(source: string) {
+  if (refreshSource.value.length > 0) return
+  if (!connection.connected) {
+    refreshSource.value = source; reconnect()
+    if (!reconnecting.value) refreshSource.value = ''
+    return
+  }
+  const threadId = pageThreadId.value
+  if (!isCurrentPage() || bridge.syncingThread == threadId) return
+  const revision = ++refreshRevision
+  refreshSource.value = source; operationError.value = ''
+  try { await bridge.watch(threadId) } finally { if (revision == refreshRevision) refreshSource.value = '' }
+}
+watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { refreshRevision++; refreshSource.value = '' })
+watch((): boolean => reconnecting.value, (pending: boolean) => { if (!pending) refreshSource.value = '' })
 function refreshFromMenu() { closeActions(); refresh(); notify('正在同步聊天') }
 // 打开只读会话即表示请求加载；仅取得真实快照，不发送草稿或其他任务指令。
-function continueConversation() {
+function continueConversation(manual: boolean = false) {
   if (!isCurrentPage() || !pageVisible.value || !readOnly.value || connection.snapshot?.threadId != pageThreadId.value || activating.value || !connection.connected || connection.pendingCommandId.length > 0) return
   if (!connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)) return
   autoConnectPending.value = false
-  activating.value = true
+  activating.value = true; activationSource.value = manual ? 'continue' : ''
   operationError.value = ''
   const request = ++activationRequest
   bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => {
     if (request != activationRequest || !isCurrentPage()) return
-    activating.value = false
+    activating.value = false; activationSource.value = ''
   }, (error: Error) => {
     if (request != activationRequest || !isCurrentPage()) return
-    activating.value = false; operationError.value = error.message
+    activating.value = false; activationSource.value = ''; operationError.value = error.message
   })
 }
 // 每次进入页面只自动尝试一次；实时会话取消意图，后台恢复和失败不循环导航电脑。
@@ -1063,9 +1086,9 @@ function selectSetting(key: string, value: string): boolean {
   changes[key] = value
   const request = ++settingsRequest
   const snapshotRevision = settingsSnapshotRevision
-  settingsBusy.value = true; busy.value = true; settingsLoading.value = false; settingsError.value = ''
+  settingChoice.value = key == 'mode' ? 'mode' : key + ':' + value; settingsBusy.value = true; busy.value = true; settingsLoading.value = false; settingsError.value = ''
   bridge.request('thread.settings.update', { threadId: pageThreadId.value, changes }, true).then((result: UTSJSONObject) => {
-    busy.value = false; settingsBusy.value = false
+    busy.value = false; settingsBusy.value = false; settingChoice.value = ''
     if (request != settingsRequest || !isCurrentPage()) return
     const response = JSON.parse<SettingsResponse>(JSON.stringify(result))
     if (response == null || response.settings == null) { settingsError.value = '请刷新并核对电脑端设置'; return }
@@ -1076,7 +1099,7 @@ function selectSetting(key: string, value: string): boolean {
     if (['model', 'effort', 'serviceTier', 'mode'].indexOf(key) >= 0 && pageVisible.value) focusComposerInput()
     refresh()
   }, (error: Error) => {
-    busy.value = false; settingsBusy.value = false
+    busy.value = false; settingsBusy.value = false; settingChoice.value = ''
     if (request != settingsRequest || !isCurrentPage()) return
     settingsError.value = error.message
     // 设置失败后由用户查看同步结果，重连不会自动再次提交。
@@ -1166,7 +1189,11 @@ function retryFile(id: string) {
   const file = draftFiles.value.find((item: DraftFile): boolean => item.id == id)
   if (file == null || file.status == 'uploading') return
   file.status = 'uploading'; file.error = ''; updateFile(pageHostId.value, pageThreadId.value, file)
-  uploadFile(pageHostId.value, pageThreadId.value, file)
+  if (retryingFileIds.value.indexOf(id) >= 0) return
+  retryingFileIds.value.push(id)
+  uploadFile(pageHostId.value, pageThreadId.value, file).finally(() => {
+    retryingFileIds.value = retryingFileIds.value.filter((item: string): boolean => item != id)
+  })
 }
 function removeFile(id: string) {
   if (busy.value || connection.pendingCommandId.length > 0) return
@@ -1272,19 +1299,19 @@ function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
 function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[]) {
   if (!canWrite.value || submittedGroupIds.value.indexOf(questionGroupId) >= 0) return
   const threadId = pageThreadId.value
-  busy.value = true
+  busy.value = true; pendingAction.value = 'question:' + questionGroupId
   bridge.request('question.reply', { threadId, questionGroupId, turnId, answers }, true).then((_: UTSJSONObject) => {
-    busy.value = false
+    busy.value = false; pendingAction.value = ''
     if (isCurrentPage()) { submittedGroupIds.value.push(questionGroupId); refresh() }
-  }, (error: Error) => { busy.value = false; if (isCurrentPage()) operationError.value = error.message })
+  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
 // 两个重试入口共享轮次占位，成功回执到新轮次广播之间也不能重复点击。
 function retrySubmitting(turnId: string): boolean { return submittedRetryKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
 function canRetryTurn(turnId: string): boolean { return turnId.length > 0 && retryTurnId.value == turnId && canWrite.value && goalHostOnline.value && liveConversation.value?.supportsTurnRetry == true && !retrySubmitting(turnId) }
-function retryTurn(turnId: string) {
+function retryTurn(turnId: string, fromComposer: boolean = false) {
   if (!canRetryTurn(turnId)) return
   const hostId = pageHostId.value, threadId = pageThreadId.value, key = hostId + ':' + threadId + ':' + turnId
-  submittedRetryKey.value = key; operationError.value = ''; busy.value = true; pendingAction.value = 'retry'
+  submittedRetryKey.value = key; operationError.value = ''; busy.value = true; pendingAction.value = fromComposer ? 'retry:composer' : 'retry:timeline'
   bridge.request('turn.retry', { threadId, expectedTurnId: turnId }, true).then((_: UTSJSONObject) => {
     busy.value = false; pendingAction.value = ''
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { resumeFollowing(); refresh() }
@@ -1298,14 +1325,14 @@ function retryTurn(turnId: string) {
 function checkRetryOutcome() {
   if (!connection.connected || busy.value || pendingRetryCommand.value.length == 0) return
   const hostId = pageHostId.value, threadId = pageThreadId.value, commandId = pendingRetryCommand.value
-  busy.value = true
+  busy.value = true; pendingAction.value = 'check-retry'
   bridge.request('command.status', { commandId }).then((status: UTSJSONObject) => {
-    busy.value = false
+    busy.value = false; pendingAction.value = ''
     const error = status['error'] as UTSJSONObject | null
     const done = status.getString('state') == 'done' && error?.getBoolean('outcomeUnknown') != true
     if (done) { bridge.clearCommand(commandId, hostId); if (error != null) submittedRetryKey.value = '' }
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { operationError.value = done ? error?.getString('message') ?? '' : '重试结果仍待核对，请勿重复提交'; bridge.watch(threadId) }
-  }, (error: Error) => { busy.value = false; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
 }
 
 // 仅在明确收到成功响应后清空草稿，未知结果保留并要求先核对。
@@ -1341,7 +1368,7 @@ function send() {
 function operateQueuedMessage(id: string, action: string) {
   if (!canWrite.value || connection.snapshot?.supportsMessageQueue != true) return
   const hostId = pageHostId.value, threadId = pageThreadId.value
-  busy.value = true; pendingAction.value = 'queue:' + id; operationError.value = ''
+  busy.value = true; pendingAction.value = 'queue:' + action + ':' + id; operationError.value = ''
   bridge.request('turn.send', { threadId, queueAction: action, queueId: id, expectedTurnId: activeTurnId.value }, true).then((_: UTSJSONObject) => {
     busy.value = false; pendingAction.value = ''
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { notify(action == 'steer' ? '已追加到当前任务' : '已移除排队消息'); refresh() }
@@ -1354,7 +1381,7 @@ function editQueuedMessage(id: string) {
   if (!canWrite.value || imageBusy.value || connection.snapshot?.supportsQueueEditing != true) return
   const hostId = pageHostId.value, threadId = pageThreadId.value
   try { beginQueueEdit(hostId, threadId, draftPlugins.value.length > 0 || draftMentions.value.length > 0) } catch (error) { notify((error as Error).message); return }
-  busy.value = true; pendingAction.value = 'queue-edit:' + id; operationError.value = ''
+  busy.value = true; pendingAction.value = 'queue:edit:' + id; operationError.value = ''
   bridge.request('turn.send', { threadId, queueAction: 'edit', queueId: id }, true).then((result: UTSJSONObject) => {
     try {
       const restored = JSON.parse<QueueEditDraft>(JSON.stringify(result['draft']))
@@ -1377,7 +1404,7 @@ function editQueuedMessage(id: string) {
 }
 let stopPromptOpen = false
 // 所有停止入口共用确认框，确认时复核原会话及任务，避免误停后续任务。
-function stop() {
+function stop(fromComposer: boolean = true) {
   if (!canWrite.value || activeTurnId.value.length == 0 || stopPromptOpen) return
   const hostId = pageHostId.value
   const threadId = pageThreadId.value
@@ -1386,14 +1413,15 @@ function stop() {
   uni.showModal({ title: '停止任务', content: '确定停止当前正在执行的任务吗？', confirmText: '停止', confirmColor: '#bb3f44', cancelText: '取消', success: (choice) => {
     stopPromptOpen = false
     if (!choice.confirm || !isCurrentPage() || !pageVisible.value || connection.hostId != hostId || pageThreadId.value != threadId || activeTurnId.value != turnId || !canWrite.value) return
-    busy.value = true; pendingAction.value = 'stop'
+    busy.value = true; pendingAction.value = fromComposer ? 'stop' : 'stop:menu'
     bridge.request('turn.stop', { threadId, expectedTurnId: turnId }, true).then((_: UTSJSONObject) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify('停止请求已提交'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
   }, fail: (_) => { stopPromptOpen = false } })
 }
 function reply(id: string, turnId: string, decision: string) {
   if (!canWrite.value || handledApprovalIds.value.indexOf(id) >= 0) return
-  busy.value = true; pendingAction.value = 'approval:' + id
-  bridge.request('approval.reply', { threadId: pageThreadId.value, approvalId: id, turnId, decision }, true).then((_: UTSJSONObject) => { handledApprovalIds.value.push(id); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { notify(decision == 'accept' ? '已允许本次操作' : '已拒绝本次操作'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  busy.value = true; pendingAction.value = 'approval:' + decision + ':' + id
+  bridge.request('approval.reply', { threadId, approvalId: id, turnId, decision }, true).then((_: UTSJSONObject) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { handledApprovalIds.value.push(id); notify(decision == 'accept' ? '已允许本次操作' : '已拒绝本次操作'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
 }
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
@@ -1409,7 +1437,7 @@ function showGoal() {
 }
 function operateGoal(action: string, objective: string, revision: string) {
   if (!canWrite.value || !goalHostOnline.value || goalBusy.value || connection.snapshot?.supportsGoalControl != true) return
-  busy.value = true; goalBusy.value = true; operationError.value = ''
+  busy.value = true; goalBusy.value = true; pendingAction.value = action; operationError.value = ''
   const hostId = pageHostId.value
   const threadId = pageThreadId.value
   const params: UTSJSONObject = { threadId, action, expectedRevision: revision }
@@ -1419,14 +1447,14 @@ function operateGoal(action: string, objective: string, revision: string) {
       connection.snapshot!.goal = result['goal'] == null ? null : JSON.parse<ThreadGoal>(JSON.stringify(result['goal']))
       connection.snapshot!.goalRevision = result.getString('goalRevision') ?? 'none'
     }
-    busy.value = false; goalBusy.value = false
+    busy.value = false; goalBusy.value = false; pendingAction.value = ''
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { notify(action == 'clear' ? '目标已清除' : '目标已同步'); refresh() }
-  }, (error: Error) => { busy.value = false; goalBusy.value = false; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+  }, (error: Error) => { busy.value = false; goalBusy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
 }
 
 // 主按钮随上下文切换：有草稿发送，空草稿运行中停止。
-function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (draftMentions.value.length > 0) return; else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value) }
-function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop() }
+function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (draftMentions.value.length > 0) return; else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value, true) }
+function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop(false) }
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
 function handleBack(): boolean {
   const handle = (): boolean => { if (mentionOpen.value) { closeThreadMentions(); return true }; if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedPlanId.value.length > 0) { closePlan(); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false }

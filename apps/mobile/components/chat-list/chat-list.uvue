@@ -32,13 +32,13 @@
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
         <view v-if="!connection.configured" class="empty"><text class="empty-title">在手机上继续你的聊天</text><text class="description">首次使用时连接电脑，已有聊天就会显示在这里。</text><button class="empty-action button-primary" @click="openConnection">连接电脑</button></view>
-        <loading-skeleton v-else-if="showThreadLoading" kind="list" :visible="pageVisible" />
-        <view v-else-if="allVisibleThreads.length == 0 && (connection.error.length > 0 || listUnavailable)" class="empty"><text class="empty-title">{{ listUnavailable && !selectedComputerOnline ? '电脑离线' : '聊天加载失败' }}</text><text class="description">请检查连接后重试。</text><button class="empty-action button-secondary" @click="refreshThreads">重新加载</button></view>
-        <view v-else-if="groups.length == 0" class="empty">
+        <loading-skeleton v-else-if="showThreadLoading && manualListRefresh.length == 0" kind="list" :visible="pageVisible" />
+        <view v-else-if="manualListRefresh == 'reload' || (allVisibleThreads.length == 0 && (connection.error.length > 0 || listUnavailable))" class="empty"><text class="empty-title">{{ listUnavailable && !selectedComputerOnline ? '电脑离线' : '聊天加载失败' }}</text><text class="description">请检查连接后重试。</text><view class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'reload'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">重新加载</text><button class="inline-progress-hitbox" @click="reloadThreads" :disabled="manualListRefresh == 'reload'" :aria-label="(manualListRefresh == 'reload') ? '正在重新加载' : '重新加载'"></button></view></view>
+        <view v-else-if="groups.length == 0 || manualListRefresh == 'sync'" class="empty">
           <text class="empty-title">{{ search.trim().length > 0 ? '没有找到相关聊天' : '暂无聊天' }}</text>
           <text class="description">{{ search.trim().length > 0 ? '试试其他标题或项目名称。' : selectedComputerOnline ? '电脑上的聊天会显示在这里。' : '电脑恢复连接后会自动同步。' }}</text>
           <button v-if="search.trim().length > 0" class="empty-action button-secondary" @click="search = ''">清除搜索</button>
-          <button v-else class="empty-action button-secondary" @click="refreshThreads">重新同步</button>
+          <view v-else class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'sync'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">重新同步</text><button class="inline-progress-hitbox" @click="refreshThreads" :disabled="manualListRefresh == 'sync'" :aria-label="(manualListRefresh == 'sync') ? '正在重新同步' : '重新同步'"></button></view>
         </view>
         <view v-for="group in groups" :key="group.key" class="thread-group">
           <text class="group-title">{{ group.title }}</text>
@@ -84,6 +84,7 @@ import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvu
 import { useLiquidGlass } from '../../services/liquid-glass.uts'
 import TaskStatus from '../../components/task-status/task-status.uvue'
 import DraftIndicator from '../../components/draft-indicator/draft-indicator.uvue'
+import { useManualReconnect } from '../../services/manual-reconnect.uts'
 import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
@@ -355,7 +356,20 @@ function onThreadListScroll(event: UniScrollEvent) { if (!restoringThreadScroll)
 function openNewConversation() { emit('create', selectedComputerId.value) }
 // 只有首条消息确认发送成功后才进入现有会话页。
 // 刷新与重连只恢复读取，不自动提交任何会话指令。
-function refreshThreads() { connection.error = ''; if (connection.connected) refreshComputerThreads(selectedComputerId.value); else bridge.resume() }
+const manualListRefresh = ref('')
+const { reconnecting: listReconnecting, reconnect: reconnectList } = useManualReconnect()
+// 手动刷新复用列表读取和握手状态；自动加载不占用按钮。
+const listRefreshPending = computed((): boolean => listReconnecting.value || threadList.computers.some((entry: ComputerThreads): boolean => entry.loading && (selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value)))
+watch(listRefreshPending, (pending: boolean) => { if (!pending) manualListRefresh.value = '' }, { flush: 'sync' })
+watch((): string => selectedComputerId.value + ':' + connection.configurationRevision.toString(), () => { manualListRefresh.value = '' })
+function loadFromListButton(action: string) {
+  if (manualListRefresh.value.length > 0) return
+  connection.error = ''
+  if (connection.connected) refreshComputerThreads(selectedComputerId.value); else reconnectList()
+  if (listRefreshPending.value) manualListRefresh.value = action
+}
+function refreshThreads() { loadFromListButton('sync') }
+function reloadThreads() { loadFromListButton('reload') }
 // 跨电脑打开时仍先通过已有的授权检查和待核对锁。
 // 跳转时携带列表标题和项目名，让详情页在快照返回前即可显示相同名称。
 // 离线时允许查看对应配对和电脑的缓存，不触发桌面导航。

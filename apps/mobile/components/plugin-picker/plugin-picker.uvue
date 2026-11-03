@@ -5,8 +5,8 @@
       <text class="plugin-hint">仅用于本次消息，最多20个；安装与授权请在电脑端完成</text>
       <input v-model="query" class="plugin-search" placeholder="搜索插件名称或简介" aria-label="搜索插件" :maxlength="100" />
       <scroll-view direction="vertical" class="plugin-list" :style="{ height: listHeight + 'px' }" :show-scrollbar="false">
-        <view v-if="loading" class="plugin-empty"><text class="plugin-note">正在读取电脑插件…</text></view>
-        <view v-else-if="error.length > 0" class="plugin-empty"><text class="plugin-error">{{ error }}</text><button class="plugin-retry" @click="load">重新读取</button></view>
+        <view v-if="loading && !manualRetry" class="plugin-empty"><text class="plugin-note">正在读取电脑插件…</text></view>
+        <view v-else-if="error.length > 0 || manualRetry" class="plugin-empty"><text class="plugin-error">{{ error }}</text><view class="plugin-retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #536050; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新读取' : '重新读取'"></button></view></view>
         <template v-else>
           <view v-for="plugin in missing" :key="plugin.id" class="plugin-row plugin-unavailable action-frame"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text class="plugin-description">已不可用，请取消选择</text></view><app-icon name="check" :size="20" tone="muted" /><button class="action-hitbox" :aria-label="'取消不可用插件 ' + plugin.displayName" @click="toggle(plugin)"></button></view>
           <view v-for="plugin in filtered" :key="plugin.id" class="plugin-row action-frame" :class="{ 'plugin-row-selected': isSelected(plugin.id) }"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text v-if="plugin.description.length > 0" class="plugin-description">{{ plugin.description }}</text></view><view class="plugin-check"><app-icon v-if="isSelected(plugin.id)" name="check" :size="20" /></view><button class="action-hitbox" role="checkbox" :aria-checked="isSelected(plugin.id)" :aria-label="(isSelected(plugin.id) ? '取消选择 ' : '选择插件 ') + plugin.displayName" @click="toggle(plugin)"></button></view>
@@ -29,6 +29,7 @@ const listHeight = Math.max(120, Math.min(380, uni.getWindowInfo().windowHeight 
 const filtered = computed((): PluginOption[] => filterPlugins(options.value, query.value))
 const missing = computed((): SelectedPlugin[] => selected.value.filter((plugin: SelectedPlugin): boolean => !options.value.some((option: PluginOption): boolean => option.id == plugin.id)))
 let revision = 0, alive = true
+const manualRetry = ref(false)
 const context = computed((): string => connection.configurationRevision + ':' + props.hostId + ':' + props.threadId + ':' + props.projectId + ':' + connection.hostId + ':' + connection.connected)
 
 // 固定读取目标和请求代次；切换电脑、项目、配对或关闭后拒绝迟到结果。
@@ -50,6 +51,13 @@ async function load() {
   }
   if (alive && request == revision && key == context.value) loading.value = false
 }
+// 用户点重试时保留原按钮，自动载入仍显示列表提示。
+async function retry() {
+  if (loading.value) return
+  manualRetry.value = true
+  const request = revision + 1
+  try { await load() } finally { if (alive && request == revision) manualRetry.value = false }
+}
 function isSelected(id: string): boolean { return selected.value.some((plugin: SelectedPlugin): boolean => plugin.id == id) }
 // 不可用的旧选择只允许取消，避免读取失败后重新加入失效插件。
 function toggle(plugin: SelectedPlugin) {
@@ -63,7 +71,7 @@ function toggle(plugin: SelectedPlugin) {
 function clear() { selected.value = [] as SelectedPlugin[] }
 function close() { revision++; emit('close') }
 function confirm() { if (!loading.value && error.value.length == 0 && missing.value.length == 0) { revision++; emit('confirm', copyPluginSelection(selected.value)) } }
-watch((): string => context.value, () => { selected.value = copyPluginSelection(props.plugins); query.value = ''; load() }, { immediate: true })
+watch((): string => context.value, () => { manualRetry.value = false; selected.value = copyPluginSelection(props.plugins); query.value = ''; load() }, { immediate: true })
 onUnmounted(() => { alive = false; revision++ })
 </script>
 <style>

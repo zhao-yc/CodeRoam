@@ -69,11 +69,11 @@ public final class CodexLiquidGlassView: UIView {
     }
 
     // 随草稿和任务状态刷新图标、VoiceOver 标签及禁用状态。
-    public func update(symbol: String, label: String, title: String, prominent: Bool, disabled: Bool, secondarySymbol: String, secondaryLabel: String, secondaryDisabled: Bool) {
+    public func update(symbol: String, label: String, title: String, prominent: Bool, disabled: Bool, busy: Bool, secondarySymbol: String, secondaryLabel: String, secondaryDisabled: Bool) {
         guard #available(iOS 26, *), !decorative else { return }
-        configure(primary, symbol: symbol, label: label, title: title, prominent: prominent, disabled: disabled)
+        configure(primary, symbol: symbol, label: label, title: title, prominent: prominent, disabled: disabled, busy: busy)
         if grouped {
-            configure(secondary, symbol: secondarySymbol, label: secondaryLabel, title: "", prominent: false, disabled: secondaryDisabled)
+            configure(secondary, symbol: secondarySymbol, label: secondaryLabel, title: "", prominent: false, disabled: secondaryDisabled, busy: false)
         }
     }
 
@@ -84,10 +84,11 @@ public final class CodexLiquidGlassView: UIView {
     }
 
     @available(iOS 26, *)
-    private func configure(_ button: UIButton, symbol: String, label: String, title: String, prominent: Bool, disabled: Bool) {
+    private func configure(_ button: UIButton, symbol: String, label: String, title: String, prominent: Bool, disabled: Bool, busy: Bool) {
         var configuration: UIButton.Configuration = grouped ? .plain() : prominent ? .prominentGlass() : .glass()
         configuration.cornerStyle = .capsule
         configuration.image = UIImage(systemName: symbol)
+        configuration.showsActivityIndicator = busy
         configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
         configuration.title = title.isEmpty ? nil : title
         configuration.imagePadding = 8
@@ -101,6 +102,6 @@ public final class CodexLiquidGlassView: UIView {
         }
         button.configuration = configuration
         button.accessibilityLabel = label
-        button.isEnabled = !disabled
+        button.isEnabled = !disabled && !busy
     }
 }

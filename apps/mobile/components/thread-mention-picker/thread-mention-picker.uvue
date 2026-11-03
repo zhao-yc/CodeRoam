@@ -4,16 +4,16 @@
       <view class="mention-heading"><text class="mention-title">引用其他聊天</text><button class="mention-close" aria-label="取消引用聊天" @click="close">×</button></view>
       <text class="mention-hint">搜索当前电脑的聊天，最多选择20个</text>
       <input v-model="query" :focus="true" class="mention-search" placeholder="搜索聊天" aria-label="搜索其他聊天" :maxlength="100" />
-      <scroll-view direction="vertical" class="mention-list" :style="{ height: listHeight + 'px' }" @scrolltolower="loadMore">
+      <scroll-view direction="vertical" class="mention-list" :style="{ height: listHeight + 'px' }" @scrolltolower="loadNextPage">
         <view v-for="thread in options" :key="thread.id" class="mention-row" :class="{ 'mention-selected': isSelected(thread.id) }">
           <view class="mention-copy"><text class="mention-name">{{ thread.title }}</text><text v-if="thread.projectLabel.length > 0" class="mention-project">{{ thread.projectLabel }}</text></view>
           <text class="mention-check">{{ isSelected(thread.id) ? '✓' : '' }}</text>
           <button class="mention-hitbox" role="checkbox" :aria-checked="isSelected(thread.id)" :aria-label="(isSelected(thread.id) ? '取消选择 ' : '引用聊天 ') + thread.title" @click="toggle(thread)"></button>
         </view>
-        <text v-if="loading" class="mention-note">正在搜索聊天…</text>
-        <view v-else-if="error.length > 0"><text class="mention-error">{{ error }}</text><button class="mention-retry" @click="retry">重新读取</button></view>
+        <text v-if="loading && manualAction.length == 0" class="mention-note">正在搜索聊天…</text>
+        <view v-else-if="error.length > 0 || manualAction == 'retry'"><text v-if="error.length > 0" class="mention-error">{{ error }}</text><view class="mention-retry inline-progress-button"><action-progress :busy="manualAction == 'retry'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualAction == 'retry'" :aria-label="(manualAction == 'retry') ? '正在重新读取' : '重新读取'"></button></view></view>
         <text v-else-if="options.length == 0" class="mention-note">{{ query.trim().length > 0 ? '没有匹配的聊天' : '暂无可引用的聊天' }}</text>
-        <button v-else-if="hasMore" class="mention-retry" @click="loadMore">加载更多</button>
+        <view v-else-if="hasMore || manualAction == 'more'" class="mention-retry inline-progress-button"><action-progress :busy="manualAction == 'more'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">加载更多</text><button class="inline-progress-hitbox" @click="loadMore" :disabled="manualAction == 'more'" :aria-label="(manualAction == 'more') ? '正在加载更多' : '加载更多'"></button></view>
       </scroll-view>
       <scroll-view v-if="selected.length > 0" direction="vertical" class="mention-selected-list" :style="{ height: Math.min(88, selected.length * 44) + 'px' }"><thread-mention-chips :mentions="selected" @remove="remove" /></scroll-view>
       <view class="mention-footer"><button class="mention-cancel" @click="close">取消</button><button class="mention-confirm" :disabled="loading || error.length > 0 || selected.length == 0" @click="confirm">确认引用 · {{ selected.length }}</button></view>
@@ -28,6 +28,7 @@ import { SelectedThreadMention, ThreadMentionOption, ThreadMentionsResponse, cop
 const props = defineProps<{ hostId: string, threadId: string, scopeId: string, initialQuery: string, mentions: SelectedThreadMention[] }>()
 const emit = defineEmits<{ (event: 'confirm', mentions: SelectedThreadMention[]): void; (event: 'close'): void }>()
 const query = ref(props.initialQuery), options = ref<ThreadMentionOption[]>([]), selected = ref<SelectedThreadMention[]>(copyThreadMentions(props.mentions))
+const manualAction = ref('')
 const loading = ref(false), error = ref(''), hasMore = ref(false)
 const listHeight = Math.max(100, Math.min(300, uni.getWindowInfo().windowHeight - 390))
 const context = computed((): string => [props.hostId, props.threadId, props.scopeId, connection.hostId, connection.configurationRevision.toString(), connection.connected.toString()].join(':'))
@@ -54,9 +55,18 @@ async function load(more: boolean = false) {
   finally { if (alive && !closed && request == revision && key == context.value) loading.value = false }
 }
 // 输入时立即让旧请求失效，250 毫秒后只搜索最后一次关键词。
-function scheduleSearch() { revision++; clearTimeout(timer); loading.value = true; error.value = ''; options.value = [] as ThreadMentionOption[]; hasMore.value = false; timer = setTimeout(() => { load() }, 250) }
-function loadMore() { load(true) }
-function retry() { load(options.value.length > 0) }
+function scheduleSearch() { revision++; manualAction.value = ''; clearTimeout(timer); loading.value = true; error.value = ''; options.value = [] as ThreadMentionOption[]; hasMore.value = false; timer = setTimeout(() => { load() }, 250) }
+// 自动触底保留列表加载提示，按钮只跟踪显式提交的分页或重试。
+function loadNextPage() { if (error.value.length == 0) load(true) }
+function loadMore() { runManualLoad('more') }
+function retry() { runManualLoad('retry') }
+async function runManualLoad(action: string) {
+  if (loading.value) return
+  manualAction.value = action
+  const request = revision + 1
+  try { await load(action == 'more' || options.value.length > 0) }
+  finally { if (alive && !closed && revision == request) manualAction.value = '' }
+}
 function isSelected(id: string): boolean { return selected.value.some((item: SelectedThreadMention): boolean => item.id == id) }
 function remove(id: string) { selected.value = selected.value.filter((item: SelectedThreadMention): boolean => item.id != id) }
 function toggle(thread: ThreadMentionOption) {

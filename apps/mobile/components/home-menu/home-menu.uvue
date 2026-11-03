@@ -27,10 +27,10 @@
         </scroll-view>
       </template>
       <template v-else>
-        <view class="archive-heading"><view class="back-action"><app-icon name="back" :size="20" /><button class="menu-hitbox" :disabled="!visible" aria-label="返回列表菜单" @click="section = 'main'"></button></view><text class="archive-title">已归档任务</text><view class="back-action"><app-icon name="refresh" :size="19" /><button class="menu-hitbox" :disabled="!visible" aria-label="刷新归档列表" @click="refreshArchives"></button></view></view>
+        <view class="archive-heading"><view class="back-action"><app-icon name="back" :size="20" /><button class="menu-hitbox" :disabled="!visible" aria-label="返回列表菜单" @click="section = 'main'"></button></view><text class="archive-title">已归档任务</text><view class="back-action"><loading v-if="archiveRefreshing" class="archive-spinner" /><app-icon v-else name="refresh" :size="19" /><button class="menu-hitbox" :disabled="!visible || archiveRefreshing" :aria-label="archiveRefreshing ? '正在刷新归档列表' : '刷新归档列表'" @click="refreshFromButton"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: archiveHeight + 'px' }">
           <text v-if="entries.length == 0" class="menu-note">连接电脑后查看已归档任务</text>
-          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading" class="menu-note">正在读取…</text><button v-else-if="entry.more && entry.archiveError.length == 0" class="load-more" :disabled="!visible" @click="loadArchives(entry)">加载更多</button></view>
+          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading && !entry.loadingMore && !archiveRefreshing" class="menu-note">正在读取…</text><view v-else-if="(entry.more || entry.loadingMore) && entry.archiveError.length == 0" class="load-more inline-progress-button"><action-progress :busy="entry.loadingMore" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">加载更多</text><button class="inline-progress-hitbox" :disabled="!visible || (entry.loadingMore)" @click="loadArchives(entry, true)" :aria-label="(entry.loadingMore) ? '正在加载更多' : '加载更多'"></button></view></view>
         </scroll-view><text class="archive-footnote">归档列表仅供查看</text>
       </template>
     </view>
@@ -42,7 +42,7 @@ import { computed, ref, watch, onUnmounted } from 'vue'
 import { bridge, connection, Computer, ThreadSummary } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type UsageWindow = { label: string, remainingPercent: number }
-type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, usageNote: string, accountLabel: string, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loaded: boolean, more: boolean, archiveError: string }
+type MenuComputer = { hostId: string, label: string, online: boolean, usageLoading: boolean, usageNote: string, accountLabel: string, windows: UsageWindow[], threads: ThreadSummary[], loading: boolean, loadingMore: boolean, loaded: boolean, more: boolean, archiveError: string }
 const props = defineProps<{ visible: boolean, sort: string, recentFirst: boolean, computerId: string }>()
 const emit = defineEmits<{ dismiss: [], closed: [], sort: [value: string], recent: [], connection: [adding: boolean] }>()
 const options = [{ id: 'priority', label: '优先级', icon: 'bell' }, { id: 'project', label: '按项目', icon: 'folder' }, { id: 'time', label: '按时间倒序排列', icon: 'clock' }]
@@ -75,7 +75,7 @@ function finishTransition() {
 function syncEntries() {
   const version = ++revision
   archiveRevision++
-  entries.value = connection.computers.filter((computer: Computer): boolean => props.computerId.length == 0 || computer.id == props.computerId).map((computer: Computer): MenuComputer => ({ hostId: computer.id, label: computer.label, online: connection.connected && computer.online, usageLoading: connection.connected && computer.online, usageNote: '暂无法获取，请稍后重试', accountLabel: '', windows: [] as UsageWindow[], threads: [] as ThreadSummary[], loading: false, loaded: false, more: false, archiveError: '' } as MenuComputer))
+  entries.value = connection.computers.filter((computer: Computer): boolean => props.computerId.length == 0 || computer.id == props.computerId).map((computer: Computer): MenuComputer => ({ hostId: computer.id, label: computer.label, online: connection.connected && computer.online, usageLoading: connection.connected && computer.online, usageNote: '暂无法获取，请稍后重试', accountLabel: '', windows: [] as UsageWindow[], threads: [] as ThreadSummary[], loading: false, loadingMore: false, loaded: false, more: false, archiveError: '' } as MenuComputer))
   entries.value.forEach((entry: MenuComputer) => {
     if (!entry.online) return
     bridge.readComputerMenu(entry.hostId, { limit: 1, archived: true, includeUsage: true }).then((result: UTSJSONObject) => {
@@ -92,21 +92,30 @@ function syncEntries() {
   if (section.value == 'archives') refreshArchives()
 }
 // 分页固定为只读归档查询；旧服务不提供归档确认标记时拒绝显示普通列表。
-function loadArchives(entry: MenuComputer) {
+function loadArchives(entry: MenuComputer, more: boolean = false) {
   if (!props.visible || entry.loading) return
   if (!entry.online) { entry.archiveError = '电脑离线，恢复连接后重试'; return }
   const version = revision, pageVersion = archiveRevision
-  entry.loading = true; entry.archiveError = ''
+  entry.loading = true; entry.loadingMore = more; entry.archiveError = ''
   bridge.readComputerMenu(entry.hostId, { archived: true, limit: 30, offset: entry.threads.length }).then((result: UTSJSONObject) => {
     if (version != revision || pageVersion != archiveRevision) return
-    entry.loading = false
+    entry.loading = false; entry.loadingMore = false
     if (result['archived'] != true) { entry.archiveError = '请更新电脑连接服务后查看归档任务'; return }
     const rows = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'])) ?? [] as ThreadSummary[]
     entry.threads = entry.threads.concat(rows); entry.loaded = true; entry.more = rows.length == 30 && entry.threads.length < 10000
-  }, (_reason: Error) => { if (version == revision && pageVersion == archiveRevision) { entry.loading = false; entry.archiveError = '暂无法读取，请刷新重试' } })
+  }, (_reason: Error) => { if (version == revision && pageVersion == archiveRevision) { entry.loading = false; entry.loadingMore = false; entry.archiveError = '暂无法读取，请刷新重试' } })
 }
+const archiveRefreshing = ref(false)
+// 首次进入归档区维持列表提示，只有点刷新时才在按钮上转圈。
+function refreshFromButton() {
+  if (archiveRefreshing.value) return
+  refreshArchives()
+  archiveRefreshing.value = entries.value.some((entry: MenuComputer): boolean => entry.loading)
+}
+watch((): boolean => entries.value.some((entry: MenuComputer): boolean => entry.loading), (pending: boolean) => { if (!pending) archiveRefreshing.value = false })
+watch((): boolean => props.visible && section.value == 'archives', (visible: boolean) => { if (!visible) archiveRefreshing.value = false })
 // 刷新先作废所有归档在途回执，防止旧分页重新混入新列表。
-function refreshArchives() { if (!props.visible) return; archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.more = false; loadArchives(entry) }) }
+function refreshArchives() { if (!props.visible) return; archiveRevision++; entries.value.forEach((entry: MenuComputer) => { entry.threads = [] as ThreadSummary[]; entry.loaded = false; entry.loading = false; entry.loadingMore = false; entry.more = false; loadArchives(entry) }) }
 function showArchives() { if (!props.visible) return; section.value = 'archives'; refreshArchives() }
 function projectName(cwd: string): string { const parts = cwd.split('\\').join('/').split('/').filter((part: string): boolean => part.length > 0); return parts.length > 0 ? parts[parts.length - 1] : cwd }
 // 退场期间冻结菜单内容，并作废额度和归档的在途回执。
@@ -151,6 +160,7 @@ onUnmounted(() => { revision++ })
 .archive-name { color: #202c28; font-size: 15px; line-height: 22px; lines: 2; text-overflow: ellipsis; }
 .archive-project { color: #7b827a; font-size: 12px; line-height: 18px; lines: 1; text-overflow: ellipsis; }
 .archive-footnote { color: #94998f; font-size: 12px; line-height: 20px; padding: 8px 18px 0; }
+.archive-spinner { width: 16px; height: 16px; border-color: #285c49; }
 .load-more { margin: 8px 18px; padding: 0; height: 36px; font-size: 13px; line-height: 36px; border-radius: 12px; color: #285c49; background-color: #e8eee6; }
 /* #ifdef WEB */
 .menu-panel { box-shadow: 0 12px 40px rgba(32, 44, 40, 0.14); }

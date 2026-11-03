@@ -11,7 +11,7 @@
               <text v-else-if="rowsFor(file.id).length == 0" class="diff-note">{{ file.kind == 'delete' ? '文件已删除' : '此文件没有可显示的文本差异' }}</text>
               <view v-for="row in rowsFor(file.id)" :key="row.id" :class="['diff-row', 'diff-' + row.kind]"><text v-if="row.kind != 'hunk' && row.kind != 'note'" class="line-number">{{ row.oldLine }}</text><text v-if="row.kind != 'hunk' && row.kind != 'note'" class="line-number">{{ row.newLine }}</text><text class="diff-text" selectable>{{ row.text.length == 0 ? ' ' : row.text }}</text></view>
             </template>
-            <view v-else class="diff-placeholder"><text class="diff-note">{{ errorFor(file.id).length > 0 ? errorFor(file.id) : connected ? '正在加载代码差异…' : '连接恢复后可查看代码差异' }}</text><button v-if="errorFor(file.id).length > 0" class="retry" :disabled="!connected" @click="loadFile(file.id)">重试</button></view>
+            <view v-else class="diff-placeholder"><text class="diff-note">{{ errorFor(file.id).length > 0 ? errorFor(file.id) : connected ? '正在加载代码差异…' : '连接恢复后可查看代码差异' }}</text><view v-if="errorFor(file.id).length > 0 || retryIds.indexOf(file.id) >= 0" class="retry inline-progress-button"><action-progress :busy="retryIds.indexOf(file.id) >= 0" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">重试</text><button class="inline-progress-hitbox" :disabled="!connected || (retryIds.indexOf(file.id) >= 0)" @click="loadFile(file.id, true)" :aria-label="(retryIds.indexOf(file.id) >= 0) ? '正在重试代码差异' : '重试'"></button></view></view>
           </view>
         </view>
         <view class="safe-area"></view>
@@ -34,6 +34,7 @@ const expandedIds = ref<string[]>([])
 const loaded = ref<LoadedFile[]>([])
 const errors = ref<FileFailure[]>([])
 const pendingIds = ref<string[]>([])
+const retryIds = ref<string[]>([])
 const refreshedIds = ref<string[]>([])
 const scrollTarget = ref('')
 let alive = true
@@ -44,7 +45,7 @@ function detailFor(id: string): FileReportDetail | null { return loaded.value.fi
 function rowsFor(id: string): DiffRow[] { return loaded.value.find((file: LoadedFile): boolean => file.id == id)?.rows ?? [] as DiffRow[] }
 function errorFor(id: string): string { return errors.value.find((error: FileFailure): boolean => error.id == id)?.message ?? '' }
 // 已读差异先从本地恢复，再后台校验；只使用同一报告版本的缓存。
-function loadFile(id: string) {
+function loadFile(id: string, manual: boolean = false) {
   if (!alive || !props.report.files.some((file: ChangedFile): boolean => file.id == id)) return
   const namespace = connection.cacheNamespace
   if (detailFor(id) == null) {
@@ -55,10 +56,10 @@ function loadFile(id: string) {
   if (!props.connected || refreshedIds.value.indexOf(id) >= 0 || pendingIds.value.indexOf(id) >= 0) return
   const version = generation
   const identity = cacheIdentity()
-  pendingIds.value.push(id); errors.value = errors.value.filter((error: FileFailure): boolean => error.id != id)
+  pendingIds.value.push(id); if (manual) retryIds.value.push(id); errors.value = errors.value.filter((error: FileFailure): boolean => error.id != id)
   bridge.request('thread.history', { threadId: props.threadId, view: 'file-report', reportId: props.report.reportId, fileId: id }).then((result: UTSJSONObject) => {
     if (!alive || version != generation || identity != cacheIdentity()) return
-    pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id)
+    pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id)
     if (result.getString('revision') != props.report.revision) { loaded.value = loaded.value.filter((file: LoadedFile): boolean => file.id != id); errors.value.push({ id, message: '这份报告已更新，请关闭后重新打开' }); return }
     const detail = JSON.parse<FileReportDetail>(JSON.stringify(result['file']))
     if (detail == null || detail.id != id) { errors.value.push({ id, message: '文件差异暂不可用' }); return }
@@ -66,14 +67,14 @@ function loadFile(id: string) {
     loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) })
     refreshedIds.value.push(id)
     saveFileReportDetailCache(namespace, props.hostId, props.threadId, props.report, detail)
-  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message }) })
+  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message }) })
 }
 function toggle(id: string) { const index = expandedIds.value.indexOf(id); if (index >= 0) expandedIds.value.splice(index, 1); else { expandedIds.value.push(id); loadFile(id) } }
 // 重新打开面板、切换配对或报告版本后，恢复当前报告的已读差异。
 function openInitialFile() { const id = props.fileId.length > 0 ? props.fileId : props.report.files[0]?.id ?? ''; if (id.length == 0) return; expandedIds.value = [id]; loadFile(id); nextTick(() => { scrollTarget.value = 'changed-file-' + id }) }
 onMounted(() => { mounted = true; openInitialFile() })
-watch((): string => cacheIdentity(), () => { generation++; pendingIds.value = [] as string[]; refreshedIds.value = [] as string[]; loaded.value = [] as LoadedFile[]; errors.value = [] as FileFailure[]; if (mounted) openInitialFile() })
-watch((): boolean => props.connected, (connected: boolean) => { generation++; pendingIds.value = [] as string[]; refreshedIds.value = [] as string[]; if (connected) expandedIds.value.forEach((id: string) => loadFile(id)) })
+watch((): string => cacheIdentity(), () => { generation++; pendingIds.value = [] as string[]; retryIds.value = [] as string[]; refreshedIds.value = [] as string[]; loaded.value = [] as LoadedFile[]; errors.value = [] as FileFailure[]; if (mounted) openInitialFile() })
+watch((): boolean => props.connected, (connected: boolean) => { generation++; pendingIds.value = [] as string[]; retryIds.value = [] as string[]; refreshedIds.value = [] as string[]; if (connected) expandedIds.value.forEach((id: string) => loadFile(id)) })
 onUnmounted(() => { alive = false; generation++ })
 </script>
 <style>

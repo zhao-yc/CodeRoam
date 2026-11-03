@@ -15,8 +15,8 @@ export class LiquidGlassControl {
   }
 
   // 动态属性在同一个原生视图上更新。
-  update(symbol: string, label: string, title: string, prominent: boolean, disabled: boolean, secondarySymbol: string, secondaryLabel: string, secondaryDisabled: boolean) {
-    this.view.update(symbol = symbol, label = label, title = title, prominent = prominent, disabled = disabled,
+  update(symbol: string, label: string, title: string, prominent: boolean, disabled: boolean, busy: boolean, secondarySymbol: string, secondaryLabel: string, secondaryDisabled: boolean) {
+    this.view.update(symbol = symbol, label = label, title = title, prominent = prominent, disabled = disabled, busy = busy,
       secondarySymbol = secondarySymbol, secondaryLabel = secondaryLabel, secondaryDisabled = secondaryDisabled)
   }
 

@@ -44,7 +44,7 @@ test('保存失败及无效值不覆盖当前选择或计时，选不自动关�
 
 test('设置页三项选择正确保存，取消不改变偏好',()=>{
  const f=fixture(),sheets=[],toasts=[];
- const context=vm.createContext({...f,computed:get=>({get value(){return get();}}),ref:value=>({value}),connection:{computers:[]},bridge:{},onLoad(){},onShow(){},onHide(){},onUnload(){},uni:{hideKeyboard(){},showActionSheet:options=>sheets.push(options),showToast:options=>toasts.push(options.title)}});
+ const context=vm.createContext({...f,computed:get=>({get value(){return get();}}),ref:value=>({value}),connection:{computers:[]},bridge:{},useManualReconnect:()=>({reconnecting:{value:false},reconnect(){}}),onLoad(){},onShow(){},onHide(){},onUnload(){},uni:{hideKeyboard(){},showActionSheet:options=>sheets.push(options),showToast:options=>toasts.push(options.title)}});
  const page=fs.readFileSync('apps/mobile/pages/connection/index.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');vm.runInContext(stripTypeScriptTypes(page,{mode:'transform'})+';globalThis.choose=chooseNoticeDuration;',context);
  for(const [index,value] of [[1,10000],[2,0],[0,5000]]){context.choose();const sheet=sheets.at(-1);assert.deepEqual(Array.from(sheet.itemList),['5 秒','10 秒','不自动关闭']);sheet.success({tapIndex:index});assert.equal(f.store.get(key),value);assert.ok(toasts.at(-1).includes(f.taskNoticeDurationLabel(value)));}
  context.choose();sheets.at(-1).fail({errMsg:'取消'});assert.equal(f.store.get(key),5000);

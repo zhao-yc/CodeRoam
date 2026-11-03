@@ -21,7 +21,7 @@
         <textarea v-else-if="item.custom || item.question.options.length == 0" v-model="item.text" class="custom-input" :maxlength="32000" :disabled="locked" placeholder="填写你的答案…"></textarea>
       </template>
     </view>
-    <button v-if="group.state == 'pending'" :class="['submit', locked || !complete ? 'submit-disabled' : '']" :disabled="locked || !complete" @click="submit">{{ busy ? '提交中…' : submitted ? '已提交' : '提交回答' }}</button>
+    <view v-if="group.state == 'pending'" class="submit inline-progress-button" :class="(locked && !busy) || !complete ? 'submit-disabled' : ''"><action-progress :busy="busy" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">{{ submitted ? '已提交' : '提交回答' }}</text><button class="inline-progress-hitbox" :disabled="locked || !complete" @click="submit" :aria-label="(busy) ? '正在提交回答' : '提交回答'"></button></view>
   </view>
 </template>
 

@@ -48,14 +48,14 @@ type ConnectionConfig = { relayUrl: string, token: string, hostId: string, cache
 type SessionTicket = { ticket: string }
 type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string }
 export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string, namespace?: string }
-type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, subscriptionRevision: number, subscribedHostId: string, subscribedThreadId: string, configurationRevision: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
+type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, subscriptionRevision: number, subscribedHostId: string, subscribedThreadId: string, configurationRevision: number, connectionAttempt: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
 export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number }
 type LiveThreadListsState = { updates: ThreadListUpdate[] }
 export const liveThreadLists = reactive<LiveThreadListsState>({ updates: [] as ThreadListUpdate[] })
 
 export const connection = reactive<ConnectionState>({
-  cacheNamespace: '', supportsHostProfiles: false, configurationRevision: 0, desktopNavigationError: '', status: '尚未配置', connected: false, configured: false, error: '', conversationError: '', hostId: '',
+  cacheNamespace: '', supportsHostProfiles: false, configurationRevision: 0, connectionAttempt: 0, desktopNavigationError: '', status: '尚未配置', connected: false, configured: false, error: '', conversationError: '', hostId: '',
   computers: [] as Computer[], threads: [] as ThreadSummary[], threadsLoading: false, threadsLoadedHostId: '', snapshot: null as Conversation | null,
   subscriptionRevision: 0, subscribedHostId: '', subscribedThreadId: '', activeThreadId: '', epoch: '', sequence: 0, pendingCommandId: '', pendingCommands: [] as PendingCommand[]
 })
@@ -171,6 +171,7 @@ class MobileBridge {
     clearTimeout(this.reconnectTimer)
     this.connecting = true
     const generation = ++this.generation
+    connection.connectionAttempt = generation
     connection.status = this.attempts == 0 ? '正在连接' : '正在重新连接'
     const sessionUrl = config.relayUrl.slice(0, -3).replace('wss://', 'https://').replace('ws://', 'http://') + '/session'
     let sessionTicket = ''
@@ -189,7 +190,7 @@ class MobileBridge {
       success: (response) => {
         if (generation != this.generation) return
         if (response.statusCode != 200 || response.data == null) {
-          this.connecting = false
+          this.connecting = false; connection.connectionAttempt = 0
           if (response.statusCode == 401) { connection.status = '需要重新配对'; connection.error = '连接配置已失效，请从电脑重新导入'; return }
           failed('获取连接票据失败（HTTP ' + response.statusCode.toString() + '）'); return
         }
@@ -233,7 +234,7 @@ class MobileBridge {
     clearTimeout(this.handshakeTimer)
     this.socket?.close({})
     this.socket = null
-    this.connecting = false
+    this.connecting = false; connection.connectionAttempt = 0
     this.syncingThread = ''
     this.listingHost = ''
     this.listingRevision++
@@ -336,7 +337,7 @@ class MobileBridge {
       if (hostId == connection.hostId) connection.threads = update.threads
     } else if (type == 'welcome') {
       clearTimeout(this.handshakeTimer)
-      this.connecting = false; this.attempts = 0; connection.connected = true; connection.status = '已连接'; connection.error = ''
+      this.connecting = false; connection.connectionAttempt = 0; this.attempts = 0; connection.connected = true; connection.status = '已连接'; connection.error = ''
       this.heartbeat()
       const capabilities = envelope['capabilities'] as UTSJSONObject | null
       connection.supportsHostProfiles = capabilities?.getBoolean('hostProfiles') == true
@@ -613,7 +614,7 @@ class MobileBridge {
   // Socket 已连接不代表聊天已订阅；缓存和旧快照不能恢复这个瞬时状态。
   clearConversationSubscription() { this.subscriptionRequestRevision++; connection.subscribedHostId = ''; connection.subscribedThreadId = '' }
 
-  watch(threadId: string) {
+  async watch(threadId: string) {
     const hostId = connection.hostId
     if (this.syncingThread == threadId) return
     this.syncingThread = threadId
@@ -627,7 +628,7 @@ class MobileBridge {
     // 会话读取错误不污染列表页的连接与列表错误。
     connection.conversationError = ''
     const updateRevision = this.conversationUpdateRevision
-    this.request('thread.watch', { threadId, epoch: connection.epoch, afterSeq: connection.sequence }).then((result: UTSJSONObject) => {
+    return this.request('thread.watch', { threadId, epoch: connection.epoch, afterSeq: connection.sequence }).then((result: UTSJSONObject) => {
       // 不同电脑可能出现同名会话编号，旧响应不能覆盖当前会话或清除新同步锁。
       if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return
       if (this.syncingThread == threadId) this.syncingThread = ''

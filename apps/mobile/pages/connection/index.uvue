@@ -4,7 +4,7 @@
     <scroll-view direction="vertical" class="content" :scroll-into-view="connectionAnchor">
       <view class="body">
         <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的聊天会自动同步到首页。</text>
-        <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的聊天' : '恢复连接后会自动同步聊天' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><app-icon name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" aria-label="重新连接" @click="reconnect"></button></view></view></view>
+        <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的聊天' : '恢复连接后会自动同步聊天' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><loading v-if="reconnecting" class="reconnect-spinner" :paused="!pageVisible" /><app-icon v-else name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" :disabled="reconnecting" :aria-label="reconnecting ? '正在连接' : '重新连接'" @click="reconnect"></button></view></view></view>
         <view id="notification-preferences" class="section"><view class="notification-setting action-frame"><view class="notification-copy"><text class="section-title">通知时长</text><text class="notification-description">{{ taskNotifications.durationMs == 0 ? '向上划走通知后显示下一条。' : '通知也可以随时向上划走。' }}</text></view><text class="notification-value">{{ noticeDurationLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'通知时长，当前' + noticeDurationLabel + '，点击选择'" hover-class="action-pressed" @click="chooseNoticeDuration"></button></view></view>
         <!-- #ifdef WEB -->
         <view class="section"><browser-notification-setting /></view>
@@ -34,6 +34,7 @@ import MessageSendingSetting from '../../components/message-sending-setting/mess
 // #ifdef WEB
 import BrowserNotificationSetting from '../../components/browser-notification-setting/browser-notification-setting.uvue'
 // #endif
+import { useManualReconnect } from '../../services/manual-reconnect.uts'
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
 import { taskNotifications, setTaskNoticeDuration, taskNoticeDurationLabel } from '../../services/task-notifications.uts'
 import { fileChangePreferences, setFileChangesExpanded } from '../../services/file-change-preferences.uts'
@@ -78,7 +79,7 @@ const currentComputerOnline = computed((): boolean => connection.computers.some(
 // 返回时先收起键盘，直接打开本页时仍能回到会话首页。
 function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
 // 重连沿用现有配置，不重新导入或重放请求。
-function reconnect() { bridge.resume() }
+const { reconnecting, reconnect } = useManualReconnect()
 // 页面离开后不保留含凭据的输入草稿；持久化统一由连接服务管理。
 onUnload(() => { configuration.value = '' })
 
@@ -143,6 +144,7 @@ function selectComputer(id: string) {
 .offline { background-color: #94998f; }
 .state { color: #7b827a; font-size: 12px; line-height: 20px; flex-shrink: 1; }
 .computer-note { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 3px; }
+.reconnect-spinner { width: 16px; height: 16px; border-color: #285c49; }
 .retry { width: 44px; height: 44px; align-items: center; justify-content: center; }
 /* 原生 textarea 显式占满宽度，避免默认宽度与主按钮不齐。 */
 .config-input { width: 100%; height: 110px; margin-top: 14px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; padding: 14px; color: #202c28; font-size: 13px; line-height: 22px; background-color: transparent; }

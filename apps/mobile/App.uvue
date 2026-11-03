@@ -22,6 +22,13 @@ export default {
 
 <style>
 .page { background-color: #f8f8f3; }
+.inline-progress-button { position: relative; min-height: 28px; flex-direction: row; align-items: center; justify-content: center; }
+.inline-progress-caption { flex-shrink: 1; text-align: center; }
+.inline-progress-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; }
+/* #ifdef WEB */
+.inline-progress-hitbox::after { border: 0; }
+.inline-progress-hitbox[disabled] { background-color: transparent; }
+/* #endif */
 .button-primary, .button-secondary, .button-danger { font-size: 15px; border-radius: 14px; }
 .button-primary { background-color: #285c49; color: #ffffff; }
 .button-secondary { background-color: #e8eee6; color: #202c28; }

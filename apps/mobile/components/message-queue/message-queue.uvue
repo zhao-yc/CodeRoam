@@ -9,9 +9,9 @@
       <text v-for="plugin in message.plugins ?? []" :key="plugin.id" class="queue-caption">插件 · {{ plugin.displayName }}</text>
       <text v-if="message.error.length > 0" class="queue-error">{{ message.error }}</text>
       <view class="queue-actions">
-        <button v-if="editable && (message.state == 'queued' || message.state == 'editing')" class="queue-edit" :disabled="disabled" @click="edit(message.id)">编辑</button>
-        <button v-if="message.state == 'queued'" class="queue-steer" :disabled="disabled || !running" @click="steer(message.id)">追加到当前任务</button>
-        <button class="queue-cancel" :disabled="disabled || message.state == 'sending'" @click="cancel(message.id)">{{ message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队' }}</button>
+        <view v-if="editable && (message.state == 'queued' || message.state == 'editing')" class="queue-edit inline-progress-button"><action-progress :busy="pendingAction == 'queue:edit:' + message.id" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">编辑</text><button class="inline-progress-hitbox" :disabled="disabled || (pendingAction == 'queue:edit:' + message.id)" @click="edit(message.id)" :aria-label="(pendingAction == 'queue:edit:' + message.id) ? '正在撤回排队消息' : '编辑'"></button></view>
+        <view v-if="message.state == 'queued'" class="queue-steer inline-progress-button"><action-progress :busy="pendingAction == 'queue:steer:' + message.id" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">追加到当前任务</text><button class="inline-progress-hitbox" :disabled="disabled || !running || (pendingAction == 'queue:steer:' + message.id)" @click="steer(message.id)" :aria-label="(pendingAction == 'queue:steer:' + message.id) ? '正在追加消息' : '追加到当前任务'"></button></view>
+        <view class="queue-cancel inline-progress-button"><action-progress :busy="pendingAction == 'queue:cancel:' + message.id" /><text class="inline-progress-caption" style="color: #69766b; font-size: 12px;">{{ message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队' }}</text><button class="inline-progress-hitbox" :disabled="disabled || message.state == 'sending' || (pendingAction == 'queue:cancel:' + message.id)" @click="cancel(message.id)" :aria-label="(pendingAction == 'queue:cancel:' + message.id) ? '正在取消排队' : (message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队')"></button></view>
       </view>
     </view>
   </view>
@@ -20,7 +20,7 @@
 import ThreadMentionChips from '../thread-mention-chips/thread-mention-chips.uvue'
 import { threadMentionMessageText } from '../../services/thread-mentions.uts'
 import { QueuedMessage, queuedMessageLabel } from '../../services/message-queue.uts'
-const props = defineProps<{ messages: QueuedMessage[], disabled: boolean, running: boolean, editable: boolean }>()
+const props = defineProps<{ messages: QueuedMessage[], disabled: boolean, running: boolean, editable: boolean, pendingAction?: string }>()
 const emit = defineEmits<{ (event: 'steer', id: string): void; (event: 'cancel', id: string): void; (event: 'edit', id: string): void }>()
 function statusLabel(state: string): string { return queuedMessageLabel(state) }
 // 操作仅发出消息编号，原正文、图片与附件由电脑保存和复用。

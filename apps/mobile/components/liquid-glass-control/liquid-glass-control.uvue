@@ -12,16 +12,16 @@ import { watchEffect, onUnmounted } from 'vue'
 import { LiquidGlassControl } from '../../uni_modules/codex-liquid-glass'
 
 const props = withDefaults(defineProps<{
-  symbol?: string, label?: string, title?: string, prominent?: boolean, disabled?: boolean,
+  symbol?: string, label?: string, title?: string, prominent?: boolean, disabled?: boolean, busy?: boolean,
   decorative?: boolean, secondarySymbol?: string, secondaryLabel?: string, secondaryDisabled?: boolean
-}>(), { symbol: '', label: '', title: '', prominent: false, disabled: false, decorative: false, secondarySymbol: '', secondaryLabel: '', secondaryDisabled: false })
+}>(), { symbol: '', label: '', title: '', prominent: false, disabled: false, busy: false, decorative: false, secondarySymbol: '', secondaryLabel: '', secondaryDisabled: false })
 const emit = defineEmits<{ activate: [], secondary: [] }>()
 let control: LiquidGlassControl | null = null
 
 // 初始化和后续更新共用一套属性，避免界面状态变化时重建 UIKit 按钮。
 function update() {
-  const { symbol, label, title, prominent, disabled, secondarySymbol, secondaryLabel, secondaryDisabled } = props
-  control?.update(symbol, label, title, prominent, disabled, secondarySymbol, secondaryLabel, secondaryDisabled)
+  const { symbol, label, title, prominent, disabled, busy, secondarySymbol, secondaryLabel, secondaryDisabled } = props
+  control?.update(symbol, label, title, prominent, disabled, busy, secondarySymbol, secondaryLabel, secondaryDisabled)
 }
 
 function initView(event: UniNativeViewInitEvent) {
@@ -30,7 +30,7 @@ function initView(event: UniNativeViewInitEvent) {
   update()
 }
 
-function activate() { if (!props.disabled) emit('activate') }
+function activate() { if (!props.disabled && !props.busy) emit('activate') }
 function activateSecondary() { if (!props.secondaryDisabled) emit('secondary') }
 
 watchEffect(update)
