@@ -1547,7 +1547,8 @@ onBackPress((): boolean => { if (mentionOpen.value) { closeThreadMentions(); ret
 .working-text { color: #929292; font-size: 13px; margin-left: 6px; }
 .bottom-space { height: 12px; }
 /* 浮钮独立定位，不能叠加会将原生position覆盖为relative的通用点击容器。 */
-.jump-latest { position: absolute; bottom: 8px; right: 16px; width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 22px; background-color: #f8f8f3; border-style: solid; border-width: 1px; border-color: #e3e5dc; align-items: center; justify-content: center; overflow: hidden; }
+/* 按聊天视口水平居中，44px 点击区域仍随输入区高度一起上移。 */
+.jump-latest { position: absolute; bottom: 8px; left: 50%; width: 44px; height: 44px; padding: 0; margin: 0; margin-left: -22px; border-radius: 22px; background-color: #f8f8f3; border-style: solid; border-width: 1px; border-color: #e3e5dc; align-items: center; justify-content: center; overflow: hidden; }
 .composer-dock { position: relative; z-index: 10; flex-shrink: 0; padding: 12px 12px 8px; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 .draft-images { flex-direction: row; margin-bottom: 10px; }
