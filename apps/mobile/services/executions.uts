@@ -62,7 +62,7 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
   if (snapshot == null) return [] as TimelineEntry[]
   const collapsible = reportTurnIds(snapshot)
   const entries = [] as TimelineEntry[]
-  const messages = planPreviewMessages(snapshot.messages)
+  const messages = planPreviewMessages(snapshot.messages, snapshot.pendingPlan?.id ?? '')
   let cursor = 0
   while (cursor < messages.length) {
     let end = cursor + 1
@@ -100,9 +100,16 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
   return entries
 }
 
-// 桌面可能同时记录最终回复与方案项；只去掉同轮正文相同的重复最终回复。
-function planPreviewMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.filter((message: ChatMessage): boolean => {
+// 桌面会同时记录方案正文、确认项与最终回复；只合并同轮完整正文相同的展示记录。
+function planPreviewMessages(messages: ChatMessage[], pendingPlanId: string): ChatMessage[] {
+  return messages.filter((message: ChatMessage, index: number): boolean => {
+    if (message.role == 'assistant' && message.kind == 'planImplementation' && (message.imageCount ?? 0) == 0 && message.turnId.length > 0 && message.text.trim().length > 0) {
+      return !messages.some((plan: ChatMessage, planIndex: number): boolean => {
+        if (plan.role != 'assistant' || plan.kind != 'planImplementation' || (plan.imageCount ?? 0) > 0 || plan.turnId != message.turnId || plan.id == message.id || plan.text.trim() != message.text.trim()) return false
+        // 优先保留待确认编号，避免时间线去重后又触发页面的方案兜底卡片。
+        return plan.id == pendingPlanId || (message.id != pendingPlanId && planIndex > index)
+      })
+    }
     if (message.role != 'assistant' || message.phase != 'final_answer' || message.kind == 'planImplementation' || (message.imageCount ?? 0) > 0) return true
     return !messages.some((plan: ChatMessage): boolean => {
       if (plan.kind != 'planImplementation' || plan.turnId != message.turnId || plan.id == message.id) return false
