@@ -166,7 +166,8 @@ function reloadOptions() { if (projects.value.length == 0) loadProjects(); else 
 async function selectSetting(key: string, value: string) {
   if (busy.value || !nativeReady.value || ['model', 'effort', 'serviceTier'].indexOf(key) < 0) return
   const changes: UTSJSONObject = {}; changes[key] = value
-  await changeNativeSettings(changes, false, key == 'effort')
+  // 模型、强度和速度共用确认后的焦点恢复，仍等待电脑草稿同步成功。
+  await changeNativeSettings(changes, false, true)
 }
 async function changeNativeSettings(changes: UTSJSONObject, confirmed: boolean = false, focusAfter: boolean = false) {
   const state = native.value, hostId = connection.hostId, id = projectId.value
