@@ -7,9 +7,9 @@ import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 
 test('历史浏览实际计算发送禁用态，原会话实时同步后恢复操作',()=>{
-  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').split(/\r?\n/).filter(line=>line.startsWith('const readOnly =')||line.startsWith('const canWrite =')).join('\n');
+  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/^const (?:readOnly|canWrite|subscriptionReady|goalHostOnline|liveConversation) = .+$/gm).join('\n');
   const snapshot={threadId:'thread',readOnly:true};
-  const context=componentContext({connection:{connected:true,snapshot,hostId:'pc',activeThreadId:'thread',pendingCommandId:''},busy:{value:false},checking:{value:false},activating:{value:false},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},computed:fn=>({get value(){return fn();}})});
+  const context=componentContext({connection:{connected:true,snapshot,hostId:'pc',activeThreadId:'thread',subscribedHostId:'pc',subscribedThreadId:'thread',computers:[{id:'pc',online:true}],pendingCommandId:''},busy:{value:false},checking:{value:false},activating:{value:false},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},computed:fn=>({get value(){return fn();}})});
   vm.runInContext(stripTypeScriptTypes(source)+'; globalThis.writable=canWrite;',context);
   assert.equal(context.writable.value,false);snapshot.readOnly=false;assert.equal(context.writable.value,true);context.activating.value=true;assert.equal(context.writable.value,false);
 });

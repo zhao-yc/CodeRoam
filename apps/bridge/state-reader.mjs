@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { readHistoricalSnapshot } from './history-reader.mjs';
@@ -16,6 +17,15 @@ export class StateReader {
     const db=new DatabaseSync(this.filePath,{readOnly:true});
     try{return !!db.prepare('SELECT id FROM threads WHERE id=? AND archived=0').get(threadId);}
     finally{db.close();}
+  }
+  /** 一次只读核对手机仍保留的缓存编号，索引不可用时明确失败。 */
+  visibleThreadIds(ids) {
+    if (!ids.length) return new Set();
+    const db = new DatabaseSync(this.filePath, { readOnly: true });
+    try {
+      const rows = db.prepare('SELECT id FROM threads WHERE archived=0 AND id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids));
+      return new Set(rows.map(row => row.id));
+    } finally { db.close(); }
   }
   /** 只读枚举与桌面删除规则相同的附属子对话，包含已归档子对话。 */
   readDeletionTree(threadId) {
@@ -45,8 +55,8 @@ export class StateReader {
       return db.prepare(`SELECT ${title} AS title FROM threads WHERE id=? AND archived=0`).get(threadId)?.title ?? '';
     } finally {db.close();}
   }
-  /** 后台浏览只读取索引和已保存历史，不唤醒或导航桌面。 */
-  readHistory(threadId, options = {}) {
+  /** 历史和缓存共用已核对的未归档会话索引。 */
+  historyRow(threadId) {
     if(!fs.existsSync(this.filePath)) throw new BridgeError('INDEX_NOT_FOUND','未找到本机的聊天索引');
     const db=new DatabaseSync(this.filePath,{readOnly:true});
     let row;
@@ -57,6 +67,26 @@ export class StateReader {
       row=db.prepare(`SELECT id,${title} AS title,cwd,rollout_path,${time} AS updatedAt FROM threads WHERE id=? AND archived=0`).get(threadId);
     } finally {db.close();}
     if(!row) throw new BridgeError('THREAD_NOT_FOUND','这条聊天已不存在或已经归档，请刷新聊天列表');
+    return row;
+  }
+  /** 轻量核对历史来源，只在会话文件或索引记录变化时重建缓存。 */
+  historyCacheSource(threadId) {
+    const row = this.historyRow(threadId);
+    if (!row.rollout_path) return '';
+    try {
+      const root = fs.realpathSync.native(path.join(path.dirname(this.filePath), 'sessions'));
+      const file = fs.realpathSync.native(row.rollout_path);
+      const relative = path.relative(root, file);
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !file.endsWith('.jsonl')) return '';
+      const stat = fs.statSync(file, { bigint: true });
+      if (!stat.isFile()) return '';
+      // 路径仅用于本机指纹，SQLite 缓存不会重复保存源文件路径。
+      return createHash('sha256').update(JSON.stringify([row.title, row.cwd, row.updatedAt, file, ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String)])).digest('hex');
+    } catch { return ''; }
+  }
+  /** 后台浏览只读取索引和已保存历史，不唤醒或导航桌面。 */
+  readHistory(threadId, options = {}) {
+    const row = this.historyRow(threadId);
     if(options.imageMessageId){const projected=readProjectedHistory(row,path.dirname(this.filePath),options);if(projected)return projected;}
     if(options.rawTurns===true&&options.reportId){const report=readProjectedFileReport(row,path.dirname(this.filePath),options.reportId);if(report)return report;}
     if(options.page===true) {

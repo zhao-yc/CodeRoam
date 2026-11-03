@@ -161,6 +161,39 @@ test('有效实时事件也能确认图片订阅，取消、电脑离线及实�
   f.bridge.confirmConversationRead();f.bridge.cancelOpen('thread');assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.subscribedHostId,'');
 });
 
+test('新版详情从请求时的缓存重建正文，提前实时帧只更新内容且不被旧回执覆盖',async()=>{
+  const f=connectedFixture(),first='content:'+'a'.repeat(64),next='content:'+'b'.repeat(64);
+  const messages=[{id:'m',text:'旧',role:'assistant',turnId:'turn',status:'running'}];
+  Object.assign(f.connection,{supportsConversationCache:true,computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',messages},contentRevision:first,epoch:'live',sequence:1});
+  const opening=f.bridge.openThread('thread');assert.equal(f.sent[0].params.contentRevision,first);
+  f.bridge.receive(utsObject({type:'event',hostId:'pc',threadId:'thread',epoch:'live',seq:3,contentRevision:next,snapshot:{threadId:'thread',messages:[{...messages[0],text:'较新正文'}]}}));
+  assert.equal(f.connection.subscribedThreadId,'');
+  respond(f,f.sent[0],{snapshot:{threadId:'thread',title:'较早状态'},desktopActivated:true,epoch:'live',seq:2,contentBaseRevision:first,contentRevision:next,contentUpdate:{order:['m'],upserts:[],appends:[{id:'m',text:'分片',status:'running'}]}});
+  await opening;assert.equal(f.connection.snapshot.messages[0].text,'较新正文');assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(messages[0].text,'旧');
+});
+
+test('新版详情遇到错误基线只补一次完整订阅，不重复桌面导航',async()=>{
+  const f=connectedFixture(),first='content:'+'a'.repeat(64),next='content:'+'b'.repeat(64);
+  Object.assign(f.connection,{supportsConversationCache:true,computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',messages:[]},contentRevision:first});
+  const opening=f.bridge.openThread('thread');
+  respond(f,f.sent[0],{snapshot:{threadId:'thread'},desktopActivated:true,epoch:'live',seq:1,contentBaseRevision:next,contentRevision:next});
+  await Promise.resolve();assert.equal(f.sent.length,2);assert.equal(f.sent[1].params.activate,undefined);assert.equal(f.sent[1].params.contentRevision,undefined);assert.equal(f.connection.subscribedThreadId,'');
+  respond(f,f.sent[1],{snapshot:{threadId:'thread',messages:[]},epoch:'live',seq:2,contentRevision:next});await opening;
+  assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(f.connection.contentRevision,next);
+});
+
+test('电脑确认移除活跃会话时撤销订阅，迟到回执和事件无法恢复旧正文',async()=>{
+  const f=connectedFixture(),version='content:'+'a'.repeat(64);
+  Object.assign(f.connection,{supportsConversationCache:true,computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',messages:[]},contentRevision:version,subscribedHostId:'pc',subscribedThreadId:'thread',epoch:'old',sequence:2});
+  const pending=f.bridge.watch('thread');
+  f.bridge.invalidateRemovedConversation('other','thread');assert.equal(f.connection.subscribedThreadId,'thread');
+  f.bridge.invalidateRemovedConversation('pc','thread');assert.equal(f.sent[1].method,'thread.unwatch');
+  f.bridge.receive(utsObject({type:'event',hostId:'pc',threadId:'thread',epoch:'old',seq:3,snapshot:{threadId:'thread',messages:[]}}));
+  respond(f,f.sent[0],{snapshot:{threadId:'thread',messages:[]},epoch:'old',seq:4,contentRevision:version});
+  respond(f,f.sent[1]);await pending;
+  assert.equal(f.connection.activeThreadId,'');assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.snapshot,null);assert.equal(f.connection.contentRevision,'');assert.match(f.connection.conversationError,/归档或删除/);
+});
+
 test('永久删除超时、断线和未知回执保留编号，重连恢复后只核对，不允许重复删除',async()=>{
   for(const failure of ['timeout','disconnect','unknown']){
     const f=connectedFixture();const pending=f.bridge.request('thread.delete',{threadId:'thread'},true);const request=f.sent.at(-1);

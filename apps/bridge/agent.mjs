@@ -4,8 +4,9 @@ import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { DesktopFileReportReader } from './file-reports.mjs';
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
+import { isDeepStrictEqual } from 'node:util';
 import { WRITE_METHODS, UPLOAD_METHODS, validateRequest, errorPayload, BridgeError, requestFingerprint } from '../../packages/protocol/contracts.mjs';
-import { conversationUpdate } from './updates.mjs';
+import { conversationUpdate, messageWindowUpdate } from './updates.mjs';
 import { computerName } from './computer-name.mjs';
 import { hostname } from 'node:os';
 import { NewThreadService } from './new-thread-service.mjs';
@@ -16,11 +17,24 @@ import { DesktopArchiveController } from './desktop-archive.mjs';
 import { deleteThread, deletionCommandStatus, retainDeletionTarget } from './thread-delete.mjs';
 import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
-import { prefetchConversation } from './conversation-prefetch.mjs';
+import { conversationContentRevision, conversationProjection, prefetchConversation } from './conversation-prefetch.mjs';
+import { CACHE_WATCHER, ThreadCacheFeed } from './thread-cache.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
 import { ThreadMentionService } from './thread-mentions.mjs';
+
+/** 更新时间是本次规范化的生成时间，不单独推进传输游标。 */
+function sameSnapshot(snapshot, previous) {
+  if (!previous) return false;
+  const {updatedAt,...current}=snapshot, {updatedAt:previousUpdatedAt,...previousState}=previous;
+  return isDeepStrictEqual(current,previousState);
+}
+
+/** 后台缓存和列表跟随不持有详情传输游标。 */
+function hasDetailWatcher(adapter, threadId) {
+  return !adapter.conversations || [...adapter.conversations.get(threadId)?.watchers ?? []].some(id => id !== 'list-status' && id !== CACHE_WATCHER);
+}
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
@@ -38,13 +52,18 @@ export class BridgeAgent extends EventEmitter {
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
-    adapter.on('conversation',snapshot=>{if(!adapter.conversations||[...adapter.conversations.get(snapshot.threadId)?.watchers??[]].some(id=>id!=='list-status'))this.publish(snapshot);});
+    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id)});
+    adapter.on('conversation',snapshot=>{
+      this.captureCache(snapshot);
+      if(hasDetailWatcher(adapter,snapshot.threadId))this.publish(snapshot,{dedupe:true});
+    });
     adapter.on('adapterWarning',warning=>this.emit('warning',warning));
   }
   start() {
     const url=new URL(this.config.relayUrl);
     if(url.protocol!=='wss:'&&!(url.protocol==='ws:'&&['127.0.0.1','localhost'].includes(url.hostname))) throw new Error('跨网络连接必须使用 WSS');
     if(url.username||url.password||url.search||url.hash) throw new Error('中转地址不能包含凭据、查询参数或片段');
+    this.threadCache.start();
     this.connect();
   }
   connect() {
@@ -61,7 +80,7 @@ export class BridgeAgent extends EventEmitter {
       this.diagnostics?.record(delivered?'bridge.sent':'bridge.dropped',this.diagnostics.context(message),{delivered,bufferedBytes:socket.bufferedAmount});
     }).catch(()=>{});});
     socket.on('error',()=>this.emit('warning',{code:'RELAY_UNAVAILABLE',message:'中转暂时不可用，正在重连'}));
-    socket.on('close',code=>{clearInterval(watchdog);this.threadListFeed.devices.clear();this.threadListFeed.stop();this.emit('disconnected');if(this.stopped||code===4001)return;const delay=Math.min(15000,500*2**Math.min(this.retries++,5))+Math.random()*300;this.reconnectTimer=setTimeout(()=>this.connect(),delay);});
+    socket.on('close',code=>{clearInterval(watchdog);this.threadListFeed.devices.clear();this.threadListFeed.stop();this.threadCache.clearSubscriptions();this.emit('disconnected');if(this.stopped||code===4001)return;const delay=Math.min(15000,500*2**Math.min(this.retries++,5))+Math.random()*300;this.reconnectTimer=setTimeout(()=>this.connect(),delay);});
   }
   send(message) {
     if(this.socket?.readyState!==WebSocket.OPEN)return false;
@@ -69,10 +88,42 @@ export class BridgeAgent extends EventEmitter {
     if(this.socket.bufferedAmount>=8*1024*1024){this.socket.terminate();return false;}
     this.socket.send(JSON.stringify(message));return true;
   }
-  publish(snapshot) {
-    snapshot=this.messageQueue?.decorate(snapshot)??snapshot;
-    const event=this.journal.append(snapshot.threadId,conversationUpdate(this.published.get(snapshot.threadId),snapshot));
-    this.published.set(snapshot.threadId,{snapshot,seq:event.seq});this.send(event);return event;
+  /** 缓存写入失败不影响实时跟随和交互回执。 */
+  captureCache(snapshot) {
+    try { this.threadCache.captureLive(snapshot); } catch { this.emit('warning',{code:'THREAD_CACHE_UNAVAILABLE',message:'电脑聊天缓存暂时不可用'}); }
+  }
+  publish(snapshot, { excludeTransportId, decorated = false, dedupe = false, broadcast = true } = {}) {
+    if(!decorated)snapshot=this.messageQueue?.decorate(snapshot)??snapshot;
+    const previous=this.published.get(snapshot.threadId);
+    if(dedupe&&sameSnapshot(snapshot,previous?.snapshot))return;
+    const contentRevision=conversationContentRevision(snapshot);
+    const event=this.journal.append(snapshot.threadId,{...conversationUpdate(previous,snapshot),contentRevision});
+    this.published.set(snapshot.threadId,{snapshot,seq:event.seq});
+    if(broadcast)this.send(excludeTransportId?{...event,excludeTransportId}:event);return event;
+  }
+  /** 详情操作状态始终来自实时 watch，正文能用已知版本恢复时省略重复传输。 */
+  watchResult(source, message) {
+    const snapshot=this.messageQueue?.decorate(source)??source;
+    const projection=conversationProjection(snapshot), contentRevision=conversationContentRevision(projection);
+    const requested=message.method==='thread.watch'?message.params.contentRevision:undefined;
+    let baseline;
+    if(requested===contentRevision) baseline=projection;
+    else if(requested) {
+      try { baseline=this.threadCache.baseline(snapshot.threadId,requested); } catch { /* 损坏的基线按首次同步处理。 */ }
+    }
+    const previous=this.published.get(snapshot.threadId);
+    // 规范化每次都会更新生成时间，状态与正文相同可沿用已经发布的游标。
+    const compact = requested !== undefined;
+    const seq=compact&&sameSnapshot(snapshot,previous?.snapshot)?previous.seq:
+      this.publish(snapshot,{decorated:true,broadcast:!compact||!!previous,excludeTransportId:compact?message.transportId:undefined}).seq;
+    const result={snapshot,epoch:this.journal.epoch,seq,contentRevision,...(message.params.activate===true?{desktopActivated:true}:{})};
+    if(baseline&&isDeepStrictEqual(snapshot.messages,projection.messages)) {
+      const {messages,...metadata}=snapshot;
+      const update=messageWindowUpdate(baseline.messages,projection.messages);
+      if(isDeepStrictEqual(baseline.messages,projection.messages)) return {...result,snapshot:metadata,contentBaseRevision:requested};
+      if(Buffer.byteLength(JSON.stringify(update))<Buffer.byteLength(JSON.stringify(messages))) return {...result,snapshot:metadata,contentBaseRevision:requested,contentUpdate:update};
+    }
+    return result;
   }
   /** 自动出队与手机写请求共用同一把会话锁，取消、追加和删除不会同时发送。 */
   async queueExclusive(threadId, operation) {
@@ -125,6 +176,7 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.archive') {
           const result=await archiveThread(this.adapter,this.archiveController,message.params.threadId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result),message.requestId);
           this.messageQueue?.forget([message.params.threadId]);
+          this.threadCache.forget(message.params.threadId);
           this.published.delete(message.params.threadId);return result;
         }
         if(message.method==='thread.delete') {
@@ -137,7 +189,7 @@ export class BridgeAgent extends EventEmitter {
           };
           const result=await deleteThread(this.adapter,this.deleteController,message.params.threadId,message.deviceId,result=>{this.journal.checkpoint(message.deviceId,message.requestId,result);if(result.deleted===true)this.journal.forgetThreads(result.deletedThreadIds);},message.requestId,lockRelated,deletionTarget);
           this.messageQueue?.forget(result.deletedThreadIds);
-          for(const id of result.deletedThreadIds)this.published.delete(id);
+          for(const id of result.deletedThreadIds){this.published.delete(id);this.threadCache.forget(id);}
           this.threadListFeed.schedule();return result;
         }
         if(message.method==='thread.prediction.read')return this.predictions.read(this.adapter,message.params.threadId,message.deviceId);
@@ -149,6 +201,8 @@ export class BridgeAgent extends EventEmitter {
         if(UPLOAD_METHODS.has(message.method))return message.params.draftId?this.nativeDrafts.transfer(message.method,message.params,message.deviceId):this.adapter.transfer(message.method,message.params,message.deviceId);
         if(message.method==='threads.watch')return this.threadListFeed.watch(message.deviceId);
         if(message.method==='threads.unwatch')return this.threadListFeed.unwatch(message.deviceId);
+        if(message.method==='threads.cache.watch')return this.threadCache.watch(message.deviceId,message.params);
+        if(message.method==='threads.cache.unwatch')return this.threadCache.unwatch(message.deviceId,message.params);
         if(message.method==='threads.list') {
           // 通过已有白名单接口扩展只读信息；显式归档标记供手机识别旧服务。
           const threads=await this.adapter.list(message.params);
@@ -158,11 +212,16 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {
           await this.adapter.threadMentions.available();
-          const snapshot=await this.adapter.watch(message.params.threadId,message.deviceId,{activate:message.params.activate===true});
-          const event=this.publish(snapshot);
-          return {snapshot:event.snapshot??this.messageQueue?.decorate(snapshot)??snapshot,epoch:this.journal.epoch,seq:event.seq,...(message.params.activate===true?{desktopActivated:true}:{})};
+          const id=message.params.threadId;
+          const readSavedHistory=this.adapter.index?.historyCacheSource?threadId=>this.threadCache.readSaved(threadId):undefined;
+          this.threadCache.remember(id);
+          const snapshot=await this.adapter.watch(id,message.deviceId,{activate:message.params.activate===true,readSavedHistory});
+          this.threadCache.schedule();
+          const result=this.watchResult(snapshot,message);
+          this.captureCache(snapshot);
+          return result;
         }
-        if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!this.adapter.conversations.has(message.params.threadId))this.published.delete(message.params.threadId);return result;}
+        if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!hasDetailWatcher(this.adapter,message.params.threadId))this.published.delete(message.params.threadId);return result;}
         if(message.method==='command.status') { const draft=await this.nativeDrafts.commandStatus(this.journal,message.deviceId,message.params.commandId);if(draft.state!=='unknown')return draft;const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
         if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result));
         throw new BridgeError('METHOD_NOT_ALLOWED','此接口不支持通过电脑执行');
@@ -195,5 +254,5 @@ export class BridgeAgent extends EventEmitter {
     }
     return response;
   }
-  async close(){this.stopped=true;this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.threadCache.close();this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

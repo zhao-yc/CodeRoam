@@ -13,8 +13,8 @@ const uts=file=>fs.readFileSync('apps/mobile/services/'+file+'.uts','utf8').repl
 function fixture(storage=new Map()) {
   let now=1000;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)};
-  const c=componentContext({uni,Date:{now:()=>++now}});
-  vm.runInContext(stripTypeScriptTypes(uts('file-report-cache')+'\n'+uts('conversation-cache'),{mode:'transform'})+';globalThis.subject={readConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts};',c);
+  const c=componentContext({uni,reactive:value=>value,Date:{now:()=>++now},setTimeout:()=>1,clearTimeout:()=>{}});
+  vm.runInContext(stripTypeScriptTypes(uts('file-report-cache')+'\n'+uts('conversation-cache'),{mode:'transform'})+';globalThis.subject={readConversationCache,saveConversationCache,cachedConversationSnapshot,clearConversationCache,retainConversationCacheHosts,conversationCacheChanges,flushConversationCacheStorage};',c);
   return {c,uni,storage,...c.subject};
 }
 
@@ -74,7 +74,7 @@ function pageFixture(finishInitial = true) {
   const f=fixture(),watchers=[],loads=[],hides=[],unloads=[],timers=new Map(),calls=[];let timer=0;
   f.c.deletedThread=()=>false;
   f.c.props={active:true};
-  const connection={configured:true,cacheNamespace:'pair',configurationRevision:1,hostId:'pc',activeThreadId:'thread',snapshot:null,connected:true,error:'',conversationError:'',epoch:'',sequence:0,subscriptionRevision:0,pendingCommandId:'',pendingCommands:[],computers:[{id:'pc',online:true}]};
+  const connection={configured:true,cacheNamespace:'pair',configurationRevision:1,hostId:'pc',activeThreadId:'thread',snapshot:null,connected:true,error:'',conversationError:'',epoch:'',sequence:0,subscriptionRevision:0,subscribedHostId:'pc',subscribedThreadId:'thread',contentRevision:'',pendingCommandId:'',pendingCommands:[],computers:[{id:'pc',online:true}]};
   f.saveConversationCache('pair','pc',snapshot([message('recent','旧正文')]),{messages:[message('older','更早正文')],turns:[],cursor:'old-cursor',hasMore:false});
   Object.assign(f.c,{connection,hideTaskNoticeThread:()=>{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watchers.push({source,callback}),onLoad:fn=>loads.push(fn),onShow:()=>{},onHide:fn=>hides.push(fn),onUnload:fn=>unloads.push(fn),onResize:()=>{},onBackPress:()=>{},nextTick:fn=>fn(),setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),readDraft:()=>'',bridge:{watch:()=>calls.push('watch'),cancelOpen:()=>{connection.snapshot=null;},resume:()=>calls.push('resume')},reportTimeline:current=>(current?.messages??[]).map(item=>({...item,executions:[],label:''})),taskNotifications:{focusRevision:0},pendingTaskNotice:()=>null,bindImagePaste:()=>()=>{}});
   const geometry={top:20};
@@ -84,6 +84,7 @@ function pageFixture(finishInitial = true) {
   vm.runInContext(stripTypeScriptTypes(uts('turn-failure')+'\n'+uts('history')+'\n'+uts('conversation-opening')+'\n'+uts('annotations')+'\n'+uts('message-attachments')+'\n'+uts('message-presentations')+'\n'+page,{mode:'transform'})+';globalThis.page={cachedDetail,pageCacheNamespace,liveConversation,showingCachedContent,cacheSyncHint,displayConversation,historyPage,canWrite,scheduleConversationCache,flushConversationCache,following,pageVisible,historyScrollTop,refresh};',f.c);
   vm.runInContext('paneHideCallbacks.forEach(onHide);',f.c);
   const p=f.c.page;loads.forEach(fn=>fn({threadId:'thread',title:'列表标题'}));
+  f.flushConversationCacheStorage();
   if(finishInitial)for(const [id,timer] of timers)if(timer.delay===50){timers.delete(id);timer.fn();}
   let previous=p.displayConversation.value;
   return {...f,p,geometry,connection,calls,watchers,timers,hides,unloads,live:()=>{watchers.find(w=>w.source===p.liveConversation).callback();watchers.find(w=>w.source===p.displayConversation).callback(p.displayConversation.value,previous);previous=p.displayConversation.value;}};
@@ -93,6 +94,23 @@ test('缓存先于 PC 回执呈现，后台失败保留内容与重试，缓存�
   const f=pageFixture();assert.deepEqual(f.calls,['watch']);assert.equal(f.connection.snapshot,null);assert.equal(f.p.canWrite.value,false);assert.equal(f.p.showingCachedContent.value,true);
   assert.deepEqual(Array.from(f.p.displayConversation.value.messages,m=>m.text),['更早正文','旧正文']);assert.equal(f.p.historyPage.value.cursor,'');assert.equal(f.p.historyPage.value.hasMore,true);
   f.connection.conversationError='读取超时';assert.equal(f.p.cacheSyncHint.value,'同步失败，当前显示缓存');assert.equal(f.p.displayConversation.value.messages.length,2);f.p.refresh();assert.equal(f.calls.length,2);
+});
+
+test('实时订阅确认前接收最新展示正文，迟到的实时快照不能启用发送或覆盖缓存',()=>{
+  const f=pageFixture();f.connection.subscribedHostId='';f.connection.subscribedThreadId='';
+  const cacheWatch=f.watchers.find(w=>String(w.source).includes('conversationCacheChanges'));
+  const newSnapshot=snapshot([message('recent','主动推送的正文')]);
+  f.saveConversationCache('pair','pc',newSnapshot,null,'content:new');cacheWatch.callback();
+  assert.equal(f.p.displayConversation.value.messages.at(-1).text,'主动推送的正文');
+  assert.equal(f.p.displayConversation.value.messages[0].text,'更早正文');
+  f.connection.snapshot=snapshot([message('recent','旧实时快照')]);f.live();f.p.flushConversationCache();
+  assert.equal(f.p.canWrite.value,false);
+  assert.equal(f.p.displayConversation.value.messages.at(-1).text,'主动推送的正文');
+  assert.equal(f.readConversationCache('pair','pc','thread').messages[0].text,'主动推送的正文');
+  f.connection.snapshot=newSnapshot;f.connection.subscribedHostId='pc';f.connection.subscribedThreadId='thread';
+  assert.equal(f.p.canWrite.value,true);
+  f.connection.computers[0].online=false;
+  assert.equal(f.p.canWrite.value,false);
 });
 
 test('缓存首屏定位期间卡片挂载不产生旧位置补偿，完成初始定位后才锁定阅读',()=>{

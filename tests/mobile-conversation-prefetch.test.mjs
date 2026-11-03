@@ -73,7 +73,7 @@ test('失败静默退避，存储失败不会产生立即重试循环',async()=>
 
 /** 执行真实缓存代码，验证预加载沿用容量边界并保留额外历史。 */
 function cacheFixture(){
-  const storage=new Map();const context=vm.createContext({uni:{getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)},Date,clearFileReportCache:()=>{}});
+  const storage=new Map();const context=vm.createContext({uni:{getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)},Date,reactive:value=>value,setTimeout,clearTimeout,clearFileReportCache:()=>{}});
   vm.runInContext(stripTypeScriptTypes(source('conversation-cache'),{mode:'transform'})+';globalThis.f={saveConversationCache,peekConversationCache,conversationCacheRevision,clearConversationCache,cachedConversationSnapshot};',context);
   return {...context.f,storage};
 }
@@ -90,19 +90,21 @@ test('预加载版本向后兼容、保留额外历史且只生成不可操作�
 });
 
 /** 执行应用服务和缓存，验证真实入口不会碰导航、焦点及当前聊天状态。 */
-function serviceFixture(){
-  const storage=new Map(),watchers=[],timers=new Map(),requests=[];let timer=0;
-  const connection={cacheNamespace:'pair',configurationRevision:1,connected:true,hostId:'current',activeThreadId:'reading',snapshot:{threadId:'reading',messages:[message('reading')]},computers:[{id:'one',online:true,instanceGeneration:'g'}]};
+function serviceFixture(supportsConversationCache=false){
+  const storage=new Map(),watchers=[],timers=new Map(),requests=[],subscriptions=[],unsubscribed=[],removed=[];let timer=0;
+  const connection={cacheNamespace:'pair',configurationRevision:1,connected:true,supportsConversationCache,hostId:'current',activeThreadId:'reading',snapshot:{threadId:'reading',messages:[message('reading')]},computers:[{id:'one',online:true,instanceGeneration:'g'}]};
   const threadList={computers:[{hostId:'one',online:true,subscribed:true,instanceGeneration:'g',threads:[{id:'a',contentRevision:'v1',status:'active',activeTurnId:'turn'}]}]};
-  const bridge={prefetchConversation:(hostId,threadId)=>new Promise((resolve,reject)=>requests.push({hostId,threadId,resolve,reject}))};
-  const context=vm.createContext({JSON,Date,bridge,connection,threadList,clearFileReportCache:()=>{},watch:(read,callback,options)=>{watchers.push(callback);if(options?.immediate)callback();},setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),uni:{getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)}});
-  vm.runInContext(stripTypeScriptTypes(source('conversation-cache')+'\n'+source('conversation-prefetch-state')+'\n'+source('conversation-prefetch'),{mode:'transform'})+';globalThis.f={startConversationPrefetch,backgroundConversationPrefetch,resumeConversationPrefetch,peekConversationCache,clearConversationCache};',context);
+  const bridge={prefetchConversation:(hostId,threadId)=>new Promise((resolve,reject)=>requests.push({hostId,threadId,resolve,reject})),watchConversationCache:(hostId,id,threads,verify)=>new Promise((resolve,reject)=>subscriptions.push({hostId,id,threads,verify,resolve,reject})),unwatchConversationCache:(hostId,id)=>unsubscribed.push({hostId,id}),invalidateRemovedConversation:(hostId,threadId)=>removed.push({hostId,threadId})};
+  const context=vm.createContext({JSON,Date,bridge,connection,threadList,reactive:value=>value,clearFileReportCache:()=>{},watch:(read,callback,options)=>{watchers.push(callback);if(options?.immediate)callback();},setTimeout:(fn,delay)=>{timers.set(++timer,{fn,delay});return timer;},clearTimeout:id=>timers.delete(id),uni:{getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)}});
+  const bridgeSource=source('bridge');const messages=bridgeSource.slice(bridgeSource.indexOf('function hasConversationContentRevision'),bridgeSource.indexOf('type ConversationDelta'));
+  vm.runInContext(stripTypeScriptTypes(source('conversation-cache')+'\n'+messages+'\n'+source('conversation-prefetch-state')+'\n'+source('conversation-prefetch'),{mode:'transform'})+';globalThis.f={startConversationPrefetch,backgroundConversationPrefetch,resumeConversationPrefetch,saveConversationCache,peekConversationCache,clearConversationCache};',context);
   const refresh=()=>watchers.forEach(fn=>fn());
   const resolve=(index,text='新正文')=>{
     const snap={...snapshot(text),readOnly:true};snap.getString=key=>snap[key];snap.getBoolean=key=>snap[key];
     requests[index].resolve({snapshot:snap,getString:key=>key==='contentRevision'?'v1':null});
   };
-  return {...context.f,connection,threadList,requests,refresh,resolve,timers};
+  const push=(value,index=subscriptions.length-1)=>bridge.cacheEventHandler({hostId:'one',generation:'g',subscriptionId:subscriptions[index].id,threadId:'a',...value,getString(key){return this[key]??null;},getBoolean(key){return this[key]??null;}});
+  return {...context.f,connection,threadList,requests,refresh,resolve,timers,subscriptions,unsubscribed,push,storage,removed};
 }
 
 test('应用级预加载不切换电脑或聊天；缓存可立即展示，后台与归档清理后不回写',async()=>{
@@ -112,4 +114,50 @@ test('应用级预加载不切换电脑或聊天；缓存可立即展示，后�
   f.threadList.computers[0].threads[0].contentRevision='v2';f.refresh();assert.ok(f.timers.size>0);
   f.backgroundConversationPrefetch();assert.equal(f.timers.size,0);f.resumeConversationPrefetch();assert.equal(f.requests.length,2);
   f.clearConversationCache('pair','one',['a']);f.resolve(1,'迟到正文');await tick();assert.equal(f.peekConversationCache('pair','one','a'),null);
+});
+
+const version=letter=>'content:'+letter.repeat(64);
+
+test('前台正文推送在回执前入内存，增量缺口仅补当前聊天，后台停止同步',()=>{
+  const f=serviceFixture(true);f.threadList.computers[0].threads.push({id:'other',updatedAt:1});f.startConversationPrefetch();
+  assert.equal(f.requests.length,0);assert.equal(f.subscriptions.length,1);
+  f.push({revision:version('a'),snapshot:snapshot('最新')});
+  f.push({threadId:'other',revision:version('b'),snapshot:{...snapshot('另一条'),threadId:'other'}});
+  f.push({revision:version('c'),baseRevision:version('a'),update:{...snapshot(),messages:undefined,order:['recent'],upserts:[],appends:[{id:'recent',text:'正文',status:'completed'}]}});
+  assert.equal(f.peekConversationCache('pair','one','a').messages[0].text,'最新正文');
+  f.push({revision:version('d'),baseRevision:version('b'),update:{...snapshot(),messages:undefined,order:['recent'],upserts:[],appends:[]}});
+  assert.equal(f.subscriptions.length,2);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.subscriptions[1].threads)),[{threadId:'a',revision:''},{threadId:'other',revision:version('b')}]);
+  f.push({revision:version('e'),snapshot:snapshot('迟到正文')},0);
+  f.push({revision:version('e'),snapshot:snapshot('旧实例正文'),generation:'old'});
+  assert.equal(f.peekConversationCache('pair','one','a').messages[0].text,'最新正文');
+  f.push({revision:version('e'),snapshot:snapshot('已追平正文')});
+  f.backgroundConversationPrefetch();assert.equal(f.unsubscribed.at(-1).id,f.subscriptions[1].id);
+  f.push({revision:version('f'),snapshot:snapshot('后台迟到正文')});
+  assert.equal(f.peekConversationCache('pair','one','a').messages[0].text,'已追平正文');
+  assert.ok([...f.storage.values()][0].includes('已追平正文'));
+});
+
+test('旧电脑拒绝正文订阅时只对该电脑恢复前台预加载',async()=>{
+  const f=serviceFixture(true);f.startConversationPrefetch();
+  f.subscriptions[0].reject(Error('接口不可用'));await tick();
+  assert.equal(f.subscriptions.length,1);assert.equal(f.requests.length,1);
+  f.resolve(0);await tick();assert.equal(f.peekConversationCache('pair','one','a').messages[0].text,'新正文');
+});
+
+test('当前详情和滑出列表的缓存继续核对，仅接收明确移除事件',()=>{
+  const f=serviceFixture(true);
+  Object.assign(f.connection,{hostId:'one',activeThreadId:'a',subscribedHostId:'one',subscribedThreadId:'a'});
+  f.saveConversationCache('pair','one',snapshot('正在读'),null,version('a'));
+  f.saveConversationCache('pair','one',{...snapshot('列表之外'),threadId:'outside'},null,version('b'));
+  f.startConversationPrefetch();
+  assert.deepEqual(Array.from(f.subscriptions[0].threads),[]);
+  assert.deepEqual(Array.from(f.subscriptions[0].verify),['a','outside']);
+  f.push({revision:version('c'),snapshot:snapshot('忽略核对正文')});
+  assert.equal(f.peekConversationCache('pair','one','a').messages[0].text,'正在读');
+  f.push({removed:true,revision:''});
+  f.push({threadId:'outside',removed:true,revision:''});
+  assert.deepEqual(f.removed,[{hostId:'one',threadId:'a'},{hostId:'one',threadId:'outside'}]);
+  assert.equal(f.peekConversationCache('pair','one','a'),null);
+  assert.equal(f.peekConversationCache('pair','one','outside'),null);
 });

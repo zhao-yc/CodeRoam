@@ -43,7 +43,7 @@ test('重试只提交目标轮次，回执前后禁止重复，明确拒绝后�
 });
 
 test('失败原因及最新轮次经过历史合并和缓存恢复，缓存不恢复重试能力', () => {
-  const storage=new Map(),c=componentContext({uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v)}});
+  const storage=new Map(),c=componentContext({reactive:value=>value,setTimeout,clearTimeout,uni:{getStorageSync:k=>storage.get(k)??'',setStorageSync:(k,v)=>storage.set(k,v)}});
   vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+uts('conversation-cache'))+';globalThis.f={conversationWithHistory,saveConversationCache,readConversationCache,cachedConversationSnapshot}',c);
   const s={...state(),title:'合成会话',cwd:'/example/project',updatedAt:1};
   assert.equal(c.f.saveConversationCache('pair','pc',s,null),true);

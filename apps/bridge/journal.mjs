@@ -11,6 +11,10 @@ export class Journal {
       CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS commands (device_id TEXT NOT NULL, command_id TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL, payload TEXT, PRIMARY KEY(device_id,command_id));
       CREATE TABLE IF NOT EXISTS question_submissions (thread_id TEXT NOT NULL, group_id TEXT NOT NULL, PRIMARY KEY(thread_id,group_id));
+      CREATE TABLE IF NOT EXISTS conversation_cache (
+        thread_id TEXT PRIMARY KEY, revision TEXT NOT NULL, snapshot TEXT NOT NULL,
+        previous_revision TEXT, previous_snapshot TEXT, saved_source TEXT NOT NULL, touched_at INTEGER NOT NULL
+      );
     `);
     this.db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES (?,?)').run('epoch', randomUUID());
     this.epoch = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('epoch').value;
@@ -45,6 +49,7 @@ export class Journal {
     const placeholders = ids.map(() => '?').join(',');
     this.db.prepare('DELETE FROM events WHERE thread_id IN (' + placeholders + ')').run(...ids);
     this.db.prepare('DELETE FROM question_submissions WHERE thread_id IN (' + placeholders + ')').run(...ids);
+    this.db.prepare('DELETE FROM conversation_cache WHERE thread_id IN (' + placeholders + ')').run(...ids);
   }
 
   /** 仅按原请求指纹和完整删除范围收口未知结果，不重放删除。 */

@@ -61,9 +61,9 @@ test('父页分别同步就绪与订阅代次时，下一次渲染只发送一�
 });
 
 test('当前聊天已订阅才允许图片读取，缓存、后台页面和其他电脑同编号快照均不能冒充',()=>{
-  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'),line=page.match(/const imagesReady = computed\([^\n]+/)[0];
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'),declarations=page.match(/^const (?:subscriptionReady|imagesReady) = computed\([^\n]+/gm).join('\n');
   const context=componentContext({computed:get=>({get value(){return get();}}),pageVisible:{value:true},pageHostId:{value:'host'},pageThreadId:{value:'thread'},liveConversation:{value:{readOnly:true}},connection:{connected:true,hostId:'host',activeThreadId:'thread',subscribedHostId:'',subscribedThreadId:''}});
-  vm.runInContext(stripTypeScriptTypes(line,{mode:'transform'})+'\nglobalThis.ready=imagesReady',context);assert.equal(context.ready.value,false);
+  vm.runInContext(stripTypeScriptTypes(declarations,{mode:'transform'})+'\nglobalThis.ready=imagesReady',context);assert.equal(context.ready.value,false);
   context.connection.subscribedHostId='host';context.connection.subscribedThreadId='thread';assert.equal(context.ready.value,true,'已订阅的历史浏览也允许查看图片');
   context.liveConversation.value=null;assert.equal(context.ready.value,false);context.liveConversation.value={};context.connection.subscribedHostId='other-host';assert.equal(context.ready.value,false);
   context.connection.subscribedHostId='host';context.pageVisible.value=false;assert.equal(context.ready.value,false);

@@ -1,15 +1,16 @@
 import { retainFileReportCacheHosts } from './file-report-cache.uts'
 import { watch } from 'vue'
 import { connection, Computer } from './bridge.uts'
-import { clearConversationCache, retainConversationCacheHosts } from './conversation-cache.uts'
+import { clearConversationCache, retainConversationCacheHosts, primeConversationCache } from './conversation-cache.uts'
 
 let installed = false
 // 应用级清理覆盖详情页未打开的情况；电脑离线仍保留缓存，授权移除才清理。
 export function startConversationCacheLifecycle() {
   if (installed) return
   installed = true
-  watch((): string => connection.cacheNamespace, (_next: string, previous: string) => {
+  watch((): string => connection.cacheNamespace, (next: string, previous: string) => {
     if (previous.length > 0) clearConversationCache(previous)
+    primeConversationCache(next)
   }, { flush: 'sync' })
   watch((): string => connection.connected + ':' + connection.cacheNamespace + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
     if (!connection.connected || connection.cacheNamespace.length == 0) return

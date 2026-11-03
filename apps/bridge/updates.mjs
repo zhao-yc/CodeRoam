@@ -1,17 +1,22 @@
-/** 只传输新增消息和增长的文本，避免每个输出片段重复发送整段历史。 */
-export function conversationUpdate(previous, snapshot) {
-  if(!previous)return {kind:'snapshot',snapshot};
-  const old=new Map(previous.snapshot.messages.map(message=>[message.id,message]));
+/** 详情和后台缓存共用消息窗口的排序、替换和文本追加。 */
+export function messageWindowUpdate(beforeMessages, messages) {
+  const old=new Map(beforeMessages.map(message=>[message.id,message]));
   const upserts=[],appends=[];
-  for(const message of snapshot.messages){
+  for(const message of messages){
     const before=old.get(message.id);
     if(before&&JSON.stringify(before)===JSON.stringify(message))continue;
     // 只有显示类型和摘要不变时才追加文本，元数据变化须替换消息，兼容旧快照。
-    if(before&&message.role===before.role&&message.kind===before.kind&&message.summary===before.summary&&message.phase===before.phase&&message.imageCount===before.imageCount&&message.turnId===before.turnId&&message.text.startsWith(before.text))appends.push({id:message.id,text:message.text.slice(before.text.length),status:message.status});
+    if(before&&message.role===before.role&&message.kind===before.kind&&message.summary===before.summary&&message.phase===before.phase&&message.imageCount===before.imageCount&&message.turnId===before.turnId&&typeof message.text==='string'&&typeof before.text==='string'&&message.text.startsWith(before.text))appends.push({id:message.id,text:message.text.slice(before.text.length),status:message.status});
     else upserts.push(message);
   }
+  return {order:messages.map(message=>message.id),upserts,appends};
+}
+
+/** 只传输新增消息和增长的文本，避免每个输出片段重复发送整段历史。 */
+export function conversationUpdate(previous, snapshot) {
+  if(!previous)return {kind:'snapshot',snapshot};
   const {messages,...metadata}=snapshot;
-  const delta={kind:'delta',baseSeq:previous.seq,update:{...metadata,order:messages.map(message=>message.id),upserts,appends}};
+  const delta={kind:'delta',baseSeq:previous.seq,update:{...metadata,...messageWindowUpdate(previous.snapshot.messages,messages)}};
   return JSON.stringify(delta).length<JSON.stringify(snapshot).length?delta:{kind:'snapshot',snapshot};
 }
 

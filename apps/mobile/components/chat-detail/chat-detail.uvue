@@ -160,7 +160,7 @@ import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as exe
 import { failureTimeline, retryTarget, latestFailureTurnId } from '../../services/turn-failure.uts'
 import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
 import type { Conversation } from '../../services/bridge.uts'
-import { CachedConversation, readConversationCache, saveConversationCache, cachedConversationSnapshot, clearConversationCache } from '../../services/conversation-cache.uts'
+import { CachedConversation, readConversationCache, peekConversationCache, saveConversationCache, cachedConversationSnapshot, clearConversationCache, conversationCacheChanges } from '../../services/conversation-cache.uts'
 import { MessageAnnotation, MessagePresentation, parseAnnotationReferences, annotationPresentationsForTimeline } from '../../services/annotations.uts'
 import { presentConversationMessages } from '../../services/message-presentations.uts'
 import { FileReport } from '../../services/file-reports.uts'
@@ -320,13 +320,15 @@ const cachedDetail = ref<CachedConversation | null>(null)
 let cacheInitialPositioning = false
 const pageCacheNamespace = ref('')
 const liveConversation = computed((): Conversation | null => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot : null)
-// 缓存首屏只展示占位，收到当前聊天的订阅回执或有效事件后才读取图片。
-const imagesReady = computed((): boolean => pageVisible.value && connection.connected && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.subscribedHostId == pageHostId.value && connection.subscribedThreadId == pageThreadId.value && liveConversation.value != null)
-const showingCachedContent = computed((): boolean => liveConversation.value == null && cachedDetail.value != null && pageCacheNamespace.value == connection.cacheNamespace)
+const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
+// 正文副本可以提前显示，图片和写操作共用当前聊天的实时订阅确认。
+const subscriptionReady = computed((): boolean => connection.connected && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.subscribedHostId == pageHostId.value && connection.subscribedThreadId == pageThreadId.value && liveConversation.value != null)
+const imagesReady = computed((): boolean => pageVisible.value && subscriptionReady.value)
+const showingCachedContent = computed((): boolean => cachedDetail.value != null && pageCacheNamespace.value == connection.cacheNamespace && (liveConversation.value == null || (connection.connected && goalHostOnline.value && !subscriptionReady.value)))
 // 骨架仅表示有缓存时的联网同步；失败、离线和同步完成立即收起。
-const cacheRefreshing = computed((): boolean => showingCachedContent.value && connection.connected && detailError.value.length == 0)
-const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同步失败，当前显示缓存' : !connection.connected ? '当前显示缓存，连接恢复后同步' : '')
-const displayConversation = computed(() => conversationWithHistory(liveConversation.value ?? (showingCachedContent.value ? cachedConversationSnapshot(cachedDetail.value!) : null), historyPage.value))
+const cacheRefreshing = computed((): boolean => showingCachedContent.value && connection.connected && goalHostOnline.value && detailError.value.length == 0)
+const cacheSyncHint = computed((): string => detailError.value.length > 0 ? '同步失败，当前显示缓存' : !connection.connected || !goalHostOnline.value ? '当前显示缓存，连接恢复后同步' : '')
+const displayConversation = computed(() => conversationWithHistory(showingCachedContent.value ? cachedConversationSnapshot(cachedDetail.value!) : liveConversation.value, historyPage.value))
 const selectedExecution = computed((): ChatMessage | null => displayConversation.value?.messages.find((message: ChatMessage): boolean => message.id == selectedExecutionId.value && message.role != 'user' && message.role != 'assistant') ?? null)
 const expandedReportIds = ref<string[]>([])
 const messagePresentations = computed((): MessagePresentation[] => presentConversationMessages(displayConversation.value?.messages ?? [] as ChatMessage[]))
@@ -389,7 +391,6 @@ const hostIcon = computed((): string => computerIcon(connection.computers.find((
 const projectName = computed((): string => conversationProjectName(listProjectName.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.cwd ?? '' : cachedDetail.value?.cwd ?? ''))
 // 后台历史只用于浏览，写操作须有原桌面的实时所有者和快照。
 const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
-const goalHostOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online))
 const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - 360)))
 const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '操作正在提交，请稍候。' : '')
 const conversationConnectionHint = computed((): string => {
@@ -405,7 +406,7 @@ const submittedRetryKey = ref('')
 const displayFailureTurnId = computed((): string => latestFailureTurnId(displayConversation.value))
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
-const canWrite = computed((): boolean => !readOnly.value && !activating.value && connection.connected && !busy.value && connection.pendingCommandId.length == 0 && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.snapshot?.threadId == pageThreadId.value)
+const canWrite = computed((): boolean => !readOnly.value && !activating.value && subscriptionReady.value && goalHostOnline.value && !busy.value && connection.pendingCommandId.length == 0)
 
 let cacheWriteTimer = 0
 let cacheDirty = false
@@ -415,9 +416,8 @@ function flushConversationCache() {
   if (!cacheDirty || deletedThread(pageHostId.value, pageThreadId.value)) return
   cacheDirty = false
   const namespace = pageCacheNamespace.value
-  if (namespace.length == 0 || namespace != connection.cacheNamespace || !pageAlive || !isCurrentPage() || liveConversation.value == null) return
-  if (connection.connected && !connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value)) return
-  saveConversationCache(namespace, pageHostId.value, liveConversation.value!, historyPage.value)
+  if (namespace.length == 0 || namespace != connection.cacheNamespace || !pageAlive || !isCurrentPage() || !subscriptionReady.value || !goalHostOnline.value) return
+  saveConversationCache(namespace, pageHostId.value, liveConversation.value!, historyPage.value, connection.contentRevision)
 }
 // 固定窗口节流，持续输出也会落盘；不因每个分片重新延后写入。
 function scheduleConversationCache() {
@@ -445,6 +445,11 @@ function restoreConversationCache() {
 }
 watch(liveConversation, () => { scheduleConversationCache() })
 watch(historyPage, () => { scheduleConversationCache() })
+// 在实时订阅确认前，详情也能呈现后台刚收到的正文。额外历史和阅读位置留在原面板。
+watch((): number => conversationCacheChanges.revision, () => {
+  if (pageCacheNamespace.value.length == 0 || pageCacheNamespace.value != connection.cacheNamespace) return
+  cachedDetail.value = peekConversationCache(pageCacheNamespace.value, pageHostId.value, pageThreadId.value)
+})
 // 配对切换和授权撤回立即撤掉展示缓存；普通掉线继续保留正文。
 watch((): string => connection.cacheNamespace + ':' + connection.connected + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
   if (pageCacheNamespace.value.length == 0) return

@@ -18,6 +18,7 @@ import { DesktopGoalController } from './desktop-goals.mjs';
 import { readGoal, updateGoal } from './goals.mjs';
 import { readThreadPlugins, selectThreadPlugins, pluginPrompt } from './plugins.mjs';
 import { threadMentionPrompt } from './thread-mentions.mjs';
+import { CACHE_WATCHER, CACHE_THREAD_LIMIT } from './thread-cache.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
@@ -42,7 +43,7 @@ export class DesktopAdapter extends EventEmitter {
   async connect() {
     if(this.connecting) return this.connecting;
     this.connecting=(async()=>{
-      try { await this.client.connect(); for(const [threadId,entry] of this.conversations) if(entry.watchers.size&&!entry.owner) this.watch(threadId,[...entry.watchers][0]).catch(()=>{}); }
+      try { await this.client.connect(); for(const [threadId,entry] of this.conversations) if(entry.watchers.size&&!entry.owner) { const watcher=[...entry.watchers][0];this.watch(threadId,watcher,{history:watcher!==CACHE_WATCHER}).catch(()=>{}); } }
       catch(error) { this.client.close(); throw error; }
       finally { this.connecting=null; }
     })();
@@ -99,14 +100,19 @@ export class DesktopAdapter extends EventEmitter {
     try{return await loading;}finally{if(this.loadingThreads.get(threadId)===loading)this.loadingThreads.delete(threadId);}
   }
 
-  async watch(threadId, deviceId, {fresh=false,snapshotTimeoutMs=this.snapshotTimeoutMs,ownerTimeoutMs=500,history=true,activate=false} = {}) {
+  async watch(threadId, deviceId, {fresh=false,snapshotTimeoutMs=this.snapshotTimeoutMs,ownerTimeoutMs=500,history=true,activate=false,readSavedHistory} = {}) {
     // 总等待留在中转十五秒超时以内；默认只读历史，明确 activate 才导航桌面。
     const navigation=activate?this.navigation.begin(threadId,deviceId):null;
     const requestDeadline=Date.now()+14000;
     await this.connect();
     let entry=this.conversations.get(threadId);
+    // 后台跟随有独立额度，不能挤占手机详情或列表既有订阅额度。
+    if (deviceId!==CACHE_WATCHER && (!entry || (entry.watchers.size===1&&entry.watchers.has(CACHE_WATCHER)))) {
+      const regular=[...this.conversations.values()].filter(item=>item.watchers.size>(item.watchers.has(CACHE_WATCHER)?1:0)).length;
+      if(regular>=64) throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
+    }
     if(!entry) {
-      if(this.conversations.size>=64) throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
+      if(this.conversations.size>=64+CACHE_THREAD_LIMIT) throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
       entry={watchers:new Set(),owner:null,state:null,revision:null,waiters:[],publishTimer:null};
       this.conversations.set(threadId,entry);
     }
@@ -127,7 +133,7 @@ export class DesktopAdapter extends EventEmitter {
         if(!discovered&&activate){discovered=await this.loadOwner(threadId,requestDeadline-1000);if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');}
         if(!discovered&&history) {
           if(!this.index?.readHistory) throw new BridgeError('HISTORY_UNAVAILABLE','暂时无法读取这条聊天的已保存历史');
-          const saved=await this.index.readHistory(threadId);
+          const saved=await (readSavedHistory ? readSavedHistory(threadId) : this.index.readHistory(threadId));
           if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
           if(previous&&this.client.socket?.writable) this.client.broadcast('thread-stream-following-changed',{hostId:previous.hostId,conversationId:threadId,following:false},1,[previous.clientId]);
           entry.owner=null;entry.state=null;entry.revision=null;
@@ -157,7 +163,10 @@ export class DesktopAdapter extends EventEmitter {
     entry.watchers.delete(deviceId);
     if(entry.watchers.size===0) {
       for(const waiter of entry.waiters.splice(0)) {clearTimeout(waiter.timer);waiter.reject(new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消'));}
-      if(entry.owner&&this.client.socket?.writable) this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:false},1,[entry.owner.clientId]);
+      if(entry.owner&&this.client.socket?.writable) {
+        // 旧所有者换代后也必须释放本地状态，定向退订只作尽力通知。
+        try { this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:false},1,[entry.owner.clientId]); } catch { }
+      }
       clearTimeout(entry.publishTimer); this.conversations.delete(threadId);
     }
     return {ok:true};
@@ -174,6 +183,7 @@ export class DesktopAdapter extends EventEmitter {
       if(change.type==='snapshot') { entry.state=change.conversationState; entry.revision=change.revision; }
       else if(change.type==='patches'&&entry.state&&entry.revision===change.baseRevision) { applyPatches(entry.state,change.patches); entry.revision=change.revision; }
       else { entry.state=null; this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:message.params.conversationId,following:true},1,[entry.owner.clientId]);return; }
+      if(entry.state?.id!==message.params.conversationId)throw new BridgeError('HISTORY_ID_MISMATCH','桌面聊天快照编号不一致');
       if(previousAttention!==JSON.stringify([entry.state?.hasUnreadTurn,entry.state?.threadRuntimeStatus]))this.native?.schedule([message.params.conversationId]);
       const normalized=this.snapshot(entry.state);
       for(const waiter of entry.waiters.splice(0)) { clearTimeout(waiter.timer); waiter.resolve(normalized); }

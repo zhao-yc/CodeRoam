@@ -15,7 +15,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(storage=new Map()) {
   let time=0;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)};
-  const context=vm.createContext({uni,reactive:value=>value,Date:{now:()=>++time}});
+  const context=vm.createContext({uni,reactive:value=>value,Date:{now:()=>++time},setTimeout,clearTimeout});
   vm.runInContext(stripTypeScriptTypes(source('file-report-cache'),{mode:'transform'})+';globalThis.api={readFileReportCache,saveFileReportCache,saveFileReportDetailCache,clearFileReportCache,retainFileReportCacheHosts};',context);
   vm.runInContext(stripTypeScriptTypes(source('file-change-preferences'),{mode:'transform'})+';globalThis.preferences={fileChangePreferences,setFileChangesExpanded};',context);
   return {context,storage,uni,...context.api,...context.preferences};

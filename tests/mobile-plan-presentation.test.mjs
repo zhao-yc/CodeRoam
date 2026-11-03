@@ -9,7 +9,7 @@ import { normalizeConversation } from '../apps/bridge/conversation.mjs';
 /** 执行实际 UTS 解析与页面选择方法，避免预览裁切影响详情原文。 */
 function presentation() {
   const storage = new Map();
-  const context = componentContext({uni:{getStorageSync:key=>storage.get(key),setStorageSync:(key,value)=>storage.set(key,value)}});
+  const context = componentContext({reactive:value=>value,setTimeout,clearTimeout,uni:{getStorageSync:key=>storage.get(key),setStorageSync:(key,value)=>storage.set(key,value)}});
   for (const file of ['annotations', 'markdown', 'plan-presentation', 'message-attachments', 'message-presentations', 'executions', 'history', 'conversation-cache']) {
     const source = fs.readFileSync('apps/mobile/services/' + file + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
     vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }), context);

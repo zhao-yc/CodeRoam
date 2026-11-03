@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_MESSAGE_BYTES, WRITE_METHODS, validateRequest, validateDraftId, validDraftRevision, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
 import { HostProfiles } from './host-profiles.mjs';
 import { HostInstances } from './host-instances.mjs';
+import { ConversationCacheRoutes } from './conversation-cache-routes.mjs';
 import { REQUEST_DIAGNOSTICS_VERSION } from '../../packages/protocol/request-diagnostics.mjs';
 
 /** 只中转已配对设备的白名单请求；模型凭据始终留在电脑端。 */
@@ -68,9 +69,10 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
   const draftKey = (hostId, draftId) => JSON.stringify([hostId, draftId]);
   const draftRead = method => method === 'thread.draft.open' || method === 'thread.draft.read';
   const generationOf = hostId => instances.managed.has(instances.row(hostId)?.parentId ?? hostId) ? instances.row(hostId)?.generation : undefined;
-  /** 草稿事件必须匹配实际注册连接及实例代次，不能借父电脑连接伪造其他电脑的来源。 */
-  const draftSource = (socket, hostId, generation) => hosts.get(hostId) === socket && hostOnline(hostId) &&
+  /** 定向事件必须匹配实际注册连接及实例代次，不能借父电脑连接伪造其他电脑的来源。 */
+  const hostSource = (socket, hostId, generation) => hosts.get(hostId) === socket && hostOnline(hostId) &&
     (instances.managed.has(socket.identity.hostId) ? instances.owns(socket.identity.hostId, hostId, generation) : hostId === socket.identity.hostId && generation === undefined);
+  const cacheRoutes = new ConversationCacheRoutes({ send, source: hostSource, authorized: (parents, hostId) => instances.authorized(parents, hostId) });
   const draftSnapshot = snapshot => {
     try {
       validateDraftId(snapshot?.draftId);
@@ -80,7 +82,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
   const draftViewer = (deviceId, key, watch) => [...mobiles].some(mobile => mobile.identity.id === deviceId && mobile.draftWatches.get(key)?.host === watch.host && mobile.draftWatches.get(key)?.generation === watch.generation);
   /** 只释放仍属原连接、原代次的观察，不把旧草稿退订发送到新实例，更不删除电脑草稿。 */
   const releaseDraft = (deviceId, watch) => {
-    if (draftViewer(deviceId, draftKey(watch.hostId, watch.draftId), watch) || !draftSource(watch.host, watch.hostId, watch.generation)) return;
+    if (draftViewer(deviceId, draftKey(watch.hostId, watch.draftId), watch) || !hostSource(watch.host, watch.hostId, watch.generation)) return;
     send(watch.host, { v: 1, type: 'request', requestId: randomUUID(), transportId: randomUUID(), deviceId, hostId: watch.hostId, ...(watch.generation ? { generation: watch.generation } : {}), method: 'thread.draft.unwatch', params: { draftId: watch.draftId } });
   };
   /** 换代与重连均撤销草稿订阅；仅相同 generation 的新连接也不能继承旧连接的订阅。 */
@@ -110,6 +112,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       client.alive = true;
       client.watches = new Set();
       client.listWatches = new Set();
+      client.cacheWatches = new Map();
       client.draftWatches = new Map();
       client.draftReleases = new Map();
       client.draftSequence = 0;
@@ -126,13 +129,14 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       if (previous) invalidateDrafts(watch => watch.host === previous);
       if (previous) for (const [id, connection] of hosts) if (connection === previous) hosts.delete(id);
       instances.disconnect(identity.hostId);
+      cacheRoutes.prune();
       hosts.set(identity.hostId, socket);
       previous?.close(4001, '电脑连接已更新');
       send(socket, { v: 1, type: 'welcome', role: 'host', hostId: identity.hostId, capabilities: { hostInstances: true } });
       notifyHosts();
     } else if (identity.role === 'mobile') {
       mobiles.add(socket);
-      send(socket, { v: 1, type: 'welcome', role: 'mobile', deviceId: identity.id, hosts: hostList(identity), capabilities: { hostProfiles: true, hostInstances: true } });
+      send(socket, { v: 1, type: 'welcome', role: 'mobile', deviceId: identity.id, hosts: hostList(identity), capabilities: { hostProfiles: true, hostInstances: true, conversationCache: true } });
     } else { socket.close(1008, '设备角色不受支持'); return; }
     socket.on('error', () => {});
     socket.on('message', data => {
@@ -157,7 +161,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
             for (const [id, entry] of pending) if (entry.host === socket && (!hostOnline(entry.hostId) || entry.generation && instances.row(entry.hostId)?.generation !== entry.generation)) {
               complete(id); recordEnd('request.cancelled', entry, { errorCode: 'INSTANCE_CHANGED', outcomeUnknown: WRITE_METHODS.has(entry.method) }); fail(entry.mobile, entry.requestId, new BridgeError(WRITE_METHODS.has(entry.method) ? 'OUTCOME_UNKNOWN' : 'INSTANCE_CHANGED', '实例连接已变化，请先核对原操作', WRITE_METHODS.has(entry.method)));
             }
-            invalidateDrafts(watch => watch.host === socket && !draftSource(socket, watch.hostId, watch.generation));
+            invalidateDrafts(watch => watch.host === socket && !hostSource(socket, watch.hostId, watch.generation));
+            cacheRoutes.prune();
             notifyHosts();
           } catch { socket.close(1008, '实例清单或归属无效'); }
           return;
@@ -165,10 +170,19 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         if (message.type === 'response') {
           const entry = pending.get(message.transportId);
           if (!entry) { diagnostics?.record('response.late', diagnostics.context(message), { connection: socket.diagnosticId, pendingTotal: pending.size }); return; }
-          if (entry.host !== socket || entry.generation && (message.hostId !== entry.hostId || message.generation !== entry.generation || !instances.owns(identity.hostId, entry.hostId, entry.generation)) || entry.method.startsWith('thread.draft.') && !draftSource(socket, entry.hostId, entry.generation)) {
+          if (entry.host !== socket || entry.generation && (message.hostId !== entry.hostId || message.generation !== entry.generation || !instances.owns(identity.hostId, entry.hostId, entry.generation)) || (entry.cacheRoute || entry.method.startsWith('thread.draft.')) && !hostSource(socket, entry.hostId, entry.generation)) {
             recordEnd('response.ignored', entry, { errorCode: 'INSTANCE_CHANGED' }); return;
           }
           complete(message.transportId);
+          if (entry.cacheRoute) {
+            const authorized = instances.authorized(entry.mobile.identity.hostIds, entry.hostId);
+            const current = entry.mobile.cacheWatches.get(entry.hostId) === entry.cacheRoute;
+            const error = !authorized ? new BridgeError('HOST_FORBIDDEN', '这台电脑已不在当前手机的授权范围内')
+              : !current ? new BridgeError('SUBSCRIPTION_CANCELED', '聊天缓存订阅已替换')
+              : !message.error && message.result?.ok !== true ? new BridgeError('BAD_CACHE_RESPONSE', '电脑返回的聊天缓存订阅回执无效') : null;
+            if (error || message.error) cacheRoutes.release(entry.cacheRoute);
+            if (error) { recordEnd('request.completed', entry, { failed: true, errorCode: error.code }); fail(entry.mobile, entry.requestId, error); return; }
+          }
           if (!message.error && draftRead(entry.method) && (!draftSnapshot(message.result) || (entry.method === 'thread.draft.read' ? message.result.draftId !== entry.draftId : message.result.projectId !== entry.projectId))) {
             recordEnd('request.completed', entry, { failed: true, errorCode: 'BAD_DRAFT_RESPONSE' }); fail(entry.mobile, entry.requestId, new BridgeError('BAD_DRAFT_RESPONSE', '电脑返回的草稿与原请求不匹配，请重新核对')); return;
           }
@@ -195,12 +209,13 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
             if (!current || current.sequence <= entry.draftSequence) entry.mobile.draftWatches.delete(key);
             entry.mobile.draftReleases.set(key, { host: socket, hostId: entry.hostId, generation: entry.generation, sequence: entry.draftSequence });
           }
-          const delivered = send(entry.mobile, { v: 1, type: 'response', requestId: entry.requestId, result: message.result, error: message.error });
+          const result = entry.cacheRoute && !message.error ? { ok: true } : message.result;
+          const delivered = send(entry.mobile, { v: 1, type: 'response', requestId: entry.requestId, result, error: message.error });
           recordEnd('request.completed', entry, { failed: !!message.error, errorCode: message.error?.code, outcomeUnknown: message.error?.outcomeUnknown === true, delivered });
         } else if (message.type === 'thread.draft.changed') {
           if (message.v !== 1 || typeof message.deviceId !== 'string' || !draftSnapshot(message.snapshot)) return;
           const hostId = message.hostId ?? identity.hostId;
-          if (!draftSource(socket, hostId, message.generation)) return;
+          if (!hostSource(socket, hostId, message.generation)) return;
           const key = draftKey(hostId, message.snapshot.draftId);
           for (const mobile of mobiles) {
             const watch = mobile.draftWatches.get(key);
@@ -208,6 +223,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
               send(mobile, { v: 1, type: 'thread.draft.changed', deviceId: message.deviceId, hostId, ...(message.generation ? { generation: message.generation } : {}), snapshot: message.snapshot });
             }
           }
+        } else if (message.type === 'thread.cache.event') {
+          cacheRoutes.forward(socket, message.hostId ?? identity.hostId, message);
         } else if (message.type === 'threads.event' && Array.isArray(message.threads)) {
           const hostId = instances.managed.has(identity.hostId) ? message.hostId : identity.hostId;
           if (instances.managed.has(identity.hostId) && !instances.owns(identity.hostId, hostId, message.generation)) return;
@@ -215,7 +232,11 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         } else if (message.type === 'event' && typeof message.threadId === 'string') {
           const hostId = instances.managed.has(identity.hostId) ? message.hostId : identity.hostId;
           if (instances.managed.has(identity.hostId) && !instances.owns(identity.hostId, hostId, message.generation)) return;
-          for (const mobile of mobiles) if (instances.authorized(mobile.identity.hostIds, hostId) && mobile.watches.has(`${hostId}:${message.threadId}`)) send(mobile, { ...message, hostId });
+          // 压缩回执只替代发起该请求的连接，其余观察者仍需要完整的事件序列。
+          const { excludeTransportId, ...event } = message;
+          const request = pending.get(excludeTransportId);
+          const excluded = request?.compactWatch && request.host === socket && request.hostId === hostId && request.threadId === message.threadId && request.generation === message.generation ? request.mobile : null;
+          for (const mobile of mobiles) if (mobile !== excluded && instances.authorized(mobile.identity.hostIds, hostId) && mobile.watches.has(`${hostId}:${message.threadId}`)) send(mobile, { ...event, hostId });
         }
         return;
       }
@@ -230,6 +251,11 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           profiles.update(message.hostId, message.params);
           notifyHosts();
           send(socket, { v: 1, type: 'response', requestId: message.requestId, result: { computer: profiles.computer(message.hostId, hostOnline(message.hostId)) } });
+          return;
+        }
+        if (message.method === 'threads.cache.unwatch') {
+          cacheRoutes.unwatch(socket, message.hostId, message.params.subscriptionId);
+          send(socket, { v: 1, type: 'response', requestId: message.requestId, result: { ok: true } });
           return;
         }
         const host = hosts.get(message.hostId);
@@ -262,18 +288,23 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const sharedWatch=message.method==='thread.unwatch'&&[...mobiles].some(other=>other!==socket&&other.identity.id===identity.id&&other.watches.has(key));
         const sharedList=message.method==='threads.unwatch'&&[...mobiles].some(other=>other!==socket&&other.identity.id===identity.id&&other.listWatches.has(message.hostId));
         if(sharedWatch||sharedList){send(socket,{v:1,type:'response',requestId:message.requestId,result:{ok:true}});return;}
+        const cacheRoute = message.method === 'threads.cache.watch' ? cacheRoutes.watch(socket, host, message.hostId, generation, message.params) : null;
         const timer = setTimeout(() => {
           const entry = complete(transportId);
+          if (entry?.cacheRoute) cacheRoutes.release(entry.cacheRoute);
           if (entry) { recordEnd('request.timeout', entry, { errorCode: 'REQUEST_TIMEOUT', outcomeUnknown: WRITE_METHODS.has(message.method) }); fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method))); }
         }, message.method === 'thread.delete' ? Math.max(60000, requestTimeoutMs) : message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
-        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, timer, diagnostic });
-        const delivered = send(host, { ...message, deviceId: identity.id, transportId, ...(generation ? { generation } : {}) });
+        const compactWatch = message.method === 'thread.watch' && message.params.contentRevision !== undefined;
+        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, cacheRoute, compactWatch, timer, diagnostic });
+        const params = cacheRoute ? { ...message.params, subscriptionId: cacheRoute.upstreamId } : message.params;
+        const delivered = send(host, { ...message, params, deviceId: identity.id, transportId, ...(generation ? { generation } : {}) });
         diagnostics?.record('request.forwarded', diagnostic, { ...counts(socket, host), connection: socket.diagnosticId, delivered, bufferedBytes: host.bufferedAmount });
       } catch (error) { diagnostics?.record('request.rejected', diagnostic, { connection: socket.diagnosticId, errorCode: error.code, pendingTotal: pending.size }); fail(socket, message.requestId, error); }
     });
     socket.on('close', closeCode => {
       diagnostics?.record('connection.close', null, { connection: socket.diagnosticId, role: identity.role, closeCode, ...counts(socket, socket) });
       mobiles.delete(socket);
+      if (identity.role === 'mobile') for (const route of socket.cacheWatches.values()) cacheRoutes.release(route);
       if (identity.role === 'mobile') for (const watch of socket.draftWatches.values()) releaseDraft(identity.id, watch);
       // 释放已离线手机的只读订阅；同一身份的其他在线连接仍在观看时保留。
       if(identity.role==='mobile')for(const key of socket.watches){
@@ -286,7 +317,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const host=hosts.get(hostId);
         if(host)send(host,{v:1,type:'request',requestId:randomUUID(),transportId:randomUUID(),deviceId:identity.id,hostId,generation:instances.row(hostId)?.generation,method:'threads.unwatch',params:{}});
       }
-      if (identity.role === 'host' && hosts.get(identity.hostId) === socket) { invalidateDrafts(watch => watch.host === socket); for (const [id, connection] of hosts) if (connection === socket) hosts.delete(id); instances.disconnect(identity.hostId); notifyHosts(); }
+      if (identity.role === 'host' && hosts.get(identity.hostId) === socket) { invalidateDrafts(watch => watch.host === socket); for (const [id, connection] of hosts) if (connection === socket) hosts.delete(id); instances.disconnect(identity.hostId); cacheRoutes.prune(); notifyHosts(); }
       for (const [id, entry] of pending) if (entry.host === socket || entry.mobile === socket) {
         // 打开回执可能晚于手机断线，保留 transport 到原超时，以便拿到编号后只转发 unwatch。
         if (entry.mobile === socket && entry.host !== socket && draftRead(entry.method)) {
@@ -301,6 +332,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
   });
 
   const heartbeat = setInterval(() => {
+    cacheRoutes.prune();
     for (const socket of sockets.clients) {
       if (!socket.alive) { socket.terminate(); continue; }
       socket.alive = false;

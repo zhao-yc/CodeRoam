@@ -72,7 +72,7 @@ export class InstanceRuntime {
     this.agent.fileReports.close();
     this.agent.fileReports = new DesktopFileReportReader({ discover: async () => instance.alive && instance.port ? [{ pid: instance.pid, port: instance.port, executable:instance.executable }] : [] });
     this.agent.send = message => instance.alive && instance.ready && send({ ...message, hostId: instance.id, generation: instance.generation });
-    this.client.on('disconnected', () => { instance.ready = false; });
+    this.client.on('disconnected', () => { instance.ready = false; this.agent.threadCache.clearSubscriptions(); });
   }
   /** Windows 单实例复用系统核验的独占 IPC，多实例继续核对页面来源。 */
   async ready() {
@@ -85,6 +85,7 @@ export class InstanceRuntime {
       const ids = this.isMac || this.instance.directIpc ? new Set() : await this.bind(this.client, this.instance);
       if (this.closed || !this.instance.alive) return false;
       this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
+      this.agent.threadCache.start();
       await this.agent.predictions.start(); return true;
     })().finally(() => { this.bindings = null; });
     return this.bindings;

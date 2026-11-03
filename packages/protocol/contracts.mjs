@@ -21,6 +21,8 @@ READ_METHODS.add('thread.create.permissions');
 READ_METHODS.add('thread.plugins.read');
 READ_METHODS.add('thread.create.plugins');
 READ_METHODS.add('threads.mentions');
+READ_METHODS.add('threads.cache.watch');
+READ_METHODS.add('threads.cache.unwatch');
 WRITE_METHODS.add('thread.permissions.update');
 READ_METHODS.add('thread.draft.read');
 READ_METHODS.add('thread.draft.unwatch');
@@ -29,6 +31,41 @@ WRITE_METHODS.add('thread.draft.update');
 WRITE_METHODS.add('thread.draft.send');
 export const METHODS = new Set([...READ_METHODS, ...WRITE_METHODS, ...UPLOAD_METHODS, ...RELAY_METHODS]);
 export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_CONVERSATION_CACHE_THREADS = 20;
+
+/** 展示版本独立于实时订阅游标，空值只在还没有基线时使用。 */
+export const validConversationCacheRevision = value => typeof value === 'string' && /^content:[a-f0-9]{64}$/.test(value);
+const validCacheSubscriptionId = value => typeof value === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(value);
+const isObject = value => value != null && typeof value === 'object' && !Array.isArray(value);
+
+/** 缓存通道仅接收一个指定会话的展示窗口、增量或移除通知。 */
+export function validConversationCacheEvent(message) {
+  if (message?.v !== PROTOCOL_VERSION || message.type !== 'thread.cache.event' || !validCacheSubscriptionId(message.subscriptionId) || typeof message.deviceId !== 'string' || typeof message.threadId !== 'string' || !message.threadId.length || message.threadId.length > 200) return false;
+  const { revision, baseRevision, snapshot, update, removed, threadId } = message;
+  if (removed === true) return (revision === '' || validConversationCacheRevision(revision)) && baseRevision === undefined && snapshot === undefined && update === undefined;
+  if (removed !== undefined || !validConversationCacheRevision(revision)) return false;
+  if (snapshot !== undefined) return baseRevision === undefined && update === undefined && isObject(snapshot) && snapshot.threadId === threadId && Array.isArray(snapshot.messages) && Array.isArray(snapshot.turns);
+  return validConversationCacheRevision(baseRevision) && baseRevision !== revision && isObject(update) && update.threadId === threadId && Array.isArray(update.order) && Array.isArray(update.upserts) && Array.isArray(update.appends);
+}
+
+/** 一次只登记有界的明确会话集合，手机不能携带正文或任意观察参数。 */
+function validateConversationCacheRequest(method, params) {
+  const watching = method === 'threads.cache.watch';
+  const allowed = watching ? ['subscriptionId', 'threads', 'verify'] : ['subscriptionId'];
+  if (!validCacheSubscriptionId(params.subscriptionId) || Object.keys(params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '聊天缓存订阅编号或参数无效');
+  if (!watching) return;
+  const { threads, verify = [] } = params;
+  if (!Array.isArray(threads) || threads.length > MAX_CONVERSATION_CACHE_THREADS || !Array.isArray(verify) || verify.length > MAX_CONVERSATION_CACHE_THREADS || (!threads.length && !verify.length)) throw new BridgeError('BAD_PARAMS', '聊天缓存订阅数量无效');
+  const ids = new Set();
+  for (const row of threads) {
+    if (!isObject(row) || Object.keys(row).some(key => key !== 'threadId' && key !== 'revision') || (row.revision !== '' && !validConversationCacheRevision(row.revision))) throw new BridgeError('BAD_PARAMS', '聊天缓存版本无效');
+    requireString(row.threadId, '聊天编号', 200);
+    if (ids.has(row.threadId)) throw new BridgeError('BAD_PARAMS', '聊天缓存订阅包含重复会话');
+    ids.add(row.threadId);
+  }
+  for (const threadId of verify) requireString(threadId, '待核对聊天编号', 200);
+  if (new Set(verify).size !== verify.length) throw new BridgeError('BAD_PARAMS', '待核对的聊天编号重复');
+}
 
 export class BridgeError extends Error {
   constructor(code, message, outcomeUnknown = false) { super(message); this.code = code; this.outcomeUnknown = outcomeUnknown; }
@@ -47,6 +84,10 @@ export function validateRequest(message) {
   if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(message.requestId)) throw new BridgeError('BAD_REQUEST_ID', '请求编号不合法');
   if (!METHODS.has(message.method)) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的接口列表中');
   if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new BridgeError('BAD_PARAMS', '请求参数必须是对象');
+  if (message.method === 'threads.cache.watch' || message.method === 'threads.cache.unwatch') {
+    validateConversationCacheRequest(message.method, message.params);
+    return message;
+  }
   // 原生草稿使用独立编号，不能落入既有聊天编号与发送参数的校验分支。
   if (message.method.startsWith('thread.draft.')) {
     validateDraftRequest(message.method, message.params);
@@ -100,6 +141,7 @@ export function validateRequest(message) {
   if(message.params.resetPlanAfterSend===true&&!['default','plan'].includes(message.params.planMode))throw new BridgeError('BAD_PARAMS','请明确本次消息的执行模式');
   if(message.params.resetPlanAfterSend!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||typeof message.params.resetPlanAfterSend!=='boolean'))throw new BridgeError('BAD_PARAMS','一次性计划标记只能用于发送消息');
   if(message.params.activate!==undefined&&(message.method!=='thread.watch'||typeof message.params.activate!=='boolean'))throw new BridgeError('BAD_PARAMS','仅聊天订阅可使用布尔值加载标记');
+  if(message.params.contentRevision!==undefined&&(message.method!=='thread.watch'||!validConversationCacheRevision(message.params.contentRevision)))throw new BridgeError('BAD_PARAMS','仅聊天订阅可携带有效的正文版本');
   if(message.params.page!==undefined&&(message.method!=='thread.history'||message.params.page!==true))throw new BridgeError('BAD_PARAMS','历史分页标记无效');
   if(message.params.before!==undefined&&(message.method!=='thread.history'||typeof message.params.before!=='string'||message.params.before.length>2000))throw new BridgeError('BAD_PARAMS','历史游标无效');
   if(message.params.beforeMessageId!==undefined&&(message.method!=='thread.history'||typeof message.params.beforeMessageId!=='string'||message.params.beforeMessageId.length>1000))throw new BridgeError('BAD_PARAMS','历史消息起点无效');
