@@ -1,10 +1,35 @@
 import type { ChatMessage } from './bridge.uts'
-import { MessagePresentation, MessageAttachment, presentAnnotatedMessages } from './annotations.uts'
+import { MessagePresentation, MessageAttachment, presentAnnotatedMessages, codeRanges, CodeRange } from './annotations.uts'
 import { AttachmentPresentation, parseMessageAttachments } from './message-attachments.uts'
 
-// 在展示副本上依次解析附件和注释；历史合并、图片请求和执行过程仍使用原消息。
+// 只转换完整的自动任务协议；代码示例、未知格式及已结束的损坏包装保留原文。
+export function heartbeatMessageText(source: string, role: string, streaming: boolean = false): string {
+  if (role != 'user' && role != 'assistant') return source
+  const text = source.trim()
+  if (!text.startsWith('<heartbeat>')) return source
+  const opening = source.indexOf('<heartbeat>')
+  if (codeRanges(source).some((range: CodeRange): boolean => range.start <= opening && opening < range.end)) return source
+  if (role == 'user') {
+    const input = /^<heartbeat>\s*<automation_id>([^<>\r\n]+)<\/automation_id>\s*<current_time_iso>([^<>\r\n]+)<\/current_time_iso>\s*<instructions>([\s\S]*?)<\/instructions>\s*<\/heartbeat>$/.exec(text)
+    if (input == null || (input[1] ?? '').trim().length == 0 || (input[3] ?? '').trim().length == 0) return source
+    return (input[3] ?? '').trim()
+  }
+  const output = /^<heartbeat>\s*<automation_id>([^<>\r\n]+)<\/automation_id>\s*<decision>(NOTIFY|SKIP)<\/decision>\s*<message>([\s\S]*?)<\/message>\s*<\/heartbeat>$/.exec(text)
+  if (output != null && (output[1] ?? '').trim().length > 0) {
+    const message = (output[3] ?? '').trim()
+    if ((output[2] ?? '') == 'SKIP' || message.length > 0) return message
+  }
+  // 流式协议等完整包装到齐再显示，防止任务编号和未闭合标签闪现在聊天中。
+  if (streaming && /^<heartbeat>\s*<automation_id>[^<>\r\n]+<\/automation_id>\s*(?:<decision>(?:NOTIFY|SKIP)<\/decision>\s*(?:<message>[\s\S]*)?)?$/.test(text)) return ''
+  return source
+}
+
+// 在展示副本上依次解析自动任务、附件和注释；历史合并与发送仍使用原消息。
 export function presentConversationMessages(messages: ChatMessage[]): MessagePresentation[] {
-  const attachments = messages.map((message: ChatMessage): AttachmentPresentation => message.role == 'user' ? parseMessageAttachments(message.text) : { text: message.text, attachments: [] as MessageAttachment[] })
+  const attachments = messages.map((message: ChatMessage): AttachmentPresentation => {
+    const text = heartbeatMessageText(message.text, message.role, ['inProgress', 'in_progress', 'active', 'running'].indexOf(message.status) >= 0)
+    return message.role == 'user' ? parseMessageAttachments(text) : { text, attachments: [] as MessageAttachment[] }
+  })
   const prepared = messages.map((message: ChatMessage, index: number): ChatMessage => ({ id: message.id, role: message.role, kind: message.kind, summary: message.summary, phase: message.phase, imageCount: message.imageCount, text: attachments[index].text, turnId: message.turnId, status: message.status }))
   const result = presentAnnotatedMessages(prepared)
   result.forEach((presentation: MessagePresentation, index: number) => {
