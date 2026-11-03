@@ -44,7 +44,12 @@
       </view>
     </scroll-view>
     </view>
-    <view class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view><view class="list-safe-area"></view>
+    <view v-if="props.wide" class="list-new-button action-frame">
+      <composer-plus /><text class="list-new-button-label">新聊天</text>
+      <button class="action-hitbox" hover-class="action-pressed" aria-label="新聊天" :disabled="creatingConversation" @click="openNewConversation"></button>
+    </view>
+    <view v-else class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
+    <view class="list-safe-area"></view>
     <connection-editor v-if="editingComputer != null" :computer="editingComputer!" :anchor-left="connectionMenuLeft" :anchor-top="connectionMenuTop" :release-at="connectionReleaseAt" @release="finishComputerPress" @dismiss="closeComputerMenu" @busy="onConnectionEditorBusy" />
     <home-menu v-if="menuVisible" :sort="listSort" :recent-first="recentFirst" :computer-id="selectedComputerId" @dismiss="menuVisible = false" @sort="selectSort" @recent="toggleRecent" @connection="openMenuConnection" />
   </view>
@@ -67,7 +72,7 @@ import ConnectionEditor from '../../components/connection-editor/connection-edit
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
 import { groupThreads, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
 
-const props = withDefaults(defineProps<{ active: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean }>(), { selectedHostId: '', selectedThreadId: '', busy: false })
+const props = withDefaults(defineProps<{ active: boolean, wide?: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean }>(), { wide: false, selectedHostId: '', selectedThreadId: '', busy: false })
 const emit = defineEmits<{ open: [thread: ComputerThread], create: [hostId: string] }>()
 const paneShowCallbacks = [] as (() => void)[]
 const paneHideCallbacks = [] as (() => void)[]
@@ -257,6 +262,7 @@ function updatedLabel(value: number): string {
 function openConnection() { if (!creatingConversation.value) uni.navigateTo({ url: '/pages/connection/index' }) }
 // 列表与新建编辑区共用页面，保留搜索、列表节点及其滚动位置。
 function onThreadListScroll(event: UniScrollEvent) { if (!restoringThreadScroll) savedThreadScrollTop = event.detail.scrollTop }
+// 两种布局共用同一个新建入口，将当前筛选的电脑交给工作区。
 function openNewConversation() { emit('create', selectedComputerId.value) }
 // 只有首条消息确认发送成功后才进入现有会话页。
 // 刷新与重连只恢复读取，不自动提交任何会话指令。
@@ -362,5 +368,7 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .thread-question { margin-left: 8px; padding: 2px 7px; border-radius: 10px; background-color: #e4edfb; color: #285c49; font-size: 11px; line-height: 18px; flex-shrink: 0; }
 .list-new-entry { flex-shrink: 0; height: 46px; margin: 4px 16px 12px; padding: 0 14px; flex-direction: row; align-items: center; border-radius: 25px; background-color: #ffffff; border-width: 1px; border-style: solid; border-color: #e3e5dc; }
 .list-new-label { margin-left: 10px; font-size: 16px; color: #94998f; }
+.list-new-button { height: 46px; margin: 4px 16px 12px; padding: 0 14px; flex-direction: row; align-items: center; justify-content: center; border-radius: 14px; background-color: #e1ece4; }
+.list-new-button-label { margin-left: 8px; font-size: 16px; font-weight: bold; color: #202c28; }
 .list-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 </style>

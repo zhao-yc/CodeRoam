@@ -1,7 +1,7 @@
 <template>
   <view class="chat-workspace" :class="{ 'workspace-wide': wide }">
     <view v-show="wide || mode == 'list'" class="workspace-list" :style="{ width: wide ? '340px' : '100%' }">
-      <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="openNewConversation" />
+      <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :wide="wide" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="openNewConversation" />
     </view>
     <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
       <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
