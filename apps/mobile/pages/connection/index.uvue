@@ -10,6 +10,13 @@
         <view class="section"><browser-notification-setting /></view>
         <!-- #endif -->
         <message-sending-setting />
+        <view id="file-change-preferences" class="section">
+          <view class="notification-setting action-frame">
+            <view class="notification-copy"><text class="section-title">更改文件默认显示</text><text class="notification-description">设置聊天中「已更改文件」卡片的初始状态。</text></view>
+            <text class="notification-value">{{ fileChangesLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" />
+            <button class="action-hitbox" :aria-label="'更改文件默认显示，当前' + fileChangesLabel + '，点击选择'" hover-class="action-pressed" @click="chooseFileChangesDisplay"></button>
+          </view>
+        </view>
         <view id="connection-config" class="section"><text class="section-title">接入配置</text><text class="description">粘贴电脑生成的连接配置。</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands" /><text class="privacy-note">配置仅用于连接你的电脑，请勿分享给他人。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands" @click="importConfig">导入并连接</button><text class="hint">更换连接前，请先确认当前操作已完成。</text></view>
         <view v-if="connection.computers.length > 0" class="section"><text class="section-title">已授权的电脑</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame" ><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', computer.online ? 'online' : 'offline']"></view><text class="state">{{ computer.online ? '在线' : '离线' }}</text><view class="selected-mark"><app-icon v-if="computer.id == connection.hostId" name="check" :size="20" /></view><button class="action-hitbox" hover-class="action-pressed"  :aria-label="'切换到' + computer.label" @click="selectComputer(computer.id)"></button></view></view>
         <text v-if="connection.error.length > 0" class="pending-note">{{ connection.error }}</text>
@@ -29,6 +36,7 @@ import BrowserNotificationSetting from '../../components/browser-notification-se
 // #endif
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
 import { taskNotifications, setTaskNoticeDuration, taskNoticeDurationLabel } from '../../services/task-notifications.uts'
+import { fileChangePreferences, setFileChangesExpanded } from '../../services/file-change-preferences.uts'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 const pageVisible = ref(false)
@@ -37,6 +45,17 @@ onHide(() => { pageVisible.value = false })
 const configuration = ref('')
 const connectionAnchor = ref('')
 const noticeDurationLabel = computed((): string => taskNoticeDurationLabel(taskNotifications.durationMs))
+const fileChangesLabel = computed((): string => fileChangePreferences.expanded ? '展开' : '收起')
+
+// 显示偏好保存在当前客户端，返回聊天后立即按新选择显示。
+function chooseFileChangesDisplay() {
+  uni.hideKeyboard()
+  uni.showActionSheet({ itemList: ['展开', '收起'], success: (result) => {
+    if (result.tapIndex != 0 && result.tapIndex != 1) return
+    try { setFileChangesExpanded(result.tapIndex == 0) }
+    catch (error) { notify((error as Error).message) }
+  }, fail: (_) => {} })
+}
 // 通知偏好保存在当前设备，与电脑配对及任务审批独立。
 function chooseNoticeDuration() {
   uni.hideKeyboard()

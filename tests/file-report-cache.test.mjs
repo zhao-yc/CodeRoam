@@ -15,9 +15,10 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(storage=new Map()) {
   let time=0;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync:(key,value)=>storage.set(key,value),removeStorageSync:key=>storage.delete(key)};
-  const context=vm.createContext({uni,Date:{now:()=>++time}});
+  const context=vm.createContext({uni,reactive:value=>value,Date:{now:()=>++time}});
   vm.runInContext(stripTypeScriptTypes(source('file-report-cache'),{mode:'transform'})+';globalThis.api={readFileReportCache,saveFileReportCache,saveFileReportDetailCache,clearFileReportCache,retainFileReportCacheHosts};',context);
-  return {context,storage,uni,...context.api};
+  vm.runInContext(stripTypeScriptTypes(source('file-change-preferences'),{mode:'transform'})+';globalThis.preferences={fileChangePreferences,setFileChangesExpanded};',context);
+  return {context,storage,uni,...context.api,...context.preferences};
 }
 
 test('已读取的汇总和完整代码差异在重启后恢复，未读取文件不预取',()=>{
@@ -61,9 +62,31 @@ function component(kind,storage=new Map(),connected=true) {
   vm.runInContext(stripTypeScriptTypes(source('file-reports'),{mode:'transform'}),f.context);
   const name=kind==='summary'?'file-change-summary':'file-change-sheet';
   const code=fs.readFileSync('apps/mobile/components/'+name+'/'+name+'.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  vm.runInContext(stripTypeScriptTypes(code,{mode:'transform'})+';globalThis.ui='+ (kind==='summary'?'{report,error,load}':'{detailFor,errorFor,loadFile,loaded}')+';',f.context);mounts.forEach(fn=>fn());
+  vm.runInContext(stripTypeScriptTypes(code,{mode:'transform'})+';globalThis.ui='+ (kind==='summary'?'{report,error,load,expanded,toggleSummary}':'{detailFor,errorFor,loadFile,loaded}')+';',f.context);mounts.forEach(fn=>fn());
   return {...f,ui:f.context.ui,props,connection,watches,requests,unload:()=>unload()};
 }
+
+test('文件汇总沿用已保存的默认状态，手动展开不改偏好，换报告后恢复默认', async () => {
+  const f = fixture();
+  assert.equal(f.fileChangePreferences.expanded, true);
+  f.setFileChangesExpanded(false);
+  const card = component('summary', f.storage);
+  assert.equal(card.ui.expanded.value, false);
+  card.ui.toggleSummary();
+  card.requests[0].resolve(object({ report: report('updated') }));
+  await tick();
+  assert.equal(card.ui.expanded.value, true);
+  assert.equal(card.fileChangePreferences.expanded, false);
+
+  card.props.reportId = 'other-report';
+  card.watches[0].callback();
+  assert.equal(card.ui.expanded.value, false);
+  card.setFileChangesExpanded(true);
+  const preferenceWatch = card.watches.find(watch => watch.read.toString().includes('fileChangePreferences'));
+  preferenceWatch.callback(preferenceWatch.read());
+  assert.equal(card.ui.expanded.value, true);
+  assert.equal(component('summary', f.storage, false).ui.expanded.value, true);
+});
 
 test('卡片先恢复本地汇总，随后 PC 新版覆盖缓存；失败和断线不清空可读汇总',async()=>{
   const f=fixture();f.saveFileReportCache('pair','pc','thread','report',report());const c=component('summary',f.storage);

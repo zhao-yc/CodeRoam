@@ -16,13 +16,14 @@ import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { ChangedFile, FileReport } from '../../services/file-reports.uts'
 import { readFileReportCache, saveFileReportCache } from '../../services/file-report-cache.uts'
+import { fileChangePreferences } from '../../services/file-change-preferences.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 const props = defineProps<{ hostId: string, threadId: string, reportId: string, connected: boolean }>()
 const emit = defineEmits<{ (event: 'open', report: FileReport, fileId: string): void; (event: 'reading'): void; (event: 'beforelayout'): void; (event: 'layout'): void }>()
 const report = ref<FileReport | null>(null)
 const error = ref('')
 const loading = ref(false)
-const expanded = ref(true)
+const expanded = ref(fileChangePreferences.expanded)
 const preview = computed((): ChangedFile[] => report.value?.files.slice(0, 3) ?? [] as ChangedFile[])
 let requestVersion = 0
 let alive = true
@@ -46,11 +47,19 @@ function load() {
     nextTick(() => emit('layout'))
   }, (failure: Error) => { if (!alive || version != requestVersion || identity != cacheIdentity()) return; emit('beforelayout'); loading.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
 }
-function toggleSummary() { emit('reading'); emit('beforelayout'); expanded.value = !expanded.value; nextTick(() => emit('layout')) }
+// 切换展开状态前记录布局，避免文件行增减时打断原来的阅读位置。
+function setExpanded(value: boolean) {
+  if (value == expanded.value) return
+  emit('beforelayout')
+  expanded.value = value
+  nextTick(() => emit('layout'))
+}
+function toggleSummary() { emit('reading'); setExpanded(!expanded.value) }
 function open(fileId: string) { if (report.value == null) return; emit('reading'); emit('open', report.value!, fileId) }
 // 先恢复本地汇总；正文实时订阅就绪后仍后台读取最新版本。
-watch((): string => cacheIdentity(), () => { requestVersion++; loading.value = false; error.value = ''; expanded.value = true; const cached = readFileReportCache(connection.cacheNamespace, props.hostId, props.threadId, props.reportId); report.value = cached?.report ?? null; load() }, { immediate: true })
+watch((): string => cacheIdentity(), () => { requestVersion++; loading.value = false; error.value = ''; expanded.value = fileChangePreferences.expanded; const cached = readFileReportCache(connection.cacheNamespace, props.hostId, props.threadId, props.reportId); report.value = cached?.report ?? null; load() }, { immediate: true })
 watch((): boolean => props.connected, (connected: boolean) => { requestVersion++; loading.value = false; if (connected) load() })
+watch((): boolean => fileChangePreferences.expanded, (value: boolean) => { setExpanded(value) })
 onUnmounted(() => { alive = false; requestVersion++ })
 </script>
 <style>

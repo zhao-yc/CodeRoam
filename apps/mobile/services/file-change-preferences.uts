@@ -1,0 +1,19 @@
+import { reactive } from 'vue'
+
+type FileChangePreferences = { expanded: boolean }
+const storageKey = 'codex-mobile-file-changes-expanded'
+
+// 已有设备没有偏好时沿用展开，只有明确保存收起才改变默认显示。
+function readFileChangesExpanded(): boolean {
+  try { return uni.getStorageSync(storageKey) !== false }
+  catch (_) { return true }
+}
+
+export const fileChangePreferences = reactive<FileChangePreferences>({ expanded: readFileChangesExpanded() })
+
+// 存储成功后再通知界面，避免保存失败却显示成已生效。
+export function setFileChangesExpanded(expanded: boolean) {
+  try { uni.setStorageSync(storageKey, expanded) }
+  catch (_) { throw new Error('无法保存更改文件显示设置，请检查本地存储权限') }
+  fileChangePreferences.expanded = expanded
+}
