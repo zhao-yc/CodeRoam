@@ -92,7 +92,7 @@ test('读取图片必须已订阅对应会话，手机不能传文件路径或�
 
 test('手机保留明确的图片错误原因，重试时清除旧错误，离页回执不写入图片',async()=>{
   const source=fs.readFileSync('apps/mobile/components/message-images/message-images.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  const pending=[],unmount=[];const context=vm.createContext({ref:value=>({value}),defineProps:()=>({hostId:'host',threadId:'thread',messageId:'message',connected:true}),defineEmits:()=>()=>{},watch(){},onUnmounted:cb=>unmount.push(cb),bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))}});
+  const pending=[],unmount=[];const context=vm.createContext({connection:{hostId:'host',activeThreadId:'thread',cacheNamespace:''},ref:value=>({value}),defineProps:()=>({hostId:'host',threadId:'thread',messageId:'message',connected:true}),defineEmits:()=>()=>{},watch(){},onUnmounted:cb=>unmount.push(cb),bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.ui={loadImages,sources,error};',context);const ui=context.ui;
   ui.loadImages();pending.shift().reject(Error('电脑上的原图已不存在，请重新发送'));await Promise.resolve();assert.match(ui.error.value,/原图已不存在/);
   ui.loadImages();assert.equal(ui.error.value,'');unmount[0]();pending.shift().resolve({images:['synthetic-image']});await Promise.resolve();assert.equal(ui.sources.value.length,0);
