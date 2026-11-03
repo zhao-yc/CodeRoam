@@ -54,5 +54,27 @@ button::after { border: none; }
 .chat-workspace.workspace-wide .composer-panel .primary-action { border-radius: 8px; }
 .chat-workspace.workspace-wide .composer-panel { border-radius: 13px; }
 .chat-workspace.workspace-wide .message-user { border-radius: 13px 13px 4px 13px; }
+
+/* 靛蓝配色仅覆盖宽屏聊天列表，详情与新聊天编辑区沿用原配色。 */
+.chat-workspace.workspace-wide #home-page {
+  --list-ink: #1a2135;
+  --list-muted: #596479;
+  --list-line: #e5e8f1;
+  --list-accent: #4546bd;
+  --list-selection: #e7e9fd;
+  background-color: #f6f7fb;
+}
+.chat-workspace.workspace-wide #home-page :is(.list-title-text, .thread-title, .search-input, .empty-title) { color: var(--list-ink); }
+.chat-workspace.workspace-wide #home-page :is(.tab-label, .group-title, .thread-computer, .thread-project, .thread-time, .description) { color: var(--list-muted); }
+.chat-workspace.workspace-wide #home-page .search-field { background-color: #ffffff; border-color: var(--list-line); }
+.chat-workspace.workspace-wide #home-page .thread { border-bottom-color: var(--list-line); }
+.chat-workspace.workspace-wide #home-page .thread-selected { background-color: var(--list-selection); border-bottom-color: var(--list-selection); }
+.chat-workspace.workspace-wide #home-page :is(.computer-tab-selected, .button-secondary, .thread-question) { background-color: var(--list-selection); }
+.chat-workspace.workspace-wide #home-page :is(.computer-tab-selected .tab-label, .thread-question) { color: var(--list-accent); }
+.chat-workspace.workspace-wide #home-page :is(.list-new-button, .button-primary, .computer-unread-dot, .thread-status .unread-dot) { background-color: var(--list-accent); }
+.chat-workspace.workspace-wide #home-page :is(.computer-spinner, .thread-status .spinner) { border-color: var(--list-accent); }
+.chat-workspace.workspace-wide #home-page .list-new-button-label { color: #ffffff; }
+.chat-workspace.workspace-wide #home-page .list-new-button :is(.plus-horizontal, .plus-vertical) { background-color: #ffffff; }
+.chat-workspace.workspace-wide #home-page .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 /* #endif */
 </style>
