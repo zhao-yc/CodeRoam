@@ -41,3 +41,10 @@ export function submissionStateLabel(state: string): string {
   if (state == 'skipped') return '已人工跳过'
   return state
 }
+
+// 图标已表达通用结果，仍保留具体执行阶段和独立的错误原因。
+export function submissionStageDetail(task: SubmissionTask): string {
+  const stage = task.stage.trim()
+  if (stage == submissionStateLabel(task.state) || task.state == 'succeeded' && stage == '执行完成') return ''
+  return task.stage
+}

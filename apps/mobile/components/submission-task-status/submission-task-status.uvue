@@ -1,0 +1,22 @@
+<template>
+  <view class="submission-task-status" role="img" :aria-label="label" :title="label">
+    <loading v-if="state == 'running'" class="submission-status-spinner" />
+    <app-icon v-else :name="icon" :size="16" :tone="tone" />
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
+import { submissionStateLabel } from '../../services/submission-task-state.uts'
+const props = defineProps<{ state: string }>()
+// 使用形状区分状态，文字保留为无障碍名称和 Web 悬停提示。
+const label = computed((): string => submissionStateLabel(props.state))
+const icon = computed((): string => props.state == 'succeeded' ? 'check' : props.state == 'failed' ? 'alert-circle' : props.state == 'queued' ? 'clock' : props.state == 'waiting_resume' ? 'hand-stop' : props.state == 'canceled' || props.state == 'cancelled' ? 'close' : props.state == 'skipped' ? 'chevron-right' : 'alert-triangle')
+const tone = computed((): string => props.state == 'failed' || props.state == 'unknown' ? 'warning' : props.state == 'succeeded' ? 'dark' : 'muted')
+</script>
+
+<style>
+.submission-task-status { width: 18px; height: 20px; align-items: center; justify-content: center; flex-shrink: 0; }
+.submission-status-spinner { width: 14px; height: 14px; border-color: #4546bd; }
+</style>

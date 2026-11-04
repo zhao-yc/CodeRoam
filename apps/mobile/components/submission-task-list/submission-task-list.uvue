@@ -4,7 +4,7 @@
     <text v-if="pausedNames.length > 0" class="submission-paused">{{ pausedNames }}的队列已暂停，处理异常后继续</text>
     <scroll-view v-if="shownRows.length > 0" direction="vertical" class="submission-rows" :show-scrollbar="false" :style="{ maxHeight: expanded ? '280px' : '222px' }">
       <view v-for="row in shownRows" :key="row.hostId + ':' + row.task.id" class="submission-row">
-        <view class="submission-main" @click="openTask(row.hostId, row.task)"><text class="submission-row-title">{{ row.task.title.length > 0 ? row.task.title : taskTitle(row.task) }}</text><text class="submission-description">{{ hostName(row.hostId) }} · {{ row.task.localOnly == true ? '入队回执待核对' : '#' + row.task.position + ' · ' + stateLabel(row.task.state) }}</text><text v-if="row.task.stage.length > 0 && row.task.state != 'queued'" class="submission-stage">{{ row.task.stage }}</text><text v-if="row.task.error.length > 0" class="submission-error">{{ row.task.error }}</text></view>
+        <view class="submission-main" @click="openTask(row.hostId, row.task)"><text class="submission-row-title">{{ row.task.title.length > 0 ? row.task.title : taskTitle(row.task) }}</text><view class="submission-meta"><text class="submission-description">{{ hostName(row.hostId) }} · {{ row.task.localOnly == true ? '入队回执待核对' : '#' + row.task.position }}</text><submission-task-status :state="row.task.state" /></view><text v-if="row.task.state != 'queued' && stageDetail(row.task).length > 0" class="submission-stage">{{ stageDetail(row.task) }}</text><text v-if="row.task.error.length > 0" class="submission-error">{{ row.task.error }}</text></view>
         <view class="submission-actions">
           <button v-if="row.task.state == 'queued'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'cancel')">取消</button>
           <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'reconcile')">核对</button>
@@ -22,8 +22,9 @@
 
 <script setup lang="uts">
 import { computed, ref } from 'vue'
+import SubmissionTaskStatus from '../submission-task-status/submission-task-status.uvue'
 import { connection, Computer } from '../../services/bridge.uts'
-import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, submissionVisible, submissionStateLabel } from '../../services/submission-task-state.uts'
+import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, submissionVisible, submissionStageDetail } from '../../services/submission-task-state.uts'
 import { controlSubmissionTask, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
 type TaskRow = { hostId: string, task: SubmissionTask }
 const props = withDefaults(defineProps<{ hostId?: string }>(), { hostId: '' })
@@ -43,7 +44,7 @@ const rows = computed((): TaskRow[] => {
 const shownRows = computed((): TaskRow[] => expanded.value ? rows.value : rows.value.slice(0, 3))
 const pausedNames = computed((): string => instances.value.filter((instance: InstanceSubmissionTasks): boolean => instance.snapshot?.paused == true).map((instance: InstanceSubmissionTasks): string => hostName(instance.hostId)).join('、'))
 const hiddenBlockers = computed((): InstanceSubmissionTasks[] => instances.value.filter((instance: InstanceSubmissionTasks): boolean => instance.snapshot?.paused == true && !rows.value.some((row: TaskRow): boolean => row.hostId == instance.hostId && row.task.id == instance.snapshot!.blockerId)))
-function stateLabel(state: string): string { return submissionStateLabel(state) }
+function stageDetail(task: SubmissionTask): string { return submissionStageDetail(task) }
 function canResume(hostId: string, task: SubmissionTask): boolean { const snapshot = instances.value.find((instance: InstanceSubmissionTasks): boolean => instance.hostId == hostId)?.snapshot; return snapshot?.paused == true && snapshot.blockerId == task.id && ['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(task.state) >= 0 }
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
 function taskTitle(task: SubmissionTask): string { return task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }
@@ -70,6 +71,8 @@ function skip(hostId: string, task: SubmissionTask) {
 .submission-rows { flex-shrink: 1; }
 .submission-row { flex-direction: row; align-items: center; background-color: #f3f4ff; border-radius: 10px; margin-top: 5px; padding: 9px 10px; }
 .submission-main { flex: 1; min-width: 0; }
+.submission-meta { flex-direction: row; align-items: center; }
+.submission-meta .submission-task-status { margin-left: 6px; }
 .submission-row-title { color: #1a2135; font-size: 13px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .submission-description, .submission-stage { color: #596479; font-size: 11px; line-height: 17px; }
 .submission-actions { flex-shrink: 0; margin-left: 6px; max-width: 96px; }
