@@ -5,13 +5,14 @@ import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 
 // 执行页面脚本，模拟刷新时握手晚到以及离开页面后的电脑上线。
-function fixture(read = async () => ({ tasks: [], getNumber: () => 0 })) {
+function fixture(read = async () => ({ tasks: [], getNumber: () => 0 }), tick = async () => {}) {
   const page = fs.readFileSync('apps/mobile/pages/task-history/index.uvue', 'utf8');
   const source = page.split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\r?\n/gm, '');
   let changed, show, hide;
   const calls = [];
   const scope = vm.createContext({
     ref: value => ({ value }), computed: read => ({ get value() { return read(); } }),
+    nextTick: tick,
     watch: (read, callback) => { changed = callback; },
     onLoad: () => {}, onShow: callback => { show = callback; }, onHide: callback => { hide = callback; }, onUnload: () => {},
     connection: { connected: false, computers: [], cacheNamespace: 'synthetic' },
@@ -46,7 +47,8 @@ test('下拉刷新保留实例和状态筛选、重置分页，重复手势只�
   const page = f.scope.subject;
   page.hostId.value = 'synthetic-instance'; page.state.value = 'failed';
   page.cursors.value = [{ hostId: 'synthetic-instance', before: 123, more: false }];
-  page.refreshHistory(); page.refreshHistory();
+  const refresh = page.refreshHistory(); page.refreshHistory();
+  await refresh;
   assert.equal(page.refreshing.value, true);
   assert.deepEqual(f.calls, ['synthetic-instance']);
   assert.equal(query.id, 'synthetic-instance');
@@ -64,12 +66,12 @@ test('下拉刷新失败、离线和离开页面都能收起刷新状态', async
   const f = fixture(async () => { throw new Error('合成读取失败'); });
   f.scope.connection.connected = true;
   f.scope.connection.computers = [{ id: 'synthetic-instance', online: true }];
-  f.scope.subject.refreshHistory();
+  await f.scope.subject.refreshHistory();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.scope.subject.refreshing.value, false);
   assert.equal(f.scope.subject.error.value, '合成读取失败');
   f.scope.connection.connected = false;
-  f.scope.subject.refreshHistory();
+  await f.scope.subject.refreshHistory();
   assert.equal(f.scope.subject.refreshing.value, false);
   assert.equal(f.calls.at(-1), '恢复连接');
   f.scope.subject.refreshing.value = true;
@@ -82,7 +84,7 @@ test('旧刷新回执不能提前结束筛选切换后的新一轮刷新', async
   const f = fixture(() => new Promise(resolve => { pending.push(resolve); }));
   f.scope.connection.connected = true;
   f.scope.connection.computers = [{ id: 'synthetic-instance', online: true }];
-  f.scope.subject.refreshHistory();
+  await f.scope.subject.refreshHistory();
   f.scope.subject.state.value = 'failed'; f.scope.subject.reload();
   pending[0]({ tasks: [], getNumber: () => 0 });
   await new Promise(resolve => setImmediate(resolve));
@@ -90,4 +92,18 @@ test('旧刷新回执不能提前结束筛选切换后的新一轮刷新', async
   pending[1]({ tasks: [], getNumber: () => 0 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.scope.subject.refreshing.value, false);
+});
+
+test('未配对时先渲染刷新开始再结束；渲染期间离页则取消后续查询', async () => {
+  let render;
+  const f = fixture(undefined, () => new Promise(resolve => { render = resolve; }));
+  const pending = f.scope.subject.refreshHistory();
+  assert.equal(f.scope.subject.refreshing.value, true);
+  assert.deepEqual(f.calls, []);
+  render(); await pending;
+  assert.equal(f.scope.subject.refreshing.value, false);
+  assert.deepEqual(f.calls, ['恢复连接']);
+  const leaving = f.scope.subject.refreshHistory();
+  f.hide(); render(); await leaving;
+  assert.deepEqual(f.calls, ['恢复连接']);
 });

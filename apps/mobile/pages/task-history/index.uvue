@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="uts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import SubmissionTaskStatus from '../../components/submission-task-status/submission-task-status.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import { bridge, connection, Computer, ThreadSummary } from '../../services/bridge.uts'
@@ -123,9 +123,12 @@ async function loadMore() {
   finally { if (revision == request) { loading.value = false; refreshing.value = false } }
 }
 // 下拉刷新保留筛选条件并重置分页，重复手势不重复请求；结束状态由当前请求统一收起。
-function refreshHistory() {
+async function refreshHistory() {
   if (refreshing.value) return
   refreshing.value = true
+  // 先让控件收到开始状态，避免离线或无在线实例时同帧结束而无法收起下拉动画。
+  await nextTick()
+  if (!refreshing.value) return
   reload()
 }
 function reload() {
