@@ -147,6 +147,7 @@ onUnload(() => { request++ })
 .history-state { margin-left: 10px; }
 .history-chat-title { margin: 7px 0 0; padding: 0; border-width: 0; border-radius: 4px; background-color: transparent; font-size: 13px; line-height: 20px; color: #4546bd; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .history-chat-title::after { border-width: 0; }
+.history-chat-title.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 .history-chat-unavailable { color: #8590a4; }
 .history-meta, .history-stage, .history-step { margin-top: 5px; font-size: 12px; line-height: 19px; color: #596479; }
 .history-step { flex-direction: row; align-items: center; }
