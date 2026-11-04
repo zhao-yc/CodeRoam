@@ -30,6 +30,7 @@ function workerFixture() {
 function browserFixture({ permission = 'default', enabled, deferPermission = false, secure = true, supported = true, failed = false } = {}) {
   const events = {}, storage = new Map(), messages = [], transports = [], opened = [], visibility = [];
   if (enabled !== undefined) storage.set('codex-mobile-browser-notifications-enabled', enabled);
+  let reading = false;
   let focused = true, permissionRequests = 0, permissionResult = 'granted', resolvePermission;
   const Notification = { get permission() { return permission; }, async requestPermission() { permissionRequests++; if (deferPermission) await new Promise(resolve => { resolvePermission = resolve; }); permission = permissionResult; return permissionResult; } };
   const worker = { state: 'activated', postMessage(data, ports) { messages.push(data); ports[0].postMessage({ ok: !failed }); } };
@@ -41,22 +42,25 @@ function browserFixture({ permission = 'default', enabled, deferPermission = fal
   const code = fs.readFileSync('apps/mobile/services/browser-notifications.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replaceAll('export ', '');
   vm.runInContext(stripTypeScriptTypes(code, { mode: 'transform' }) + ';globalThis.api={browserNotifications,startBrowserNotifications,syncBrowserNotificationContext,enableBrowserNotifications,disableBrowserNotifications,deliverBrowserTaskNotice,testBrowserNotification,browserNotificationLabel};', context);
   const api = context.api;
-  api.startBrowserNotifications(value => opened.push(value), value => transports.push(value), value => visibility.push(value));
+  api.startBrowserNotifications(value => opened.push(value), value => transports.push(value), value => visibility.push(value), () => focused && reading);
   api.syncBrowserNotificationContext('synthetic-pair', [JSON.stringify(['host', 'generation'])]);
-  return { ...api, events, storage, messages, transports, opened, visibility, get permissionRequests() { return permissionRequests; }, resolvePermission: () => resolvePermission(), setPermission: value => { permission = value; }, setPermissionResult: value => { permissionResult = value; }, background() { focused = false; events.blur(); }, foreground() { focused = true; events.focus(); } };
+  return { ...api, setReading(value) { reading = value; }, events, storage, messages, transports, opened, visibility, get permissionRequests() { return permissionRequests; }, resolvePermission: () => resolvePermission(), setPermission: value => { permission = value; }, setPermissionResult: value => { permissionResult = value; }, background() { focused = false; events.blur(); }, foreground() { focused = true; events.focus(); } };
 }
 
-test('手动允许后就绪，前台不投递，后台五类事件均投递且仅带标题', async () => {
+test('对应聊天不投递，其他页面及后台五类事件均投递且仅带标题', async () => {
   const f = browserFixture(); assert.equal(f.permissionRequests, 0); assert.equal(f.browserNotificationLabel(), '未授权');
   await f.enableBrowserNotifications(); assert.equal(f.browserNotifications.ready, true); assert.equal(f.transports.at(-1), true);
+  f.setReading(true);
   await f.deliverBrowserTaskNotice(notice('completed')); assert.equal(f.messages.length, 0);
-  f.background();
+  f.setReading(false);
+  await f.deliverBrowserTaskNotice(notice('completed')); assert.equal(f.messages.length, 1);
+  f.setReading(true); f.background();
   for (const kind of ['completed', 'failed', 'question', 'approval', 'plan']) await f.deliverBrowserTaskNotice(notice(kind));
-  assert.equal(f.messages.length, 5); assert.equal(f.messages[0].body, '合成测试聊天');
+  assert.equal(f.messages.length, 6); assert.equal(f.messages[0].body, '合成测试聊天');
   assert.deepEqual(Object.keys(f.messages[0]).sort(), ['body', 'tag', 'test', 'title', 'type']);
   assert.ok(f.messages.every(message => /^codex-mobile-task-[a-f0-9]{64}$/.test(message.tag)));
   assert.equal(JSON.stringify(f.messages).includes('synthetic-pair'), false);
-  f.foreground(); assert.equal(f.messages.length, 5, '回前台不重放');
+  f.foreground(); assert.equal(f.messages.length, 6, '回前台不重放');
 });
 
 test('页面加载、焦点切换及普通操作均不申请权限', async () => {
@@ -110,10 +114,10 @@ test('实例和配对切换清除映射，只有有效通知点击交给现有�
   f.syncBrowserNotificationContext('other-pair', [JSON.stringify(['host', 'generation'])]); click(); assert.equal(replies.at(-1).handled, false);
 });
 
-test('Worker 在任一前台应用窗口存在时抑制系统通知，显式测试允许前台显示', async () => {
+test('Worker 不按全站前台拦截，正常通知与显式测试均可显示', async () => {
   const f = workerFixture(); f.windows.push({ id: 'other', url: f.source.url, focused: true, visibilityState: 'visible' });
-  await f.send({ type: 'codex-notice-show', tag, title: '合成通知', body: '合成聊天' }); assert.equal(f.notifications.length, 0);
-  await f.send({ type: 'codex-notice-show', tag: 'codex-mobile-test-00000000-0000-4000-8000-000000000000', title: '合成测试', body: '合成测试', test: true }); assert.equal(f.notifications.length, 1);
+  await f.send({ type: 'codex-notice-show', tag, title: '合成通知', body: '合成聊天' }); assert.equal(f.notifications.length, 1);
+  await f.send({ type: 'codex-notice-show', tag: 'codex-mobile-test-00000000-0000-4000-8000-000000000000', title: '合成测试', body: '合成测试', test: true }); assert.equal(f.notifications.length, 2);
 });
 
 test('Worker 并发多标签仅显示一次，手动关闭后同一运行期也不重复提示', async () => {
@@ -162,4 +166,29 @@ test('只有已授权通知允许后台连接，心跳和重连门禁一致，�
   bridge.scheduleReconnect(); assert.equal(timers.length, 1); timers.pop()(); assert.equal(connected, 2);
   bridge.setBackgroundNotifications(false); assert.equal(disconnected, 2); assert.equal(bridge.shouldMaintainConnection(), false);
   bridge.scheduleReconnect(); assert.equal(timers.length, 0);
+});
+
+/** 执行真实页面登记入口，核对同号聊天的电脑隔离、后台状态和迟到清理。 */
+test('系统通知仅抑制前台对应电脑的当前聊天，页面退出后恢复', () => {
+  const source = ['task-notification-state.uts', 'task-notifications.uts'].map(file => fs.readFileSync('apps/mobile/services/' + file, 'utf8').replace(/^import .*\r?\n/gm, '').replaceAll('export ', '')).join('\n');
+  const context = vm.createContext({ reactive: value => value, clearTimeout, setTimeout });
+  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + ';globalThis.api={showTaskNoticeThread,hideTaskNoticeThread,setTaskNoticeForeground,isTaskNoticeThreadVisible};', context);
+  const api = context.api, event = notice('completed');
+  assert.equal(api.isTaskNoticeThreadVisible(event), false);
+  const old = api.showTaskNoticeThread('host', 'thread');
+  assert.equal(api.isTaskNoticeThreadVisible(event), true);
+  assert.equal(api.isTaskNoticeThreadVisible({ ...event, hostId: 'other-host' }), false);
+  assert.equal(api.isTaskNoticeThreadVisible({ ...event, threadId: 'other-thread' }), false);
+  api.setTaskNoticeForeground(false); assert.equal(api.isTaskNoticeThreadVisible(event), false);
+  api.setTaskNoticeForeground(true); assert.equal(api.isTaskNoticeThreadVisible(event), true);
+  const current = api.showTaskNoticeThread('host', 'thread');
+  api.hideTaskNoticeThread(old); assert.equal(api.isTaskNoticeThreadVisible(event), true);
+  api.hideTaskNoticeThread(current); assert.equal(api.isTaskNoticeThreadVisible(event), false);
+});
+
+test('通知摘要计算期间进入对应聊天，迟到投递会被抑制', async () => {
+  const f = browserFixture(); await f.enableBrowserNotifications();
+  const delivery = f.deliverBrowserTaskNotice(notice('completed'));
+  f.setReading(true); await delivery;
+  assert.equal(f.messages.length, 0);
 });

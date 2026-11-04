@@ -17,6 +17,7 @@ let hosts = [] as string[]
 let openNotice: ((notice: TaskNotice) => void) | null = null
 let keepAlive: ((allowed: boolean) => void) | null = null
 let visibility: ((active: boolean) => void) | null = null
+let readingNotice: ((notice: TaskNotice) => boolean) | null = null
 
 // 前台必须同时可见且拥有焦点，覆盖切换标签页以及切换桌面应用两种场景。
 function isForeground(): boolean { return document.visibilityState == 'visible' && document.hasFocus() }
@@ -85,9 +86,9 @@ function closeTags(tags: string[]) {
 function clearRecords() { const tags = Array.from(records.keys()); records.clear(); closeTags(tags) }
 
 // 点击映射留在页面内存；Worker 及通知持久化数据只保留不透明票据和来源窗口编号。
-export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, onKeepAlive: (allowed: boolean) => void, onVisibility: (active: boolean) => void) {
+export function startBrowserNotifications(onOpen: (notice: TaskNotice) => void, onKeepAlive: (allowed: boolean) => void, onVisibility: (active: boolean) => void, isReadingNotice: (notice: TaskNotice) => boolean) {
   if (installed) return
-  installed = true; openNotice = onOpen; keepAlive = onKeepAlive; visibility = onVisibility
+  installed = true; openNotice = onOpen; keepAlive = onKeepAlive; visibility = onVisibility; readingNotice = isReadingNotice
   try { const saved = uni.getStorageSync(preferenceKey); browserNotifications.enabled = saved == true; explicitlyDisabled = saved === false } catch (_) {}
   const refreshed = () => {
     refreshCapability()
@@ -161,10 +162,10 @@ async function eventTag(value: string): Promise<string> {
 
 export async function deliverBrowserTaskNotice(notice: TaskNotice) {
   refreshCapability()
-  if (!browserNotifications.enabled || !browserNotifications.ready || browserNotifications.permission != 'granted' || browserNotifications.foreground || namespace.length == 0) return
+  if (!browserNotifications.enabled || !browserNotifications.ready || browserNotifications.permission != 'granted' || readingNotice?.(notice) == true || namespace.length == 0) return
   const expected = revision, currentNamespace = namespace
   const tag = await eventTag(JSON.stringify([currentNamespace, notice.key]))
-  if (expected != revision || isForeground() || !browserNotifications.ready || hosts.indexOf(JSON.stringify([notice.hostId, notice.generation])) < 0) return
+  if (expected != revision || readingNotice?.(notice) == true || !browserNotifications.ready || hosts.indexOf(JSON.stringify([notice.hostId, notice.generation])) < 0) return
   records.set(tag, { notice, namespace: currentNamespace } as BrowserNoticeRecord)
   if (records.size > 256) { const first = records.keys().next().value; if (first != null) records.delete(first) }
   try { await workerRequest({ type: 'codex-notice-show', tag, title: taskNoticeTitle(notice.kind), body: notice.threadTitle, test: false }) }
@@ -175,7 +176,7 @@ export async function deliverBrowserTaskNotice(notice: TaskNotice) {
 export async function testBrowserNotification() {
   refreshCapability()
   if (!browserNotifications.enabled || !browserNotifications.ready || browserNotifications.permission != 'granted') throw new Error('请先开启浏览器通知并允许权限')
-  await workerRequest({ type: 'codex-notice-show', tag: 'codex-mobile-test-' + crypto.randomUUID(), title: '掌上 Codex 通知测试', body: '浏览器通知已就绪，切到后台后可接收任务提醒。', test: true })
+  await workerRequest({ type: 'codex-notice-show', tag: 'codex-mobile-test-' + crypto.randomUUID(), title: '掌上 Codex 通知测试', body: '浏览器通知已就绪，查看其他页面时也可接收任务提醒。', test: true })
 }
 
 export function browserNotificationLabel(): string {

@@ -19,8 +19,7 @@ self.addEventListener('message', event => {
       return;
     }
     if (data?.type !== 'codex-notice-show' || typeof data.tag !== 'string' || !/^codex-mobile-(task-[a-f0-9]{64}|test-[a-f0-9-]{36})$/.test(data.tag) || typeof data.title !== 'string' || typeof data.body !== 'string') throw Error('通知参数无效');
-    const windows = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).filter(belongs);
-    if (!data.test && windows.some(client => client.visibilityState === 'visible' && client.focused)) return;
+    // 对应聊天是否正在阅读由页面生命周期判断，不按整个站点前台状态拦截。
     if (seen.has(data.tag) || (await self.registration.getNotifications({ tag: data.tag })).length) return;
     await self.registration.showNotification(data.title.slice(0, 100), {
       body: data.body.slice(0, 200), tag: data.tag, renotify: false,

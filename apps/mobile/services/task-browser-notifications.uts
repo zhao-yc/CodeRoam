@@ -1,7 +1,7 @@
 import { watch } from 'vue'
 import { bridge, connection, Computer } from './bridge.uts'
 import { TaskNotice } from './task-notification-state.uts'
-import { bindTaskNoticeDelivery, setTaskNoticeForeground, openTaskNoticeFromBrowser } from './task-notifications.uts'
+import { bindTaskNoticeDelivery, setTaskNoticeForeground, openTaskNoticeFromBrowser, isTaskNoticeThreadVisible } from './task-notifications.uts'
 import { startBrowserNotifications, deliverBrowserTaskNotice, syncBrowserNotificationContext } from './browser-notifications.uts'
 
 let pending: TaskNotice | null = null
@@ -24,7 +24,7 @@ export function startTaskBrowserNotifications() {
   startBrowserNotifications((notice: TaskNotice) => {
     pending = notice; pendingNamespace = connection.cacheNamespace
     bridge.resume(); openPendingNotice()
-  }, (allowed: boolean) => { bridge.setBackgroundNotifications(allowed) }, (active: boolean) => { setTaskNoticeForeground(active) })
+  }, (allowed: boolean) => { bridge.setBackgroundNotifications(allowed) }, (active: boolean) => { setTaskNoticeForeground(active) }, isTaskNoticeThreadVisible)
   bindTaskNoticeDelivery((notice: TaskNotice) => { deliverBrowserTaskNotice(notice).catch((_: Error) => {}) })
   watch((): string => connection.cacheNamespace + ':' + connection.configured + ':' + connection.connected + ':' + JSON.stringify(connection.computers.map((computer: Computer): string => JSON.stringify([computer.id, computer.instanceGeneration ?? '']))), () => {
     syncBrowserNotificationContext(connection.configured ? connection.cacheNamespace : '', connection.computers.map((computer: Computer): string => JSON.stringify([computer.id, computer.instanceGeneration ?? ''])))

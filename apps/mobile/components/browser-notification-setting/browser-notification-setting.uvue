@@ -19,7 +19,7 @@ const status = computed((): string => browserNotificationLabel())
 const canEnable = computed((): boolean => browserNotifications.supported && browserNotifications.permission != 'denied' && !browserNotifications.enabled)
 const canRetry = computed((): boolean => browserNotifications.supported && browserNotifications.permission != 'denied' && browserNotifications.enabled && !browserNotifications.ready && noticeAction.value != 'enable')
 // 权限拒绝时提供可操作的站点设置说明，不展示无法完成的授权按钮。
-const description = computed((): string => browserNotifications.permission == 'denied' ? '请在浏览器的站点设置中允许通知，再返回此页开启。' : browserNotifications.error.length > 0 ? browserNotifications.error : '切到其他标签页或应用后提醒。网页需保持运行，关闭或被系统挂起后可能无法送达。')
+const description = computed((): string => browserNotifications.permission == 'denied' ? '请在浏览器的站点设置中允许通知，再返回此页开启。' : browserNotifications.error.length > 0 ? browserNotifications.error : '正在查看对应聊天时不提醒，其他页面允许系统通知。网页需保持运行，关闭或被系统挂起后可能无法送达。')
 // 由设置按钮的点击发起权限申请。
 function enable() { applyEnable('enable') }
 function reenable() { applyEnable('retry') }

@@ -9,6 +9,8 @@ const center = new TaskNotificationCenter()
 let noticeDelivery: ((notice: TaskNotice) => void) | null = null
 
 // 系统通知消费新事件，不依赖页面卡片时长、排队和当前聊天抑制。
+// 系统通知仅抑制前台正在阅读的对应聊天，不能按整个站点的前台状态拦截。
+export function isTaskNoticeThreadVisible(notice: TaskNotice): boolean { return center.canPresentNotices && center.visibleHostId == notice.hostId && center.visibleThreadId == notice.threadId }
 export function bindTaskNoticeDelivery(deliver: (notice: TaskNotice) => void) { noticeDelivery = deliver }
 export function setTaskNoticeForeground(active: boolean) { center.setPresentationActive(active); publishNotice() }
 export function openTaskNoticeFromBrowser(notice: TaskNotice) { openTaskNotice(notice, center.visibleHostId, center.visibleThreadId) }
