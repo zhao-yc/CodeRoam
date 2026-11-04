@@ -27,7 +27,15 @@ const emit = defineEmits<{ select: [mode: string, confirmed: boolean, revision: 
 const manualRetry = ref(false), pendingMode = ref('')
 const pendingPermissionCommand = ref(''), pendingQueued = ref(false)
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
-const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
+const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeightLimit = ref(390)
+// 行高与下方样式保持一致，按可见内容收紧面板；超出小屏可用高度时仍可滚动。
+const panelHeight = computed((): number => {
+  let height = loading.value && !manualRetry.value ? 40 : (state.value?.options?.length ?? 0) * 64
+  if (props.threadId.length > 0 && activeTurn.value) height += 60
+  if (pendingQueued.value || (busy.value && pendingMode.value.length == 0)) height += 40
+  if (error.value.length > 0 || manualRetry.value) height += 100
+  return Math.min(panelHeightLimit.value, height)
+})
 let alive = true, request = 0
 // 新建权限不依赖已有会话订阅；展开、联网及电脑在线状态均参与请求失效判断。
 const isNative = computed((): boolean => props.nativeDraft == true || (props.draftId ?? '').length > 0 || props.nativeState != null)
@@ -73,7 +81,7 @@ function openMenu() {
   panelWidth.value = Math.min(340, width - 28)
   panelLeft.value = Math.max(14, Math.min((rect?.left ?? props.paneLeft + 14) - props.paneLeft, width - panelWidth.value - 14))
   panelBottom.value = Math.max(12, info.windowHeight - (rect?.top ?? info.windowHeight - 110) + 8)
-  panelHeight.value = Math.max(100, Math.min(390, info.windowHeight - panelBottom.value - 100))
+  panelHeightLimit.value = Math.max(100, Math.min(390, info.windowHeight - panelBottom.value - 100))
   opened.value = true
   // 新建菜单复用自动加载的结果；已有会话仍在打开菜单时刷新权限版本。
   if (isNative.value) state.value = props.nativeState
@@ -130,16 +138,16 @@ onUnmounted(() => { emit('visibility', false); alive = false; request++; if (bus
 .permission-trigger { position: relative; width: 38px; height: 44px; padding: 0; margin: 0; background-color: transparent; align-items: center; justify-content: center; }
 .permission-trigger-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
 .permission-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 250; background-color: rgba(0,0,0,0.12); }
-.permission-panel { position: absolute; border-radius: 22px; padding: 8px; background-color: #ffffff; border-width: 1px; border-color: #e5e8f1; }
-.permission-heading { height: 42px; flex-direction: row; align-items: center; padding-left: 12px; }
+.permission-panel { position: absolute; border-radius: 16px; padding: 6px; background-color: #ffffff; border-width: 1px; border-color: #e5e8f1; }
+.permission-heading { height: 36px; flex-direction: row; align-items: center; padding-left: 10px; }
 .permission-title { flex: 1; font-size: 14px; color: #596479; }
 .permission-close { position: relative; width: 38px; height: 38px; align-items: center; justify-content: center; }
 .permission-close-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; padding: 0; margin: 0; background-color: transparent; }
-.permission-row { position: relative; min-height: 76px; flex-direction: row; align-items: center; padding: 10px 8px; }
-.permission-symbol { width: 36px; height: 32px; flex-shrink: 0; justify-content: center; }
+.permission-row { position: relative; min-height: 64px; flex-direction: row; align-items: center; padding: 8px; }
+.permission-symbol { width: 32px; height: 28px; flex-shrink: 0; justify-content: center; }
 .permission-copy { flex: 1; }
-.permission-name { font-size: 17px; color: #1a2135; line-height: 26px; }
-.permission-description { font-size: 13px; line-height: 21px; color: #596479; }
+.permission-name { font-size: 16px; color: #1a2135; line-height: 23px; }
+.permission-description { font-size: 13px; line-height: 19px; color: #596479; }
 .permission-queued { font-size: 12px; color: #4546bd; margin-left: 8px; }
 .permission-spinner { width: 16px; height: 16px; border-color: #4546bd; }
 .permission-check { width: 24px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center; }
