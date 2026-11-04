@@ -49,3 +49,26 @@ test('大列表首批跨组保留原顺序与键，补齐时保持完整分组',
   assert.equal(first[0],groups[0]);assert.equal(groups[1].threads.length,20);
   assert.equal(s.limitThreadGroups(groups,-1),groups);assert.equal(groups.flatMap(group=>group.threads).length,150);
 });
+
+test('执行中按开始顺序固定，交替输出、筛选、等待交互和短暂离线不改变顺序',()=>{
+  const s=subject();
+  const a=row('a','',10,{status:'active',activeTurnId:'ta'}),b=row('b','',20,{status:'active',activeTurnId:'tb'});
+  const running=rows=>plain(s.groupThreads(rows,'priority',false,[],0).find(g=>g.key==='priority:1')?.threads.map(t=>t.id)??[]);
+  assert.deepEqual(running([b,a]),['a','b']);
+  a.updatedAt=90;assert.deepEqual(running([a,b]),['a','b']);
+  b.updatedAt=100;assert.deepEqual(running([b,a]),['a','b']);
+  running([b]);assert.deepEqual(running([a,b]),['a','b']);
+  running([{...a,approvalCount:1},b]);assert.deepEqual(running([a,b]),['a','b']);
+  running([{...a,online:false},b]);assert.deepEqual(running([a,b]),['a','b']);
+  assert.deepEqual(running([{...a,activeTurnId:'ta2',updatedAt:110},b]),['b','a']);
+});
+
+test('执行结束清理开始时间，同时间稳定排序，迟到轮次标识不重置位置',()=>{
+  const s=subject(),a=row('a','',10,{status:'active'}),b=row('b','',10,{status:'active',activeTurnId:'tb'});
+  const running=rows=>plain(s.groupThreads(rows,'priority',false,[],0).find(g=>g.key==='priority:1')?.threads.map(t=>t.id)??[]);
+  assert.deepEqual(running([b,a]),['a','b']);
+  assert.deepEqual(running([{...a,activeTurnId:'ta',updatedAt:20},b]),['a','b']);
+  running([{...a,status:'idle'},b]);
+  assert.deepEqual(running([{...a,activeTurnId:'ta2',updatedAt:30},b]),['b','a']);
+  assert.deepEqual(plain(s.groupThreads([{...a,updatedAt:40},b],'time',false,[],0)[0].threads.map(t=>t.id)),['a','b']);
+});

@@ -37,6 +37,25 @@ function priority(thread: ComputerThread): number {
 
 type ThreadProject = { key: string, path: string, name: string }
 
+type RunningOrder = { turnId: string, startedAt: number }
+const runningOrder = new Map<string, RunningOrder>()
+
+// 同一轮执行只记录一次排序时间，等待交互或短暂离线不重置；新轮次重新记录。
+function rememberRunningOrder(thread: ComputerThread) {
+  const activeTurnId = thread.activeTurnId ?? ''
+  const turnId = activeTurnId.length > 0 ? activeTurnId : thread.latestTurn?.turnId ?? ''
+  const previous = runningOrder.get(thread.key)
+  if (!thread.online) return
+  const rank = priority(thread)
+  if (rank > 1) { runningOrder.delete(thread.key); return }
+  if (previous != null && (turnId.length == 0 || previous.turnId.length == 0 || previous.turnId == turnId)) {
+    if (turnId.length > 0) previous.turnId = turnId
+    return
+  }
+  // 旧桌面协议没有轮次开始时间，使用首次收到执行状态时的索引时间并冻结。
+  runningOrder.set(thread.key, { turnId, startedAt: thread.updatedAt } as RunningOrder)
+}
+
 // 每个项目路径只归一化一次，用末级名称索引查找跨电脑、跨路径重名。
 function threadProject(thread: ComputerThread): ThreadProject {
   let path = thread.cwd.split('\\').join('/')
@@ -47,6 +66,7 @@ function threadProject(thread: ComputerThread): ThreadProject {
 
 // 保留完整规范路径作分组键；末级名称相同的不同路径、不同电脑不会误合并。
 export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: boolean, recent: RecentThread[], dayStart: number): ThreadGroup[] {
+  rows.forEach((thread: ComputerThread) => { rememberRunningOrder(thread) })
   const threads = rows.slice().sort((left: ComputerThread, right: ComputerThread): number => {
     const timeOrder = right.updatedAt - left.updatedAt
     // UTS 的逻辑条件需要布尔值，同一时间的聊天按原键排序。
@@ -97,6 +117,16 @@ export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: 
     if (group == null) { group = { key, title, threads: [] as ComputerThread[] } as ThreadGroup; groups.set(key, group); result.push(group) }
     group.threads.push(thread)
   })
-  if (sort == 'priority') result.sort((left: ThreadGroup, right: ThreadGroup): number => left.key == 'recent' ? -1 : right.key == 'recent' ? 1 : left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
+  if (sort == 'priority') {
+    // 执行中按开始顺序排列，正文和索引更新时间变化不再改变位置。
+    result.forEach((group: ThreadGroup) => {
+      if (group.key != 'priority:1') return
+      group.threads.sort((left: ComputerThread, right: ComputerThread): number => {
+        const difference = (runningOrder.get(left.key)?.startedAt ?? left.updatedAt) - (runningOrder.get(right.key)?.startedAt ?? right.updatedAt)
+        return difference != 0 ? difference : left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+      })
+    })
+    result.sort((left: ThreadGroup, right: ThreadGroup): number => left.key == 'recent' ? -1 : right.key == 'recent' ? 1 : left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
+  }
   return result
 }
