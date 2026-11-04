@@ -16,7 +16,7 @@
       <view v-if="liquidGlass" class="icon-button glass-header-action"><liquid-glass-control symbol="ellipsis" label="聊天菜单" @activate="showActions" /></view>
       <view v-else class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
-    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><view v-if="(!autoConnectPending && !activating) || activationSource == 'continue'" class="continue-button button-secondary inline-progress-button"><action-progress :busy="activationSource == 'continue'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">重新连接</text><button class="inline-progress-hitbox" :disabled="!connection.connected || connection.pendingCommandId.length > 0 || (activationSource == 'continue')" @click="continueConversation(true)" :aria-label="(activationSource == 'continue') ? '正在连接聊天' : '重新连接'"></button></view></view>
+    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text></view>
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
     <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><view class="check button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'check-retry'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">核对重试结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || busy || (pendingAction == 'check-retry')" @click="checkRetryOutcome" :aria-label="(pendingAction == 'check-retry') ? '正在核对重试结果' : '核对重试结果'"></button></view></view>
@@ -324,7 +324,6 @@ let refreshRevision = 0
 const activating = ref(false)
 const activationSource = ref('')
 const retryingFileIds = ref<string[]>([])
-const autoConnectPending = ref(false)
 let activationRequest = 0
 const actionsVisible = ref(false)
 const following = ref(true)
@@ -490,10 +489,10 @@ const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
 const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - 360)))
 const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '操作正在提交，请稍候。' : '')
 const conversationConnectionHint = computed((): string => {
-  if (activating.value) return '正在连接聊天…'
-  if (connection.pendingCommandId.length > 0) return autoConnectPending.value ? '操作提交结束后将自动连接此聊天。' : '操作正在提交，请稍后重新连接。'
-  if (!connection.connected) return autoConnectPending.value ? '连接恢复后将自动连接此聊天。' : '连接恢复后可重新连接此聊天。'
-  return autoConnectPending.value ? '正在等待电脑连接此聊天…' : '聊天连接未完成，历史内容和草稿已保留。'
+  if (activating.value) return '正在同步聊天…'
+  if (connection.pendingCommandId.length > 0) return '操作正在提交，请稍后从右上角菜单重新同步。'
+  if (!connection.connected) return '连接恢复后可从右上角菜单重新同步，历史内容和草稿已保留。'
+  return '当前为历史浏览；需要继续操作时，请从右上角菜单重新同步。'
 })
 const openingTitle = computed((): string => conversationOpeningTitle(connection.snapshot != null, detailError.value, connection.connected))
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
@@ -584,8 +583,19 @@ function notify(message: string) { uni.showToast({ title: message, icon: 'none' 
 // 原页面卸载后仍结算提交记录，但异步回执不再修改首页提示或重新同步。
 function showActions() { dismissGoal(); closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
-// 重试仅恢复电脑导航，草稿不会被发送。
-function retryDesktopOpen() { if (!isCurrentPage() || activating.value) return; activating.value = true; activationSource.value = 'desktop'; bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => { if (isCurrentPage()) { activating.value = false; activationSource.value = '' } }, (_: Error) => { if (isCurrentPage()) { activating.value = false; activationSource.value = '' } }) }
+// 只有明确同步才加载桌面聊天；重复点击和迟到回执不能影响新的页面。
+function retryDesktopOpen() {
+  if (!isCurrentPage() || !pageVisible.value || activating.value || !connection.connected || !goalHostOnline.value || connection.pendingCommandId.length > 0) return
+  const request = ++activationRequest
+  activating.value = true; activationSource.value = 'desktop'; operationError.value = ''
+  bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => {
+    if (request != activationRequest || !isCurrentPage()) return
+    activating.value = false; activationSource.value = ''
+  }, (error: Error) => {
+    if (request != activationRequest || !isCurrentPage()) return
+    activating.value = false; activationSource.value = ''; operationError.value = error.message
+  })
+}
 // 只标记用户点击的同步入口，回执交给现有会话订阅处理。
 async function refreshButton(source: string) {
   if (refreshSource.value.length > 0) return
@@ -602,10 +612,13 @@ async function refreshButton(source: string) {
 }
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { refreshRevision++; refreshSource.value = '' })
 watch((): boolean => reconnecting.value, (pending: boolean) => { if (!pending) refreshSource.value = '' })
-// 手动同步沿用当前订阅，保持正文区域稳定。
+// 菜单同步是显式桌面加载入口；断线恢复不排队重放导航意图。
 function refreshFromMenu() {
   closeActions()
-  refresh(); notify('正在同步聊天')
+  if (!connection.connected) { bridge.resume(); notify('正在恢复连接，连接后请再次重新同步'); return }
+  if (!goalHostOnline.value) { notify('电脑离线，请待电脑在线后重新同步'); return }
+  if (connection.pendingCommandId.length > 0) { notify('操作正在提交，请稍后重新同步'); return }
+  retryDesktopOpen()
 }
 // 取消只收起编辑区，重新进入时保留尚未发送的意见。
 function editPlan() { if (!busy.value && canWrite.value) planEditing.value = true }
@@ -625,31 +638,6 @@ function replyPlan(action: string) {
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && pendingPlan.value?.id == planId) { hiddenPlanId.value = planId; planFeedback.value = ''; planEditing.value = false; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
   }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
 }
-// 打开只读会话即表示请求加载；仅取得真实快照，不发送草稿或其他任务指令。
-function continueConversation(manual: boolean = false) {
-  if (!isCurrentPage() || !pageVisible.value || !readOnly.value || connection.snapshot?.threadId != pageThreadId.value || activating.value || !connection.connected || connection.pendingCommandId.length > 0) return
-  if (!connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)) return
-  autoConnectPending.value = false
-  activating.value = true; activationSource.value = manual ? 'continue' : ''
-  operationError.value = ''
-  const request = ++activationRequest
-  bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => {
-    if (request != activationRequest || !isCurrentPage()) return
-    activating.value = false; activationSource.value = ''
-  }, (error: Error) => {
-    if (request != activationRequest || !isCurrentPage()) return
-    activating.value = false; activationSource.value = ''; operationError.value = error.message
-  })
-}
-// 每次进入页面只自动尝试一次；实时会话取消意图，后台恢复和失败不循环导航电脑。
-function tryAutoConnectConversation() {
-  if (!autoConnectPending.value || !pageVisible.value || !isCurrentPage() || connection.snapshot?.threadId != pageThreadId.value) return
-  if (bridge.syncingThread == pageThreadId.value) return
-  if (!readOnly.value) { autoConnectPending.value = false; return }
-  continueConversation()
-}
-// 在方法声明后注册监听，兼容 Android UTS；离线或提交中保留本次打开意图。
-watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + connection.hostId + ':' + connection.activeThreadId + ':' + connection.epoch + ':' + connection.sequence + ':' + (connection.snapshot?.threadId ?? '') + ':' + readOnly.value + ':' + connection.connected + ':' + connection.pendingCommandId + ':' + pageVisible.value + ':' + connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online), () => { tryAutoConnectConversation() }, { immediate: true })
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
 function copyLatestReply() { closeActions(); const messages = displayConversation.value?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(presentConversationMessages([messages[index]])[0].text); return } }; notify('还没有可复制的回复') }
 function showConversationInfo() { closeActions(); uni.showModal({ title: '聊天信息', content: displayTitle.value + '\n\n电脑：' + hostName.value + '\n项目：' + (displayConversation.value?.cwd ?? '') + '\n连接：' + (showingPreview.value ? syncHint.value : connection.status), showCancel: false, confirmText: '知道了' }) }
@@ -968,7 +956,7 @@ onMounted(() => {
   baseWindowHeight = uni.getWindowInfo().windowHeight
   if (pageThreadId.value.length > 0 && props.active) bridge.watch(pageThreadId.value)
 })
-onUnmounted(() => { autoConnectPending.value = false; activationRequest++; pageAlive = false; cancelReadingCorrection(); settingsRequest++; clearTimeout(settingsRetryTimer); if (connection.hostId == pageHostId.value) bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
+onUnmounted(() => { activationRequest++; pageAlive = false; cancelReadingCorrection(); settingsRequest++; clearTimeout(settingsRetryTimer); if (connection.hostId == pageHostId.value) bridge.cancelOpen(pageThreadId.value); historyRequest++; clearTimeout(historyTopTimer) })
 
 function endTimelineTouch() { touchingTimeline = false; if (lastScrollTop <= 60 && !following.value) onHistoryTop(); rememberReadingPosition(); updateTimelinePosition(true); scheduleTimelineFill() }
 // 内层列表结束触摸不恢复自动跟随，避免新输出打断阅读。

@@ -93,7 +93,7 @@ function serviceFixture(){
  const watchers=[],ticks=[],calls=[];
  const connection={configurationRevision:1,configured:true,connected:true,hostId:'one',computers:[{id:'one',online:true,label:'示例电脑',instanceGeneration:'g'}]};
  const threadList={computers:[{hostId:'one',instanceGeneration:'g',online:true,subscribed:true,threads:[row('inProgress',[action()])]}]};
- const context=vm.createContext({TaskNotificationCenter:fixture().constructor,reactive:value=>value,connection,threadList,watch:(_read,changed,options)=>{watchers.push(changed);if(options?.immediate)changed();},nextTick:fn=>ticks.push(fn),setTimeout:()=>1,clearTimeout(){},Date,JSON,getCurrentPages:()=>[{route:'pages/connection/index'}],syncThreadComputers:()=>calls.push('sync'),refreshComputerThreads:()=>calls.push('subscribe'),disconnectThreadLists:()=>calls.push('disconnect'),bridge:{selectComputer:id=>calls.push(['computer',id]),openThread:id=>{calls.push(['open',id]);return Promise.resolve({});}},uni:{showToast:options=>calls.push(['toast',options.title]),navigateTo:options=>calls.push(['navigate',options]),redirectTo:options=>calls.push(['replace',options])}});
+ const context=vm.createContext({TaskNotificationCenter:fixture().constructor,reactive:value=>value,connection,threadList,watch:(_read,changed,options)=>{watchers.push(changed);if(options?.immediate)changed();},nextTick:fn=>ticks.push(fn),setTimeout:()=>1,clearTimeout(){},Date,JSON,getCurrentPages:()=>[{route:'pages/connection/index'}],syncThreadComputers:()=>calls.push('sync'),refreshComputerThreads:()=>calls.push('subscribe'),disconnectThreadLists:()=>calls.push('disconnect'),bridge:{selectComputer:id=>calls.push(['computer',id]),watch:id=>calls.push(['watch',id]),openThread:()=>assert.fail('查看通知不能导航电脑')},uni:{showToast:options=>calls.push(['toast',options.title]),navigateTo:options=>calls.push(['navigate',options]),redirectTo:options=>calls.push(['replace',options])}});
  const source=fs.readFileSync('apps/mobile/services/task-notifications.uts','utf8').replace(/^import .*\r?\n/gm,'').replaceAll('export ','');vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.f={startTaskNotifications,resetTaskNotifications,openTaskNotice,pendingTaskNotice,taskNotifications,showTaskNoticeThread,hideTaskNoticeThread};',context);
  return {...context.f,connection,threadList,calls,watchers,ticks};
 }
@@ -101,12 +101,12 @@ function serviceFixture(){
 test('应用初始化即全局订阅，重入只初始化一次；点击跨页后才打开目标，不发送任务',()=>{
  const f=serviceFixture();f.startTaskNotifications();f.startTaskNotifications();assert.equal(f.watchers.length,2);assert.ok(f.calls.includes('subscribe'));const notice=f.taskNotifications.current;assert.equal(notice.kind,'question');
  f.openTaskNotice(notice);const navigation=f.calls.find(call=>call[0]==='navigate')[1];assert.match(navigation.url,/noticeKey=/);assert.equal(f.pendingTaskNotice(notice.key).hostId,'one');assert.equal(f.calls.some(call=>call[0]==='open'),false);
- navigation.success();assert.equal(f.calls.some(call=>call[0]==='open'),false);f.ticks.shift()();assert.deepEqual(f.calls.filter(call=>Array.isArray(call)&&call[0]==='open'),[['open','thread']]);assert.equal(f.taskNotifications.focus.targetId,'q1');
+ navigation.success();assert.equal(f.calls.some(call=>call[0]==='watch'),false);f.ticks.shift()();assert.deepEqual(f.calls.filter(call=>Array.isArray(call)&&call[0]==='watch'),[['watch','thread']]);assert.equal(f.taskNotifications.focus.targetId,'q1');
 });
 
 test('当前会话点击只定位；离线、换代或旧导航回调不切换电脑',()=>{
  const f=serviceFixture();f.startTaskNotifications();const notice=f.taskNotifications.current;f.openTaskNotice(notice,'one','thread');assert.equal(f.taskNotifications.focusRevision,1);assert.equal(f.calls.some(call=>Array.isArray(call)&&call[0]==='navigate'),false);
- f.openTaskNotice(notice);const navigation=f.calls.find(call=>call[0]==='navigate')[1];navigation.success();f.resetTaskNotifications();f.ticks.shift()();assert.equal(f.calls.some(call=>call[0]==='open'),false);
+ f.openTaskNotice(notice);const navigation=f.calls.find(call=>call[0]==='navigate')[1];navigation.success();f.resetTaskNotifications();f.ticks.shift()();assert.equal(f.calls.some(call=>call[0]==='watch'),false);
  f.connection.computers[0].instanceGeneration='new';f.openTaskNotice(notice);assert.ok(f.calls.some(call=>call[0]==='toast'));assert.equal(f.calls.some(call=>call[0]==='computer'),false);
 });
 

@@ -60,7 +60,7 @@ function canOpen(target: WorkspaceTarget, online: boolean): boolean {
 }
 
 // 先卸载旧面板，等订阅清理完成再切换，避免旧清理误取消新订阅。
-async function selectConversation(target: WorkspaceTarget, activate: boolean): Promise<boolean> {
+async function selectConversation(target: WorkspaceTarget, subscribe: boolean): Promise<boolean> {
   const online = connection.computers.some((computer: Computer): boolean => computer.id == target.hostId && computer.online)
   if (!canOpen(target, online)) return false
   handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
@@ -72,7 +72,8 @@ async function selectConversation(target: WorkspaceTarget, activate: boolean): P
   try {
     bridge.selectComputer(target.hostId)
     selected.value = target; mode.value = 'conversation'
-    if (activate && connection.connected && online) bridge.openThread(target.threadId).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    // 查看聊天只订阅后台状态，桌面页面切换由详情菜单的显式同步触发。
+    if (subscribe && connection.connected && online) bridge.watch(target.threadId)
     detailMounted.value = true
     listPane.value?.rememberOpened(target.hostId + ':' + target.threadId)
     return true
@@ -87,7 +88,7 @@ async function openThread(thread: ComputerThread) {
   handledInitialTarget = workspaceTargetKey(props.initialTarget ?? null)
   try {
     bridge.selectComputer(thread.hostId)
-    bridge.openThread(thread.id).then((_: UTSJSONObject) => {}, (_: Error) => {})
+    bridge.watch(thread.id)
     const suffix = '&title=' + encodeURIComponent(thread.title) + '&projectName=' + encodeURIComponent(project)
     uni.navigateTo({ url: '/pages/conversation/index?threadId=' + encodeURIComponent(thread.id) + '&hostId=' + encodeURIComponent(thread.hostId) + suffix, success: (_) => { listPane.value?.rememberOpened(thread.key) } })
   } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) }

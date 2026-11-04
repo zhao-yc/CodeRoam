@@ -130,7 +130,8 @@ export function openTaskNotice(notice: TaskNotice, hostId: string = '', threadId
       try {
         bridge.selectComputer(notice.hostId)
         focusNotice(notice)
-        bridge.openThread(notice.threadId).then((_: UTSJSONObject) => {}, (_: Error) => {})
+        // 通知打开与列表查看一致，只恢复后台订阅，不切换电脑正在显示的聊天。
+        bridge.watch(notice.threadId)
       } catch (error) { uni.showToast({ title: (error as Error).message, icon: 'none' }) }
     })
   }
