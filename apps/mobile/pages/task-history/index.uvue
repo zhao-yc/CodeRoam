@@ -6,14 +6,14 @@
     <scroll-view direction="vertical" class="history-scroll" :show-scrollbar="false" @scrolltolower="loadMore">
       <view v-if="rows.length == 0 && !loading" class="history-empty"><text>暂无执行记录</text><text class="history-empty-note">记录保存在原守护进程，电脑在线时可以查询。</text></view>
       <view v-for="row in rows" :key="row.hostId + ':' + row.task.id" class="history-task">
-        <view class="history-task-heading" @click="openTask(row.hostId, row.task)"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><submission-task-status class="history-state" :state="row.task.state" /></view>
-        <text v-if="row.task.threadId.length > 0" class="history-chat-title">聊天：{{ chatTitle(row.hostId, row.task) }}</text>
+        <view class="history-task-heading"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><submission-task-status class="history-state" :state="row.task.state" /></view>
+        <template v-if="row.task.threadId.length > 0"><button v-if="row.task.method != 'thread.delete'" class="history-chat-title" hover-class="action-pressed" @click="openTask(row.hostId, row.task)">{{ chatTitle(row.hostId, row.task) }}</button><text v-else class="history-chat-title history-chat-unavailable">{{ chatTitle(row.hostId, row.task) }}</text></template>
         <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · 提交时间 {{ dateLabel(row.task.createdAt) }}</text>
         <text v-if="row.task.completedAt > 0" class="history-meta">{{ completionLabel(row.task) }}</text>
         <text v-if="stageDetail(row.task).length > 0" class="history-stage">{{ stageDetail(row.task) }}</text>
         <text v-if="row.task.error.length > 0" class="history-error">{{ row.task.error }}</text>
         <view v-if="row.task.steps.length > 0" class="history-steps"><view v-for="step in row.task.steps" :key="step.name" class="history-step"><submission-task-status :state="step.state" /><text class="history-step-name">{{ step.name }}</text></view></view>
-        <view class="history-actions"><button v-if="row.task.state == 'failed' && row.task.canRetry == true" class="history-action" :disabled="working.length > 0" @click="retry(row)">重试</button><button v-if="row.task.threadId.length > 0 && row.task.method != 'thread.delete'" class="history-action" @click="openTask(row.hostId, row.task)">打开聊天</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="control(row, 'reconcile')">核对结果</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="skip(row)">已核对并跳过</button><button v-if="canResume(row)" class="history-action" :disabled="working.length > 0" @click="control(row, 'resume')">继续队列</button></view>
+        <view v-if="row.task.state == 'failed' && row.task.canRetry == true || row.task.state == 'unknown' || canResume(row)" class="history-actions"><button v-if="row.task.state == 'failed' && row.task.canRetry == true" class="history-action" :disabled="working.length > 0" @click="retry(row)">重试</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="control(row, 'reconcile')">核对结果</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="skip(row)">已核对并跳过</button><button v-if="canResume(row)" class="history-action" :disabled="working.length > 0" @click="control(row, 'resume')">继续队列</button></view>
       </view>
       <button v-if="hasMore" class="history-more" :disabled="loading" @click="loadMore">{{ loading ? '正在读取…' : '加载更多' }}</button>
       <text class="history-footnote">每实例保留最近30天且最多1000条已结束记录；待核对任务保留至处理。</text>
@@ -145,7 +145,9 @@ onUnload(() => { request++ })
 .history-task-heading { flex-direction: row; align-items: center; }
 .history-task-title { flex: 1; font-weight: bold; font-size: 15px; color: #1a2135; }
 .history-state { margin-left: 10px; }
-.history-chat-title { margin-top: 7px; font-size: 13px; line-height: 20px; color: #4546bd; overflow-wrap: anywhere; }
+.history-chat-title { margin: 7px 0 0; padding: 0; border-width: 0; border-radius: 4px; background-color: transparent; font-size: 13px; line-height: 20px; color: #4546bd; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.history-chat-title::after { border-width: 0; }
+.history-chat-unavailable { color: #8590a4; }
 .history-meta, .history-stage, .history-step { margin-top: 5px; font-size: 12px; line-height: 19px; color: #596479; }
 .history-step { flex-direction: row; align-items: center; }
 .history-step-name { margin-left: 6px; font-size: 12px; line-height: 19px; color: #596479; }
