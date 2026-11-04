@@ -141,9 +141,9 @@ function reload() {
   if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
   loadMore()
 }
-// 分类切换清空旧游标与状态筛选，迟到的另一类结果由请求代次丢弃。
+// 分类入口与另外两个筛选统一使用原生选择菜单。
 function chooseCategoryMenu() { uni.showActionSheet({ itemList: categoryLabels, success: (answer) => { chooseCategory(categoryValues[answer.tapIndex]) } }) }
-// 分类变更继续复用原来的游标与状态重置规则。
+// 分类切换清空旧游标与状态筛选，迟到的另一类结果由请求代次丢弃。
 function chooseCategory(value: string) { if (category.value == value) return; category.value = value; state.value = ''; reload() }
 // 下拉刷新保留筛选条件并重置分页，重复手势不重复请求；结束状态由当前请求统一收起。
 async function refreshHistory() {
@@ -195,7 +195,7 @@ onUnload(() => { closeHostPicker(); pageVisible.value = false; request++; refres
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 .history-filters { flex-direction: row; align-items: center; padding: 14px 16px 12px; flex-shrink: 0; }
-.history-filter { position: relative; min-width: 0; height: 44px; margin-right: 8px; padding: 0 12px; flex-direction: row; align-items: center; justify-content: center; border-width: 0; border-radius: 12px; background-color: #f7f8fc; overflow: hidden; }
+.history-filter { position: relative; min-width: 0; height: 44px; margin-right: 8px; padding: 0 8px; flex-direction: row; align-items: center; justify-content: center; border-width: 0; border-radius: 12px; background-color: #f7f8fc; overflow: hidden; }
 /* 长实例名称只压缩文字，实例图标与紧随其后的箭头始终可见。 */
 .history-category-filter { flex-shrink: 0; }
 .history-host-filter { max-width: 50%; flex-shrink: 1; }
@@ -203,7 +203,7 @@ onUnload(() => { closeHostPicker(); pageVisible.value = false; request++; refres
 .history-selected-icon { width: 16px; height: 20px; margin-right: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
 
 .history-filter-content { flex-direction: row; align-items: center; justify-content: center; max-width: 100%; min-width: 0; height: 22px; }
-.history-filter-label { flex-shrink: 1; min-width: 0; height: 22px; font-size: 14px; line-height: 22px; text-align: center; color: #596479; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-filter-label { flex-shrink: 1; min-width: 0; height: 22px; font-size: 13px; line-height: 22px; text-align: center; color: #596479; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-filter-chevron { width: 14px; height: 20px; margin-left: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
 .history-filter-active { background-color: #eeefff; }
 .history-filter-label-active { color: #4546bd; }
