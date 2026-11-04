@@ -1,11 +1,12 @@
 <template>
   <view class="page history-page">
     <view class="history-header"><view class="history-back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回上一页" @click="goBack"></button></view><text class="history-heading">执行记录</text></view>
-    <view class="history-categories" role="tablist" aria-label="记录分类">
-      <view v-for="(label, index) in categoryLabels" :key="label" class="history-category action-frame" :class="category == categoryValues[index] ? 'history-category-selected' : ''"><text class="history-category-label" :class="category == categoryValues[index] ? 'history-category-label-selected' : ''">{{ label }}</text><view v-if="category == categoryValues[index]" class="history-category-indicator"></view><button class="action-hitbox" hover-class="action-pressed" role="tab" :aria-selected="category == categoryValues[index]" :aria-label="label" @click="chooseCategory(categoryValues[index])"></button></view>
-    </view>
     <view class="history-filters">
-      <!-- 筛选胶囊按内容宽度靠左排列，图标、文字和箭头保持同一基线。 -->
+      <!-- 分类与实例、状态使用同一组下拉入口，首次进入默认展示提交任务。 -->
+      <view class="history-filter history-category-filter" :class="category == 'operation' ? 'history-filter-active' : ''">
+        <view class="history-filter-content"><text class="history-filter-label" :class="category == 'operation' ? 'history-filter-label-active' : ''">{{ selectedCategoryLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
+        <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选记录分类" @click="chooseCategoryMenu"></button>
+      </view>
       <view class="history-filter history-host-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
         <view class="history-filter-content history-host-content"><view class="history-selected-icon"><app-icon :name="selectedHostIcon" tone="muted" :size="16" /></view><text class="history-filter-label" :class="hostId.length > 0 ? 'history-filter-label-active' : ''">{{ selectedHostLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
         <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选实例" @click="chooseHost"></button>
@@ -62,6 +63,7 @@ type HistoryCursor = { hostId: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
 const category = ref('submission')
 const categoryValues = ['submission', 'operation'], categoryLabels = ['提交任务', '状态操作']
+const selectedCategoryLabel = computed((): string => categoryLabels[categoryValues.indexOf(category.value)] ?? '提交任务')
 const cursors = ref<HistoryCursor[]>([])
 const refreshing = ref(false)
 const hostPickerOpen = ref(false), hostPickerWindowHeight = ref(640)
@@ -140,6 +142,8 @@ function reload() {
   loadMore()
 }
 // 分类切换清空旧游标与状态筛选，迟到的另一类结果由请求代次丢弃。
+function chooseCategoryMenu() { uni.showActionSheet({ itemList: categoryLabels, success: (answer) => { chooseCategory(categoryValues[answer.tapIndex]) } }) }
+// 分类变更继续复用原来的游标与状态重置规则。
 function chooseCategory(value: string) { if (category.value == value) return; category.value = value; state.value = ''; reload() }
 // 下拉刷新保留筛选条件并重置分页，重复手势不重复请求；结束状态由当前请求统一收起。
 async function refreshHistory() {
@@ -187,20 +191,14 @@ onUnload(() => { closeHostPicker(); pageVisible.value = false; request++; refres
 .history-header { background-color: #ffffff; border-bottom-style: solid; border-bottom-width: 1px; border-bottom-color: #e0e4ec; height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .history-back { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
 .history-heading { font-size: 17px; line-height: 26px; font-weight: bold; color: #1a2135; margin-left: 8px; }
-.history-categories { margin: 8px 16px 0; border-bottom-width: 1px; border-bottom-style: solid; border-bottom-color: #e4e7ef; flex-direction: row; flex-shrink: 0; }
-.history-category { height: 52px; padding: 0 8px; margin-right: 16px; border-radius: 6px; align-items: center; justify-content: center; }
-.history-category-selected { background-color: transparent; }
-/* 指示条只表示分类选中态，整块页签仍保留完整点击区域。 */
-.history-category-indicator { position: absolute; bottom: 0; width: 40px; height: 3px; border-radius: 2px; background-color: #4546bd; }
-.history-category-label { font-size: 16px; line-height: 24px; color: #596479; }
-.history-category-label-selected { color: #4546bd; font-weight: bold; }
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 .history-filters { flex-direction: row; align-items: center; padding: 14px 16px 12px; flex-shrink: 0; }
-.history-filter { position: relative; min-width: 0; height: 44px; margin-right: 12px; padding: 0 12px; flex-direction: row; align-items: center; justify-content: center; border-width: 0; border-radius: 12px; background-color: #f7f8fc; overflow: hidden; }
+.history-filter { position: relative; min-width: 0; height: 44px; margin-right: 8px; padding: 0 12px; flex-direction: row; align-items: center; justify-content: center; border-width: 0; border-radius: 12px; background-color: #f7f8fc; overflow: hidden; }
 /* 长实例名称只压缩文字，实例图标与紧随其后的箭头始终可见。 */
-.history-host-filter { max-width: 56%; flex-shrink: 1; }
+.history-category-filter { flex-shrink: 0; }
+.history-host-filter { max-width: 50%; flex-shrink: 1; }
 .history-host-content { flex-shrink: 1; }
 .history-selected-icon { width: 16px; height: 20px; margin-right: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
 
