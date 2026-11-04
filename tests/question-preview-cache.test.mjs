@@ -44,7 +44,7 @@ test('守护进程重启后可直接从SQLite返回问题展示，终态移除�
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-question-cache-'));
   const file = path.join(directory, 'journal.sqlite'), first = new Journal(file);
   const source = snapshot(); let reads = 0, removed = false;
-  const adapter = { conversations: new Map(), index: { historyCacheSource: () => 'unchanged', readHistory: () => { reads++; return source; } } };
+  const adapter = { conversations: new Map(), index: { visibleThreadIds: ids => new Set(removed ? [] : ids), historyCacheSource: () => 'unchanged', readHistory: () => { reads++; return source; } } };
   const makeFeed = journal => new ThreadCacheFeed({ adapter, db: journal.db, send: () => {}, blocked: () => removed });
   const oldFeed = makeFeed(first); oldFeed.save(source, 'unchanged'); oldFeed.close(); first.close();
   const journal = new Journal(file), feed = makeFeed(journal);

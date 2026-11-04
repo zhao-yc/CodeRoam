@@ -18,7 +18,8 @@ export class ThreadListFeed {
     Object.assign(this,{adapter,send,onSettled,onActivity});
     this.devices=new Set();this.rows=[];this.ids=new Set();this.revision=0;this.generation=0;
     this.mode='legacy';this.closed=false;this.started=false;this.dirty=false;this.syncing=false;
-    this.store=new ThreadListStore(db);this.indexRows=new Map();this.changed=new Set();this.initialized=new Set();
+    this.store=new ThreadListStore(db,{verifyVisible:ids=>this.adapter.index.visibleThreadIds?this.adapter.index.visibleThreadIds(ids):new Set(this.adapter.index.list({limit:50}).map(row=>row.id))});
+    this.indexRows=new Map();this.changed=new Set();this.initialized=new Set();
     this.probeLeases=new Map();
     this.nextActivityAt=0;this.nextReadStateAt=0;this.activityReading=null;
     this.owned=new Set();this.nextProbe=new Map();this.activity=new Set();this.pendingSnapshots=new Map();this.recheck=new Set();this.settled=new Set();
@@ -101,7 +102,7 @@ export class ThreadListFeed {
       const wasWarm=this.indexRows.size>0;
       for(const row of rows)if(wasWarm&&JSON.stringify(this.indexRows.get(row.id))!==JSON.stringify(row)){this.changed.add(row.id);this.settled.delete(row.id);}
       const ids=new Set(rows.map(row=>row.id));
-      for(const id of this.ids)if(!ids.has(id)){this.release(id);this.changed.delete(id);this.initialized.delete(id);this.nextProbe.delete(id);this.pendingSnapshots.delete(id);}
+      for(const id of this.ids)if(!ids.has(id)){const lease=this.probeLeases.get(id);if(lease)lease.active=false;this.release(id);this.changed.delete(id);this.initialized.delete(id);this.nextProbe.delete(id);this.pendingSnapshots.delete(id);}
       this.ids=ids;this.indexRows=new Map(rows.map(row=>[row.id,row]));
       const result=rows.map(row=>{
         const entry=this.adapter.conversations?.get(row.id);
@@ -158,7 +159,8 @@ export class ThreadListFeed {
       let next=0;
       const worker=async()=>{
         while(next<candidates.length&&current()&&this.realtime()) {
-          const id=candidates[next++],entry=this.adapter.conversations?.get(id);
+          const id=candidates[next++];if(!this.ids.has(id))continue;
+          const entry=this.adapter.conversations?.get(id);
           if(entry?.state&&!this.recheck.has(id)) {
             const snapshot=this.adapter.snapshot(entry.state);this.consume(snapshot,!this.initialized.has(id));this.follow(id,snapshot);this.changed.delete(id);continue;
           }
@@ -175,7 +177,7 @@ export class ThreadListFeed {
               operation,
               new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('聊天候选快照超时')),1800);timeout.unref?.();}),
             ]);
-            if(!current()||!this.realtime()){this.release(id);continue;}
+            if(!valid()||!this.ids.has(id)){this.release(id);continue;}
             const value={...snapshot,threadId:snapshot.threadId??id};
             this.consume(value,!this.initialized.has(id));this.follow(id,value);this.changed.delete(id);this.recheck.delete(id);this.nextProbe.delete(id);
           } catch {this.release(id);if(current())error='部分聊天状态暂时未知，正在后台重试';}
@@ -193,6 +195,17 @@ export class ThreadListFeed {
   }
   release(id) {this.owned.delete(id);this.adapter.unwatch?.(id,OWNER);}
   releaseAll() {for(const id of new Set([...this.owned,...this.ids]))this.release(id);}
+  /** 已确认归档删除立即清理内存、待写及磁盘展示副本，不让迟到帧重新登记。 */
+  forget(ids) {
+    const removed=new Set(ids);
+    for(const id of removed) {
+      const lease=this.probeLeases.get(id);if(lease)lease.active=false;
+      this.release(id);this.ids.delete(id);this.indexRows.delete(id);this.changed.delete(id);this.initialized.delete(id);
+      this.nextProbe.delete(id);this.pendingSnapshots.delete(id);this.activity.delete(id);this.recheck.delete(id);this.settled.delete(id);
+    }
+    this.replace((this.pendingRows??this.rows).filter(row=>!removed.has(row.id)),true);
+    try {this.store.forget([...removed]);}catch{/* 展示清理失败不改变真实归档删除结果，后续新鲜成员核对会重试。 */}
+  }
   /** 状态比较不计算正文哈希；纯流式变化在一秒尾帧才计算内容版本。 */
   stateSummary(row,snapshot,includeNotification=true) {
     const {notificationState,...base}=row;
@@ -214,7 +227,16 @@ export class ThreadListFeed {
     this.pendingSnapshots.delete(snapshot.threadId);
     this.replace((this.pendingRows??this.rows).map(row=>row.id===snapshot.threadId?this.summary(row,snapshot):row),false,baseline);
     this.initialized.add(snapshot.threadId);
-    if(!this.needsAttention(this.stateSummary({id:snapshot.threadId},snapshot))&&snapshot.status==='idle'){this.settled.add(snapshot.threadId);this.onSettled(snapshot);}else this.settled.delete(snapshot.threadId);
+    const settled=!this.needsAttention(this.stateSummary({id:snapshot.threadId},snapshot))&&snapshot.status==='idle';
+    const terminal=!snapshot.activeTurnId&&snapshot.status!=='active'&&['completed','failed','interrupted'].includes(snapshot.latestTurn?.status);
+    if(settled||terminal){
+      // 终态先推送内存结果，再尽力保存展示字段；缓存故障不能阻止正文保存和内部订阅释放。
+      try {this.store.save(this.pendingRows??this.rows);this.store.flush();}catch{}
+    }
+    if(settled){
+      this.settled.add(snapshot.threadId);
+      this.onSettled(snapshot);
+    }else this.settled.delete(snapshot.threadId);
   }
   update(snapshot) {
     if(!this.started||this.closed||!this.realtime()||!this.ids.has(snapshot.threadId))return;
@@ -250,5 +272,12 @@ export class ThreadListFeed {
     clearTimeout(this.contentTimer);this.contentTimer=null;this.pendingRows=null;this.pendingSnapshots.clear();this.releaseAll();
     if(this.mode!=='legacy'&&!this.closed){this.armCycle();this.kick();}
   }
-  close() {this.closed=true;this.devices.clear();this.stop();this.watcher?.close();this.watcher=null;this.adapter.off('conversation',this.onConversation);this.adapter.off('readState',this.onReadState);}
+  close() {
+    if(this.closed)return;
+    // 关闭前只提取最新展示字段，不为尚未发送的正文尾帧额外计算哈希。
+    const latest=(this.pendingRows??this.rows).map(row=>{const snapshot=this.pendingSnapshots.get(row.id);return snapshot?.title?{...row,title:snapshot.title}:row;});
+    try {this.store.save(latest);}catch{}
+    this.closed=true;this.devices.clear();this.stop();this.watcher?.close();this.watcher=null;
+    this.adapter.off('conversation',this.onConversation);this.adapter.off('readState',this.onReadState);this.store.close();
+  }
 }

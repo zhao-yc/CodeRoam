@@ -2,7 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { BridgeError, requestFingerprint } from '../../packages/protocol/contracts.mjs';
 
-/** 在自有数据库中记录事件和操作结果，绝不向 Codex 数据库写入。 */
+const EVENT_COUNT_LIMIT = 2000;
+const EVENT_BYTES_LIMIT = 4 * 1024 * 1024;
+
+/** 展示事件只驻留内存，操作结果及时写入自有账本，绝不向 Codex 数据库写入。 */
 export class Journal {
   constructor(filePath = ':memory:') {
     this.db = new DatabaseSync(filePath);
@@ -16,26 +19,41 @@ export class Journal {
         previous_revision TEXT, previous_snapshot TEXT, saved_source TEXT NOT NULL, touched_at INTEGER NOT NULL
       );
     `);
-    this.db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES (?,?)').run('epoch', randomUUID());
-    this.epoch = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('epoch').value;
+    // 展示流只在本进程内续接；重启更换代次，旧游标必须重新取得完整窗口。
+    this.epoch = randomUUID();
+    this.eventSequence = 0; this.eventRows = []; this.eventBytes = 0; this.eventDiscardedThrough = 0; this.closed = false;
+    this.db.prepare('INSERT INTO metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('epoch', this.epoch);
+    // 旧展示事件不作为执行账本；仅启动时清理，commands 和任务表仍保留原持久化语义。
+    this.db.exec('DELETE FROM events');
     // 上次进程退出时未收口的操作不能自动重放，结果需要通过会话状态核对。
     this.db.prepare("UPDATE commands SET state='unknown' WHERE state='pending'").run();
   }
 
+  /** 热事件只序列化一次；队列保留不可变字符串，调用方修改快照不会污染重放。 */
   append(threadId, payload) {
-    const result = this.db.prepare('INSERT INTO events(thread_id,payload) VALUES (?,?)').run(threadId, JSON.stringify(payload));
-    const seq = Number(result.lastInsertRowid);
-    this.db.prepare('DELETE FROM events WHERE seq <= ?').run(seq - 2000);
-    return { v: 1, type: 'event', epoch: this.epoch, seq, threadId, ...payload };
+    if (this.closed) throw new Error('账本已关闭，不能继续发布聊天事件');
+    const seq = this.eventSequence + 1;
+    const event = { ...payload, v: 1, type: 'event', epoch: this.epoch, seq, threadId };
+    const serialized = JSON.stringify(event), bytes = Buffer.byteLength(serialized);
+    this.eventSequence = seq;
+    this.eventRows.push({ threadId, seq, serialized, bytes }); this.eventBytes += bytes;
+    while (this.eventRows.length > EVENT_COUNT_LIMIT || this.eventBytes > EVENT_BYTES_LIMIT) {
+      const discarded = this.eventRows.shift();
+      this.eventBytes -= discarded.bytes; this.eventDiscardedThrough = Math.max(this.eventDiscardedThrough, discarded.seq);
+    }
+    return event;
   }
 
-  latestSeq() { return this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM events').get().seq; }
+  /** 序号属于本进程展示流，不访问执行账本或旧事件表。 */
+  latestSeq() {
+    if (this.closed) throw new Error('账本已关闭，无法读取聊天事件游标');
+    return this.eventSequence;
+  }
 
+  /** 全局淘汰水位保守拒绝缺口；不同会话占用序号造成的正常跳号不视为缺帧。 */
   replay(threadId, epoch, afterSeq) {
-    if (epoch !== this.epoch || !Number.isSafeInteger(afterSeq) || afterSeq < 0) return null;
-    const oldest = this.db.prepare('SELECT MIN(seq) AS seq FROM events').get().seq;
-    if (oldest !== null && afterSeq < oldest - 1) return null;
-    return this.db.prepare('SELECT seq,payload FROM events WHERE thread_id=? AND seq>? ORDER BY seq').all(threadId, afterSeq).map(row => ({ v: 1, type: 'event', epoch: this.epoch, seq: row.seq, threadId, ...JSON.parse(row.payload) }));
+    if (this.closed || epoch !== this.epoch || !Number.isSafeInteger(afterSeq) || afterSeq < this.eventDiscardedThrough || afterSeq < 0 || afterSeq > this.eventSequence) return null;
+    return this.eventRows.filter(row => row.threadId === threadId && row.seq > afterSeq).map(row => JSON.parse(row.serialized));
   }
 
   status(deviceId, commandId) {
@@ -47,7 +65,12 @@ export class Journal {
   forgetThreads(ids) {
     if (!ids.length) return;
     const placeholders = ids.map(() => '?').join(',');
-    this.db.prepare('DELETE FROM events WHERE thread_id IN (' + placeholders + ')').run(...ids);
+    const forgotten = new Set(ids);
+    this.eventRows = this.eventRows.filter(row => {
+      if (!forgotten.has(row.threadId)) return true;
+      this.eventBytes -= row.bytes; this.eventDiscardedThrough = Math.max(this.eventDiscardedThrough, row.seq);
+      return false;
+    });
     this.db.prepare('DELETE FROM question_submissions WHERE thread_id IN (' + placeholders + ')').run(...ids);
     this.db.prepare('DELETE FROM conversation_cache WHERE thread_id IN (' + placeholders + ')').run(...ids);
     if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_list_index'").get())this.db.prepare('DELETE FROM thread_list_index WHERE id IN ('+placeholders+')').run(...ids);
@@ -125,5 +148,10 @@ export class Journal {
     }
   }
 
-  close() { this.db.close(); }
+  /** 释放展示正文引用；执行记录此前已按原路径及时写入 SQLite。 */
+  close() {
+    if (this.closed) return;
+    this.closed = true; this.eventRows = []; this.eventBytes = 0; this.eventDiscardedThrough = this.eventSequence;
+    this.db.close();
+  }
 }

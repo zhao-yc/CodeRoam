@@ -216,6 +216,8 @@ test('列表SQLite只落盘四个展示字段，重启不会恢复运行、权�
   const db=new DatabaseSync(':memory:');t.after(()=>db.close());
   const {feed,value}=fixture(t,{db,live:true});value.executionSettings={model:'合成模型'};value.approvals=[{id:'合成审批'}];value.notificationState={latestTurnId:'turn',latestTurnStatus:'completed',pending:[]};
   await ready(feed);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM thread_list_index').get().count,0);
+  assert.equal(feed.store.flush(),true);
   const row=db.prepare('SELECT * FROM thread_list_index').get();
   assert.deepEqual(Object.keys(row).sort(),['cwd','id','position','title','updated_at']);
   const adapter=new EventEmitter();adapter.index={list:()=>{throw new Error('合成索引暂不可用');}};adapter.conversations=new Map();adapter.unwatch=()=>{};

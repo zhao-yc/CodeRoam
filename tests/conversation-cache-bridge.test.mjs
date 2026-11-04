@@ -63,6 +63,7 @@ test('无人订阅时缓存换版不读出旧正文，上一版仍可续接且�
     const value = Reflect.get(db, key, db);
     return typeof value === 'function' ? value.bind(db) : value;
   } });
+  f.feed.cacheStore.db = f.feed.db;
   const first = snapshot(), second = snapshot('乙'), third = snapshot('乙丙');
   f.feed.save(first, 'source-1');
   f.feed.save(second, 'source-2');
@@ -76,7 +77,7 @@ test('无人订阅时缓存换版不读出旧正文，上一版仍可续接且�
   f.feed.watch('phone', { subscriptionId, threads: [{ threadId, revision: conversationContentRevision(third) }] });
   const beforeSubscribed = largeReadBytes;
   f.feed.save(snapshot('乙丙丁'), 'source-5');
-  assert.ok(largeReadBytes > beforeSubscribed);
+  assert.equal(largeReadBytes, beforeSubscribed);
   assert.deepEqual(f.sent.at(-1).update.appends, [{ id: 'message', text: '丁', status: 'inProgress' }]);
 });
 
@@ -91,6 +92,62 @@ test('复用列表最近排序时仍核验成员，旧列表不能让已删除�
   await f.feed.refresh();
   assert.equal(f.feed.row(threadId), undefined);
   assert.equal(f.adapter.reads, 1);
+});
+
+test('订阅者可跨磁盘与RAM两版续接，事件声明实际计算差异的基线', t => {
+  const f = fixture(t), first=snapshot(), second=snapshot('乙'), third=snapshot('乙丙');
+  f.feed.save(first,'one');f.feed.cacheStore.flush();
+  f.feed.save(second,'two');f.feed.cacheStore.flush();
+  f.feed.save(third,'three');
+  const previous=conversationContentRevision(first);
+  f.feed.watch('phone',{subscriptionId,threads:[{threadId,revision:previous}]});
+  f.feed.deliverStored(threadId,conversationContentRevision(third));
+  assert.equal(f.sent.at(-1).baseRevision,previous);
+  assert.deepEqual(f.sent.at(-1).update.appends,[{id:'message',text:'乙丙',status:'inProgress'}]);
+  assert.equal(validConversationCacheEvent(f.sent.at(-1)),true);
+});
+
+test('持续输出立即推送，固定1500毫秒窗口只保存最新段，同版本不重复写盘', t => {
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
+  const f=fixture(t),first=snapshot();
+  f.feed.watch('phone',{subscriptionId,threads:[{threadId,revision:conversationContentRevision(first)}]});
+  f.feed.save(first,'one');
+  for(let index=1;index<=7;index++){
+    t.mock.timers.tick(200);f.feed.save(snapshot('增'.repeat(index)),'source-'+index);
+  }
+  const disk=()=>f.journal.db.prepare('SELECT * FROM conversation_cache WHERE thread_id=?').get(threadId);
+  assert.equal(f.sent.length,7);assert.equal(disk(),undefined);
+  t.mock.timers.tick(100);
+  assert.equal(JSON.parse(disk().snapshot).messages[0].text,text+'增'.repeat(7));
+  const before=f.journal.db.prepare('SELECT total_changes() AS count').get().count;
+  f.feed.save(snapshot('增'.repeat(7)),'source-7');t.mock.timers.tick(1500);
+  assert.equal(f.journal.db.prepare('SELECT total_changes() AS count').get().count,before);
+});
+
+test('完成失败和中断均立即保存，推送抛错也不能丢终态或阻止内部退订',t=>{
+  const f=fixture(t);
+  for(const status of ['completed','failed','interrupted']){
+    const terminal={...snapshot(status),status:'idle',activeTurnId:'',turns:[{turnId:'turn',status}],latestTurn:{turnId:'turn',status}};
+    f.feed.save(terminal);
+    assert.equal(JSON.parse(f.journal.db.prepare('SELECT snapshot FROM conversation_cache WHERE thread_id=?').get(threadId).snapshot).latestTurn.status,status);
+  }
+  f.adapter.client={allowedClients:new Set(['owner'])};
+  const entry={owner:{clientId:'owner'},state:{},watchers:new Set([CACHE_WATCHER,'detail-page'])};
+  f.adapter.conversations.set(threadId,entry);f.feed.activity.add(threadId);
+  f.feed.watch('phone',{subscriptionId,threads:[{threadId,revision:''}]});f.feed.send=()=>{throw Error('合成连接已关闭');};
+  f.feed.settled({...snapshot('最终'),status:'idle',activeTurnId:'',turns:[{turnId:'turn',status:'completed'}],latestTurn:{turnId:'turn',status:'completed'}});
+  assert.equal(JSON.parse(f.journal.db.prepare('SELECT snapshot FROM conversation_cache WHERE thread_id=?').get(threadId).snapshot).messages[0].text,text+'最终');
+  assert.deepEqual([...entry.watchers],['detail-page']);assert.equal(f.feed.activity.has(threadId),false);
+});
+
+test('缓存SQLite失败仍即时推送最新内存正文，明确删除取消尚未落盘的副本',t=>{
+  const f=fixture(t);f.feed.watch('phone',{subscriptionId,threads:[{threadId,revision:''}]});
+  f.feed.cacheStore.db={prepare(){throw Error('合成磁盘不可用');},exec(){throw Error('合成磁盘不可用');}};
+  f.feed.save(snapshot('内存'),'fresh');assert.equal(f.sent.at(-1).snapshot.messages[0].text,text+'内存');
+  assert.equal(f.feed.cacheStore.flush(),false);assert.ok(f.feed.row(threadId));
+  f.feed.cacheStore.db=f.journal.db;f.data.delete(threadId);f.feed.checkMembership();
+  assert.equal(f.feed.row(threadId),undefined);assert.equal(f.feed.cacheStore.pending.size,0);
+  f.feed.cacheStore.flush();assert.equal(f.journal.db.prepare('SELECT count(*) AS total FROM conversation_cache').get().total,0);
 });
 
 test('后台来源批次跨事件循环时归档，不能保存或补发该聊天的迟到正文', async t => {
@@ -240,9 +297,12 @@ test('持久缓存最多二十条并可在重启后使用，失去 IPC 身份时
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-thread-cache-'));
   const database = path.join(directory, 'journal.sqlite');
   const journal = new Journal(database);
-  const feed = new ThreadCacheFeed({ adapter: {}, db: journal.db, send: () => {}, blocked: () => false });
+  const feed = new ThreadCacheFeed({ adapter: {index:{visibleThreadIds:ids=>new Set(ids)}}, db: journal.db, send: () => {}, blocked: () => false });
   for (let index = 0; index < CACHE_THREAD_LIMIT; index++) feed.save(snapshot('', 'old-' + index));
   feed.save(snapshot(), 'one');
+  assert.equal(journal.db.prepare('SELECT COUNT(*) AS total FROM conversation_cache').get().total, 0);
+  assert.equal(feed.cacheStore.records.size, CACHE_THREAD_LIMIT);
+  feed.cacheStore.flush();
   assert.equal(journal.db.prepare('SELECT COUNT(*) AS total FROM conversation_cache').get().total, CACHE_THREAD_LIMIT);
   feed.close();
   journal.close();

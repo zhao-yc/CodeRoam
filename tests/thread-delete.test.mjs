@@ -154,7 +154,13 @@ test('回执丢失后只读核对完整范围，部分删除和跨设备查询�
     assert.equal((await agent.handleRequest(check)).result.state, 'not_found');
     check.deviceId = 'phone'; const status = (await agent.handleRequest(check)).result;
     assert.equal(status.state, partial ? 'unknown' : 'done'); assert.equal(f.calls.filter(call => call === 'delete').length, 1);
-    if (!partial) { assert.equal(status.result.deleted, true); assert.deepEqual(journal.db.prepare('SELECT thread_id FROM events').all().map(row => row.thread_id), ['other']); }
+    if (!partial) {
+      assert.equal(status.result.deleted, true);
+      assert.deepEqual(journal.replay('other',journal.epoch,2).map(row=>row.threadId),['other']);
+      assert.deepEqual(journal.replay('root',journal.epoch,2),[]);
+      assert.deepEqual(journal.replay('child',journal.epoch,2),[]);
+      assert.equal(journal.replay('other',journal.epoch,0),null);
+    }
   }
 });
 
