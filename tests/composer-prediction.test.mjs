@@ -37,6 +37,29 @@ test('固定表达式按所选标签和目标会话过滤，内容使用内存�
   view.state.doc.content.content[0].content.size=0;view.state['cumberbatch$'].prediction={...prediction,sourceTurnId:'old'};assert.deepEqual(read(),[]);
 });
 
+test('无标签新版主内容区读取预测，隐藏工作区、其他会话和重复编辑器均不误用',async()=>{
+  let style='',main=true;
+  const root={get tagName(){return main?'MAIN':'DIV';},getAttribute:name=>name==='style'?style:null,parentElement:null};
+  const view={state:{doc:{content:{content:[{type:{name:'paragraph'},content:{size:0}}]}}},input:{composing:false}};
+  view.state['cumberbatch$']={prediction,hiddenForComposition:false};
+  const props={conversationId:'thread-1',hostId:'local',composerController:{view}};
+  const host={__reactFiber$1:{memoizedProps:props,return:null},parentElement:root,getAttribute:()=>null};
+  const editor={parentElement:host,getAttribute:()=>null,querySelector:()=>({textContent:'显示正文不作为来源'})};view.dom=editor;
+  const doc={querySelectorAll:()=>[editor],querySelector:()=>null};
+  const read=()=>JSON.parse(JSON.stringify(vm.runInNewContext(predictionExpression('local','thread-1','turn-1'),{document:doc})));
+  assert.deepEqual(read(),[prediction]);
+  for(style of ['display:none','--workspace-width: 100%; display: none !important;','DISPLAY : NONE !IMPORTANT','visibility: hidden;','visibility:collapse','content-visibility:hidden'])assert.deepEqual(read(),[],style);
+  style='display:flex;';assert.deepEqual(read(),[prediction]);
+  main=false;assert.deepEqual(read(),[]);main=true;
+  props.conversationId='other';assert.deepEqual(read(),[]);props.conversationId='thread-1';
+  const hiddenRoot={...root,getAttribute:name=>name==='style'?'display: none !important;':null};
+  const hiddenHost={...host,parentElement:hiddenRoot};
+  const hiddenEditor={...editor,parentElement:hiddenHost};
+  doc.querySelectorAll=()=>[hiddenEditor,editor];assert.deepEqual(read(),[prediction]);
+  const r=reader(async()=>[prediction,prediction]);
+  assert.deepEqual(await r.read(adapter(),'thread-1','phone'),{prediction:null});
+});
+
 /** 执行手机页面实际预测方法，验证异步回执、过期状态与采纳行为。 */
 function mobile(){
   const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');

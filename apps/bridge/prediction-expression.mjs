@@ -3,15 +3,21 @@ function readDisplayedPrediction(expectedHost, expectedThread, expectedTurn) {
   const results=[];
   for(const editor of document.querySelectorAll('.ProseMirror[data-codex-composer]')) {
     // 桌面被浏览器遮挡时 visibilityState 也会变为 hidden，但预测仍在原输入框中。
-    // 以选中的会话面板和实际预测组件为准，并先排除后台旧编辑器以减少读取耗时。
+    // 以选中的会话面板或新版可见主内容区为准，先排除没有预测的旧编辑器。
     if(!editor.querySelector('[data-cumberbatch] .cumberbatch-content'))continue;
-    let panel=null,hidden=false;
-    for(let ancestor=editor;ancestor;ancestor=ancestor.parentElement){
+    let panel=null,hidden=false,inMain=false,ancestor=editor,depth=0;
+    for(;ancestor&&depth<100;depth++,ancestor=ancestor.parentElement){
       if(panel===null&&ancestor.getAttribute('role')==='tabpanel')panel=ancestor;
+      if(ancestor.tagName==='MAIN')inMain=true;
       if(ancestor.getAttribute('hidden')!==null||ancestor.getAttribute('inert')!==null||ancestor.getAttribute('aria-hidden')==='true')hidden=true;
+      // 新版把后台 Workspace 保留在 DOM，并用内联 display:none 隐藏，不再提供 tabpanel。
+      const style=ancestor.getAttribute('style')??'';
+      if(/(^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|content-visibility\s*:\s*hidden)\s*(?:!important\s*)?(;|$)/i.test(style))hidden=true;
     }
+    if(ancestor||hidden)continue;
     const tab=panel?.id?document.querySelector('[role="tab"][aria-controls="'+panel.id+'"]'):null;
-    if(hidden||tab?.getAttribute('aria-selected')!=='true')continue;
+    // 旧标签布局继续核对选中态；无标签的新布局必须位于未隐藏的主内容区。
+    if(panel!==null?tab?.getAttribute('aria-selected')!=='true':!inMain)continue;
     let host=editor;
     while(host&&!Object.keys(host).some(key=>key.startsWith('__reactFiber$')))host=host.parentElement;
     let fiber=host?.[Object.keys(host).find(key=>key.startsWith('__reactFiber$'))];
