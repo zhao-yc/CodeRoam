@@ -30,7 +30,8 @@ export default {
 .inline-progress-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; }
 /* #ifdef WEB */
 .inline-progress-hitbox::after { border: 0; }
-.inline-progress-hitbox[disabled] { background-color: transparent; }
+/* 高于 Web 默认禁用按钮的选择器优先级，点击层不能盖住文字和加载动画。 */
+.page .inline-progress-hitbox[disabled] { background-color: transparent; }
 /* #endif */
 .button-primary, .button-secondary, .button-danger { font-size: 15px; border-radius: 14px; }
 .button-primary { background-color: #4546bd; color: #ffffff; }
