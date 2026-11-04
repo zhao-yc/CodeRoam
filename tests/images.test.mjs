@@ -31,7 +31,7 @@ test('Web实际图片模块等比压缩并在过大或读取失败时给出明�
   const draws=[];let oversized=false;
   class Image {naturalWidth=3200;naturalHeight=2400;set src(value){queueMicrotask(()=>value==='bad'?this.onerror():this.onload());}}
   const canvas={width:0,height:0,getContext(){return {fillRect(){},drawImage(_image,_x,_y,width,height){draws.push([width,height]);}};},toDataURL(){return oversized?syntheticJpeg(MAX_IMAGE_BYTES+1):image;}};
-  const context=componentContext({Image,document:{createElement:()=>canvas},queueMicrotask,fetch:()=>Promise.reject(new Error('模拟读取失败'))});
+  const context=componentContext({Image,document:{createElement:()=>canvas},queueMicrotask,window:{fetch:()=>Promise.reject(new Error('模拟读取失败'))}});
   let source=fs.readFileSync('apps/mobile/services/images.uts','utf8').replace(/\/\/ #ifndef WEB[\s\S]*?\/\/ #endif/g,'').replace(/\bexport /g,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={prepareImage};',context);
   assert.equal(await context.subject.prepareImage('valid'),image);assert.deepEqual(draws[0],[1600,1200]);
@@ -42,7 +42,7 @@ test('Web实际图片模块等比压缩并在过大或读取失败时给出明�
 function loadImageModule(platform, environment) {
   let source=fs.readFileSync('apps/mobile/services/images.uts','utf8');
   source=source.replace(platform==='web'?/\/\/ #ifndef WEB[\s\S]*?\/\/ #endif/g:/\/\/ #ifdef WEB[\s\S]*?\/\/ #endif/g,'').replace(/\bexport /g,'');
-  const context=componentContext(environment);
+  const context=componentContext({...environment,window:{fetch:environment.fetch}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={prepareImage};',context);
   return context.subject;
 }
@@ -60,7 +60,6 @@ test('Web预算内原图保持透明PNG，精确字节边界不重编码',async(
   const boundary=syntheticJpeg(MAX_IMAGE_BYTES);
   assert.equal(await subject.prepareImage(boundary),boundary);
   assert.equal(encoded,0);
-
 });
 
 test('Web先在相同尺寸降低质量，缩图后恢复高质量，原图读取失败仍可压缩',async()=>{

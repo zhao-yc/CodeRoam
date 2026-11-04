@@ -15,6 +15,7 @@ function imageDataUrl(data: string): string {
   return 'data:image/' + mime + ';base64,' + data
 }
 
+// Data URL 仅按图片正文计入上传预算。
 function withinImageBudget(source: string): boolean {
   const separator = source.indexOf(',')
   return separator >= 0 && imageBytes(source.substring(separator + 1)) <= MAX_IMAGE_BYTES
@@ -24,7 +25,7 @@ function withinImageBudget(source: string): boolean {
 // 先读取原始文件，让预算内的小图和透明 PNG 无须经过画布重编码。
 function readWebOriginal(source: string): Promise<string> {
   if (source.startsWith('data:')) return Promise.resolve(source)
-  return fetch(source).then((response) => response.blob()).then((blob) => new Promise<string>((resolve, reject) => {
+  return window.fetch(source).then((response: Response): Promise<Blob> => response.blob()).then((blob: Blob) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as string)
     reader.onerror = () => reject(new Error('读取图片失败'))
