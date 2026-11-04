@@ -18,7 +18,8 @@ test('电脑恢复在线后每次重新打开聊天均请求当前订阅',async(
   f.connection.connected=true;
   await f.openThread(row);
   await f.openThread(row);
-  assert.equal(f.calls.filter(([kind])=>kind==='open').length,2);
+  assert.equal(f.calls.filter(([kind])=>kind==='watch').length,2);
+  assert.equal(f.calls.some(([kind])=>kind==='open'),false);
   assert.equal(f.calls.some(([kind])=>kind==='cache'),false);
   assert.ok(f.calls.filter(([kind])=>kind==='navigate').every(([,url])=>!url.includes('cacheOnly')));
 });
