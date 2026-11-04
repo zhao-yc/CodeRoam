@@ -126,9 +126,7 @@ export function groupThreads(rows: ComputerThread[], sort: string, recentFirst: 
         return difference != 0 ? difference : left.key < right.key ? -1 : left.key > right.key ? 1 : 0
       })
     })
-    // 未读结果显示在执行中之前，保留原分组键和执行开始时间记录。
-    const groupOrder = ['recent', 'priority:0', 'priority:2', 'priority:1', 'priority:3']
-    result.sort((left: ThreadGroup, right: ThreadGroup): number => groupOrder.indexOf(left.key) - groupOrder.indexOf(right.key))
+    result.sort((left: ThreadGroup, right: ThreadGroup): number => left.key == 'recent' ? -1 : right.key == 'recent' ? 1 : left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
   }
   return result
 }
