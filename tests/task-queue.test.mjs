@@ -129,7 +129,7 @@ test('重启恢复等待任务，在途任务改为未知并暂停，任何步�
   assert.deepEqual(calls, [second.taskId]); await restored.close(); restoredJournal.close();
 });
 
-test('组合中间步骤核对后等待人工恢复，成功步骤复用检查点而不重复创建', async t => {
+test('组合中间步骤核对后自动继续，成功步骤复用检查点而不重复创建', async t => {
   let creates = 0, sends = 0, known = false;
   const f = fixture(t, {
     execute: async (_task, context) => {
@@ -139,12 +139,8 @@ test('组合中间步骤核对后等待人工恢复，成功步骤复用检查�
     reconcile: async task => { assert.match(task.pendingCommandId, /^task-/); return known ? { state: 'done', result: { threadId: 'created' } } : { state: 'unknown' }; },
   });
   const taskId = randomUUID(); f.queue.submit('phone', { taskId, kind: 'newConversation', payload: { projectId: 'project', text: '合成消息' } }); await f.queue.pump();
-  known = true; await f.queue.control('phone', { taskId, action: 'reconcile' });
-  assert.equal(f.queue.list('phone').tasks[0].state, 'waiting_resume'); assert.equal(f.queue.list('phone').paused, true);
-  assert.equal(f.queue.list('phone', { view: 'history', state: 'waiting_resume' }).tasks[0].id, taskId);
-  await f.queue.control('phone', { taskId, action: 'dismiss' });
-  assert.equal(f.queue.list('phone').tasks.length, 0); assert.equal(f.queue.list('phone').paused, true);
-  await f.queue.control('phone', { taskId, action: 'resume' }); await f.queue.pump();
+  known = true; await f.queue.pump();
+  assert.equal(f.queue.list('phone').paused, false);
   assert.equal(creates, 1); assert.equal(sends, 1); assert.equal(f.queue.list('phone', { taskId }).tasks[0].state, 'succeeded');
 });
 
