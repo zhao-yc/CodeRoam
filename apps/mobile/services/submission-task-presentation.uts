@@ -1,6 +1,13 @@
 import type { SubmissionTask } from './submission-task-state.uts'
 import { submissionStageDetail } from './submission-task-state.uts'
 
+// 各实例历史合并后仍按实际完成时间倒序；没有完成时间的待核对记录排在后面。
+export function submissionHistoryOrder(a: SubmissionTask, b: SubmissionTask): number {
+  const aTime = a.completedAt > 0 ? a.completedAt : 0
+  const bTime = b.completedAt > 0 ? b.completedAt : 0
+  return bTime - aTime || b.position - a.position
+}
+
 // 首页只展示一条进度说明；失败原因另占一行，完整步骤留在执行记录。
 export function submissionCardMeta(task: SubmissionTask, isPausedBlocker: boolean): string {
   if (task.localOnly == true) return '入队待核对'

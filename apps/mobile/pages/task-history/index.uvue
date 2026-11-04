@@ -26,6 +26,7 @@ import SubmissionTaskStatus from '../../components/submission-task-status/submis
 import { bridge, connection, Computer } from '../../services/bridge.uts'
 import { SubmissionTask, submissionStageDetail, submissionInstance } from '../../services/submission-task-state.uts'
 import { readSubmissionTasks, controlSubmissionTask } from '../../services/submission-tasks.uts'
+import { submissionHistoryOrder } from '../../services/submission-task-presentation.uts'
 type HistoryRow = { hostId: string, task: SubmissionTask }
 type HistoryCursor = { hostId: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
@@ -68,7 +69,7 @@ async function loadMore() {
       const next = result.getNumber('nextCursor') ?? 0
       cursor.before = next; cursor.more = next > 0
     }
-    rows.value = rows.value.sort((a: HistoryRow, b: HistoryRow): number => b.task.createdAt - a.task.createdAt || b.task.position - a.task.position)
+    rows.value = rows.value.sort((a: HistoryRow, b: HistoryRow): number => submissionHistoryOrder(a.task, b.task))
   } catch (reason) { if (revision == request) error.value = (reason as Error).message }
   finally { if (revision == request) loading.value = false }
 }

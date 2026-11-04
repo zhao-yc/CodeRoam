@@ -158,6 +158,47 @@ test('历史分页、状态筛选和通知均限定原提交设备', async t => 
   assert.ok(events.filter(event => event.deviceId === 'two').every(event => event.snapshot.tasks.length <= 1));
 });
 
+test('历史按实际完成时间倒序分页，提交编号交错、同毫秒和待核对记录均不重不漏', t => {
+  const f = fixture(t, { ready: () => false, now: () => 1000000 }), ids = [];
+  for (const completedAt of [400000, 700000, 500000, 700000, 0, 100000]) {
+    const request = command(); ids.push(request.taskId); f.queue.submit('phone', request);
+    f.queue.finish(f.queue.row('phone', request.taskId), completedAt ? 'succeeded' : 'unknown', completedAt ? { ok: true } : null);
+    f.journal.db.prepare('UPDATE submission_tasks SET completed_at=? WHERE id=?').run(completedAt, request.taskId);
+  }
+  const queued = command(); f.queue.submit('phone', queued);
+  const actual = []; let before;
+  do {
+    const page = f.queue.list('phone', { view: 'history', limit: 2, ...(before === undefined ? {} : { before }) });
+    actual.push(...page.tasks.map(task => task.id)); before = page.nextCursor;
+  } while (before !== undefined);
+  assert.deepEqual(actual, [ids[3], ids[1], ids[2], ids[0], ids[5], ids[4]]);
+  assert.equal(new Set(actual).size, 6);
+  assert.deepEqual(f.queue.list('phone').tasks.map(task => task.id), [ids[4], queued.taskId]);
+  const page = f.queue.list('phone', { view: 'history', state: 'succeeded', limit: 2 });
+  assert.deepEqual(page.tasks.map(task => task.id), [ids[3], ids[1]]);
+  assert.deepEqual(f.queue.list('phone', { view: 'history', state: 'succeeded', before: page.nextCursor }).tasks.map(task => task.id), [ids[2], ids[0], ids[5]]);
+});
+
+test('较早提交的任务后来重试成功，刷新历史会按新的完成时间移到最前', async t => {
+  let time = 10000, firstAttempt = true;
+  const f = fixture(t, { now: () => time, execute: async () => { if (firstAttempt) { firstAttempt = false; throw new BridgeError('SYNTHETIC_FAILURE', '合成首次失败'); } return { ok: true }; } });
+  const first = command(), second = command(); f.queue.submit('phone', first); await f.queue.pump();
+  time = 20000; await f.queue.control('phone', { taskId: first.taskId, action: 'resume' }); f.queue.submit('phone', second); await f.queue.pump();
+  assert.deepEqual(f.queue.list('phone', { view: 'history' }).tasks.map(task => task.id), [second.taskId, first.taskId]);
+  time = 30000; await f.queue.control('phone', { taskId: first.taskId, action: 'retry', confirmed: true, expectedAttempt: 0 }); await f.queue.pump();
+  const records = f.queue.list('phone', { view: 'history' }).tasks;
+  assert.deepEqual(records.map(task => task.id), [first.taskId, second.taskId]); assert.equal(records[0].createdAt, 10000); assert.equal(records[0].completedAt, 30000);
+});
+
+test('完成时间分页锚点限定原设备，已清理或其他设备的锚点统一要求刷新', t => {
+  const f = fixture(t, { ready: () => false }), request = command(); f.queue.submit('other-phone', request);
+  f.queue.finish(f.queue.row('other-phone', request.taskId), 'succeeded', { ok: true });
+  const before = f.queue.row('other-phone', request.taskId).position;
+  assert.throws(() => f.queue.list('phone', { view: 'history', before }), { code: 'TASK_HISTORY_CHANGED' });
+  f.journal.db.prepare('DELETE FROM submission_tasks WHERE id=?').run(request.taskId);
+  assert.throws(() => f.queue.list('other-phone', { view: 'history', before }), { code: 'TASK_HISTORY_CHANGED' });
+});
+
 test('推送和历史不含撤回草稿或原生快照，仅原设备定点查询返回必要业务回执', async t => {
   const events = [], f = fixture(t, { changed: (_device, snapshot) => events.push(snapshot), execute: async () => ({ ok: true, draft: { text: '合成私有正文', images: ['synthetic-image'] }, snapshot: { draftId: randomUUID(), settings: { effort: 'high' } }, result: { raw: '不可展示的原始回执' } }) });
   const request = command(); f.queue.watch('phone'); f.queue.submit('phone', request); await f.queue.pump();

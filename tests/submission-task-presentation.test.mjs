@@ -6,8 +6,18 @@ import { stripTypeScriptTypes } from 'node:module';
 
 const source = ['submission-task-state', 'submission-task-presentation'].map(name => fs.readFileSync('apps/mobile/services/' + name + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '')).join('\n');
 const context = vm.createContext({ reactive: value => value });
-vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={submissionCardMeta,submissionCardError,submissionNeedsPauseNotice,legacyDeletionVisible};', context);
+vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={submissionCardMeta,submissionCardError,submissionNeedsPauseNotice,legacyDeletionVisible,submissionHistoryOrder};', context);
 const subject = context.subject;
+
+test('跨实例合并历史按实际完成时间倒序，早提交的重试成功记录也能排在最前', () => {
+  const tasks = [{ id: 'later-submitted', position: 80, createdAt: 900, completedAt: 1000 }, { id: 'retried', position: 6, createdAt: 100, completedAt: 3000 }, { id: 'other-instance', position: 2, createdAt: 800, completedAt: 2000 }];
+  assert.deepEqual(tasks.sort(subject.submissionHistoryOrder).map(task => task.id), ['retried', 'other-instance', 'later-submitted']);
+});
+
+test('完成时间相同按编号倒序，缺少完成时间的待核对记录排在后面', () => {
+  const tasks = [{ position: 99, completedAt: 0 }, { position: 100, completedAt: null }, { position: 2, completedAt: 1000 }, { position: 3, completedAt: 1000 }];
+  assert.deepEqual(tasks.sort(subject.submissionHistoryOrder).map(task => task.position), [3, 2, 100, 99]);
+});
 
 test('支持提交队列的实例不再出现旧删除卡，旧服务保留原异常和核对入口', () => {
   for (const state of ['running', 'failed', 'unknown']) {

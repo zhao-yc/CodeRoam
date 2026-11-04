@@ -135,10 +135,18 @@ export class TaskQueue {
     if (taskId) { conditions.push('id=?'); values.push(taskId); }
     else if (view === 'active') { conditions.push("dismissed=0 AND (state IN ('queued','running','failed','unknown','waiting_resume') OR (state='succeeded' AND completed_at>?))"); values.push(this.now() - 5000); }
     else { conditions.push("state IN ('succeeded','failed','canceled','skipped','unknown','waiting_resume')"); }
-    if (before !== undefined) { conditions.push('position<?'); values.push(before); }
+    const history = view === 'history' && !taskId;
+    if (before !== undefined) {
+      if (history) {
+        // 编号只作原设备上一页的锚点，不能用编号大小截断完成时间不同的任务。
+        const anchor = this.db.prepare('SELECT completed_at FROM submission_tasks WHERE device_id=? AND position=?').get(deviceId, before);
+        if (!anchor) throw new BridgeError('TASK_HISTORY_CHANGED', '执行记录已变化，请刷新后继续查看');
+        conditions.push('(completed_at<? OR (completed_at=? AND position<?))'); values.push(anchor.completed_at, anchor.completed_at, before);
+      } else { conditions.push('position<?'); values.push(before); }
+    }
     if (state) { conditions.push('state=?'); values.push(state); }
     const count = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
-    const rows = this.db.prepare('SELECT * FROM submission_tasks WHERE ' + conditions.join(' AND ') + (view === 'history' && !taskId ? ' ORDER BY position DESC' : ' ORDER BY position') + ' LIMIT ?').all(...values, count + 1);
+    const rows = this.db.prepare('SELECT * FROM submission_tasks WHERE ' + conditions.join(' AND ') + (history ? ' ORDER BY completed_at DESC,position DESC' : ' ORDER BY position') + ' LIMIT ?').all(...values, count + 1);
     const selected = rows.slice(0, count), tasks = selected.map(row => this.publicRow(row, !!taskId));
     if (taskId && !tasks.length) {
       const tombstone = this.db.prepare('SELECT display_metadata FROM submission_task_keys WHERE device_id=? AND id=?').get(deviceId, taskId);
