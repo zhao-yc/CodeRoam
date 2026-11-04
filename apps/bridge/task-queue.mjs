@@ -1,3 +1,4 @@
+import { historyThreadTitle, migrateHistoryTitles } from './history-thread-title.mjs';
 import { createHash } from 'node:crypto';
 import { BridgeError, WRITE_METHODS, requestFingerprint } from '../../packages/protocol/contracts.mjs';
 import { validateTaskRequest } from '../../packages/protocol/tasks.mjs';
@@ -9,8 +10,8 @@ const parse = (value, fallback = null) => value ? JSON.parse(value) : fallback;
 
 /** 每个实例使用自己的 SQLite 任务队列；传输回执与桌面执行彼此独立。 */
 export class TaskQueue {
-  constructor({ journal, execute, changed = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, now = Date.now }) {
-    this.db = journal.db; this.execute = execute; this.changed = changed; this.reconcile = reconcile; this.ready = ready; this.now = now;
+  constructor({ journal, execute, changed = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, readTitle = () => '', now = Date.now }) {
+    this.readTitle = readTitle; this.db = journal.db; this.execute = execute; this.changed = changed; this.reconcile = reconcile; this.ready = ready; this.now = now;
     this.watchers = new Set(); this.waiters = new Map(); this.closed = false; this.running = null;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS submission_tasks (
@@ -40,6 +41,7 @@ export class TaskQueue {
       );
       INSERT OR IGNORE INTO submission_queue_state(singleton) VALUES (1);
     `);
+    migrateHistoryTitles(this.db, 'submission_tasks', readTitle);
     if (!this.db.prepare('PRAGMA table_info(submission_task_keys)').all().some(column => column.name === 'display_metadata')) this.db.exec('ALTER TABLE submission_task_keys ADD COLUMN display_metadata TEXT');
     if (!this.db.prepare('PRAGMA table_info(submission_tasks)').all().some(column => column.name === 'attempt')) this.db.exec('ALTER TABLE submission_tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0');
     // 任务、去重状态与暂停标记一并恢复，不能留下 wait 永久等待的旧 running 状态。
@@ -86,7 +88,7 @@ export class TaskQueue {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('INSERT INTO submission_task_keys(device_id,id,fingerprint,state) VALUES (?,?,?,?)').run(deviceId, taskId, fingerprint, 'queued');
-      const inserted = this.db.prepare("INSERT INTO submission_tasks(id,device_id,kind,method,payload,title,thread_id,project_id,state,stage,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'queued','等待执行',?,?)").run(taskId, deviceId, kind, method, encoded, title, threadId, projectId, time, time);
+      const inserted = this.db.prepare("INSERT INTO submission_tasks(id,device_id,kind,method,payload,title,thread_id,project_id,thread_title,state,stage,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'queued','等待执行',?,?)").run(taskId, deviceId, kind, method, encoded, title, threadId, projectId, historyThreadTitle(this.readTitle, threadId), time, time);
       const scope = kind === 'newConversation' ? 'task:' + taskId : payload.params.draftId ? 'draft:' + payload.params.draftId : threadId;
       if (scope) this.db.prepare('INSERT INTO submission_task_scopes(task_position,scope) VALUES (?,?)').run(Number(inserted.lastInsertRowid), scope);
       this.db.exec('COMMIT');
@@ -125,7 +127,7 @@ export class TaskQueue {
     const steps = this.db.prepare('SELECT name,state,updated_at FROM submission_task_steps WHERE task_position=? ORDER BY rowid').all(row.position).map(step => ({ name: step.name, state: step.state, at: step.updated_at }));
     const receipt = includeResult && row.state === 'succeeded' ? this.db.prepare('SELECT result FROM submission_task_keys WHERE device_id=? AND id=?').get(row.device_id, row.id) : null;
     const original = parse(receipt?.result), result = original && typeof original === 'object' && !Array.isArray(original) ? Object.fromEntries(Object.entries(original).filter(([key]) => ['ok', 'commandId', 'threadId', 'draftId', 'snapshot', 'settings', 'models', 'mode', 'revision', 'options', 'reviewer', 'queued', 'queueId', 'edited', 'canceled', 'draft', 'archived', 'deleted', 'deletedThreadIds', 'goal', 'goalRevision', 'messageAccepted', 'planReset', 'reconciled'].includes(key))) : null;
-    return { id: row.id, position: row.position, kind: row.kind, method: row.method, title: row.title, threadId: row.thread_id, projectId: row.project_id, state: row.state, stage: row.stage, error: row.error, createdAt: row.created_at, startedAt: row.started_at, completedAt: row.completed_at, updatedAt: row.updated_at, dismissed: !!row.dismissed, attempt: row.attempt ?? 0, canRetry: this.canRetry(row), steps, ...(result ? { result } : {}) };
+    return { id: row.id, position: row.position, kind: row.kind, method: row.method, title: row.title, threadTitle: row.thread_title ?? '', threadId: row.thread_id, projectId: row.project_id, state: row.state, stage: row.stage, error: row.error, createdAt: row.created_at, startedAt: row.started_at, completedAt: row.completed_at, updatedAt: row.updated_at, dismissed: !!row.dismissed, attempt: row.attempt ?? 0, canRetry: this.canRetry(row), steps, ...(result ? { result } : {}) };
   }
 
   /** 活跃列表使用服务端完成时间，刷新不会重新开始五秒倒计时。 */
@@ -225,7 +227,11 @@ export class TaskQueue {
       retainScope: scope => { this.db.prepare('INSERT OR IGNORE INTO submission_task_scopes(task_position,scope) VALUES (?,?)').run(row.position, scope); },
       update: changes => {
         const current = this.row(row.device_id, row.id);
-        this.db.prepare('UPDATE submission_tasks SET thread_id=?,title=?,stage=?,updated_at=? WHERE position=?').run(changes.threadId ?? current.thread_id, changes.title ?? current.title, changes.stage ?? current.stage, this.now(), row.position); this.notify();
+        this.db.prepare('UPDATE submission_tasks SET thread_id=?,title=?,stage=?,updated_at=? WHERE position=?').run(changes.threadId ?? current.thread_id, changes.title ?? current.title, changes.stage ?? current.stage, this.now(), row.position);
+        const target = changes.threadId ?? current.thread_id;
+        const title = historyThreadTitle(this.readTitle, target) || (row.kind === 'newConversation' ? current.title : '');
+        if (title) this.db.prepare("UPDATE submission_tasks SET thread_title=? WHERE position=? AND thread_title=''").run(title, row.position);
+        this.notify();
       },
       step: async (name, operation) => {
         const previous = this.db.prepare('SELECT * FROM submission_task_steps WHERE task_position=? AND name=?').get(row.position, name);
@@ -257,6 +263,9 @@ export class TaskQueue {
         this.db.prepare('DELETE FROM submission_task_scopes WHERE task_position=?').run(row.position);
       }
       if (result?.threadId) this.db.prepare('UPDATE submission_tasks SET thread_id=? WHERE position=?').run(result.threadId, row.position);
+      const current = this.row(row.device_id, row.id);
+      const title = historyThreadTitle(this.readTitle, current.thread_id) || (row.kind === 'newConversation' ? current.title : '');
+      if (title) this.db.prepare("UPDATE submission_tasks SET thread_title=? WHERE position=? AND thread_title=''").run(title, row.position);
       if (state === 'failed' || state === 'unknown') this.db.prepare('UPDATE submission_queue_state SET paused=1,blocker_position=? WHERE singleton=1').run(row.position);
       this.db.exec('COMMIT');
     } catch (failure) { this.db.exec('ROLLBACK'); throw failure; }

@@ -59,13 +59,13 @@ export class StateReader {
     finally { db.close(); }
   }
   /** 实时快照可能缺少名称；按会话 ID 只读索引，不受列表分页影响。 */
-  readTitle(threadId) {
+  readTitle(threadId, { includeArchived = false } = {}) {
     if(!fs.existsSync(this.filePath))return '';
     const db=new DatabaseSync(this.filePath,{readOnly:true});
     try {
       const columns=new Set(db.prepare('PRAGMA table_info(threads)').all().map(column=>column.name));
       const title=columns.has('name')?"COALESCE(NULLIF(TRIM(name),''),title)":'title';
-      return db.prepare(`SELECT ${title} AS title FROM threads WHERE id=? AND archived=0`).get(threadId)?.title ?? '';
+      return db.prepare(`SELECT ${title} AS title FROM threads WHERE id=?${includeArchived ? '' : ' AND archived=0'}`).get(threadId)?.title ?? '';
     } finally {db.close();}
   }
   /** 历史和缓存共用已核对的未归档会话索引。 */

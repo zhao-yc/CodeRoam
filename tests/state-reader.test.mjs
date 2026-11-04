@@ -118,3 +118,11 @@ test('保留已命名的新会话及消息索引滞后的聊天，搜索和分�
     assert.deepEqual(f.db.prepare('SELECT * FROM threads ORDER BY id').all(),before);
   } finally {f.close();}
 });
+
+test('执行历史允许只读取得归档标题，普通标题查询仍保持原可见性', t => {
+  const f=fixture(['name']);t.after(()=>f.close());
+  f.add({id:'archived-title',title:'旧名称',name:'归档名称',archived:1});
+  assert.equal(f.reader.readTitle('archived-title'),'');
+  assert.equal(f.reader.readTitle('archived-title',{includeArchived:true}),'归档名称');
+  assert.equal(f.db.prepare('SELECT archived FROM threads WHERE id=?').get('archived-title').archived,1);
+});
