@@ -21,7 +21,9 @@ export function validateTaskRequest(method, params, requestId) {
     return;
   }
   if (method === 'tasks.list') {
-    if (!keys(params,['view','taskId','before','limit','state']) || !['active','history'].includes(params.view ?? 'active') ||
+    if (!keys(params,['view','taskId','before','limit','state','category']) || !['active','history'].includes(params.view ?? 'active') ||
+        params.category !== undefined && !['submission','operation'].includes(params.category) ||
+        params.category === 'operation' && (params.view !== 'history' || params.taskId !== undefined) ||
         params.taskId !== undefined && !id(params.taskId) || params.before !== undefined && !integer(params.before) ||
         params.limit !== undefined && (!integer(params.limit) || params.limit < 1 || params.limit > 100) ||
         params.state !== undefined && !TASK_STATES.includes(params.state)) fail('任务查询参数无效');
@@ -64,11 +66,12 @@ export function validateTaskRequest(method, params, requestId) {
 
 /** 展示事件采用字段白名单，阻断误把数据库执行正文、原设备身份或桌面原始回执推送给手机。 */
 export function validTaskSnapshot(snapshot) {
-  if (!keys(snapshot,['supportsTaskQueue','revision','paused','blockerId','tasks','now','nextCursor']) || snapshot.supportsTaskQueue !== true || !integer(snapshot.revision) ||
+  if (!keys(snapshot,['supportsTaskQueue','supportsOperationHistory','revision','paused','blockerId','tasks','now','nextCursor']) || snapshot.supportsTaskQueue !== true || !integer(snapshot.revision) ||
+      snapshot.supportsOperationHistory !== undefined && typeof snapshot.supportsOperationHistory !== 'boolean' ||
       typeof snapshot.paused !== 'boolean' || !text(snapshot.blockerId,80) || snapshot.blockerId && !id(snapshot.blockerId) || !integer(snapshot.now) ||
       !Array.isArray(snapshot.tasks) || snapshot.tasks.length > 1000 || snapshot.nextCursor !== undefined && snapshot.nextCursor !== null && !integer(snapshot.nextCursor)) return false;
   return snapshot.tasks.every(task => keys(task,['id','position','kind','method','title','threadId','projectId','state','stage','error','createdAt','startedAt','completedAt','updatedAt','dismissed','steps','result','historyExpired','attempt','canRetry']) &&
-    id(task.id) && integer(task.position) && ['command','newConversation'].includes(task.kind) && text(task.method,100) && text(task.title,300) && text(task.threadId,200) && text(task.projectId,200) &&
+    id(task.id) && integer(task.position) && ['command','newConversation','operation'].includes(task.kind) && text(task.method,100) && text(task.title,300) && text(task.threadId,200) && text(task.projectId,200) &&
     TASK_STATES.includes(task.state) && text(task.stage,300) && text(task.error,2000) && integer(task.createdAt) && (task.startedAt === null || integer(task.startedAt)) &&
     (task.completedAt === null || integer(task.completedAt)) && integer(task.updatedAt) && typeof task.dismissed === 'boolean' && (task.historyExpired === undefined || typeof task.historyExpired === 'boolean') && (task.attempt === undefined || integer(task.attempt)) && (task.canRetry === undefined || typeof task.canRetry === 'boolean') && (task.result === undefined || object(task.result) && safeResult(task.result)) && Array.isArray(task.steps) && task.steps.length <= 100 &&
     task.steps.every(step => keys(step,['name','state','at','startedAt','completedAt','error']) && text(step.name,300) && ['queued','running','succeeded','failed','unknown','done'].includes(step.state) &&

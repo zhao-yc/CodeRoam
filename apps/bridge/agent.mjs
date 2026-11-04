@@ -24,6 +24,7 @@ import { ClientPresenceController } from './client-presence.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { TaskQueue } from './task-queue.mjs';
+import { StateOperationHistory } from './state-operation-history.mjs';
 import { runNewConversationTask } from './new-conversation-task.mjs';
 import { randomUUID } from 'node:crypto';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
@@ -59,6 +60,7 @@ export class BridgeAgent extends EventEmitter {
     this.adapter.nativeFileReportAvailable=()=>this.fileReports.supports(this.adapter);
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
+    this.operationHistory=journal.db?new StateOperationHistory({db:journal.db}):null;
     this.taskQueue=journal.db?new TaskQueue({journal,
       ready:()=>!this.taskClosed&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
       execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.commandId,task.payload.firstMessageGuard),
@@ -252,7 +254,7 @@ export class BridgeAgent extends EventEmitter {
       if(!accepted&&params.kind==='newConversation')for(const id of params.payload.attachments??[]){const {metadata}=this.adapter.attachments.metadata(deviceId,scope,id);if(!metadata.complete)throw new BridgeError('UPLOAD_INCOMPLETE','附件尚未上传完成，输入已保留');}
       return this.taskQueue.submit(deviceId,params);
     }
-    if(method==='tasks.list')return this.taskQueue.list(deviceId,params);
+    if(method==='tasks.list')return params.category==='operation'?this.operationHistory.list(deviceId,params):this.taskQueue.list(deviceId,params);
     if(method==='tasks.watch')return this.taskQueue.watch(deviceId);
     if(method==='tasks.unwatch')return this.taskQueue.unwatch(deviceId);
     if(method==='tasks.control')return this.taskQueue.control(deviceId,params);
@@ -379,7 +381,10 @@ export class BridgeAgent extends EventEmitter {
           }
           return {...result,...(this.taskQueue?{supportsTaskQueue:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
         }
-        if(message.method==='thread.read')return this.adapter.markRead(message.params.threadId,message.deviceId);
+        if(message.method==='thread.read') {
+          const read=()=>this.adapter.markRead(message.params.threadId,message.deviceId);
+          return this.operationHistory?this.operationHistory.run({deviceId:message.deviceId,requestId:message.requestId,method:'thread.read',threadId:message.params.threadId,alreadyRead:this.adapter.native?.unread?.get(message.params.threadId)===false},read,read):read();
+        }
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {
@@ -400,7 +405,11 @@ export class BridgeAgent extends EventEmitter {
             }).catch(()=>{});
           }
           let snapshot;
-          try { snapshot=await this.adapter.watch(id,message.deviceId,{activate:message.params.activate===true,readSavedHistory}); }
+          try {
+            const watch=activate=>this.adapter.watch(id,message.deviceId,{activate,readSavedHistory});
+            snapshot=message.params.activate===true&&this.operationHistory?
+              await this.operationHistory.run({deviceId:message.deviceId,requestId:message.requestId,method:'thread.sync',threadId:id},()=>watch(true),()=>watch(false)):await watch(message.params.activate===true);
+          }
           // 已有实时快照时直接结束读取；晚到的历史预览不能拖慢或覆盖实时回执。
           finally { finished=true; }
           this.threadCache.schedule();

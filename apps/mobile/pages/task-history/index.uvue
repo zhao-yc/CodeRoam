@@ -1,6 +1,9 @@
 <template>
   <view class="page history-page">
     <view class="history-header"><view class="history-back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回上一页" @click="goBack"></button></view><text class="history-heading">执行记录</text></view>
+    <view class="history-categories" role="tablist" aria-label="记录分类">
+      <view v-for="(label, index) in categoryLabels" :key="label" class="history-category action-frame" :class="category == categoryValues[index] ? 'history-category-selected' : ''"><text class="history-category-label" :class="category == categoryValues[index] ? 'history-category-label-selected' : ''">{{ label }}</text><button class="action-hitbox" hover-class="action-pressed" role="tab" :aria-selected="category == categoryValues[index]" :aria-label="label" @click="chooseCategory(categoryValues[index])"></button></view>
+    </view>
     <view class="history-filters">
       <!-- 按文字和图标的整体宽度居中，避免按钮默认布局和字符箭头基线造成偏移。 -->
       <view class="history-filter history-host-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
@@ -18,15 +21,15 @@
       <view v-for="row in rows" :key="row.hostId + ':' + row.task.id" class="history-task">
         <view class="history-task-heading"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><submission-task-status class="history-state" :state="row.task.state" /></view>
         <template v-if="row.task.threadId.length > 0"><button v-if="row.task.method != 'thread.delete'" class="history-chat-title" hover-class="action-pressed" @click="openTask(row.hostId, row.task)">{{ chatTitle(row.hostId, row.task) }}</button><text v-else class="history-chat-title history-chat-unavailable">{{ chatTitle(row.hostId, row.task) }}</text></template>
-        <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · 提交时间 {{ dateLabel(row.task.createdAt) }}</text>
+        <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · {{ row.task.kind == 'operation' ? '操作时间' : '提交时间' }} {{ dateLabel(row.task.createdAt) }}</text>
         <text v-if="row.task.completedAt > 0" class="history-meta">{{ completionLabel(row.task) }}</text>
         <text v-if="stageDetail(row.task).length > 0" class="history-stage">{{ stageDetail(row.task) }}</text>
         <text v-if="row.task.error.length > 0" class="history-error">{{ row.task.error }}</text>
         <view v-if="row.task.steps.length > 0" class="history-steps"><view v-for="step in row.task.steps" :key="step.name" class="history-step"><submission-task-status :state="step.state" /><text class="history-step-name">{{ step.name }}</text></view></view>
-        <view v-if="row.task.state == 'failed' && row.task.canRetry == true || row.task.state == 'unknown' || canResume(row)" class="history-actions"><button v-if="row.task.state == 'failed' && row.task.canRetry == true" class="history-action" :disabled="working.length > 0" @click="retry(row)">重试</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="control(row, 'reconcile')">核对结果</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="skip(row)">已核对并跳过</button><button v-if="canResume(row)" class="history-action" :disabled="working.length > 0" @click="control(row, 'resume')">继续队列</button></view>
+        <view v-if="row.task.kind != 'operation' && (row.task.state == 'failed' && row.task.canRetry == true || row.task.state == 'unknown' || canResume(row))" class="history-actions"><button v-if="row.task.state == 'failed' && row.task.canRetry == true" class="history-action" :disabled="working.length > 0" @click="retry(row)">重试</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="control(row, 'reconcile')">核对结果</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="skip(row)">已核对并跳过</button><button v-if="canResume(row)" class="history-action" :disabled="working.length > 0" @click="control(row, 'resume')">继续队列</button></view>
       </view>
       <button v-if="hasMore" class="history-more" :disabled="loading" @click="loadMore">{{ loading ? '正在读取…' : '加载更多' }}</button>
-      <text class="history-footnote">每实例保留最近30天且最多1000条已结束记录；待核对任务保留至处理。</text>
+      <text class="history-footnote">{{ category == 'operation' ? '状态操作独立执行，不影响提交队列；重复已读确认合并记录。每设备保留最近30天且最多1000条结果。' : '每实例保留最近30天且最多1000条已结束记录；待核对任务保留至处理。' }}</text>
     </scroll-view>
     <view v-if="hostPickerOpen" class="history-instance-overlay" @click="closeHostPicker">
       <view class="history-instance-sheet" @click.stop>
@@ -59,6 +62,8 @@ type HistoryChatTitle = { hostId: string, threadId: string, title: string }
 const chatTitles = ref<HistoryChatTitle[]>([])
 type HistoryCursor = { hostId: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
+const category = ref('submission')
+const categoryValues = ['submission', 'operation'], categoryLabels = ['提交任务', '状态操作']
 const cursors = ref<HistoryCursor[]>([])
 const refreshing = ref(false)
 const hostPickerOpen = ref(false), hostPickerWindowHeight = ref(640)
@@ -66,15 +71,15 @@ const hostPickerHeight = computed((): number => Math.max(60, Math.min((connectio
 let request = 0
 const pageVisible = ref(false)
 const onlineHosts = computed((): string => connection.computers.filter((computer: Computer): boolean => computer.online).map((computer: Computer): string => computer.id).sort().join(','))
-const stateValues = ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped']
-const stateLabels = ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过']
+const stateValues = computed((): string[] => category.value == 'operation' ? ['', 'running', 'succeeded', 'failed', 'unknown'] : ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped'])
+const stateLabels = computed((): string[] => category.value == 'operation' ? ['全部状态', '执行中', '已完成', '执行失败', '结果待核对'] : ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过'])
 // 原生模板通过本地方法调用导入函数，避免 UTS 将其解析为函数对象。
 function computerIcon(computer: Computer | null): string { return resolveComputerIcon(computer) }
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原实例' }
 const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全部实例' : hostName(hostId.value))
 // 与选择列表共用实例图标映射，连接设置更新图标时筛选框同步更新。
 const selectedHostIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == hostId.value) ?? null))
-const selectedStateLabel = computed((): string => stateLabels[stateValues.indexOf(state.value)] ?? '全部状态')
+const selectedStateLabel = computed((): string => stateLabels.value[stateValues.value.indexOf(state.value)] ?? '全部状态')
 const hasMore = computed((): boolean => cursors.value.some((cursor: HistoryCursor): boolean => cursor.more))
 // 标题按电脑和聊天编号共同匹配，避免多实例同编号串到其他聊天。
 function chatTitle(id: string, task: SubmissionTask): string {
@@ -115,7 +120,8 @@ function completionLabel(task: SubmissionTask): string {
   else if (task.state == 'failed') label = '失败时间'
   else if (task.state == 'canceled' || task.state == 'cancelled') label = '取消时间'
   else if (task.state == 'skipped') label = '跳过时间'
-  const duration = task.startedAt > 0 ? ' · 耗时 ' + Math.max(0, Math.round((task.completedAt - task.startedAt) / 1000)) + ' 秒' : ''
+  const elapsed = Math.max(0, task.completedAt - task.startedAt)
+  const duration = task.startedAt > 0 ? ' · 耗时 ' + (task.kind == 'operation' && elapsed < 1000 ? elapsed + ' 毫秒' : task.kind == 'operation' ? (elapsed / 1000).toFixed(2) + ' 秒' : Math.round(elapsed / 1000) + ' 秒') : ''
   return label + ' ' + dateLabel(task.completedAt) + duration
 }
 // 每实例独立游标，全部实例仅合并显示，不能把一个实例游标传给另一实例。
@@ -127,10 +133,13 @@ async function loadMore() {
     for (const cursor of cursors.value) {
       if (!cursor.more) continue
       const params: UTSJSONObject = { view: 'history', limit: 30 }
+      if (category.value == 'operation') params['category'] = 'operation'
       if (cursor.before > 0) params['before'] = cursor.before
       if (state.value.length > 0) params['state'] = state.value
       const result = await readSubmissionTasks(cursor.hostId, params)
       if (revision != request || namespace != connection.cacheNamespace) return
+      // 旧服务可能忽略新筛选字段，不能将提交任务误显示为状态操作。
+      if (category.value == 'operation' && result.getBoolean('supportsOperationHistory') != true) throw new Error('请更新电脑连接服务后查看状态操作记录')
       const tasks = JSON.parse<SubmissionTask[]>(JSON.stringify(result['tasks'] ?? [] as SubmissionTask[])) ?? [] as SubmissionTask[]
       tasks.forEach((task: SubmissionTask) => { if (!rows.value.some((row: HistoryRow): boolean => row.hostId == cursor.hostId && row.task.id == task.id)) rows.value.push({ hostId: cursor.hostId, task } as HistoryRow) })
       const next = result.getNumber('nextCursor') ?? 0
@@ -147,6 +156,8 @@ function reload() {
   if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
   loadMore()
 }
+// 分类切换清空旧游标与状态筛选，迟到的另一类结果由请求代次丢弃。
+function chooseCategory(value: string) { if (category.value == value) return; category.value = value; state.value = ''; reload() }
 // 下拉刷新保留筛选条件并重置分页，重复手势不重复请求；结束状态由当前请求统一收起。
 async function refreshHistory() {
   if (refreshing.value) return
@@ -167,7 +178,7 @@ function selectHost(id: string) {
   hostId.value = id
   reload()
 }
-function chooseState() { uni.showActionSheet({ itemList: stateLabels, success: (answer) => { state.value = stateValues[answer.tapIndex]; reload() } }) }
+function chooseState() { uni.showActionSheet({ itemList: stateLabels.value, success: (answer) => { state.value = stateValues.value[answer.tapIndex]; reload() } }) }
 function openTask(id: string, task: SubmissionTask) {
   if (task.threadId.length == 0 || task.method == 'thread.delete') return
   try { bridge.selectComputer(id); uni.navigateTo({ url: '/pages/conversation/index?hostId=' + encodeURIComponent(id) + '&threadId=' + encodeURIComponent(task.threadId) + '&title=' + encodeURIComponent(chatTitle(id, task)) }) } catch (reason) { error.value = (reason as Error).message }
@@ -193,6 +204,11 @@ onUnload(() => { closeHostPicker(); pageVisible.value = false; request++; refres
 .history-header { background-color: #ffffff; border-bottom-style: solid; border-bottom-width: 1px; border-bottom-color: #e0e4ec; height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .history-back { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
 .history-heading { font-size: 17px; line-height: 26px; font-weight: bold; color: #1a2135; margin-left: 8px; }
+.history-categories { margin: 12px 16px 0; padding: 4px; border-radius: 14px; background-color: #f1f2fa; flex-direction: row; flex-shrink: 0; }
+.history-category { flex: 1; height: 38px; border-radius: 10px; align-items: center; justify-content: center; }
+.history-category-selected { background-color: #ffffff; }
+.history-category-label { font-size: 14px; line-height: 22px; color: #596479; }
+.history-category-label-selected { color: #4546bd; font-weight: bold; }
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
