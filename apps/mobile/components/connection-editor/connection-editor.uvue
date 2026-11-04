@@ -13,9 +13,10 @@
           <view class="icon-options"><view v-for="option in iconOptions" :key="option.id" :class="['icon-option', 'action-frame', icon == option.id ? 'icon-selected' : '']"><app-icon :name="option.id" :size="26" :tone="icon == option.id ? 'dark' : 'muted'" /><button class="action-hitbox" :disabled="saving" :aria-label="'选择' + option.label + '图标'" @click="chooseIcon(option.id)"></button></view></view>
           <view class="connection-facts"><view class="fact-row"><text class="fact-label">主机名</text><text class="fact-value">{{ (computer.hostname ?? '').length > 0 ? computer.hostname : '未提供' }}</text></view><view class="fact-divider"></view><view class="fact-row"><text class="fact-label">类型</text><text class="fact-value">{{ computer.connectionType == 'codex-desktop' ? 'Codex 桌面版' : '未提供' }}</text></view></view>
           <view class="last-connected"><app-icon name="clock" :size="17" tone="muted" /><text class="last-label">上次连接：{{ lastConnectedLabel }}</text></view>
-          <text v-if="!connection.supportsHostProfiles" class="editor-error">请更新中转服务后再编辑连接。</text>
+          <text v-if="!connection.connected" class="editor-error">恢复连接后可以保存修改。</text>
+          <text v-else-if="!connection.supportsHostProfiles" class="editor-error">请更新中转服务后再编辑连接。</text>
           <text v-if="error.length > 0" class="editor-error">{{ error }}</text>
-          <view class="save-button inline-progress-button" :class="canSave || saving ? 'save-enabled' : 'save-disabled'"><action-progress :busy="saving" light /><text class="inline-progress-caption" :style="{ color: canSave || saving ? '#ffffff' : '#737d91' }" style="font-size: 16px;">保存</text><button class="inline-progress-hitbox" :disabled="!canSave" @click="save" :aria-label="(saving) ? '正在保存' : '保存'"></button></view>
+          <view class="save-button inline-progress-button" :class="canSave || saving ? 'save-enabled' : 'save-disabled'"><action-progress :busy="saving" light /><text class="inline-progress-caption" :style="{ color: canSave || saving ? '#ffffff' : '#737d91' }" style="font-size: 16px;">保存</text><button class="inline-progress-hitbox" style="background-color: transparent;" :disabled="!canSave" @click="save" :aria-label="(saving) ? '正在保存' : '保存'"></button></view>
         </view>
       </scroll-view>
       <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
@@ -27,7 +28,7 @@
 import { computed, ref, onUnmounted } from 'vue'
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
-const props = defineProps<{ computer: Computer, anchorLeft: number, anchorTop: number, releaseAt: number }>()
+const props = defineProps<{ computer: Computer, anchorLeft: number, anchorTop: number, releaseAt: number, directEdit?: boolean }>()
 const emit = defineEmits<{ dismiss: [], release: [], busy: [value: boolean] }>()
 const editing = ref(false)
 const displayName = ref('')
@@ -45,7 +46,7 @@ const menuWidth = Math.min(230, windowInfo.windowWidth - 24)
 const menuLeft = computed((): number => Math.max(12, Math.min(props.anchorLeft, windowInfo.windowWidth - menuWidth - 12)))
 const menuTop = computed((): number => Math.max(12, Math.min(props.anchorTop, windowInfo.windowHeight - 124)))
 const sheetHeight = computed((): number => Math.max(180, Math.min(490, windowInfo.windowHeight - keyboardInset.value - 28)))
-const canSave = computed((): boolean => !saving.value && connection.connected && connection.supportsHostProfiles && displayName.value.trim().length > 0 && displayName.value.length <= 100 && !/[\u0000-\u001f\u007f]/.test(displayName.value) && (displayName.value.trim() != originalName.value || icon.value != originalIcon.value))
+const canSave = computed((): boolean => editorContextCurrent() && !saving.value && connection.connected && connection.supportsHostProfiles && displayName.value.trim().length > 0 && displayName.value.length <= 100 && !/[\u0000-\u001f\u007f]/.test(displayName.value) && (displayName.value.trim() != originalName.value || icon.value != originalIcon.value))
 const lastConnectedLabel = computed((): string => {
   const timestamp = props.computer.lastConnectedAt ?? 0
   if (timestamp <= 0) return '未提供'
@@ -57,8 +58,12 @@ const lastConnectedLabel = computed((): string => {
   return date.getFullYear().toString() + '-' + (date.getMonth() + 1).toString().padStart(2, '0') + '-' + date.getDate().toString().padStart(2, '0')
 })
 let alive = true
+let editTargetId = props.computer.id
+let editConfigurationRevision = connection.configurationRevision
+// 固定编辑目标与配对，旧请求的结果不能关闭或提示新的资料面板。
+function editorContextCurrent(): boolean { return alive && props.computer.id == editTargetId && connection.configurationRevision == editConfigurationRevision }
 // 打开时拍下原值与版本，远端推送更新信息时不覆盖正在输入的草稿。
-function beginEditing() { displayName.value = props.computer.label; originalName.value = props.computer.label; icon.value = computerIcon(props.computer); originalIcon.value = icon.value; revision.value = props.computer.profileRevision ?? 0; editing.value = true }
+function beginEditing() { editTargetId = props.computer.id; editConfigurationRevision = connection.configurationRevision; displayName.value = props.computer.label; originalName.value = props.computer.label; icon.value = computerIcon(props.computer); originalIcon.value = icon.value; revision.value = props.computer.profileRevision ?? 0; editing.value = true }
 function chooseIcon(value: string) { if (!saving.value) icon.value = value }
 function hideInputKeyboard() { uni.hideKeyboard(); keyboardInset.value = 0 }
 function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) { keyboardInset.value = event.detail.height }
@@ -69,10 +74,12 @@ function save() {
   if (!canSave.value) return
   saving.value = true; emit('busy', true); error.value = ''; hideInputKeyboard()
   bridge.updateComputerProfile(props.computer.id, displayName.value.trim(), icon.value, revision.value).then((_: UTSJSONObject) => {
-    if (!alive) return
+    if (!editorContextCurrent()) return
     saving.value = false; emit('busy', false); uni.showToast({ title: '连接已保存', icon: 'none' }); emit('dismiss')
-  }, (reason: Error) => { if (alive) { saving.value = false; emit('busy', false); error.value = reason.message } })
+  }, (reason: Error) => { if (editorContextCurrent()) { saving.value = false; emit('busy', false); error.value = reason.message } })
 }
+// 设置页直接显示资料编辑；首页长按仍先显示原有菜单。
+if (props.directEdit == true) beginEditing()
 onUnmounted(() => { alive = false; uni.hideKeyboard() })
 </script>
 
@@ -82,7 +89,7 @@ onUnmounted(() => { alive = false; uni.hideKeyboard() })
 .menu-name { font-size: 14px; line-height: 22px; color: #737d91; lines: 1; text-overflow: ellipsis; }
 .menu-edit { flex-direction: row; align-items: center; height: 52px; margin-top: 5px; }
 .menu-label { color: #1a2135; font-size: 17px; margin-left: 16px; }
-.connection-sheet { border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #ffffff; overflow: hidden; }
+.connection-sheet { width: 100%; max-width: 720px; align-self: center; border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #ffffff; overflow: hidden; }
 .sheet-grip { width: 36px; height: 4px; margin-top: 8px; background-color: #e5e8f1; border-radius: 2px; align-self: center; flex-shrink: 0; }
 .sheet-heading { flex-direction: row; align-items: center; padding: 10px 12px 14px 24px; flex-shrink: 0; }
 .sheet-title { color: #1a2135; font-size: 22px; font-weight: bold; flex: 1; }

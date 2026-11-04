@@ -21,9 +21,9 @@
           </view>
         </view>
         <view v-if="liquidGlass" class="header-glass-group">
-          <liquid-glass-control symbol="magnifyingglass" label="搜索聊天" secondary-symbol="gearshape" secondary-label="电脑连接设置" :secondary-disabled="creatingConversation" @activate="openSearch" @secondary="openConnection" />
+          <liquid-glass-control symbol="magnifyingglass" label="搜索聊天" secondary-symbol="gearshape" secondary-label="设置" :secondary-disabled="creatingConversation" @activate="openSearch" @secondary="openConnection" />
         </view>
-        <view v-else class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="电脑连接设置" @click="openConnection"></button></view></view>
+        <view v-else class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="设置" @click="openConnection"></button></view></view>
       </template>
     </view>
     <view class="list-shell" :class="{ 'list-shell-glass': liquidGlass }">
@@ -404,7 +404,7 @@ function updatedLabel(value: number): string {
 }
 
 // 低频接入与设备管理只在独立页面中提供。
-function openConnection() { if (!creatingConversation.value) uni.navigateTo({ url: '/pages/connection/index' }) }
+function openConnection() { if (!creatingConversation.value) uni.navigateTo({ url: '/pages/settings/index' }) }
 // 列表与新建编辑区共用页面，保留搜索、列表节点及其滚动位置。
 function onThreadListScroll(event: UniScrollEvent) { if (!restoringThreadScroll) savedThreadScrollTop = event.detail.scrollTop; if (event.detail.scrollTop > 0 && listRowLimit.value >= 0) revealAllThreadRows() }
 // 两种布局共用同一个新建入口，将当前筛选的电脑交给工作区。
@@ -435,8 +435,8 @@ function resetThreadScroll() { savedThreadScrollTop = 0; threadScrollTop.value =
 // 列表偏好即时生效，不等菜单退场。
 function selectSort(value: string) { if (!menuVisible.value || ['priority', 'project', 'time'].indexOf(value) < 0) return; closeMenu(); listSort.value = value; saveListPreferences(); resetThreadScroll() }
 function toggleRecent() { if (!menuVisible.value) return; closeMenu(); recentFirst.value = !recentFirst.value; saveListPreferences(); resetThreadScroll() }
-// 添加连接直接定位接入配置，设置入口保留当前连接概览。
-function openMenuConnection(adding: boolean) { if (!menuVisible.value || creatingConversation.value) return; closeMenu(); uni.navigateTo({ url: '/pages/connection/index' + (adding ? '?add=true' : '') }) }
+// 电脑连接直达管理页；日常偏好统一从设置首页进入。
+function openMenuConnection(adding: boolean) { if (!menuVisible.value || creatingConversation.value) return; closeMenu(); uni.navigateTo({ url: adding ? '/pages/connection/index' : '/pages/settings/index' }) }
 function openSearch() { searchVisible.value = true; nextTick(() => { searchFocused.value = true }) }
 function closeSearch() { search.value = ''; searchFocused.value = false; searchVisible.value = false; uni.hideKeyboard() }
 function chooseComputerFilter(id: string) { if (editingComputerId.value.length > 0 || Date.now() < suppressComputerClickUntil) return; if (id.length > 0 && !displayComputers.value.some((computer: Computer): boolean => computer.id == id)) return; selectedComputerId.value = id; resetThreadScroll(); refreshComputerThreads(id) }

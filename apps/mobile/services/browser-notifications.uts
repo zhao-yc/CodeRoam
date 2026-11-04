@@ -183,5 +183,5 @@ export function browserNotificationLabel(): string {
   if (browserNotifications.permission == 'denied') return '已拒绝'
   if (browserNotifications.busy) return '正在开启'
   if (!browserNotifications.enabled) return browserNotifications.permission == 'default' ? '未授权' : '已关闭'
-  return browserNotifications.ready ? '已开启' : '未就绪'
+  return browserNotifications.ready ? '已开启' : browserNotifications.error.length > 0 ? '初始化失败' : '未就绪'
 }

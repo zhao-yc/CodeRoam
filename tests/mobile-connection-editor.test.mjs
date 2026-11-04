@@ -6,8 +6,8 @@ import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 
 /** 直接执行编辑面板的 UTS，检查草稿、重复保存、错误和远端推送竞争。 */
-function editorFixture() {
-  const props = { computer: { id: 'pc', label: '原名', icon: 'laptop', hostname: 'example-pc', profileRevision: 2 }, anchorLeft: 290, anchorTop: 100, releaseAt: Date.now() - 1000 };
+function editorFixture(directEdit = false) {
+  const props = { computer: { id: 'pc', label: '原名', icon: 'laptop', hostname: 'example-pc', profileRevision: 2 }, anchorLeft: 290, anchorTop: 100, releaseAt: Date.now() - 1000, directEdit };
   const events = [], requests = [], lifecycle = [];
   const connection = { connected: true, supportsHostProfiles: true };
   const context = componentContext({ defineProps: () => props, defineEmits: () => (...event) => events.push(event), ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }), onUnmounted: fn => lifecycle.push(fn), connection, computerIcon: computer => computer?.icon ?? 'laptop', bridge: { updateComputerProfile(...args) { return new Promise((resolve, reject) => requests.push({ args, resolve, reject })); } }, uni: { getWindowInfo: () => ({ windowWidth: 320, windowHeight: 600 }), hideKeyboard() {}, showToast() {} } });
@@ -25,6 +25,15 @@ test('长名称与图标草稿只在打开时初始化，未修改和空白名�
   f.props.computer = { ...f.props.computer, label: '远端新名称', profileRevision: 3 }; assert.equal(f.displayName.value, '修改名称');
   f.onKeyboardChange({ detail: { height: 330 } }); assert.equal(f.sheetHeight.value, 242);
   f.dismiss(); assert.deepEqual(f.events.at(-1), ['dismiss']); assert.equal(f.requests.length, 0);
+});
+
+test('设置页直接初始化编辑草稿，配对改变后的成功或失败回执不影响新上下文', async () => {
+  for (const failure of [false, true]) {
+    const f = editorFixture(true); assert.equal(f.displayName.value, '原名'); f.displayName.value = '新名称'; f.save();
+    assert.equal(f.requests.length, 1); f.connection.configurationRevision = 2; assert.equal(f.canSave.value, false);
+    if (failure) f.requests[0].reject(new Error('旧配对错误')); else f.requests[0].resolve({});
+    await Promise.resolve(); assert.equal(f.events.some(event => event[0] === 'dismiss'), false); assert.equal(f.error.value, '');
+  }
 });
 
 test('保存固定目标与打开时版本，防重复提交，失败保留草稿，成功才退出', async () => {

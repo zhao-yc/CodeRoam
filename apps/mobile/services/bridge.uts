@@ -143,6 +143,8 @@ class MobileBridge {
 
   // 连接配置来自自己的电脑；长期令牌不会写入 URL 或调试日志。
   configure(serialized: string, persist: boolean = true) {
+    // 页面确认期间仍可能出现新提交，持久化更换必须在服务入口再次检查。
+    if (persist && this.hasPendingCommands()) throw new Error('操作正在提交，请稍后再更换连接')
     const parsed = JSON.parse<ConnectionConfig>(serialized)
     if (parsed == null || parsed.token.length < 32 || parsed.hostId.length == 0 || !parsed.relayUrl.endsWith('/ws')) throw new Error('连接配置不完整')
     if (!parsed.relayUrl.startsWith('wss://') && !parsed.relayUrl.startsWith('ws://127.0.0.1:') && !parsed.relayUrl.startsWith('ws://localhost:')) throw new Error('连接地址必须使用 WSS')

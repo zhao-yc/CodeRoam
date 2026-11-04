@@ -1,0 +1,23 @@
+import { computed } from 'vue'
+import { connection, Computer } from './bridge.uts'
+
+// 概览描述整个接入通道，不把最近使用的执行电脑当成唯一连接。
+export const connectionStatusLabel = computed((): string => {
+  if (!connection.configured) return '未配置'
+  if (connection.connected) return '已连接'
+  if (connection.status == '正在连接') return '连接中'
+  if (connection.status == '正在重新连接' || connection.status == '等待重连') return '重连中'
+  if (connection.status == '需要重新配对' || connection.status == '网络不可用' || connection.error.length > 0) return '连接失败'
+  return '未连接'
+})
+
+// 只有本次握手确认连接后才统计实时在线数量；断线时不沿用旧在线状态。
+export const connectionSummary = computed((): string => {
+  if (!connection.configured) return '连接电脑后，聊天会自动同步到首页。'
+  if (!connection.connected) return connection.status == '需要重新配对' ? '接入配置已失效，请从电脑重新导入。' : '恢复连接后更新电脑状态并继续同步聊天。'
+  const online = connection.computers.filter((computer: Computer): boolean => computer.online).length
+  return connection.computers.length == 0 ? '暂无可访问的电脑，请确认电脑端连接服务已启动。' : online.toString() + ' 台在线，共 ' + connection.computers.length.toString() + ' 台电脑或实例'
+})
+
+// 电脑离线和接入通道断线分别展示，避免把上次状态误报为实时在线。
+export function computerConnectionLabel(computer: Computer): string { return connection.connected ? (computer.online ? '在线' : '离线') : '待更新' }

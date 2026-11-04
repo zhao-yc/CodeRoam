@@ -1,12 +1,12 @@
 <template>
   <view class="browser-notice-setting">
     <view class="notice-heading"><text class="notice-title">浏览器通知</text><text class="notice-state">{{ status }}</text></view>
-    <text class="notice-description">{{ browserNotifications.error.length > 0 ? browserNotifications.error : '切到其他标签页或应用后提醒。网页需保持运行，关闭或被系统挂起后可能无法送达。' }}</text>
+    <text class="notice-description">{{ description }}</text>
     <view class="notice-actions">
-      <view v-if="!browserNotifications.enabled || noticeAction == 'enable'" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'enable'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">开启浏览器通知</text><button class="inline-progress-hitbox" :disabled="noticeAction.length > 0 || browserNotifications.busy || !browserNotifications.supported || (noticeAction == 'enable')" @click="enable" :aria-label="(noticeAction == 'enable') ? '正在开启浏览器通知' : '开启浏览器通知'"></button></view>
-      <button v-else class="notice-button button-secondary" :disabled="noticeAction.length > 0 || browserNotifications.busy" @click="disableBrowserNotifications">关闭浏览器通知</button>
-      <view v-if="(browserNotifications.enabled && !browserNotifications.ready && noticeAction != 'enable') || noticeAction == 'retry'" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'retry'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">重新开启</text><button class="inline-progress-hitbox" :disabled="noticeAction.length > 0 || browserNotifications.busy || (noticeAction == 'retry')" @click="reenable" :aria-label="(noticeAction == 'retry') ? '正在重新开启浏览器通知' : '重新开启'"></button></view>
-      <view class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'test'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">发送测试通知</text><button class="inline-progress-hitbox" :disabled="!browserNotifications.ready || browserNotifications.busy || (noticeAction == 'test')" @click="test" :aria-label="(noticeAction == 'test') ? '正在发送测试通知' : '发送测试通知'"></button></view>
+      <view v-if="canEnable || noticeAction == 'enable'" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'enable'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">开启浏览器通知</text><button class="inline-progress-hitbox" style="background-color: transparent;" :disabled="noticeAction.length > 0 || browserNotifications.busy" @click="enable" :aria-label="noticeAction == 'enable' ? '正在开启浏览器通知' : '开启浏览器通知'"></button></view>
+      <button v-if="browserNotifications.enabled && noticeAction != 'enable'" class="notice-button button-secondary" :disabled="noticeAction.length > 0 || browserNotifications.busy" @click="disableBrowserNotifications">关闭浏览器通知</button>
+      <view v-if="canRetry || noticeAction == 'retry'" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'retry'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">重新开启</text><button class="inline-progress-hitbox" style="background-color: transparent;" :disabled="noticeAction.length > 0 || browserNotifications.busy" @click="reenable" :aria-label="noticeAction == 'retry' ? '正在重新开启浏览器通知' : '重新开启'"></button></view>
+      <view v-if="browserNotifications.ready" class="notice-button button-secondary inline-progress-button"><action-progress :busy="noticeAction == 'test'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">发送测试通知</text><button class="inline-progress-hitbox" style="background-color: transparent;" :disabled="noticeAction.length > 0 || browserNotifications.busy" @click="test" :aria-label="noticeAction == 'test' ? '正在发送测试通知' : '发送测试通知'"></button></view>
     </view>
   </view>
 </template>
@@ -16,6 +16,10 @@ import { computed, ref } from 'vue'
 import { browserNotifications, browserNotificationLabel, enableBrowserNotifications, disableBrowserNotifications, testBrowserNotification } from '../../services/browser-notifications.uts'
 const noticeAction = ref('')
 const status = computed((): string => browserNotificationLabel())
+const canEnable = computed((): boolean => browserNotifications.supported && browserNotifications.permission != 'denied' && !browserNotifications.enabled)
+const canRetry = computed((): boolean => browserNotifications.supported && browserNotifications.permission != 'denied' && browserNotifications.enabled && !browserNotifications.ready && noticeAction.value != 'enable')
+// 权限拒绝时提供可操作的站点设置说明，不展示无法完成的授权按钮。
+const description = computed((): string => browserNotifications.permission == 'denied' ? '请在浏览器的站点设置中允许通知，再返回此页开启。' : browserNotifications.error.length > 0 ? browserNotifications.error : '切到其他标签页或应用后提醒。网页需保持运行，关闭或被系统挂起后可能无法送达。')
 // 由设置按钮的点击发起权限申请。
 function enable() { applyEnable('enable') }
 function reenable() { applyEnable('retry') }
@@ -28,11 +32,11 @@ function test() { if (noticeAction.value.length > 0) return; noticeAction.value 
 </script>
 
 <style>
-.browser-notice-setting { margin-top: 24px; }
+.browser-notice-setting { min-height: 44px; }
 .notice-heading { flex-direction: row; align-items: center; justify-content: space-between; }
 .notice-title { color: #1a2135; font-size: 16px; line-height: 24px; font-weight: bold; }
 .notice-state { color: #596479; font-size: 14px; line-height: 22px; }
 .notice-description { color: #596479; font-size: 12px; line-height: 20px; margin-top: 8px; }
 .notice-actions { flex-direction: row; flex-wrap: wrap; margin-top: 12px; gap: 8px; }
-.notice-button { margin: 0; padding: 0 12px; min-height: 38px; font-size: 13px; }
+.notice-button { margin: 0; padding: 0 12px; min-height: 44px; font-size: 13px; }
 </style>

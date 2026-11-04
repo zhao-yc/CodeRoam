@@ -103,6 +103,14 @@ test('待核对操作或存储删除失败时不清除连接，不丢失原配�
   assert.throws(()=>f.bridge.forgetConfiguration(),/无法清除本地连接/);assert.equal(f.connection.configured,true);assert.notEqual(f.bridge.config,null);
 });
 
+test('更换配置在服务入口再次检查提交锁，不能清空原待核对操作',()=>{
+  const f=mobileFixture();f.bridge.foreground=false;f.bridge.configure(JSON.stringify(f.bridge.config));
+  const saved=f.storage.get('codex-mobile-connection'),namespace=f.connection.cacheNamespace;
+  f.bridge.rememberCommand('pending','pc','thread');
+  assert.throws(()=>f.bridge.configure(JSON.stringify(f.bridge.config)),/正在提交/);
+  assert.equal(f.storage.get('codex-mobile-connection'),saved);assert.equal(f.connection.cacheNamespace,namespace);assert.equal(f.connection.pendingCommands.length,1);
+});
+
 test('原生 WebSocket 只触发 onError 时也会释放连接并安排一次重试',()=>{
   const f=mobileFixture();f.bridge.connect();const socket=f.sockets[0];socket.callbacks.error({errMsg:'Expected HTTP 101 response but was 401'});
   assert.equal(f.bridge.connecting,false);assert.equal(f.connection.connected,false);assert.equal(socket.closeCount,1);

@@ -1,165 +1,133 @@
 <template>
   <view class="page">
-    <view id="connection-header" class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回聊天列表" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
+    <view id="connection-header" class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回上一页" @click="goBack"></button></view><text class="header-title">电脑连接</text></view>
     <scroll-view direction="vertical" class="content" :scroll-into-view="connectionAnchor">
       <view class="body">
-        <text class="page-title">连接你的电脑</text><text class="description">接入后，电脑上的聊天会自动同步到首页。</text>
-        <view v-if="connection.configured" class="section current-section"><text class="section-title">当前连接</text><view class="current-computer"><app-icon :name="currentComputerIcon" :size="25" /><view class="computer-content"><view class="computer-heading"><text class="computer-name">{{ currentComputerLabel }}</text><view :class="['dot', connection.connected && currentComputerOnline ? 'online' : 'offline']"></view><text class="state">{{ connection.connected && currentComputerOnline ? '已连接' : connection.status }}</text></view><text class="computer-note">{{ connection.connected && currentComputerOnline ? '正在同步这台电脑上的聊天' : '恢复连接后会自动同步聊天' }}</text></view><view v-if="!connection.connected" class="retry action-frame"><loading v-if="reconnecting" class="reconnect-spinner" :paused="!pageVisible" /><app-icon v-else name="refresh" :size="19" /><button class="action-hitbox" hover-class="action-pressed" :disabled="reconnecting" :aria-label="reconnecting ? '正在连接' : '重新连接'" @click="reconnect"></button></view></view></view>
-        <view id="notification-preferences" class="section"><view class="notification-setting action-frame"><view class="notification-copy"><text class="section-title">通知时长</text><text class="notification-description">{{ taskNotifications.durationMs == 0 ? '向上划走通知后显示下一条。' : '通知也可以随时向上划走。' }}</text></view><text class="notification-value">{{ noticeDurationLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'通知时长，当前' + noticeDurationLabel + '，点击选择'" hover-class="action-pressed" @click="chooseNoticeDuration"></button></view></view>
-        <!-- #ifdef WEB -->
-        <view class="section"><browser-notification-setting /></view>
-        <!-- #endif -->
-        <message-sending-setting />
-        <view id="file-change-preferences" class="section">
-          <view class="notification-setting action-frame">
-            <view class="notification-copy"><text class="section-title">更改文件默认显示</text><text class="notification-description">设置聊天中「已更改文件」卡片的初始状态。</text></view>
-            <text class="notification-value">{{ fileChangesLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" />
-            <button class="action-hitbox" :aria-label="'更改文件默认显示，当前' + fileChangesLabel + '，点击选择'" hover-class="action-pressed" @click="chooseFileChangesDisplay"></button>
-          </view>
+        <view id="connection-overview" class="section overview"><view class="overview-heading"><app-icon name="link" :size="25" /><text class="page-title">{{ connectionStatusLabel }}</text></view><text class="description">{{ connectionSummary }}</text><text v-if="!connection.connected && connection.configured && connection.error.length > 0" class="error-note">暂时无法连接，请检查网络及电脑端连接服务，或核对接入配置。</text><view v-if="connection.configured && !connection.connected" class="retry-button button-secondary inline-progress-button"><action-progress :busy="reconnecting" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">重新连接</text><button class="inline-progress-hitbox" style="background-color: transparent;" :disabled="reconnecting" :aria-label="reconnecting ? '正在连接' : '重新连接'" @click="reconnect"></button></view></view>
+        <view v-if="connection.configured" class="section"><text class="section-title">已授权的电脑</text><text class="description">点击查看资料，编辑名称和图标。聊天在首页按电脑筛选。</text><text v-if="connection.computers.length == 0" class="hint">{{ connection.connected ? '暂无可访问的电脑。' : '连接后更新电脑列表。' }}</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame"><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', connection.connected && computer.online ? 'online' : 'offline']"></view><text class="state">{{ computerConnectionLabel(computer) }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看并编辑' + computer.label" @click="editComputer(computer.id)"></button></view></view>
+        <view id="connection-config" class="section">
+          <view v-if="connection.configured" class="config-heading action-frame"><text class="section-title">更换接入配置</text><app-icon :name="configExpanded ? 'chevron-down' : 'chevron-right'" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :disabled="hasPendingCommands || confirming" :aria-label="configExpanded ? '收起接入配置' : '展开更换接入配置'" :aria-expanded="configExpanded" @click="toggleConfig"></button></view><text v-else class="section-title">接入配置</text>
+          <view v-if="!connection.configured || configExpanded"><text class="description">{{ connection.configured ? '导入会替换本设备保存的接入配置。' : '粘贴电脑生成的连接配置，接入后自动同步聊天。' }}</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands || confirming" /><text class="privacy-note">配置保存在当前设备，请勿分享给他人或在公共设备上保存。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands || confirming" @click="importConfig">保存并连接</button></view>
         </view>
-        <view id="connection-config" class="section"><text class="section-title">接入配置</text><text class="description">粘贴电脑生成的连接配置。</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands" /><text class="privacy-note">配置仅用于连接你的电脑，请勿分享给他人。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands" @click="importConfig">导入并连接</button><text class="hint">更换连接前，请先确认当前操作已完成。</text></view>
-        <view v-if="connection.computers.length > 0" class="section"><text class="section-title">已授权的电脑</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame" ><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', computer.online ? 'online' : 'offline']"></view><text class="state">{{ computer.online ? '在线' : '离线' }}</text><view class="selected-mark"><app-icon v-if="computer.id == connection.hostId" name="check" :size="20" /></view><button class="action-hitbox" hover-class="action-pressed"  :aria-label="'切换到' + computer.label" @click="selectComputer(computer.id)"></button></view></view>
-        <text v-if="connection.error.length > 0" class="pending-note">{{ connection.error }}</text>
-        <text class="hint closing-note">连接配置会保存在当前设备，刷新后自动连接，请勿在公共设备上保存。</text>
-        <button v-if="connection.configured" class="forget-button button-secondary" :disabled="hasPendingCommands" @click="forgetConfiguration">清除本地连接</button>
+        <text v-if="hasPendingCommands" class="error-note">有操作正在提交或仍需核对结果，暂时不能更换或清除连接。</text>
+        <view v-if="connection.configured" class="maintenance"><text class="hint">清除只影响此设备保存的连接，电脑上的任务会继续运行。</text><button class="forget-button button-secondary" :disabled="hasPendingCommands || confirming" @click="forgetConfiguration">清除本地连接</button></view>
       </view>
     </scroll-view>
     <task-notice :active="pageVisible" header-id="connection-header" />
+    <connection-editor v-if="editingComputer != null" :key="editingComputer!.id" :computer="editingComputer!" :anchor-left="0" :anchor-top="0" :release-at="1" :direct-edit="true" @dismiss="closeEditor" @busy="editorBusy = $event" />
   </view>
 </template>
 
 <script setup lang="uts">
-import { computed, ref } from 'vue'
-import MessageSendingSetting from '../../components/message-sending-setting/message-sending-setting.uvue'
-// #ifdef WEB
-import BrowserNotificationSetting from '../../components/browser-notification-setting/browser-notification-setting.uvue'
-// #endif
+import { computed, ref, watch } from 'vue'
 import { useManualReconnect } from '../../services/manual-reconnect.uts'
 import { bridge, connection, Computer, computerIcon } from '../../services/bridge.uts'
-import { taskNotifications, setTaskNoticeDuration, taskNoticeDurationLabel } from '../../services/task-notifications.uts'
-import { fileChangePreferences, setFileChangesExpanded } from '../../services/file-change-preferences.uts'
+import { connectionStatusLabel, connectionSummary, computerConnectionLabel } from '../../services/connection-presentation.uts'
+import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 const pageVisible = ref(false)
-onShow(() => { pageVisible.value = true })
-onHide(() => { pageVisible.value = false })
 const configuration = ref('')
 const connectionAnchor = ref('')
-const noticeDurationLabel = computed((): string => taskNoticeDurationLabel(taskNotifications.durationMs))
-const fileChangesLabel = computed((): string => fileChangePreferences.expanded ? '展开' : '收起')
-
-function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
-
-// 显示偏好保存在当前客户端，返回聊天后立即按新选择显示。
-function chooseFileChangesDisplay() {
-  uni.hideKeyboard()
-  uni.showActionSheet({ itemList: ['展开', '收起'], success: (result) => {
-    if (result.tapIndex != 0 && result.tapIndex != 1) return
-    try { setFileChangesExpanded(result.tapIndex == 0) }
-    catch (error) { notify((error as Error).message) }
-  }, fail: (_) => {} })
-}
-// 通知偏好保存在当前设备，与电脑配对及任务审批独立。
-function chooseNoticeDuration() {
-  uni.hideKeyboard()
-  uni.showActionSheet({ itemList: ['5 秒', '10 秒', '不自动关闭'], success: (result) => {
-    const options = [5000, 10000, 0]
-    if (result.tapIndex < 0 || result.tapIndex >= options.length) return
-    try { setTaskNoticeDuration(options[result.tapIndex]); notify('通知时长已设为' + noticeDurationLabel.value) }
-    catch (error) { notify((error as Error).message) }
-  }, fail: (_) => {} })
-}
-// 菜单的添加连接入口直接定位配置区，普通设置入口仍从概览开始。
-onLoad((options) => { if (options['add'] == 'true') connectionAnchor.value = 'connection-config' })
-const currentComputerIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId) ?? null))
-function iconForComputer(computer: Computer): string { return computerIcon(computer) }
+const configExpanded = ref(false)
+const confirming = ref(false)
+const editingComputer = ref<Computer | null>(null)
+const editorBusy = ref(false)
 const hasPendingCommands = computed((): boolean => bridge.hasPendingCommands())
-const currentComputerLabel = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)?.label ?? '我的电脑')
-const currentComputerOnline = computed((): boolean => connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online))
-// 接入错误使用简短提示，不把含凭据的原始异常展示出来。
-// 返回时先收起键盘，直接打开本页时仍能回到会话首页。
-function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
-// 重连沿用现有配置，不重新导入或重放请求。
 const reconnecting = ref(false)
 const reconnect = useManualReconnect((pending: boolean) => { reconnecting.value = pending })
-// 页面离开后不保留含凭据的输入草稿；持久化统一由连接服务管理。
-onUnload(() => { configuration.value = '' })
+let alive = true
+let pageRevision = 0
+onShow(() => { pageVisible.value = true })
+onHide(() => { pageVisible.value = false; configuration.value = ''; pageRevision++; confirming.value = false; editingComputer.value = null; editorBusy.value = false })
+// 兼容原有添加入口：展开后定位输入区，普通入口从连接概览开始。
+onLoad((options) => { if (options['add'] == 'true') { configExpanded.value = true; connectionAnchor.value = 'connection-config' } })
+onUnload(() => { alive = false; pageRevision++; configuration.value = '' })
 
-// 提交中的写操作会暂时阻止更换配置，成功导入后立即清空含凭据的输入。
+function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
+function iconForComputer(computer: Computer): string { return computerIcon(computer) }
+// 返回只处理导航；不切换执行电脑，不取消正文订阅。
+function goBack() { if (editorBusy.value) return; uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+function toggleConfig() { if (hasPendingCommands.value || confirming.value) return; configExpanded.value = !configExpanded.value; if (!configExpanded.value) { configuration.value = ''; uni.hideKeyboard() } }
+
+// 固定资料快照；打开和取消编辑都不调用执行电脑切换。
+function editComputer(id: string) {
+  const computer = connection.computers.find((item: Computer): boolean => item.id == id)
+  if (computer != null) editingComputer.value = { ...computer } as Computer
+}
+function closeEditor() { if (!editorBusy.value) editingComputer.value = null }
+// 配对变化或目标撤销后卸载旧编辑器，让迟到回执失效。
+watch((): string => connection.configurationRevision.toString() + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => { editingComputer.value = null; editorBusy.value = false; pageRevision++; confirming.value = false })
+
+// 确认框关闭后重新检查操作锁与配对版本，避免确认期间出现新的提交。
+function confirmMaintenance(title: string, content: string, confirmText: string, action: () => void) {
+  if (confirming.value || hasPendingCommands.value) { if (hasPendingCommands.value) notify('请先等待提交完成或核对原操作结果'); return }
+  uni.hideKeyboard()
+  const revision = pageRevision
+  confirming.value = true
+  uni.showModal({ title, content, confirmText, success: (result) => {
+    if (!alive || revision != pageRevision) return
+    confirming.value = false
+    if (!result.confirm) return
+    if (hasPendingCommands.value) { notify('请先等待提交完成或核对原操作结果'); return }
+    action()
+  }, fail: (_) => { if (alive && revision == pageRevision) confirming.value = false } })
+}
+
+// 保存不等于握手成功：留在本页显示真实连接进展，原始异常不进入提示。
+function saveConfiguration() {
+  if (hasPendingCommands.value) { notify('请先等待提交完成或核对原操作结果'); return }
+  try { bridge.configure(configuration.value); configuration.value = ''; configExpanded.value = false; connectionAnchor.value = 'connection-overview'; uni.hideKeyboard(); notify('配置已保存，正在连接') }
+  catch (error) { notify(error instanceof Error && (error.message == '无法保存连接配置，请检查浏览器存储权限' || error.message == '操作正在提交，请稍后再更换连接') ? error.message : '配置无效，请核对电脑生成的内容') }
+}
 function importConfig() {
-  if (hasPendingCommands.value) { notify('操作正在提交，请稍后再更换连接'); return }
-  try {
-    bridge.configure(configuration.value)
-    configuration.value = ''
-    // #ifdef APP-IOS
-    // 启动连接会更新本页图标。保留页面供用户查看状态，避免同时卸载原生图片组件。
-    uni.hideKeyboard()
-    notify('配置已保存，可返回聊天列表')
-    // #endif
-    // #ifndef APP-IOS
-    goBack()
-    // #endif
-  }
-  catch (error) { notify(error instanceof Error && error.message == '无法保存连接配置，请检查浏览器存储权限' ? error.message : '配置无效，请核对电脑生成的内容') }
+  if (configuration.value.trim().length == 0 || confirming.value) return
+  if (connection.configured) confirmMaintenance('更换接入配置', '将替换此设备保存的接入配置，电脑上的任务会继续运行。', '更换并连接', saveConfiguration)
+  else saveConfiguration()
 }
-
-// 清除后立即断开并留在配置页，保留其他浏览器数据。
+// 只删除连接配置，偏好及其他本地数据沿用现有服务的保存规则。
 function forgetConfiguration() {
-  if (hasPendingCommands.value) { notify('操作正在提交，请稍后再更换连接'); return }
-  try { bridge.forgetConfiguration(); configuration.value = ''; notify('已清除本地连接') }
-  catch (_) { notify('无法清除本地连接，请检查浏览器存储权限') }
+  confirmMaintenance('清除本地连接', '仅清除此设备保存的连接，电脑上的任务会继续运行。聊天与通知偏好会保留。', '清除连接', () => {
+    try { bridge.forgetConfiguration(); configuration.value = ''; configExpanded.value = false; notify('已清除本地连接') }
+    catch (_) { notify('无法清除本地连接，请检查本地存储权限') }
+  })
 }
-
-// 沿用原设备切换的订阅清理与提交状态，不重放任何写操作。
-function selectComputer(id: string) {
-  if (connection.hostId == id) return
-  try { bridge.selectComputer(id); notify('已切换电脑') }
-  catch (error) { notify((error as Error).message) }
-}
+// 原生返回键优先关闭资料面板，保存期间等待结果。
+onBackPress((): boolean => { if (editingComputer.value == null) return false; closeEditor(); return true })
 </script>
 
 <style>
-.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
-.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
-.page { flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #ffffff; }
+.page { position: relative; flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #ffffff; }
 .header { height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .back { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
 .header-title { font-size: 17px; line-height: 26px; font-weight: bold; color: #1a2135; margin-left: 8px; }
 .content { flex: 1; height: 0; min-height: 0; }
-.body { padding: 22px 24px 30px; margin-bottom: var(--uni-safe-area-inset-bottom); }
-.page-title { color: #1a2135; font-size: 28px; line-height: 38px; font-weight: bold; }
-.description { color: #596479; font-size: 14px; line-height: 23px; margin-top: 8px; }
-.section { padding: 24px 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
-.current-section { padding-top: 34px; }
+.body { width: 100%; max-width: 720px; align-self: center; padding: 0 24px 30px; margin-bottom: var(--uni-safe-area-inset-bottom); }
+.section { padding: 24px 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
+.overview-heading { flex-direction: row; align-items: center; }
+.page-title { color: #1a2135; font-size: 25px; line-height: 36px; font-weight: bold; margin-left: 14px; }
+.description { color: #596479; font-size: 13px; line-height: 22px; margin-top: 8px; }
 .section-title { color: #1a2135; font-size: 16px; line-height: 24px; font-weight: bold; }
-.notification-setting { min-height: 52px; flex-direction: row; align-items: center; }
-.notification-copy { flex: 1; min-width: 0; margin-right: 12px; }
-.notification-description { color: #596479; font-size: 12px; line-height: 20px; margin-top: 6px; }
-.notification-value { color: #596479; font-size: 14px; line-height: 22px; margin-right: 10px; flex-shrink: 0; }
-.current-computer { flex-direction: row; align-items: center; margin-top: 18px; }
-.computer-content { flex: 1; min-width: 0; margin-left: 16px; }
-.computer-heading { flex-direction: row; align-items: center; }
-.computer-name { color: #1a2135; font-size: 15px; line-height: 23px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
-.dot { width: 6px; height: 6px; border-radius: 3px; margin: 0 8px 0 14px; flex-shrink: 0; }
+.retry-button { min-height: 44px; align-self: flex-start; padding: 0 18px; margin-top: 14px; border-radius: 12px; }
+.computer-option { min-height: 64px; padding: 12px 0; flex-direction: row; align-items: center; }
+.option-name { flex: 1; min-width: 0; color: #1a2135; font-size: 15px; line-height: 22px; margin-left: 14px; margin-right: 10px; lines: 1; text-overflow: ellipsis; }
+.dot { width: 6px; height: 6px; border-radius: 3px; margin-right: 6px; flex-shrink: 0; }
 .online { background-color: #18765d; }
 .offline { background-color: #737d91; }
-.state { color: #596479; font-size: 12px; line-height: 20px; flex-shrink: 1; }
-.computer-note { color: #596479; font-size: 12px; line-height: 20px; margin-top: 3px; }
-.reconnect-spinner { width: 16px; height: 16px; border-color: #4546bd; }
-.retry { width: 44px; height: 44px; align-items: center; justify-content: center; }
-/* 原生 textarea 显式占满宽度，避免默认宽度与主按钮不齐。 */
-.config-input { width: 100%; height: 110px; margin-top: 14px; border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 12px; padding: 14px; color: #1a2135; font-size: 13px; line-height: 22px; background-color: transparent; }
-.privacy-note { color: #596479; font-size: 11px; line-height: 18px; margin-top: 8px; }
+.state { color: #596479; font-size: 12px; line-height: 20px; margin-right: 10px; flex-shrink: 0; }
+.config-heading { min-height: 44px; flex-direction: row; align-items: center; justify-content: space-between; }
+.config-input { width: 100%; height: 130px; margin-top: 14px; border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 12px; padding: 14px; color: #1a2135; font-size: 13px; line-height: 22px; background-color: transparent; }
+.privacy-note { color: #596479; font-size: 12px; line-height: 20px; margin-top: 8px; }
 .connect-button { width: 100%; height: 46px; line-height: 46px; padding: 0 18px; margin: 14px 0 0; border-radius: 12px; font-size: 15px; }
 .hint { color: #596479; font-size: 12px; line-height: 20px; margin-top: 10px; }
-.computer-option { min-height: 58px; padding: 14px 0; flex-direction: row; align-items: center; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
-.option-name { flex: 1; min-width: 0; color: #1a2135; font-size: 15px; line-height: 22px; margin-left: 16px; lines: 1; text-overflow: ellipsis; }
-.selected-mark { width: 28px; align-items: flex-end; margin-left: 14px; }
-.pending-note { color: #8d4d2b; font-size: 12px; line-height: 20px; margin-top: 18px; }
-.closing-note { margin-top: 22px; }
-.forget-button { width: 100%; height: 44px; line-height: 44px; margin: 14px 0 0; font-size: 14px; border-radius: 12px; }
+.error-note { color: #8d4d2b; font-size: 13px; line-height: 22px; margin-top: 16px; }
+.maintenance { padding-top: 14px; }
+.forget-button { width: 100%; min-height: 44px; line-height: 44px; margin: 14px 0 0; font-size: 14px; border-radius: 12px; }
+.action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
+.action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
+.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 /* #ifdef WEB */
-.computer-name, .option-name { display: block; white-space: nowrap; overflow: hidden; }
+.body { margin-left: auto; margin-right: auto; }
+.option-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
 </style>
