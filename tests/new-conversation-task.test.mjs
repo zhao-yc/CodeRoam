@@ -8,13 +8,13 @@ import { BridgeError } from '../packages/protocol/contracts.mjs';
 function fixture(mode = 'desktopIpc', extra = {}) {
   const calls = [], scopes = [], updates = [], checkpoints = new Map(), task = { id: randomUUID(), deviceId: 'phone', title: '合成新聊天', payload: { projectId: 'project', mode, text: '合成消息', images: [], attachments: ['synthetic-upload-123456'], choices: { effort: 'high' }, ...extra } };
   const state = { settings: { model: 'model', effort: 'medium', serviceTier: '', mode: 'default' }, models: [{ id: 'model', supportsImages: true }], permissions: { mode: 'default', revision: 'permission-1' } };
-  const draftId = randomUUID(); let revision = 1, leased = false, nativeText = false;
+  const draftId = randomUUID(); let revision = 1, leased = false, nativeText = false, owned = false;
   const native = () => ({ draftId, revision, status: 'ready', ...structuredClone(state), hasDesktopText: nativeText, supportsThreadMentions: true });
   const agent = {
     newThreads: { project: async id => ({ id, label: '合成项目', cwd: 'synthetic-project' }) },
-    retainTaskThread: async () => { leased = true; return () => { leased = false; calls.push('release'); }; },
+    retainTaskThread: async () => { assert.equal(owned, true, '空聊天必须先由原桌面加载'); leased = true; return () => { leased = false; calls.push('release'); }; },
     adapter: {
-      watch: async () => { assert.equal(leased, true); calls.push('watch'); },
+      watch: async (_id, watcher, options = {}) => { if (options.activate) { assert.match(watcher, /^submission-open:/); owned = true; calls.push('activate'); return; } assert.equal(leased, true); calls.push('watch'); },
       readSettings: async () => { assert.equal(leased, true); return structuredClone(state); },
       readPermissions: async () => { assert.equal(leased, true); return structuredClone(state.permissions); },
       attachments: { bindScope: async (deviceId, source, target, ids) => { calls.push('bind'); scopes.push({ deviceId, source, target, ids }); } },
@@ -51,9 +51,20 @@ function fixture(mode = 'desktopIpc', extra = {}) {
 test('普通新建由守护进程依次创建、应用选择、绑定附件和发送，并释放后台租约', async () => {
   const f = fixture(), result = await runNewConversationTask(f.agent, f.task, f.context);
   assert.deepEqual(result, { ok: true, threadId: 'created-thread' });
-  assert.deepEqual(f.calls, ['thread.create', 'watch', 'thread.settings.update', 'bind', 'watch', 'turn.send', 'release']);
+  assert.deepEqual(f.calls, ['thread.create', 'activate', 'watch', 'thread.settings.update', 'bind', 'watch', 'turn.send', 'release']);
   assert.equal(f.scopes.find(scope => scope.target)?.source, 'task:' + f.task.id);
   assert.equal(f.scopes.find(scope => scope.target)?.target, 'created-thread'); assert.equal(f.leased(), false);
+});
+
+test('创建后原桌面加载失败保留创建编号并释放独立观察者，不发送首条或再次创建', async () => {
+  const f = fixture(), released = [];
+  f.agent.adapter.watch = async (_id, watcher, options) => { assert.equal(options.activate, true); assert.match(watcher, /^submission-open:/); throw new BridgeError('OWNER_UNAVAILABLE', '合成桌面尚未加载聊天'); };
+  f.agent.adapter.unwatch = (threadId, watcher) => released.push({ threadId, watcher });
+  await assert.rejects(runNewConversationTask(f.agent, f.task, f.context), { code: 'OWNER_UNAVAILABLE' });
+  assert.deepEqual(f.calls, ['thread.create']);
+  assert.equal(f.task.threadId, 'created-thread');
+  assert.equal(released.length, 1); assert.match(released[0].watcher, /^submission-open:/);
+  assert.equal(f.leased(), false);
 });
 
 test('组合检查点再次执行时不会重复创建、修改设置或发送', async () => {

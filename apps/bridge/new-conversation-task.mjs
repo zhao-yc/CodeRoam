@@ -38,9 +38,13 @@ export async function runNewConversationTask(agent, task, context) {
   const threadId = created?.threadId;
   if (typeof threadId !== 'string' || !threadId) throw new BridgeError('OUTCOME_UNKNOWN', '创建回执缺少聊天编号，请核对电脑端', true);
   context.update({ threadId, stage: '正在连接电脑聊天' });
-  const release = await agent.retainTaskThread(threadId, task.deviceId, task.id);
+  const openingWatcher = 'submission-open:' + task.id;
+  let release = () => {};
   try {
-  await agent.adapter.watch(threadId, task.deviceId, { fresh: true, history: false, activate: true });
+  // 创建服务只登记空聊天；先由独立观察者让原桌面加载它，再取得后台可写租约。
+  await agent.adapter.watch(threadId, openingWatcher, { activate: true, fresh: true, history: false });
+  release = await agent.retainTaskThread(threadId, task.deviceId, task.id);
+  await agent.adapter.watch(threadId, task.deviceId, { fresh: true, history: false });
 
   const settings = await agent.adapter.readSettings(threadId, task.deviceId), changes = settingChanges(settings.settings, choices);
   if (Object.keys(changes).length) await context.step('应用执行设置', commandId => command('thread.settings.update', { threadId, changes }, commandId));
@@ -66,7 +70,7 @@ export async function runNewConversationTask(agent, task, context) {
   const sent = await context.step('发送首条消息', commandId => command('turn.send', params, commandId, guard));
   if (sent?.ok !== true) throw new BridgeError('OUTCOME_UNKNOWN', '首条消息回执尚未确认，请核对电脑端', true);
   return { ok: true, threadId };
-  } finally { release(); }
+  } finally { release(); agent.adapter.unwatch?.(threadId, openingWatcher); }
 }
 
 /** 原生草稿按最新修订发送，已有电脑正文和已发送状态均不能被后台任务覆盖。 */
