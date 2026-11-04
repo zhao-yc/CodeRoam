@@ -82,6 +82,22 @@ const stageHeight = computed((): number => props.expanded ? visibleContentHeight
 let alive = true, layoutRevision = 0, layoutTimer = 0
 let synchronizedText: string | null = null
 
+// #ifdef WEB
+// uni-app x 的属性会落在外层组件，需直接标记内部文本框，避免被密码管理器误判为登录字段。
+function configureMessageInput() {
+  nextTick(() => {
+    if (!alive) return
+    const input = document.getElementById(props.instanceId)?.querySelector('textarea')
+    if (input == null) return
+    input.setAttribute('autocomplete', 'off')
+    input.setAttribute('name', 'chat-message')
+    input.setAttribute('aria-label', '聊天消息')
+  })
+}
+// Web 禁用状态变化时可能替换内部节点，重新应用同样的自动填充设置。
+watch((): string => props.instanceId + ':' + props.active + ':' + props.disabled, configureMessageInput, { flush: 'post', immediate: true })
+// #endif
+
 // 原生按钮单独派发事件，保留原点击冒泡所触发的编辑区交互。
 function activateGlassAdd() { emit('add'); emit('interact') }
 function activateGlassPrimary() { emit('primary'); emit('interact') }
