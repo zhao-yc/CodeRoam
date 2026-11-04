@@ -5,7 +5,7 @@ import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { ThreadCreationClient } from './thread-creation.mjs';
 import { normalizeServiceTier } from './model-settings.mjs';
 
-const SETTINGS_CACHE_TTL_MS = 30000;
+const SETTINGS_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const SETTINGS_CACHE_LIMIT = 64;
 
 /** 只读取所选电脑已保存的项目；客户端不能提交任意目录。 */
@@ -36,7 +36,7 @@ export class NewThreadService {
     if (!project) throw new BridgeError('PROJECT_NOT_FOUND', '项目已不存在，请重新选择电脑端项目');
     return project;
   }
-  /** 常见配置层只比较文件状态；其他托管配置由短有效期兜底，不读取或保留原始配置正文。 */
+  /** 常见配置层只比较文件状态；其他托管配置由有效期兜底，不读取或保留原始配置正文。 */
   settingsSignature(cwd) {
     const files = new Set([path.join(this.codexHome, 'config.toml'), path.join(this.codexHome, 'managed_config.toml'), this.catalog?.filePath ?? path.join(this.codexHome, 'models_cache.json')]);
     for (let directory = path.resolve(cwd); ; directory = path.dirname(directory)) {

@@ -7,6 +7,7 @@ import { NewThreadService } from '../apps/bridge/new-thread-service.mjs';
 import { ModelCatalog } from '../apps/bridge/model-settings.mjs';
 
 const DAY = 24 * 60 * 60 * 1000;
+const SETTINGS_TTL = 2 * 60 * 60 * 1000;
 
 /** 用可控回执精确安排配置读取与文件变化，避免依赖定时等待。 */
 function deferred() {
@@ -67,14 +68,16 @@ test('并发及重复读取复用一次配置请求，每个调用仍检查真�
   assert.equal(f.reads.length, 1); assert.equal(f.catalogReads, 3);
 });
 
-test('三十秒有效期到边界重新读取，时钟回退不能延长旧缓存寿命', async t => {
+test('两小时有效期到边界重新读取，时钟回退不能延长旧缓存寿命', async t => {
   const f = fixture(t), start = f.time;
   await f.service.settings('project');
-  f.time = start + 29999; await f.service.settings('project');
-  assert.equal(f.reads.length, 1);
   f.time = start + 30000; await f.service.settings('project');
+  assert.equal(f.reads.length, 1);
+  f.time = start + SETTINGS_TTL - 1; await f.service.settings('project');
+  assert.equal(f.reads.length, 1);
+  f.time = start + SETTINGS_TTL; await f.service.settings('project');
   assert.equal(f.reads.length, 2);
-  f.time = start + 29999; await f.service.settings('project');
+  f.time = start + SETTINGS_TTL - 1; await f.service.settings('project');
   assert.equal(f.reads.length, 3);
 });
 
@@ -144,7 +147,7 @@ test('配置读取失败不缓存，下一次请求可以重试', async t => {
 
 test('过期配置重读失败时直接报错，不回退之前成功的旧配置', async t => {
   const f = fixture(t);
-  await f.service.settings('project'); f.time += 30000;
+  await f.service.settings('project'); f.time += SETTINGS_TTL;
   f.handler = async () => { throw new Error('合成重读失败'); };
   await assert.rejects(f.service.settings('project'), /合成重读失败/);
   assert.equal(f.service.settingsCache.size, 0);
