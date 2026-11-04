@@ -7,8 +7,8 @@
       <view v-if="rows.length == 0 && !loading" class="history-empty"><text>暂无执行记录</text><text class="history-empty-note">记录保存在原守护进程，电脑在线时可以查询。</text></view>
       <view v-for="row in rows" :key="row.hostId + ':' + row.task.id" class="history-task">
         <view class="history-task-heading" @click="openTask(row.hostId, row.task)"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><submission-task-status class="history-state" :state="row.task.state" /></view>
-        <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · {{ dateLabel(row.task.createdAt) }}</text>
-        <text v-if="row.task.completedAt > 0 && row.task.startedAt > 0" class="history-meta">耗时 {{ Math.max(0, Math.round((row.task.completedAt - row.task.startedAt) / 1000)) }} 秒</text>
+        <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · 提交时间 {{ dateLabel(row.task.createdAt) }}</text>
+        <text v-if="row.task.completedAt > 0" class="history-meta">{{ completionLabel(row.task) }}</text>
         <text v-if="stageDetail(row.task).length > 0" class="history-stage">{{ stageDetail(row.task) }}</text>
         <text v-if="row.task.error.length > 0" class="history-error">{{ row.task.error }}</text>
         <view v-if="row.task.steps.length > 0" class="history-steps"><view v-for="step in row.task.steps" :key="step.name" class="history-step"><submission-task-status :state="step.state" /><text class="history-step-name">{{ step.name }}</text></view></view>
@@ -40,6 +40,16 @@ function hostName(id: string): string { return connection.computers.find((comput
 function stageDetail(task: SubmissionTask): string { return submissionStageDetail(task) }
 function canResume(row: HistoryRow): boolean { const snapshot = submissionInstance(row.hostId)?.snapshot; return snapshot?.paused == true && snapshot.blockerId == row.task.id && ['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(row.task.state) >= 0 }
 function dateLabel(value: number): string { const date = new Date(value); return date.getFullYear() + '-' + (date.getMonth() + 1) + '-' + date.getDate() + ' ' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') }
+// 完成时间只取守护进程的实际结果时间，重试成功不能沿用最初提交或手机刷新时间。
+function completionLabel(task: SubmissionTask): string {
+  let label = '结束时间'
+  if (task.state == 'succeeded') label = '成功时间'
+  else if (task.state == 'failed') label = '失败时间'
+  else if (task.state == 'canceled' || task.state == 'cancelled') label = '取消时间'
+  else if (task.state == 'skipped') label = '跳过时间'
+  const duration = task.startedAt > 0 ? ' · 耗时 ' + Math.max(0, Math.round((task.completedAt - task.startedAt) / 1000)) + ' 秒' : ''
+  return label + ' ' + dateLabel(task.completedAt) + duration
+}
 // 每实例独立游标，全部电脑仅合并显示，不能把一个实例游标传给另一实例。
 async function loadMore() {
   if (loading.value || !connection.connected) return
