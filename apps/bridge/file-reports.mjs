@@ -14,9 +14,19 @@ export function desktopDiffModules(executable) {
   if(typeof executable!=='string'||!/[\\/]WindowsApps[\\/]OpenAI\.Codex_[^\\/]+[\\/]app[\\/]ChatGPT\.exe$/i.test(executable))throw new BridgeError('REPORT_UNAVAILABLE','当前电脑暂不支持读取原生文件汇总');
   const reader=new AsarReader(path.join(path.dirname(executable),'resources','app.asar'));
   try{
-    const find=pattern=>{const names=[...reader.files.keys()].filter(name=>pattern.test(name));if(names.length!==1)throw new Error('原生模块不唯一');return path.posix.basename(names[0]);};
-    return {initial:find(/^webview\/assets\/app-initial-[a-f0-9]+\.js$/),summary:find(/^webview\/assets\/diff-summary-[a-f0-9]+\.js$/)};
+    return desktopDiffModuleNames([...reader.files.keys()]);
   }finally{reader.close();}
+}
+
+/** 将缺失模块与重复匹配分开报告，避免把新版资源不兼容误报为模块重复。 */
+export function desktopDiffModuleNames(files) {
+  const find=pattern=>{
+    const names=files.filter(name=>pattern.test(name));
+    if(names.length===0)throw new BridgeError('REPORT_UNAVAILABLE','电脑连接服务未找到兼容的文件汇总模块，请更新连接服务后重试');
+    if(names.length>1)throw new BridgeError('REPORT_UNAVAILABLE','桌面文件汇总模块存在多个匹配，连接服务暂时无法确定版本，请更新连接服务');
+    return path.posix.basename(names[0]);
+  };
+  return {initial:find(/^webview\/assets\/app-initial-[a-f0-9]+\.js$/),summary:find(/^webview\/assets\/diff-summary-[a-f0-9]+\.js$/)};
 }
 
 /** 独立有界调用原生只读模块；只接受连接服务生成的固定表达式。 */

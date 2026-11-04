@@ -14,7 +14,7 @@
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
 import { bridge, connection } from '../../services/bridge.uts'
-import { ChangedFile, FileReport } from '../../services/file-reports.uts'
+import { ChangedFile, FileReport, fileReportErrorMessage } from '../../services/file-reports.uts'
 import { readFileReportCache, saveFileReportCache } from '../../services/file-report-cache.uts'
 import { fileChangePreferences } from '../../services/file-change-preferences.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
@@ -46,7 +46,7 @@ function load(manual: boolean = false) {
     report.value = next
     saveFileReportCache(namespace, props.hostId, props.threadId, props.reportId, report.value)
     nextTick(() => emit('layout'))
-  }, (failure: Error) => { if (!alive || version != requestVersion || identity != cacheIdentity()) return; emit('beforelayout'); loading.value = false; manualRetry.value = false; error.value = failure.message; nextTick(() => emit('layout')) })
+  }, (failure: Error) => { if (!alive || version != requestVersion || identity != cacheIdentity()) return; emit('beforelayout'); loading.value = false; manualRetry.value = false; error.value = fileReportErrorMessage(failure.message); nextTick(() => emit('layout')) })
 }
 // 切换展开状态前记录布局，避免文件行增减时打断原来的阅读位置。
 function setExpanded(value: boolean) {

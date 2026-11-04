@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { NativeFileReportRuntime } from '../apps/bridge/native-report-runtime.mjs';
+import { nativeReportCurrentLayout } from '../apps/bridge/native-report-current-layout.mjs';
 
 const replace='@@ -1 +1 @@\n-old\n+new\n';
 const change=(path,type,diff,move_path)=>({path,kind:{type,move_path},diff});
@@ -103,6 +104,32 @@ test('未知版本只读一次安装包，安装文件变化后重新核验', {s
 });
 
 const nativeExecutable=process.env.CODEX_TEST_NATIVE_REPORT_EXECUTABLE;
+
+test('数字分块入口存在但字节未通过审核时仍拒绝执行', {skip:process.platform!=='win32'}, async()=>{
+  const root=fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()),'codex-report-hash-'));
+  const app=path.join(root,'WindowsApps','OpenAI.Codex_example','app');
+  fs.mkdirSync(path.join(app,'resources'),{recursive:true});
+  const executable=path.join(app,'ChatGPT.exe'),archive=path.join(app,'resources','app.asar');
+  fs.writeFileSync(executable,'');
+  // 仅合成索引和无效字节，验证存在相同入口也不能绕过完整哈希核验。
+  const index={files:{}},segments=('webview/assets/'+nativeReportCurrentLayout.modules[0][0]).split('/');
+  let cursor=index;
+  for(const segment of segments.slice(0,-1))cursor=cursor.files[segment]={files:{}};
+  cursor.files[segments.at(-1)]={size:1,offset:'0'};
+  const header=Buffer.from(JSON.stringify(index)),prefix=Buffer.alloc(16);
+  prefix.writeUInt32LE(header.length+8,4);prefix.writeUInt32LE(header.length,12);
+  fs.writeFileSync(archive,Buffer.concat([prefix,header,Buffer.from('x')]));
+  const runtime=new NativeFileReportRuntime();
+  try {
+    assert.equal(runtime.supports(executable),false);
+    await assert.rejects(runtime.calculate(executable,pack(change('demo.uts','update',replace))),{code:'REPORT_UNAVAILABLE',message:/尚未适配.*更新连接服务/});
+  } finally {
+    runtime.close();
+    // 只清理本测试刚创建并持有的明确临时路径。
+    fs.unlinkSync(archive);fs.unlinkSync(executable);
+    for(const directory of [path.join(app,'resources'),app,path.dirname(app),path.dirname(path.dirname(app)),root])fs.rmdirSync(directory);
+  }
+});
 test('固定版本官方安装包可离线生成原生文件汇总', {skip:!nativeExecutable}, async()=>{
   const runtime=new NativeFileReportRuntime();
   try {

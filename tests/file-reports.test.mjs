@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {fileReportSource} from '../apps/bridge/file-report-source.mjs';
-import {DesktopFileReportReader} from '../apps/bridge/file-reports.mjs';
+import {DesktopFileReportReader,desktopDiffModuleNames} from '../apps/bridge/file-reports.mjs';
 import {fileReportExpression} from '../apps/bridge/file-report-expression.mjs';
 import {validateRequest} from '../packages/protocol/contracts.mjs';
 import {EventEmitter} from 'node:events';
@@ -13,6 +13,25 @@ import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';
 const change=(id,path='src/demo.uts',status='completed')=>({id,type:'fileChange',status,changes:[{path,kind:{type:'update'},diff:'@@ -1 +1 @@\n-old\n+new\n'}]});
 const final=id=>({id,type:'agentMessage',phase:'final_answer',text:'合成报告'});
 const state=items=>({cwd:'/workspace/demo',turns:[{turnId:'turn',status:'completed',items}]});
+
+test('桌面资源缺失和重复匹配分别给出明确更新指引',()=>{
+  const initial='webview/assets/app-initial-abc.js',summary='webview/assets/diff-summary-def.js';
+  assert.deepEqual(desktopDiffModuleNames([initial,summary]),{initial:'app-initial-abc.js',summary:'diff-summary-def.js'});
+  for(const files of [[],[initial],['webview/assets/async/123.abc.js']]) {
+    assert.throws(()=>desktopDiffModuleNames(files),{code:'REPORT_UNAVAILABLE',message:/未找到兼容.*更新连接服务/});
+  }
+  assert.throws(()=>desktopDiffModuleNames([initial,'webview/assets/app-initial-def.js',summary]),{code:'REPORT_UNAVAILABLE',message:/多个匹配/});
+  assert.throws(()=>desktopDiffModuleNames([initial,summary,'webview/assets/diff-summary-abc.js']),{code:'REPORT_UNAVAILABLE',message:/多个匹配/});
+});
+
+test('文件错误展示兼容旧服务提示，保留新服务的具体原因',()=>{
+  const source=fs.readFileSync('apps/mobile/services/file-reports.uts','utf8').replace(/\bexport /g,'');
+  const context=vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.format=fileReportErrorMessage;',context);
+  assert.match(context.format('原生模块不唯一'),/无法识别当前桌面版.*更新连接服务/);
+  assert.equal(context.format('报告未完整保留'),'报告未完整保留');
+  assert.match(context.format(''),/读取失败/);
+});
 
 test('文件汇总绑定每份最终报告，保留重复修改并排除失败、后续和其他轮次',()=>{
   const input=state([change('first'),final('early'),...Array.from({length:100},(_,id)=>({id:'cmd-'+id,type:'commandExecution'})),change('second'),change('third'),change('failed','src/no.uts','failed'),final('report'),change('tail')]);

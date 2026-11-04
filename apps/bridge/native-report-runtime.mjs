@@ -5,6 +5,7 @@ import { Worker } from 'node:worker_threads';
 import { AsarReader } from '../../packages/protocol/asar-reader.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { nativeReportLayout } from './native-report-layout.mjs';
+import { nativeReportCurrentLayout } from './native-report-current-layout.mjs';
 
 const archiveCacheLimit = 4;
 const maxParallelReports = 4;
@@ -40,13 +41,17 @@ function archiveIdentity(archive) {
 function loadNativeFunctions(archive) {
   const reader = new AsarReader(archive);
   try {
-    const modules = nativeReportLayout.modules.map(([filename,expected])=>{
+    // 仅按已审核资源入口选择布局，未知版本不能靠文件名猜测后执行。
+    const layout = reader.files.has('webview/assets/' + nativeReportCurrentLayout.modules[0][0])
+      ? nativeReportCurrentLayout : nativeReportLayout;
+    const modules = layout.modules.map(([filename,expected])=>{
       const file = 'webview/assets/' + filename;
       if (!reader.files.has(file)) throw new UnsupportedNativeReportVersion('桌面原生差异模块版本尚未验证');
       const source = reader.text(file);
       if (createHash('sha256').update(source).digest('hex') !== expected) throw new UnsupportedNativeReportVersion('桌面原生差异模块版本尚未验证');
       return source;
     });
+    if (layout === nativeReportCurrentLayout) return currentNativeFunctions(modules,layout);
     const slice = ([module,start,end])=>modules[module].slice(start,end);
     const declarations = nativeReportLayout.declarations.map(slice).join('\n');
     const aliases = nativeReportLayout.aliases.map(([name,local])=>`const ${name} = ${local};`).join('\n');
@@ -70,6 +75,38 @@ function loadNativeFunctions(archive) {
       `,
     };
   } finally { reader.close(); }
+}
+
+/** 数字分块版只提取已审核定义；模块装载器只连接这些纯计算闭包，不启动桌面应用。 */
+function currentNativeFunctions(modules,layout) {
+  const slice = (module,start,end)=>modules[module].slice(start,end);
+  const sum = slice(...layout.sum);
+  const overrides = {
+    emptyCache:'Object.freeze({maxSize:0,get(){},set(){}})',
+    silentLogger:'Object.freeze({v:Object.freeze({error(){}})})',
+    sumBy:'nativeSumBy',
+    blockedPaths:'Object.freeze({ph(){throw new Error("报告不支持重写仓库路径")}})',
+    noPaths:'null',
+  };
+  const factories = layout.factories.map(factory=>{
+    const replacements = Object.entries(factory.overrides).map(([name,key])=>`const ${name}=${overrides[key]};`).join('\n');
+    const declarations = factory.declarations.map(([start,end,variable])=>(variable?'let ':'')+slice(factory.module,start,end)+';').join('\n');
+    const exports = factory.exports.map(([name,start,end])=>JSON.stringify(name)+':'+slice(factory.module,start,end)).join(',');
+    return `modules[${JSON.stringify(factory.id)}]=()=>{${replacements}\n${declarations}\nreturn {${exports}};};`;
+  }).join('\n');
+  return {
+    version:layout.modules.map(([,hash])=>hash).join(':'),
+    source:`
+      'use strict';
+      const console=Object.freeze({error(){},warn(){}});
+      const nativeSumBy=(array,fn)=>array?.length?(${sum})(array,fn):0;
+      const modules=Object.create(null),cache=Object.create(null);
+      function n(id){if(cache[id])return cache[id];if(!modules[id])throw new Error('未开放原生模块');return cache[id]=modules[id]();}
+      n.n=value=>()=>value;
+      ${factories}
+      return Object.freeze({convert:n('C4Sc').LU,serialize:n('aCkJ').CD,parse:n('JiBc').F,summarize:n('mHZT').s});
+    `,
+  };
 }
 
 /** 复制固定历史字段，限制数量及序列化体积。差异文本始终作为数据传输。 */
@@ -116,7 +153,7 @@ export class NativeFileReportRuntime {
     const input=reportInput(batches);
     let bundle;
     try { bundle=this.#bundle(executable); } catch {
-      throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用');
+      throw new BridgeError('REPORT_UNAVAILABLE','电脑连接服务尚未适配当前桌面版本，请更新连接服务后重试文件汇总');
     }
     const key=bundle.version+':'+createHash('sha256').update(input).digest('hex');
     const existing=this.#pending.get(key);

@@ -22,7 +22,7 @@
 <script setup lang="uts">
 import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { bridge, connection } from '../../services/bridge.uts'
-import { ChangedFile, FileReport, FileReportDetail, DiffRow, fileDiffRows } from '../../services/file-reports.uts'
+import { ChangedFile, FileReport, FileReportDetail, DiffRow, fileDiffRows, fileReportErrorMessage } from '../../services/file-reports.uts'
 import { readFileReportCache, saveFileReportDetailCache } from '../../services/file-report-cache.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 const props = defineProps<{ hostId: string, threadId: string, report: FileReport, fileId: string, connected: boolean }>()
@@ -67,7 +67,7 @@ function loadFile(id: string, manual: boolean = false) {
     loaded.value.push({ id, detail, rows: fileDiffRows(detail.diffs) } as LoadedFile)
     refreshedIds.value.push(id)
     saveFileReportDetailCache(namespace, props.hostId, props.threadId, props.report, detail)
-  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: failure.message } as FileFailure) })
+  }, (failure: Error) => { if (!alive || version != generation || identity != cacheIdentity()) return; pendingIds.value = pendingIds.value.filter((item: string): boolean => item != id); retryIds.value = retryIds.value.filter((item: string): boolean => item != id); errors.value.push({ id, message: fileReportErrorMessage(failure.message) } as FileFailure) })
 }
 function toggle(id: string) { const index = expandedIds.value.indexOf(id); if (index >= 0) expandedIds.value.splice(index, 1); else { expandedIds.value.push(id); loadFile(id) } }
 // 重新打开面板、切换配对或报告版本后，恢复当前报告的已读差异。

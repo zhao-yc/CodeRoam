@@ -3,6 +3,12 @@ export type FileReport = { reportId: string, revision: string, fileCount: number
 export type FileReportDetail = { id: string, path: string, kind: string, additions: number, deletions: number, binary: boolean, diffs: string[] }
 export type DiffRow = { id: string, kind: string, oldLine: string, newLine: string, text: string }
 
+// 兼容旧电脑连接服务的含糊错误；更新指引同时用于汇总卡片和文件差异面板。
+export function fileReportErrorMessage(message: string): string {
+  if (message == '原生模块不唯一') return '电脑连接服务无法识别当前桌面版的文件汇总模块，请更新连接服务后重试'
+  return message.length > 0 ? message : '文件汇总读取失败，请稍后重试'
+}
+
 // 路径仅用于显示；网络请求始终使用电脑签发的文件编号，不把路径作为读取参数。
 export function changedFileName(path: string): string { const parts = path.replace(/\\/g, '/').split('/'); return parts[parts.length - 1] }
 
