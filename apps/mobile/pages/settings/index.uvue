@@ -1,18 +1,24 @@
 <template>
-  <view class="page">
+  <view class="page settings-page">
     <view id="settings-header" class="header"><view class="back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回聊天列表" @click="goBack"></button></view><text class="header-title">设置</text></view>
     <scroll-view direction="vertical" class="content">
       <view class="body">
         <text class="group-title">聊天</text>
-        <message-sending-setting />
-        <view id="file-change-preferences" class="section setting-row action-frame"><view class="setting-copy"><text class="setting-title">更改文件默认显示</text><text class="description">设置聊天中「已更改文件」卡片的初始状态。</text></view><text class="setting-value">{{ fileChangesLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'更改文件默认显示，当前' + fileChangesLabel + '，点击选择'" hover-class="action-pressed" @click="chooseFileChangesDisplay"></button></view>
+        <view class="settings-group">
+          <view class="group-inset"><message-sending-setting /></view>
+          <view id="file-change-preferences" class="section setting-row action-frame"><view class="setting-copy"><text class="setting-title">更改文件默认显示</text><text class="description">设置聊天中「已更改文件」卡片的初始状态。</text></view><text class="setting-value">{{ fileChangesLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'更改文件默认显示，当前' + fileChangesLabel + '，点击选择'" hover-class="action-pressed" @click="chooseFileChangesDisplay"></button></view>
+        </view>
         <text class="group-title">通知</text>
-        <view id="notification-preferences" class="section setting-row action-frame"><view class="setting-copy"><text class="setting-title">页面内通知时长</text><text class="description">{{ taskNotifications.durationMs == 0 ? '向上划走通知后显示下一条。' : '页面内的提醒也可以随时向上划走。' }}</text></view><text class="setting-value">{{ noticeDurationLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'页面内通知时长，当前' + noticeDurationLabel + '，点击选择'" hover-class="action-pressed" @click="chooseNoticeDuration"></button></view>
-        <!-- #ifdef WEB -->
-        <view class="section"><browser-notification-setting /></view>
-        <!-- #endif -->
+        <view class="settings-group">
+          <view id="notification-preferences" class="section setting-row action-frame"><view class="setting-copy"><text class="setting-title">页面内通知时长</text><text class="description">{{ taskNotifications.durationMs == 0 ? '向上划走通知后显示下一条。' : '页面内的提醒也可以随时向上划走。' }}</text></view><text class="setting-value">{{ noticeDurationLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" :aria-label="'页面内通知时长，当前' + noticeDurationLabel + '，点击选择'" hover-class="action-pressed" @click="chooseNoticeDuration"></button></view>
+          <!-- #ifdef WEB -->
+          <view class="section browser-section"><browser-notification-setting /></view>
+          <!-- #endif -->
+        </view>
         <text class="group-title">连接</text>
-        <view class="section setting-row action-frame"><app-icon name="desktop" :size="23" /><view class="setting-copy connection-copy"><text class="setting-title">电脑连接</text><text class="description">{{ connectionSummary }}</text></view><text class="setting-value">{{ connectionStatusLabel }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" aria-label="电脑连接，查看状态和管理接入" hover-class="action-pressed" @click="openConnection"></button></view>
+        <view class="settings-group">
+          <view class="section setting-row action-frame"><app-icon name="desktop" :size="23" /><view class="setting-copy connection-copy"><text class="setting-title">电脑连接</text><text class="description">{{ connectionSummary }}</text></view><view class="connection-state"><view v-if="connection.connected" class="connection-dot"></view><text class="setting-value">{{ connectionStatusLabel }}</text></view><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" aria-label="电脑连接，查看状态和管理接入" hover-class="action-pressed" @click="openConnection"></button></view>
+        </view>
         <text class="footnote">聊天与通知偏好仅保存在当前设备。</text>
       </view>
     </scroll-view>
@@ -28,6 +34,7 @@ import BrowserNotificationSetting from '../../components/browser-notification-se
 // #endif
 import { taskNotifications, setTaskNoticeDuration, taskNoticeDurationLabel } from '../../services/task-notifications.uts'
 import { fileChangePreferences, setFileChangesExpanded } from '../../services/file-change-preferences.uts'
+import { connection } from '../../services/bridge.uts'
 import { connectionStatusLabel, connectionSummary } from '../../services/connection-presentation.uts'
 import TaskNotice from '../../components/task-notice/task-notice.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
@@ -61,21 +68,27 @@ function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.na
 </script>
 
 <style>
-.page { flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #ffffff; }
-.header { height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
+.settings-page { flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f6f7fa; }
+.header { background-color: #ffffff; border-bottom-style: solid; border-bottom-width: 1px; border-bottom-color: #e0e4ec; height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .back { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
 .header-title { font-size: 17px; line-height: 26px; font-weight: bold; color: #1a2135; margin-left: 8px; }
 .content { flex: 1; height: 0; min-height: 0; }
-.body { width: 100%; max-width: 720px; align-self: center; padding: 0 24px 30px; margin-bottom: var(--uni-safe-area-inset-bottom); }
-.group-title { color: #737d91; font-size: 13px; line-height: 22px; margin-top: 28px; }
-.section { padding: 24px 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
-.setting-row { min-height: 72px; flex-direction: row; align-items: center; }
+.body { width: 100%; max-width: 720px; align-self: center; padding: 0 16px 30px; margin-bottom: var(--uni-safe-area-inset-bottom); }
+.group-title { color: #687386; font-size: 13px; line-height: 22px; font-weight: bold; margin: 24px 8px 10px; }
+/* 分组使用完整白色底板，组内只保留内缩分隔线，避免控件边界混在一起。 */
+.settings-group { background-color: #ffffff; border: 1px solid #dfe3ec; border-radius: 14px; overflow: hidden; padding: 0 12px; flex-shrink: 0; }
+.group-inset { padding: 0 4px; }
+.section { padding: 18px 4px; }
+.browser-section { border-top-style: solid; border-top-width: 1px; border-top-color: #e5e8f1; }
+.setting-row { min-height: 80px; flex-direction: row; align-items: center; }
 .setting-copy { flex: 1; min-width: 0; margin-right: 12px; }
 .connection-copy { margin-left: 14px; }
 .setting-title { color: #1a2135; font-size: 16px; line-height: 24px; font-weight: bold; }
-.description { color: #596479; font-size: 12px; line-height: 20px; margin-top: 6px; }
+.description { color: #687386; font-size: 12px; line-height: 20px; margin-top: 6px; }
 .setting-value { color: #596479; font-size: 14px; line-height: 22px; margin-right: 10px; flex-shrink: 0; }
-.footnote { color: #737d91; font-size: 12px; line-height: 20px; margin-top: 24px; }
+.connection-state { flex-direction: row; align-items: center; flex-shrink: 0; }
+.connection-dot { width: 7px; height: 7px; border-radius: 4px; background-color: #48be64; margin-right: 7px; }
+.footnote { padding: 0 8px; color: #737d91; font-size: 12px; line-height: 20px; margin-top: 24px; }
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
