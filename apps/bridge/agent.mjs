@@ -7,6 +7,7 @@ import { WebSocket } from 'ws';
 import { isDeepStrictEqual } from 'node:util';
 import { WRITE_METHODS, UPLOAD_METHODS, validateRequest, errorPayload, BridgeError, requestFingerprint } from '../../packages/protocol/contracts.mjs';
 import { conversationUpdate, messageWindowUpdate } from './updates.mjs';
+import { recentConversationPage } from './conversation-page.mjs';
 import { computerName } from './computer-name.mjs';
 import { hostname } from 'node:os';
 import { NewThreadService } from './new-thread-service.mjs';
@@ -123,6 +124,7 @@ export class BridgeAgent extends EventEmitter {
     try { this.threadCache.captureLive(snapshot); } catch { this.emit('warning',{code:'THREAD_CACHE_UNAVAILABLE',message:'电脑聊天缓存暂时不可用'}); }
   }
   publish(snapshot, { excludeTransportId, decorated = false, dedupe = false, broadcast = true } = {}) {
+    snapshot=recentConversationPage(snapshot);
     if(!decorated)snapshot=this.messageQueue?.decorate(snapshot)??snapshot;
     const previous=this.published.get(snapshot.threadId);
     if(dedupe&&sameSnapshot(snapshot,previous?.snapshot))return;
@@ -133,7 +135,8 @@ export class BridgeAgent extends EventEmitter {
   }
   /** 详情操作状态始终来自实时 watch，正文能用已知版本恢复时省略重复传输。 */
   watchResult(source, message, preview) {
-    const snapshot=this.messageQueue?.decorate(source)??source;
+    const page={...recentConversationPage(source),...(this.adapter.native?.platform==='win32'?{supportsReadState:true}:{})};
+    const snapshot=this.messageQueue?.decorate(page)??page;
     const projection=conversationProjection(snapshot), contentRevision=conversationContentRevision(projection);
     const requested=message.method==='thread.watch'?(message.params.contentRevision??preview?.contentRevision):undefined;
     let baseline;
@@ -376,6 +379,7 @@ export class BridgeAgent extends EventEmitter {
           }
           return {...result,...(this.taskQueue?{supportsTaskQueue:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
         }
+        if(message.method==='thread.read')return this.adapter.markRead(message.params.threadId,message.deviceId);
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {
@@ -386,8 +390,11 @@ export class BridgeAgent extends EventEmitter {
           // 首帧读取与桌面导航并行，预览失败不会中断原有实时订阅。
           let finished=false,preview;
           if(message.method==='thread.watch'&&message.params.previewId&&message.params.contentRevision===undefined) {
-            this.threadCache.preview(id).then(current=>{
-              if(finished||!current||this.deletingIds.has(id))return;
+            this.threadCache.preview(id).then(cached=>{
+              if(finished||!cached||this.deletingIds.has(id))return;
+              const snapshot=recentConversationPage(cached.snapshot);
+              // 预览的空可执行题组不能遮住展示题组，版本仍须包含待回答的问题。
+              const current={snapshot,contentRevision:conversationContentRevision({...snapshot,questionGroups:undefined})};
               const sent=this.send({v:1,type:'thread.preview',transportId:message.transportId,deviceId:message.deviceId,previewId:message.params.previewId,threadId:id,...current});
               if(sent!==false)preview=current;
             }).catch(()=>{});

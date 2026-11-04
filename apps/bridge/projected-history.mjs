@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {CONVERSATION_PAGE_SIZE, CONVERSATION_PAGE_BYTES} from './conversation-page.mjs';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {BridgeError} from '../../packages/protocol/contracts.mjs';
@@ -125,7 +126,7 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
     // 新版有起始位置；旧版按项目位置或结束位置定位没有消息的失败轮次。
     const turnPosition=`COALESCE(${turnColumns.has('rollout_ordinal')?'t.rollout_ordinal,':''}(SELECT MIN(i.rollout_ordinal) FROM thread_items i WHERE i.thread_id=t.thread_id AND i.turn_id=t.turn_id),t.rollout_end_ordinal)`;
     const failureQuery=db.prepare(`SELECT t.*,${turnPosition} AS position FROM thread_turns t WHERE t.thread_id=? AND ${turnPosition}>=? AND ${turnPosition}<? AND ${turnPosition}<? ORDER BY position`);
-    const messages=[],turnInfo=new Map(),turnPositions=new Map();let characters=0,cursor='',hasMore=false;
+    const messages=[],turnInfo=new Map(),turnPositions=new Map();let bytes=0,cursor='',hasMore=false;
     if(!before&&!beforeMessageId){
       const latestQuery=db.prepare(`SELECT t.*,${turnPosition} AS position FROM thread_turns t WHERE t.thread_id=? AND ${turnPosition}<? ORDER BY ${turnPosition} DESC,t.turn_id DESC LIMIT 1`);
       for(const source of [...sources].reverse()){
@@ -143,10 +144,11 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
         // 仅转换明确的可见项目，禁止把推理、内部提示或未知结构当正文。
         const normalized=item.id===saved.item_id&&visibleTypes.includes(item.type)&&item.phase!=='analysis'&&item.channel!=='analysis'
           ?normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,status,items:[item]}]},{preserveDialogue:false}).messages[0]:null;
-        if(normalized&&(messages.length>=80||characters+normalized.text.length>120000)){hasMore=true;break;}
+        const size=normalized?Buffer.byteLength(JSON.stringify(normalized)):0;
+        if(normalized&&messages.length&&(messages.length>=CONVERSATION_PAGE_SIZE||bytes+size>CONVERSATION_PAGE_BYTES)){hasMore=true;break;}
         ordinal=saved.rollout_ordinal;itemId=saved.item_id;
         cursor=Buffer.from(JSON.stringify({storage:'projection',threadId:row.id,source:source.id,ordinal,itemId})).toString('base64url');
-        if(normalized){messages.unshift(normalized);characters+=normalized.text.length;turnInfo.set(saved.turn_id,metadata);turnPositions.set(saved.turn_id,[sourceIndex,savedTurn?.rollout_ordinal??saved.rollout_ordinal]);}
+        if(normalized){messages.unshift(normalized);bytes+=size;turnInfo.set(saved.turn_id,metadata);turnPositions.set(saved.turn_id,[sourceIndex,savedTurn?.rollout_ordinal??saved.rollout_ordinal]);}
       }
       // 只附带当前翻页范围内的失败，不能把游标之后的轮次混进早期历史。
       for(const saved of failureQuery.all(source.id,rows.length===81||hasMore?ordinal:0,upper,source.limit)){

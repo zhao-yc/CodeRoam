@@ -4,6 +4,7 @@ import { predictionTurnId } from './prediction-turn.mjs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { IpcClient } from '../../packages/protocol/ipc-client.mjs';
+import { recentConversationPage, RECENT_CONVERSATION_OPTIONS } from './conversation-page.mjs';
 import { BridgeError, validateTurnRetry, validateTurnInput } from '../../packages/protocol/contracts.mjs';
 import { applyPatches, normalizeConversation } from './conversation.mjs';
 import { formatQuestionReply, validateQuestionAnswers, questionCounts } from './questions.mjs';
@@ -276,6 +277,18 @@ export class DesktopAdapter extends EventEmitter {
     return {images:message.images};
   }
 
+  /** 仅当前设备已订阅且仍有效的聊天可确认已读；历史浏览也不需要导航桌面。 */
+  async markRead(threadId, deviceId) {
+    const entry=this.conversations.get(threadId);
+    const current=()=>!this.stopped&&this.conversations.get(threadId)===entry&&entry?.watchers.has(deviceId);
+    if(!current())throw new BridgeError('SUBSCRIPTION_REQUIRED','请先查看这条聊天再确认已读');
+    if(this.native?.platform!=='win32')throw new BridgeError('READ_STATE_UNAVAILABLE','当前电脑暂不支持独立的已读确认');
+    this.client.assertCurrent?.();
+    await this.client.instance?.verify?.();
+    if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，已取消旧的已读确认');
+    await this.native.markRead(threadId,current);
+    return {threadId,read:true};
+  }
   /** 翻页只读取已订阅会话的保存记录，不导航桌面，也不发布成实时状态。 */
   async historyPage(threadId,deviceId,options) {
     const entry=this.conversations.get(threadId);
@@ -322,7 +335,7 @@ export class DesktopAdapter extends EventEmitter {
   get supportsFileReports() { return this.nativeFileReportAvailable?.()??(process.platform==='win32'&&!usesWindowsIpcWithoutPage(this.client.instance)); }
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
-    const snapshot={...normalizeConversation(state,options),supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
+    const snapshot={...recentConversationPage(normalizeConversation(state,{...RECENT_CONVERSATION_OPTIONS,...options})),supportsReadState:this.native?.platform==='win32',supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
     // 侧边栏保存的未读独立于流式快照，不能用快照默认 false 提前清理桌面蓝点。
     if(this.native){if(this.native.unread.has(state.id))snapshot.hasUnreadTurn=this.native.unread.get(state.id);else delete snapshot.hasUnreadTurn;}
     const entry=this.conversations.get(state.id);

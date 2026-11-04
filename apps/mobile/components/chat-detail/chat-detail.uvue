@@ -26,7 +26,7 @@
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch" @wheel="onTimelineWheel">
         <view id="timeline-content" class="timeline-content" :style="{ minHeight: readingFloor + 'px' }">
         <!-- 历史提示预留固定高度，骨架出现和移除时不改变现有消息的位置。 -->
-        <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的聊天，请再次下拉重试</text><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部聊天</text></view>
+        <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的聊天，请再次下拉重试</text><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部聊天</text><button v-else class="history-more" @click="loadOlder()">加载更早消息</button></view>
         <!-- 首次同步仅替换正文占位，导航、输入区和失败重试继续沿用真实状态。 -->
         <loading-skeleton v-if="displayConversation == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
         <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得聊天内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步聊天。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
@@ -168,7 +168,7 @@ import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
 import { failureTimeline, retryTarget, latestFailureTurnId } from '../../services/turn-failure.uts'
-import { HistoryPage, conversationWithHistory } from '../../services/history.uts'
+import { HistoryPage, conversationWithHistory, retainHistoryWindow } from '../../services/history.uts'
 import type { Conversation } from '../../services/bridge.uts'
 import { MessageAnnotation, MessagePresentation, annotationPresentationsForTimeline } from '../../services/annotations.uts'
 import { presentConversationMessages } from '../../services/message-presentations.uts'
@@ -349,7 +349,6 @@ const historyPage = ref<HistoryPage | null>(null)
 const loadingHistory = ref(false)
 const historyError = ref('')
 const historyScrollTop = ref(0)
-let initialHistoryChecked = false
 let historyRequest = 0
 let historyGesture = 0
 let lastHistoryGesture = -1
@@ -907,15 +906,6 @@ function loadOlder(preserveFollowing: boolean = false) {
   loadingHistory.value = true; historyError.value = ''
   readOlderPage(++historyRequest, preserveFollowing, 8)
 }
-// 短会话没有可滚动距离，首个稳定布局自动检查一次，不关闭跟随最新消息。
-function checkShortHistory() {
-  if (localTimelineHasMore() || !following.value || initialHistoryChecked || !isCurrentPage() || !pageVisible.value || !connection.connected || connection.snapshot?.supportsHistoryPages != true || (connection.snapshot?.messages.length ?? 0) == 0) return
-  const viewport = uni.getElementById('conversation-timeline')?.getBoundingClientRect()
-  const bottom = uni.getElementById('timeline-bottom')?.getBoundingClientRect()
-  if (viewport == null || bottom == null || viewport.height <= 0) return
-  initialHistoryChecked = true
-  if (bottom.bottom <= viewport.bottom + 1) { lastHistoryGesture = historyGesture; loadOlder(true) }
-}
 // 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
 function scheduleTimelineFill() {
   if (timelineFillTimer != 0 || timelineFilled.value || !pageVisible.value || !isReadingPage()) return
@@ -937,7 +927,7 @@ function scheduleTimelineFill() {
     timelineFilled.value = earlier == 0
     timelineFillStarted = true
     afterMarkdownLayout()
-    nextTick(() => { scheduleTimelineFill(); checkShortHistory() })
+    nextTick(() => { scheduleTimelineFill() })
   }, timelineFillStarted ? 48 : 150)
 }
 function onHistoryTop() {
@@ -951,6 +941,30 @@ function onHistoryTop() {
 onPaneShow(() => { nextTick(() => { scheduleTimelineFill() }) })
 onPaneHide(() => { clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
 onUnmounted(() => { clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
+
+// 只保留已读过的实时窗口；分页回执不能覆盖最新消息或执行权限。
+watch(liveConversation, (current: Conversation | null, previous: Conversation | null) => {
+  if (isCurrentPage()) historyPage.value = retainHistoryWindow(historyPage.value, previous, current)
+}, { flush: 'sync' })
+
+let readRequestKey = ''
+// 正文挂载且实时订阅已确认后独立提交已读；不导航电脑，不发送草稿。
+function confirmVisibleRead() {
+  const snapshot = liveConversation.value
+  if (!pageVisible.value || !isCurrentPage() || !subscriptionReady.value || snapshot?.supportsReadState != true) { readRequestKey = ''; return }
+  if (snapshot!.hasUnreadTurn == false) { readRequestKey = ''; return }
+  if (snapshot!.hasUnreadTurn != true || displayConversation.value == null) return
+  const key = pageHostId.value + ':' + pageThreadId.value + ':' + (connection.subscriptionRevision ?? 0).toString() + ':' + (snapshot!.latestTurn?.turnId ?? '')
+  if (readRequestKey == key) return
+  readRequestKey = key
+  nextTick(() => {
+    if (!pageVisible.value || !isCurrentPage() || !subscriptionReady.value || readRequestKey != key) return
+    bridge.request('thread.read', { threadId: pageThreadId.value }).then((result: UTSJSONObject) => {
+      if (isCurrentPage() && readRequestKey == key && result.getString('threadId') == pageThreadId.value && result.getBoolean('read') == true && connection.snapshot != null) connection.snapshot!.hasUnreadTurn = false
+    }, (_: Error) => { if (isCurrentPage() && readRequestKey == key) operationError.value = '已读状态同步失败，可从右上角菜单重新同步后重试' })
+  })
+}
+watch((): string => [pageVisible.value.toString(), (connection.connected == true).toString(), (connection.subscriptionRevision ?? 0).toString(), (liveConversation.value?.hasUnreadTurn ?? false).toString(), (liveConversation.value?.supportsReadState ?? false).toString(), liveConversation.value?.latestTurn?.turnId ?? ''].join(':'), () => { confirmVisibleRead() }, { immediate: true })
 
 onMounted(() => {
   baseWindowHeight = uni.getWindowInfo().windowHeight
@@ -998,7 +1012,7 @@ watch(displayConversation, (current: Conversation | null, previous: Conversation
       if (viewport != null && increased.some((message: ChatMessage): boolean => (uni.getElementById('message-' + message.id.split(':').join('-'))?.getBoundingClientRect().bottom ?? 0) > viewport.bottom + 2)) hasUnseenBelow.value = true
     }) }
   }
-  afterMarkdownLayout(); nextTick(() => { checkShortHistory() })
+  afterMarkdownLayout()
 }, { flush: 'pre' })
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
@@ -1639,7 +1653,7 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
   const computer = connection.computers.find((item: Computer): boolean => item.id == pageHostId.value)
   const generation = computer?.instanceGeneration ?? ''
   if (props.target.cacheNamespace != connection.cacheNamespace || (connection.connected && computer == null) || (pageGeneration.length > 0 && generation.length > 0 && pageGeneration != generation)) {
-    historyPage.value = null; historyRequest++; historyError.value = ''; initialHistoryChecked = false
+    historyPage.value = null; historyRequest++; historyError.value = ''
     timelineBoundary.value = ''; timelineFilled.value = false; timelineFillStarted = false
     cancelReadingCorrection(); closeFileReport()
   }
@@ -1699,6 +1713,7 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
 .pending-notice { flex-direction: row; align-items: center; }
 .check { font-size: 12px; height: 34px; line-height: 34px; margin: 0 0 0 8px; padding: 0 12px; }
 .history-controls { height: 52px; padding: 8px 16px; justify-content: center; flex-shrink: 0; }
+.history-more { color: #596479; font-size: 12px; line-height: 24px; padding: 2px 12px; background-color: transparent; border-width: 0; }
 .history-note { font-size: 12px; line-height: 18px; color: #596479; text-align: center; }
 .timeline-region { flex: 1; min-height: 0; position: relative; }
 .timeline { flex: 1; min-height: 0; }

@@ -12,6 +12,8 @@ export const UPLOAD_METHODS = new Set(['attachment.begin', 'attachment.chunk', '
 // 中转内的显示偏好更新不属于需要桌面核对的会话写操作。
 export const RELAY_METHODS = new Set(['host.profile.update']);
 READ_METHODS.add('projects.list');
+// 查看确认是可重复的已读状态更新，不发送指令，也不进入桌面任务队列。
+READ_METHODS.add('thread.read');
 READ_METHODS.add('thread.create.settings');
 WRITE_METHODS.add('thread.create');
 READ_METHODS.add('thread.goal.read');
@@ -161,6 +163,7 @@ export function validateRequest(message) {
   if(message.params.planMode!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||!['default','plan'].includes(message.params.planMode)||message.params.resetPlanAfterSend!==true))throw new BridgeError('BAD_PARAMS','本次计划模式参数无效');
   if(message.params.resetPlanAfterSend===true&&!['default','plan'].includes(message.params.planMode))throw new BridgeError('BAD_PARAMS','请明确本次消息的执行模式');
   if(message.params.resetPlanAfterSend!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||typeof message.params.resetPlanAfterSend!=='boolean'))throw new BridgeError('BAD_PARAMS','一次性计划标记只能用于发送消息');
+  if(message.method==='thread.read'&&Object.keys(message.params).some(key=>key!=='threadId'))throw new BridgeError('BAD_PARAMS','已读确认只接受聊天编号');
   if(message.params.activate!==undefined&&(message.method!=='thread.watch'||typeof message.params.activate!=='boolean'))throw new BridgeError('BAD_PARAMS','仅聊天订阅可使用布尔值加载标记');
   if(message.params.previewId!==undefined&&(message.method!=='thread.watch'||!validCacheSubscriptionId(message.params.previewId)))throw new BridgeError('BAD_PARAMS','仅聊天订阅可携带有效的首帧编号');
   if(message.params.contentRevision!==undefined&&(message.method!=='thread.watch'||!validConversationCacheRevision(message.params.contentRevision)))throw new BridgeError('BAD_PARAMS','仅聊天订阅可携带有效的正文版本');

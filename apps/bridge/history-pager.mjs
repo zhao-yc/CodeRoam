@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {BridgeError} from '../../packages/protocol/contracts.mjs';
 import {historicalSnapshot} from './history-reader.mjs';
+import {CONVERSATION_PAGE_SIZE, CONVERSATION_PAGE_BYTES} from './conversation-page.mjs';
 
 /** 逐块向前读取保存历史，只返回一页可见消息；游标只表达位置，不接受文件路径。 */
 export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessageId=''}={}, maximumBytes=8*1024*1024) {
@@ -40,9 +41,9 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
     }
     const snapshot=historicalSnapshot(row,records,{maxMessages:Number.MAX_SAFE_INTEGER,maxCharacters:maximumBytes*2,preserveDialogue:false});
     const eligible=snapshot.messages.filter(message=>(offsets.get(message.id)??end)<(anchor>=0?anchor:end));
-    const messages=[];let characters=0;
+    const messages=[];let bytes=0;
     // 分页保留连续片段；大小不足时在边界结束，下一页继续，不能跳过中间消息。
-    for(let index=eligible.length-1;index>=0;index--){const message=eligible[index];if(messages.length>=80||characters+message.text.length>120000)break;messages.unshift(message);characters+=message.text.length;}
+    for(let index=eligible.length-1;index>=0;index--){const message=eligible[index],size=Buffer.byteLength(JSON.stringify(message));if(messages.length&&(messages.length>=CONVERSATION_PAGE_SIZE||bytes+size>CONVERSATION_PAGE_BYTES))break;messages.unshift(message);bytes+=size;}
     let next=messages.length?Math.min(...messages.map(message=>offsets.get(message.id))):alignedStart;
     // 块内没有可见消息时仍向前推进，避免半行或纯工具内部事件造成死循环。
     if(next>=end)next=start;

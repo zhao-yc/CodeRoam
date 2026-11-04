@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { normalizeConversation } from './conversation.mjs';
+import { recentConversationPage, RECENT_CONVERSATION_OPTIONS } from './conversation-page.mjs';
 import { questionPreviews } from './question-preview.mjs';
 
 const MESSAGE_FIELDS = ['id', 'role', 'kind', 'summary', 'phase', 'imageCount', 'text', 'turnId', 'status'];
@@ -40,7 +41,7 @@ export function existingConversationSnapshot(adapter, threadId) {
   const entry = adapter.conversations?.get(threadId);
   if (!entry?.state) return undefined;
   // 与 adapter.snapshot(state, undefined) 使用相同的默认消息窗口和标题优先级。
-  const source = normalizeConversation(entry.state);
+  const source = recentConversationPage(normalizeConversation(entry.state, RECENT_CONVERSATION_OPTIONS));
   let title = [entry.state.title, entry.state.fallbackSearchTitle].find(value => typeof value === 'string' && value.trim().length > 0);
   if (!title) {
     let indexedTitle = entry.indexedTitle;

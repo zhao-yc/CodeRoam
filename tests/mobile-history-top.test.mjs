@@ -14,20 +14,20 @@ function fixture(){
  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
  // 加载实际展示依赖，保留历史布局和异步回执的完整验收路径。
  for (const module of ['turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
- vm.runInContext(stripTypeScriptTypes(helpers+'\n'+page,{mode:'transform'})+';globalThis.subject={checkShortHistory,loadOlder,onHistoryTop,beginTimelineTouch,historyPage,loadingHistory,historyError,historyScrollTop,displayConversation,pageHostId,pageThreadId,pageVisible,following,scrollTarget,setScroll:(top)=>{lastScrollTop=top;}};',context);
+ vm.runInContext(stripTypeScriptTypes(helpers+'\n'+page,{mode:'transform'})+';globalThis.subject={loadOlder,onHistoryTop,beginTimelineTouch,historyPage,loadingHistory,historyError,historyScrollTop,displayConversation,pageHostId,pageThreadId,pageVisible,following,scrollTarget,setScroll:(top)=>{lastScrollTop=top;}};',context);
  const p=context.subject;p.pageHostId.value='pc';p.pageThreadId.value='thread';p.pageVisible.value=true;
  return {p,requests,connection,geometry,unloads};
 }
 
-test('短会话首次布局只检查一次，确认没有更早记录后保留跟随状态',async()=>{
- const f=fixture();f.p.checkShortHistory();f.p.checkShortHistory();assert.equal(f.requests.length,1);assert.equal(f.p.following.value,true);
+test('短页面不自动预取，只有手动加载才请求一页',async()=>{
+ const f=fixture();assert.equal(f.requests.length,0);f.p.loadOlder();f.p.loadOlder();assert.equal(f.requests.length,1);
  f.requests[0].resolve({messages:[],turns:[],cursor:'',hasMore:false});await settle();
- assert.equal(f.p.historyPage.value.hasMore,false);assert.equal(f.p.loadingHistory.value,false);assert.equal(f.p.following.value,true);
- f.p.checkShortHistory();assert.equal(f.requests.length,1);
+ assert.equal(f.p.historyPage.value.hasMore,false);assert.equal(f.p.loadingHistory.value,false);
+ f.p.loadOlder();assert.equal(f.requests.length,1);
 });
 
 test('长会话初次布局不预取，失败后同一手势不重试，新的触顶手势才重试',async()=>{
- const f=fixture();f.geometry.short=false;f.p.checkShortHistory();assert.equal(f.requests.length,0);
+ const f=fixture();f.geometry.short=false;assert.equal(f.requests.length,0);
  f.p.beginTimelineTouch();f.p.onHistoryTop();f.p.onHistoryTop();assert.equal(f.requests.length,1);
  f.requests[0].reject(new Error('模拟超时'));await settle();f.p.onHistoryTop();assert.equal(f.requests.length,1);
  f.p.beginTimelineTouch();f.p.onHistoryTop();assert.equal(f.requests.length,2);

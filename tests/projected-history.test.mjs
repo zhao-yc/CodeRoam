@@ -49,10 +49,10 @@ test('分叉分页从归档源会话定位早期消息，跨源连续翻页且�
     f.db.prepare('INSERT INTO thread_turns VALUES(?,?,?,?,?,?)').run('parent','turn','completed',null,1234,190);
     const before=[fs.readFileSync(parent,'utf8'),fs.readFileSync(child,'utf8')];
     const first=f.reader.readHistory('child',{page:true,beforeMessageId:'p-150'});
-    assert.deepEqual(first.messages.map(m=>m.id),Array.from({length:80},(_,i)=>'p-'+(70+i)));
+    assert.deepEqual(first.messages.map(m=>m.id),Array.from({length:20},(_,i)=>'p-'+(130+i)));
     assert.equal(first.turns[0].status,'');assert.equal(first.turns[0].durationMs,undefined);
     const second=f.reader.readHistory('child',{page:true,before:first.cursor});
-    assert.deepEqual(second.messages.map(m=>m.id),Array.from({length:70},(_,i)=>'p-'+i));assert.equal(second.hasMore,false);
+    assert.deepEqual(second.messages.map(m=>m.id),Array.from({length:20},(_,i)=>'p-'+(110+i)));assert.equal(second.hasMore,true);
     let cursor='',more=true;const pages=[];
     for(let n=0;more&&n<10;n++){const page=f.reader.readHistory('child',{page:true,before:cursor});pages.unshift(...page.messages.map(m=>m.id));cursor=page.cursor;more=page.hasMore;}
     assert.equal(more,false);assert.deepEqual(pages,[...Array.from({length:180},(_,i)=>'p-'+i),...Array.from({length:20},(_,i)=>'c-'+(180+i))]);
@@ -69,7 +69,7 @@ test('多层继承取最小边界，同序号按编号翻页，正文有大小�
     for(let i=0;i<90;i++)f.item('child','m-'+String(i).padStart(3,'0'),200,{text:'正文'.repeat(6000)});
     f.item('child','hidden',201,{phase:'analysis',text:'内部推理'});f.item('child','reason',202,{type:'reasoning',text:'内部推理'});
     let before='',hasMore=true;const messages=[];
-    for(let n=0;n<20&&hasMore;n++) {
+    for(let n=0;n<100&&hasMore;n++) {
       const page=f.reader.readHistory('child',{page:true,before});
       assert.ok(page.messages.reduce((sum,m)=>sum+m.text.length,0)<=120000);
       messages.unshift(...page.messages.map(m=>m.id));hasMore=page.hasMore;before=page.cursor;
@@ -89,7 +89,7 @@ test('投影游标拒绝其他会话、无关来源及越过分叉边界，继�
       const before=Buffer.from(JSON.stringify({...valid,...change})).toString('base64url');
       assert.throws(()=>f.reader.readHistory('child',{page:true,before}),e=>e.code==='BAD_HISTORY_CURSOR');
     }
-    assert.equal(first.hasMore,false);
+    assert.equal(first.hasMore,true);assert.equal(first.messages.length,20);
     const childFile=path.join(f.home,'sessions/child.jsonl');
     const outside=path.join(f.home,'outside.jsonl');fs.writeFileSync(outside,fs.readFileSync(childFile));
     f.index.prepare('UPDATE threads SET rollout_path=? WHERE id=?').run(outside,'child');

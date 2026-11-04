@@ -144,7 +144,7 @@ test('旧日志分页携带范围内的无消息失败，早期页不会带入�
     }
     fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join('\n')+'\n');
     const row = {id:'thread', rollout_path:file};
-    const page = readHistoricalPage(row, root, {beforeMessageId:'message-80'});
+    const page = readHistoricalPage(row, root, {beforeMessageId:'message-60'});
     assert.equal(page.turns.find(turn => turn.turnId==='empty-failure')?.errorMessage, capacity);
     const huge=page.turns.find(turn=>turn.turnId==='huge-failure').errorMessage;
     assert.ok(huge.length<=MAX_TURN_ERROR_CHARACTERS);assert.ok(huge.startsWith('分页错误'));assert.ok(huge.endsWith(TURN_ERROR_TRUNCATED));

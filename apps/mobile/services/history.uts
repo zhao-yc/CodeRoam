@@ -28,5 +28,19 @@ export function conversationWithHistory(snapshot: Conversation | null, page: His
     if (index >= 0) turns.splice(index, 1, turn)
     else turns.push(turn)
   })
-  return { latestTurn: snapshot.latestTurn, supportsTurnRetry: snapshot.supportsTurnRetry, threadId: snapshot.threadId, title: snapshot.title, cwd: snapshot.cwd, status: snapshot.status, activeTurnId: snapshot.activeTurnId, hasUnreadTurn: snapshot.hasUnreadTurn, activeFlags: snapshot.activeFlags, activity: snapshot.activity, messages: mergeHistoryMessages(page.messages, snapshot.messages), turns, approvals: snapshot.approvals, questionGroups: snapshot.questionGroups, updatedAt: snapshot.updatedAt, readOnly: snapshot.readOnly, supportsFileReports: snapshot.supportsFileReports, supportsImages: snapshot.supportsImages, supportsPlanReset: snapshot.supportsPlanReset, supportsHistoryPages: snapshot.supportsHistoryPages } as Conversation
+  return { ...snapshot, messages: mergeHistoryMessages(page.messages, snapshot.messages), turns } as Conversation
+}
+
+// 实时窗口前移时保留已经接收的消息；未浏览过的历史仍只在用户翻页时读取。
+export function retainHistoryWindow(page: HistoryPage | null, previous: Conversation | null, current: Conversation | null): HistoryPage | null {
+  if (previous == null || current == null || previous.threadId != current.threadId) return page
+  const ids = new Set<string>(current.messages.map((message: ChatMessage): string => message.id))
+  const firstRetained = previous.messages.findIndex((message: ChatMessage): boolean => ids.has(message.id))
+  const boundary = firstRetained < 0 ? previous.messages.length : firstRetained
+  const evicted = previous.messages.filter((message: ChatMessage, index: number): boolean => index < boundary && !ids.has(message.id))
+  if (evicted.length == 0) return page
+  const messages = mergeHistoryMessages(page?.messages ?? [] as ChatMessage[], evicted)
+  const merged = conversationWithHistory(previous, page)
+  const trimmed = messages.length > 400
+  return { messages: trimmed ? messages.slice(-400) : messages, turns: merged?.turns ?? [] as ConversationTurn[], cursor: trimmed ? '' : page?.cursor ?? '', hasMore: trimmed || (page?.hasMore ?? true) } as HistoryPage
 }

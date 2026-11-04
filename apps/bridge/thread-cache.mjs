@@ -5,6 +5,7 @@ import { BridgeError, MAX_CONVERSATION_CACHE_THREADS } from '../../packages/prot
 import { conversationContentRevision, conversationProjection, existingConversationSnapshot } from './conversation-prefetch.mjs';
 import { conversationUpdate } from './updates.mjs';
 import { ConversationCacheStore } from './conversation-cache-store.mjs';
+import { RECENT_CONVERSATION_OPTIONS, CONVERSATION_PAGE_SIZE, CONVERSATION_PAGE_BYTES } from './conversation-page.mjs';
 
 export const CACHE_WATCHER = Symbol('缓存只读跟随');
 export const CACHE_THREAD_LIMIT = MAX_CONVERSATION_CACHE_THREADS;
@@ -159,7 +160,7 @@ export class ThreadCacheFeed {
       if (source && row?.saved_source === source) {
         try {
           const saved = JSON.parse(row.snapshot);
-          if (saved?.threadId === threadId && Array.isArray(saved.messages) && Array.isArray(saved.turns)) snapshot = saved;
+          if (saved?.threadId === threadId && Array.isArray(saved.messages) && Array.isArray(saved.turns) && saved.messages.length <= CONVERSATION_PAGE_SIZE && (saved.messages.length <= 1 || Buffer.byteLength(JSON.stringify(saved.messages)) <= CONVERSATION_PAGE_BYTES)) snapshot = saved;
         } catch { /* 损坏的展示副本按原历史来源重新读取。 */ }
       }
       snapshot ??= await this.readSaved(threadId, source);
@@ -285,7 +286,7 @@ export class ThreadCacheFeed {
     const reading = Promise.resolve().then(async () => {
       let snapshot;
       for (let attempt = 0; attempt < 2; attempt++) {
-        snapshot = await this.adapter.index.readHistory(threadId);
+        snapshot = await this.adapter.index.readHistory(threadId, RECENT_CONVERSATION_OPTIONS);
         if (snapshot?.threadId !== threadId) throw new BridgeError('HISTORY_ID_MISMATCH', '保存的聊天历史编号不一致');
         const current = this.adapter.index.historyCacheSource(threadId);
         if (this.closed || this.blocked(threadId) || this.reading.get(threadId) !== reading) throw new BridgeError('SUBSCRIPTION_CANCELED', '已取消旧的聊天历史读取');

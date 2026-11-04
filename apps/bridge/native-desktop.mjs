@@ -54,6 +54,10 @@ export class NativeDesktop extends EventEmitter {
   if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','旧的聊天导航已取消');
   const result=await this.call('navigate_to_codex_page',{threadId},threadId);
   if(result.navigated!==true)throw new BridgeError('DESKTOP_LOAD_FAILED','电脑未确认聊天切换，请重试');
+  await this.markRead(threadId,isCurrent);
+ }
+ /** 查看确认只更新原生已读状态，不导航、不打开窗口。 */
+ async markRead(threadId,isCurrent=()=>true){
   if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，不提交旧聊天的已读状态');
   const read=await this.call('set_thread_read_state',{threadId,source:'codex',hostId:'local',read:true},threadId);
   if(!isCurrent()||this.closed)throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，已忽略旧聊天的已读回执');
