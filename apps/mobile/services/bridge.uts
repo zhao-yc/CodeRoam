@@ -127,6 +127,49 @@ class MobileBridge {
   conversationUpdateRevision = 0
   migrateDeleteCommands = false
 
+  // 顺序按当前配对保存在本机，不改变执行电脑或向桌面提交操作。
+  computerOrder(): string[] {
+    if (connection.cacheNamespace.length == 0) return [] as string[]
+    try {
+      const saved = uni.getStorageSync('codex-mobile-computer-order-' + connection.cacheNamespace)
+      if (typeof saved != 'string' || saved.length == 0) return [] as string[]
+      const order = JSON.parse<string[]>(saved)
+      if (order == null || !Array.isArray(order)) return [] as string[]
+      return order.filter((id: string): boolean => typeof id == 'string')
+    } catch (_) { return [] as string[] }
+  }
+
+  // 全量与增量快照均复用本机顺序，新电脑按服务端顺序追加。
+  sortComputers(computers: Computer[]): Computer[] {
+    const order = this.computerOrder()
+    const result = [] as Computer[]
+    order.forEach((id: string) => {
+      const computer = computers.find((item: Computer): boolean => item.id == id)
+      if (computer != null && !result.some((item: Computer): boolean => item.id == id)) result.push(computer)
+    })
+    computers.forEach((computer: Computer) => { if (order.indexOf(computer.id) < 0) result.push(computer) })
+    return result
+  }
+
+  // 先持久化再更新界面；保存失败保持原顺序，缺席电脑保留原排序位置。
+  moveComputer(id: string, direction: number): boolean {
+    if (connection.cacheNamespace.length == 0 || (direction != -1 && direction != 1)) return false
+    const computers = connection.computers
+    const index = computers.findIndex((item: Computer): boolean => item.id == id)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= computers.length) return false
+    const order = this.computerOrder()
+    computers.forEach((computer: Computer) => { if (order.indexOf(computer.id) < 0) order.push(computer.id) })
+    const from = order.indexOf(id)
+    const to = order.indexOf(computers[target].id)
+    order[from] = computers[target].id
+    order[to] = id
+    try { uni.setStorageSync('codex-mobile-computer-order-' + connection.cacheNamespace, JSON.stringify(order)) }
+    catch (_) { throw new Error('无法保存电脑顺序，请检查存储权限') }
+    connection.computers = this.sortComputers(computers)
+    return true
+  }
+
   restore() {
     // 浏览器禁用存储或缓存损坏时仍可打开应用，不把原始配置写入错误信息。
     try {
@@ -396,7 +439,7 @@ class MobileBridge {
       connection.supportsHostProfiles = capabilities?.getBoolean('hostProfiles') == true
       connection.supportsConversationCache = capabilities?.getBoolean('conversationCache') == true
       connection.supportsConversationPreview = capabilities?.getBoolean('conversationPreview') == true
-      connection.computers = JSON.parse<Computer[]>(JSON.stringify(envelope['hosts'])) ?? []
+      connection.computers = this.sortComputers(JSON.parse<Computer[]>(JSON.stringify(envelope['hosts'])) ?? [])
       liveThreadLists.updates = [] as ThreadListUpdate[]
       this.connecting = false; connection.connectionAttempt = 0; this.attempts = 0; connection.connected = true; connection.status = '已连接'; connection.error = ''
       this.heartbeat()
@@ -404,7 +447,7 @@ class MobileBridge {
     } else if (type == 'hosts') {
       const previousComputers = connection.computers
       const wasOnline = connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online)
-      connection.computers = JSON.parse<Computer[]>(JSON.stringify(envelope['hosts'])) ?? []
+      connection.computers = this.sortComputers(JSON.parse<Computer[]>(JSON.stringify(envelope['hosts'])) ?? [])
       liveThreadLists.updates = liveThreadLists.updates.filter((item: ThreadListUpdate): boolean => connection.computers.some((computer: Computer): boolean => computer.id == item.hostId && computer.online && (computer.instanceGeneration ?? '') == (previousComputers.find((previous: Computer): boolean => previous.id == item.hostId)?.instanceGeneration ?? '')) && previousComputers.some((computer: Computer): boolean => computer.id == item.hostId && computer.online))
       const online = connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId && computer.online)
       const previousGeneration = previousComputers.find((computer: Computer): boolean => computer.id == connection.hostId)?.instanceGeneration ?? ''

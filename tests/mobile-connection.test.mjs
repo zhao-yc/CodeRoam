@@ -563,3 +563,31 @@ test('跨电脑只读列表请求保留执行电脑与待核对编号，并拒�
   const read=f.bridge.readComputerThreads('other');assert.equal(f.sent[0].hostId,'other');assert.equal(f.sent[0].method,'threads.watch');assert.equal(f.connection.hostId,'pc');assert.equal(f.connection.pendingCommandId,'pending');
   respond(f,f.sent[0],{threads:[]});await read;await assert.rejects(f.bridge.readComputerThreads('forbidden'),/授权范围/);assert.equal(f.sent.length,1);
 });
+
+test('电脑排序立即同步、刷新恢复且不改变执行电脑，新电脑追加并保留缺席电脑位置',()=>{
+  const f=mobileFixture();f.connection.cacheNamespace='pair-a';f.connection.hostId='pc';
+  const hosts=['pc','second','third'].map(id=>({id,label:id,online:true}));f.connection.computers=hosts;
+  assert.equal(f.bridge.moveComputer('second',-1),true);
+  assert.deepEqual(Array.from(f.connection.computers,x=>x.id),['second','pc','third']);
+  assert.equal(f.connection.hostId,'pc');assert.equal(f.sockets.length,0);assert.equal(f.bridge.pending.size,0);
+  const reopened=mobileFixture(f.storage);reopened.connection.cacheNamespace='pair-a';
+  assert.deepEqual(Array.from(reopened.bridge.sortComputers([...hosts,{id:'new'}]),x=>x.id),['second','pc','third','new']);
+  reopened.connection.computers=reopened.bridge.sortComputers([hosts[0],hosts[2]]);
+  reopened.bridge.moveComputer('third',-1);
+  assert.deepEqual(Array.from(reopened.bridge.sortComputers(hosts),x=>x.id),['second','third','pc']);
+  reopened.connection.cacheNamespace='pair-b';
+  assert.deepEqual(Array.from(reopened.bridge.sortComputers(hosts),x=>x.id),['pc','second','third']);
+});
+
+test('电脑排序边界不写存储，保存失败保持原列表，损坏缓存安全回退',()=>{
+  const f=mobileFixture();f.connection.cacheNamespace='pair';const hosts=[{id:'pc'},{id:'second'}];f.connection.computers=hosts;
+  for(const [id,direction] of [['pc',-1],['second',1],['absent',1],['pc',2]])assert.equal(f.bridge.moveComputer(id,direction),false);
+  assert.equal(f.storage.size,0);
+  f.uni.setStorageSync=()=>{throw Error('禁止存储');};
+  assert.throws(()=>f.bridge.moveComputer('second',-1),/无法保存电脑顺序/);assert.equal(f.connection.computers,hosts);
+  for(const bad of ['{坏','{}','[null,4,"second","second"]']){
+    f.storage.set('codex-mobile-computer-order-pair',bad);
+    assert.equal(f.bridge.sortComputers(hosts).length,2);
+  }
+  assert.match(fs.readFileSync(new URL('../apps/mobile/services/bridge.uts',import.meta.url),'utf8'),/this\.sortComputers\(JSON\.parse<Computer\[\]>/);
+});

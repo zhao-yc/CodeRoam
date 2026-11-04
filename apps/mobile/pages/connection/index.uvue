@@ -4,7 +4,16 @@
     <scroll-view direction="vertical" class="content" :scroll-into-view="connectionAnchor">
       <view class="body">
         <view id="connection-overview" class="section overview"><view class="overview-heading"><app-icon name="link" :size="25" /><text class="page-title">{{ connectionStatusLabel }}</text></view><text class="description">{{ connectionSummary }}</text><text v-if="!connection.connected && connection.configured && connection.error.length > 0" class="error-note">暂时无法连接，请检查网络及电脑端连接服务，或核对接入配置。</text><view v-if="connection.configured && !connection.connected" class="retry-button button-secondary inline-progress-button"><action-progress :busy="reconnecting" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">重新连接</text><button class="inline-progress-hitbox" style="background-color: transparent;" :disabled="reconnecting" :aria-label="reconnecting ? '正在连接' : '重新连接'" @click="reconnect"></button></view></view>
-        <view v-if="connection.configured" class="section"><text class="section-title">已授权的电脑</text><text class="description">点击查看资料，编辑名称和图标。聊天在首页按电脑筛选。</text><text v-if="connection.computers.length == 0" class="hint">{{ connection.connected ? '暂无可访问的电脑。' : '连接后更新电脑列表。' }}</text><view v-for="computer in connection.computers" :key="computer.id" class="computer-option action-frame"><app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text><view :class="['dot', connection.connected && computer.online ? 'online' : 'offline']"></view><text class="state">{{ computerConnectionLabel(computer) }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看并编辑' + computer.label" @click="editComputer(computer.id)"></button></view></view>
+        <view v-if="connection.configured" class="section">
+          <view class="computer-heading"><text class="section-title">已授权的电脑</text><button v-if="connection.computers.length > 1" class="sort-toggle button-secondary" :aria-label="sorting ? '完成电脑排序' : '调整电脑顺序'" @click="sorting = !sorting">{{ sorting ? '完成' : '排序' }}</button></view>
+          <text class="description">{{ sorting ? '使用上移、下移调整顺序，自动保存到当前设备，首页电脑栏同步更新。' : '点击查看资料，编辑名称和图标。可通过排序调整首页电脑栏顺序。' }}</text>
+          <text v-if="connection.computers.length == 0" class="hint">{{ connection.connected ? '暂无可访问的电脑。' : '连接后更新电脑列表。' }}</text>
+          <view v-for="(computer, index) in connection.computers" :key="computer.id" class="computer-option action-frame">
+            <app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text>
+            <view v-if="sorting" class="sort-actions"><button class="sort-button button-secondary" :disabled="index == 0" :aria-label="'上移' + computer.label" @click="moveComputer(computer.id, -1)">上移</button><button class="sort-button button-secondary" :disabled="index == connection.computers.length - 1" :aria-label="'下移' + computer.label" @click="moveComputer(computer.id, 1)">下移</button></view>
+            <template v-else><view :class="['dot', connection.connected && computer.online ? 'online' : 'offline']"></view><text class="state">{{ computerConnectionLabel(computer) }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看并编辑' + computer.label" @click="editComputer(computer.id)"></button></template>
+          </view>
+        </view>
         <view id="connection-config" class="section">
           <view v-if="connection.configured" class="config-heading action-frame"><text class="section-title">更换接入配置</text><app-icon :name="configExpanded ? 'chevron-down' : 'chevron-right'" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :disabled="hasPendingCommands || confirming" :aria-label="configExpanded ? '收起接入配置' : '展开更换接入配置'" :aria-expanded="configExpanded" @click="toggleConfig"></button></view><text v-else class="section-title">接入配置</text>
           <view v-if="!connection.configured || configExpanded"><text class="description">{{ connection.configured ? '导入会替换本设备保存的接入配置。' : '粘贴电脑生成的连接配置，接入后自动同步聊天。' }}</text><textarea v-model="configuration" class="config-input" placeholder="在这里粘贴连接配置" :maxlength="4096" :disabled="hasPendingCommands || confirming" /><text class="privacy-note">配置保存在当前设备，请勿分享给他人或在公共设备上保存。</text><button class="connect-button button-primary" :disabled="configuration.trim().length == 0 || hasPendingCommands || confirming" @click="importConfig">保存并连接</button></view>
@@ -30,6 +39,7 @@ const pageVisible = ref(false)
 const configuration = ref('')
 const connectionAnchor = ref('')
 const configExpanded = ref(false)
+const sorting = ref(false)
 const confirming = ref(false)
 const editingComputer = ref<Computer | null>(null)
 const editorBusy = ref(false)
@@ -45,6 +55,11 @@ onLoad((options) => { if (options['add'] == 'true') { configExpanded.value = tru
 onUnload(() => { alive = false; pageRevision++; configuration.value = '' })
 
 function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
+// 移动后同步共用列表；保存失败保持原顺序并提示。
+function moveComputer(id: string, direction: number) {
+  try { bridge.moveComputer(id, direction) }
+  catch (_) { notify('无法保存电脑顺序，请检查存储权限') }
+}
 function iconForComputer(computer: Computer): string { return computerIcon(computer) }
 // 返回只处理导航；不切换执行电脑，不取消正文订阅。
 function goBack() { if (editorBusy.value) return; uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
@@ -109,6 +124,11 @@ onBackPress((): boolean => { if (editingComputer.value == null) return false; cl
 .description { color: #596479; font-size: 13px; line-height: 22px; margin-top: 8px; }
 .section-title { color: #1a2135; font-size: 16px; line-height: 24px; font-weight: bold; }
 .retry-button { min-height: 44px; align-self: flex-start; padding: 0 18px; margin-top: 14px; border-radius: 12px; }
+.computer-heading { flex-direction: row; align-items: center; justify-content: space-between; }
+.sort-toggle { margin: 0; padding: 0 14px; height: 44px; line-height: 44px; font-size: 14px; border-radius: 10px; }
+.sort-actions { flex-direction: row; flex-shrink: 0; }
+.sort-button { margin: 0 0 0 6px; padding: 0 10px; height: 44px; line-height: 44px; font-size: 13px; border-radius: 10px; }
+.sort-button[disabled] { opacity: 0.35; }
 .computer-option { min-height: 64px; padding: 12px 0; flex-direction: row; align-items: center; }
 .option-name { flex: 1; min-width: 0; color: #1a2135; font-size: 15px; line-height: 22px; margin-left: 14px; margin-right: 10px; lines: 1; text-overflow: ellipsis; }
 .dot { width: 6px; height: 6px; border-radius: 3px; margin-right: 6px; flex-shrink: 0; }
