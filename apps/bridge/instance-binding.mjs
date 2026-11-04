@@ -5,7 +5,7 @@ import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { instanceBindingModules } from './instance-binding-modules.mjs';
 
 /** 模块位置来自核验过的安装包，只读取原页面已有的服务单例。 */
-function instanceServicesExpression(modules) {
+export function instanceServicesExpression(modules) {
   const asset = name => typeof name === 'string' && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\.js$/.test(name);
   if (modules?.kind === 'webpack' && asset(modules.entry) && typeof modules.servicesModule === 'string' && /^[a-zA-Z0-9_$-]{1,80}$/.test(modules.servicesModule)) {
     const entry = JSON.stringify('app://-/assets/' + modules.entry);
@@ -57,15 +57,15 @@ export function queryInstancePage(url, nonce, modules) {
 }
 
 /** 固定原桌面服务查询的公共传输，不接收手机代码或调试地址。 */
-export function evaluateInstancePage(url, expression) {
+export function evaluateInstancePage(url, expression, { timeoutMs = 8000 } = {}) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url, { handshakeTimeout: 2000, maxPayload: 256 * 1024, perMessageDeflate: false });
     let done = false;
     const finish = (error,value) => { if (done) return; done = true; clearTimeout(timer); socket.terminate(); error ? reject(error) : resolve(value); };
-    const timer = setTimeout(() => finish(new Error('实例身份查询超时')), 8000);
+    const timer = setTimeout(() => finish(new Error('实例身份查询超时')), timeoutMs);
     socket.on('error', () => finish(new Error('实例页面连接失败')));
     socket.on('close', () => finish(new Error('实例页面已关闭')));
-    socket.on('open', () => socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true, timeout: 6000 } })));
+    socket.on('open', () => socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true, timeout: Math.max(1, timeoutMs - 1000) } })));
     socket.on('message', data => { try { const message = JSON.parse(data.toString()); if (message.id === 1) finish(message.error || message.result?.exceptionDetails ? new Error('实例协调接口暂不兼容') : null,message.result?.result?.value); } catch { finish(new Error('实例页面返回无效')); } });
   });
 }

@@ -2,7 +2,7 @@ import { reactive, watch } from 'vue'
 import { bridge, connection, liveThreadLists, ThreadListUpdate, Computer, ThreadSummary, LatestTurn } from './bridge.uts'
 import { CachedThreadListHost, CachedThreadListRow, readThreadListCache, replaceThreadListCacheHost, removeThreadListCacheHost, removeThreadListCacheThreads, retainThreadListCacheHosts, clearThreadListCache } from './thread-list-storage.uts'
 
-export type ComputerThreads = { hostId: string, label: string, online: boolean, threads: ThreadSummary[], loading: boolean, loaded: boolean, error: string, revision: number, subscribed?: boolean, instanceGeneration?: string }
+export type ComputerThreads = { hostId: string, label: string, online: boolean, threads: ThreadSummary[], loading: boolean, loaded: boolean, error: string, syncing?: boolean, syncError?: string, revision: number, subscribed?: boolean, instanceGeneration?: string }
 export type ComputerThread = { latestTurn?: LatestTurn, key: string, hostId: string, hostLabel: string, online: boolean, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number, cached?: boolean }
 type ListQueueEntry = { hostId: string, configuration: number, revision: number }
 type ThreadListState = { configuration: number, computers: ComputerThreads[], cachedHosts: CachedThreadListHost[], cachedReady: boolean, cachedRevision: number }
@@ -130,12 +130,12 @@ export function syncThreadComputers() {
     const existing = threadList.computers.find((entry: ComputerThreads): boolean => entry.hostId == computer.id)
     if (existing == null) return { hostId: computer.id, label: computer.label, online: computer.online, instanceGeneration: computer.instanceGeneration, threads: [] as ThreadSummary[], loading: false, loaded: false, error: '', revision: 0 } as ComputerThreads
     if ((existing.instanceGeneration ?? '') != (computer.instanceGeneration ?? '')) {
-      existing.revision++; existing.loading = false; existing.loaded = false; existing.subscribed = false; existing.threads = [] as ThreadSummary[]; existing.error = ''
+      existing.revision++; existing.loading = false; existing.loaded = false; existing.subscribed = false; existing.threads = [] as ThreadSummary[]; existing.error = ''; existing.syncing = false; existing.syncError = ''
       appliedPushes.delete(computer.id); archivedThreads.delete(computer.id)
       if (cacheScope.length > 0) removeThreadListCacheHost(cacheScope, computer.id)
     }
     existing.instanceGeneration = computer.instanceGeneration
-    if (existing.online && !computer.online) { existing.revision++; existing.loading = false; existing.subscribed = false; appliedPushes.delete(computer.id) }
+    if (existing.online && !computer.online) { existing.revision++; existing.loading = false; existing.subscribed = false; existing.syncing = false; existing.syncError = ''; appliedPushes.delete(computer.id) }
     existing.label = computer.label; existing.online = computer.online
     return existing
   })
@@ -179,7 +179,7 @@ export function computerThreadsLoading(hostId: string): boolean {
 }
 
 // 只有已通过实时会话校验的全量快照才能接管展示和落盘；流式正文变化不进入列表字段。
-function acceptThreadSnapshot(entry: ComputerThreads, incoming: ThreadSummary[]) {
+function acceptThreadSnapshot(entry: ComputerThreads, incoming: ThreadSummary[], syncing: boolean = false, syncError: string = '', catchup: boolean = false) {
   const archived = archivedThreads.get(entry.hostId)
   if (archived != null) {
     const present = new Set<string>(incoming.map((thread: ThreadSummary): string => thread.id))
@@ -188,7 +188,9 @@ function acceptThreadSnapshot(entry: ComputerThreads, incoming: ThreadSummary[])
     confirmed.forEach((id: string) => { archived.delete(id) })
     if (archived.size == 0) archivedThreads.delete(entry.hostId)
   }
-  const threads = incoming.filter((thread: ThreadSummary): boolean => !threadExcluded(entry.hostId, thread.id))
+  // 基线标记只来自当前帧，下一次实时快照必须重新计算，不能继承历史标记。
+  const threads = incoming.filter((thread: ThreadSummary): boolean => !threadExcluded(entry.hostId, thread.id)).map((thread: ThreadSummary): ThreadSummary => ({ ...thread, notificationState: catchup ? thread.notificationBaselineState ?? thread.notificationState : thread.notificationState, notificationBaseline: catchup } as ThreadSummary))
+  entry.syncing = syncing; entry.syncError = syncError; entry.subscribed = true
   entry.threads = threads; entry.loaded = true; entry.error = ''
   threadList.cachedHosts = threadList.cachedHosts.filter((host: CachedThreadListHost): boolean => host.hostId != entry.hostId)
   threadList.cachedRevision++
@@ -214,12 +216,12 @@ function drainThreadQueue() {
         const rawRevision = result['revision']
         const responseRevision = typeof rawRevision == 'number' ? rawRevision as number : pushedRevision
         const raw = result['threads']
-        if (pushed != null && pushed.revision > responseRevision) {
+        if (pushed != null && (pushed.revision > responseRevision || typeof rawRevision == 'number' && pushed.revision == responseRevision)) {
           appliedPushes.set(entry.hostId, pushed.revision)
-          acceptThreadSnapshot(entry, pushed.threads)
+          acceptThreadSnapshot(entry, pushed.threads, pushed.syncing == true, pushed.syncError ?? '', pushed.catchup == true)
         } else if (Array.isArray(raw)) {
           appliedPushes.set(entry.hostId, Math.max(appliedPushes.get(entry.hostId) ?? -1, responseRevision))
-          acceptThreadSnapshot(entry, JSON.parse<ThreadSummary[]>(JSON.stringify(raw)) ?? [] as ThreadSummary[])
+          acceptThreadSnapshot(entry, JSON.parse<ThreadSummary[]>(JSON.stringify(raw)) ?? [] as ThreadSummary[], result['syncing'] == true, typeof result['syncError'] == 'string' ? result['syncError'] as string : '', result['catchup'] == true)
         }
         else { entry.loading = false; entry.error = '收到无法识别的聊天列表'; activeReads--; drainThreadQueue(); return }
         entry.subscribed = true
@@ -227,7 +229,7 @@ function drainThreadQueue() {
       }
       activeReads--; drainThreadQueue()
     }, (reason: Error) => {
-      if (next.configuration == threadList.configuration && threadList.computers.some((item: ComputerThreads): boolean => item === entry) && entry.revision == revision) { entry.loading = false; entry.error = reason.message }
+      if (next.configuration == threadList.configuration && threadList.computers.some((item: ComputerThreads): boolean => item === entry) && entry.revision == revision) { entry.loading = false; if (entry.subscribed != true) entry.error = reason.message }
       activeReads--; drainThreadQueue()
     })
   }
@@ -249,7 +251,7 @@ export function refreshComputerThreads(hostId: string = '') {
 export function disconnectThreadLists() {
   queue.splice(0, queue.length)
   appliedPushes.clear()
-  threadList.computers.forEach((entry: ComputerThreads) => { entry.revision++; entry.loading = false; entry.subscribed = false })
+  threadList.computers.forEach((entry: ComputerThreads) => { entry.revision++; entry.loading = false; entry.subscribed = false; entry.syncing = false; entry.syncError = '' })
 }
 
 // 即使列表页隐藏也消费推送，返回时直接显示内存中的最新状态。
@@ -257,8 +259,8 @@ watch((): string => liveThreadLists.updates.map((item: ThreadListUpdate): string
   if (!connection.connected) return
   liveThreadLists.updates.forEach((update: ThreadListUpdate) => {
     const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == update.hostId)
-    if (entry == null || !entry.online || (appliedPushes.get(update.hostId) ?? -1) >= update.revision) return
+    if (entry == null || !entry.online || (update.generation != null && update.generation != (entry.instanceGeneration ?? '')) || (appliedPushes.get(update.hostId) ?? -1) >= update.revision) return
     appliedPushes.set(update.hostId, update.revision)
-    acceptThreadSnapshot(entry, update.threads)
+    acceptThreadSnapshot(entry, update.threads, update.syncing == true, update.syncError ?? '', update.catchup == true)
   })
 })

@@ -31,6 +31,16 @@ test('首次仅补待交互，成功失败只在基线后的明确终态提醒�
  c.reset();c.observe('host','g',[row('unknown',[],'thread','')],0);c.observe('host','g',[row('completed')],1);assert.equal(c.current,null,'历史或未知快照首次补齐不能冒充新完成');
 });
 
+test('首帧与首次追平基线不补历史终态，待交互仍提醒，后续实时终态仅通知一次',()=>{
+ const c=fixture();c.observe('one','g',[{id:'thread',title:'快首帧',notificationBaseline:true}],0);
+ c.observe('one','g',[{...row('completed'),notificationBaseline:true},{...row('failed',[],'history'),notificationBaseline:true}],1);assert.equal(c.current,null);
+ const pending={...row('completed',[action('approval','a')]),notificationBaseline:true};
+ c.observe('one','g',[pending],2);assert.equal(c.current.kind,'approval');c.dismiss(3);
+ c.observe('one','g',[row('inProgress')],4);c.observe('one','g',[row('failed')],5);assert.equal(c.current.kind,'failed');c.dismiss(6);
+ c.observe('one','g',[row('failed')],7);assert.equal(c.current,null);
+ c.observe('two','g',[{...row('completed'),notificationBaseline:true}],8);c.observe('two','g',[row('inProgress')],9);c.observe('two','g',[row('failed')],10);assert.equal(c.current.hostId,'two');
+});
+
 test('进入动画后完整展示五秒，再淡出并依次展示；重复推送不重置跨页倒计时',()=>{
  const c=fixture();c.observe('host','g',[row('inProgress',[action(),action('approval','a')])],0);assert.equal(c.phase,'enter');c.tick(16);assert.equal(c.phase,'visible');assert.equal(c.deadline,5216);
  c.observe('host','g',[row('inProgress',[action(),action('approval','a')])],1000);assert.equal(c.deadline,5216);assert.equal(c.queue.length,1);

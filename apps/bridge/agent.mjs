@@ -19,6 +19,7 @@ import { DesktopDeleteController } from './desktop-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
 import { conversationContentRevision, conversationProjection, prefetchConversation } from './conversation-prefetch.mjs';
 import { CACHE_WATCHER, ThreadCacheFeed } from './thread-cache.mjs';
+import { ClientPresenceController } from './client-presence.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
@@ -54,10 +55,13 @@ export class BridgeAgent extends EventEmitter {
     this.adapter.nativeFileReportAvailable=()=>this.fileReports.supports(this.adapter);
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
-    this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
+    this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event),{db:journal.db,
+      onActivity:inventory=>this.threadCache?.setActivityInventory(inventory),
+      onSettled:snapshot=>this.threadCache?.settled(snapshot)});
     this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id),removed:id=>{
       if(this.published.delete(id))this.send({v:1,type:'thread.removed',threadId:id});
     }});
+    this.clientPresence=new ClientPresenceController({onModeChange:mode=>{this.threadListFeed.setMode(mode);this.threadCache.setMode(mode);this.emit('maintenance',mode);}});
     adapter.on('conversation',snapshot=>{
       this.captureCache(snapshot);
       if(hasDetailWatcher(adapter,snapshot.threadId))this.publish(snapshot,{dedupe:true});
@@ -69,6 +73,7 @@ export class BridgeAgent extends EventEmitter {
     if(url.protocol!=='wss:'&&!(url.protocol==='ws:'&&['127.0.0.1','localhost'].includes(url.hostname))) throw new Error('跨网络连接必须使用 WSS');
     if(url.username||url.password||url.search||url.hash) throw new Error('中转地址不能包含凭据、查询参数或片段');
     this.threadCache.start();
+    this.threadListFeed.start();
     this.connect();
   }
   connect() {
@@ -79,13 +84,20 @@ export class BridgeAgent extends EventEmitter {
     const watchdog=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)return;if(!alive){socket.terminate();return;}alive=false;socket.ping();},15000);
     socket.on('pong',()=>{alive=true;});
     socket.on('open',()=>{this.retries=0;this.send({v:1,type:'host.ready',label:computerName(this.config.label),hostname:hostname(),connectionType:'codex-desktop'});this.emit('connected');});
-    socket.on('message',data=>{let message;try{message=JSON.parse(data.toString());}catch{return;}if(message.type==='request')this.handleRequest(message).then(response=>{
-      const delivered=socket.readyState===WebSocket.OPEN;
+    socket.on('message',data=>{if(this.socket!==socket)return;let message;try{message=JSON.parse(data.toString());}catch{return;}if(message.type==='welcome'){this.configurePresence({supported:message.capabilities?.clientPresence===true,hostId:this.config.hostId});return;}if(message.type==='clients.presence'){this.clientPresence.update(message);return;}if(message.type==='request')this.handleRequest(message).then(response=>{
+      const delivered=this.socket===socket&&socket.readyState===WebSocket.OPEN;
       if(delivered)socket.send(JSON.stringify(response));
       this.diagnostics?.record(delivered?'bridge.sent':'bridge.dropped',this.diagnostics.context(message),{delivered,bufferedBytes:socket.bufferedAmount});
     }).catch(()=>{});});
     socket.on('error',()=>this.emit('warning',{code:'RELAY_UNAVAILABLE',message:'中转暂时不可用，正在重连'}));
-    socket.on('close',code=>{clearInterval(watchdog);this.threadListFeed.devices.clear();this.threadListFeed.stop();this.threadCache.clearSubscriptions();this.emit('disconnected');if(this.stopped||code===4001)return;const delay=Math.min(15000,500*2**Math.min(this.retries++,5))+Math.random()*300;this.reconnectTimer=setTimeout(()=>this.connect(),delay);});
+    socket.on('close',code=>{clearInterval(watchdog);if(this.socket!==socket)return;this.relayDisconnected();this.emit('disconnected');if(this.stopped||code===4001)return;const delay=Math.min(15000,500*2**Math.min(this.retries++,5))+Math.random()*300;this.reconnectTimer=setTimeout(()=>this.connect(),delay);});
+  }
+  /** 在线数量由当前中转连接和实例代次确认，不能从读取或订阅数量猜测。 */
+  configurePresence(identity) {this.clientPresence.configure(identity);}
+  /** 断开只废弃设备传输，新协议保留五分钟本地维护宽限。 */
+  relayDisconnected() {
+    this.threadListFeed.devices.clear();this.threadCache.clearSubscriptions();this.clientPresence.disconnected();
+    if(this.clientPresence.mode==='legacy')this.threadListFeed.stop();
   }
   send(message) {
     if(this.socket?.readyState!==WebSocket.OPEN)return false;
@@ -210,7 +222,7 @@ export class BridgeAgent extends EventEmitter {
           const result=await archiveThread(this.adapter,this.archiveController,message.params.threadId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result),message.requestId);
           this.messageQueue?.forget([message.params.threadId]);
           this.threadCache.forget(message.params.threadId);
-          this.published.delete(message.params.threadId);return result;
+          this.published.delete(message.params.threadId);if(this.threadListFeed.started)this.threadListFeed.readIndex();return result;
         }
         if(message.method==='thread.delete') {
           const lockRelated=async ids=>{
@@ -238,8 +250,17 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='threads.cache.unwatch')return this.threadCache.unwatch(message.deviceId,message.params);
         if(message.method==='threads.list') {
           // 通过已有白名单接口扩展只读信息；显式归档标记供手机识别旧服务。
-          const threads=await this.adapter.list(message.params);
-          return {threads:message.params.archived===true?threads:threads.map(row=>this.threadListFeed.contentSummary(row)),...(message.params.archived===true?{archived:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
+          let result;
+          if(message.params.archived===true)result={threads:await this.adapter.list(message.params),archived:true};
+          else {
+            result=this.threadListFeed.list();
+            const {search='',offset=0,limit=50}=message.params;
+            if(search||offset||limit>50) {
+              const known=new Map(result.threads.map(row=>[row.id,row]));
+              result={...result,threads:this.adapter.index.list(message.params).map(row=>({...this.threadListFeed.contentSummary(row),...(known.get(row.id)??{}),...row}))};
+            }else result={...result,threads:result.threads.slice(0,limit)};
+          }
+          return {...result,...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
         }
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
@@ -301,5 +322,5 @@ export class BridgeAgent extends EventEmitter {
     }
     return response;
   }
-  async close(){this.stopped=true;this.threadCache.close();this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.clientPresence.close();this.threadCache.close();this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

@@ -19,6 +19,8 @@ import { readGoal, updateGoal } from './goals.mjs';
 import { readThreadPlugins, selectThreadPlugins, pluginPrompt } from './plugins.mjs';
 import { threadMentionPrompt } from './thread-mentions.mjs';
 import { CACHE_WATCHER, CACHE_THREAD_LIMIT } from './thread-cache.mjs';
+
+const internalWatcher=id=>id===CACHE_WATCHER||id==='list-status';
 import { usesWindowsIpcWithoutPage, supportsDesktopIpcNewConversation } from './windows-ipc-mode.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
@@ -29,6 +31,7 @@ export class DesktopAdapter extends EventEmitter {
     this.modelCatalog=modelCatalog;this.attachments=attachments;
     this.goalController=goalController;this.permissionCatalog=permissionCatalog;
     this.conversations=new Map(); this.connecting=null; this.reconnectTimer=null; this.stopped=false;
+    this.activityHistory=new Map();this.backgroundRotation={startedAt:0,count:0};
     this.native=native??(client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null,ipcSocketPath:client.socketPath}):null);
     this.native?.on('changed',ids=>{if(this.stopped)return;for(const id of ids){const entry=this.conversations.get(id);if(entry?.state)this.emit('conversation',this.snapshot(entry.state));else this.emit('readState',{threadId:id,hasUnreadTurn:this.native.unread.get(id)});}});
     this.activateThread=(id,options)=>activateThread(id,{...options,nativeApi:this.native??undefined});this.loadTimeoutMs=loadTimeoutMs;this.loadingThreads=new Map();this.navigation=new DesktopNavigation();
@@ -44,13 +47,43 @@ export class DesktopAdapter extends EventEmitter {
   async connect() {
     if(this.connecting) return this.connecting;
     this.connecting=(async()=>{
-      try { await this.client.connect(); for(const [threadId,entry] of this.conversations) if(entry.watchers.size&&!entry.owner) { const watcher=[...entry.watchers][0];this.watch(threadId,watcher,{history:watcher!==CACHE_WATCHER}).catch(()=>{}); } }
+      try { await this.client.connect(); for(const [threadId,entry] of this.conversations) if(entry.watchers.size&&!entry.owner) { const watcher=[...entry.watchers][0];this.watch(threadId,watcher,{history:!internalWatcher(watcher)}).catch(()=>{}); } }
       catch(error) { this.client.close(); throw error; }
       finally { this.connecting=null; }
     })();
     return this.connecting;
   }
 
+  /** 缺少实例活动入口时，只读变化历史的生命周期，候选仍需实时核验。 */
+  async readActivityInventory() {
+    if(!this.index?.historyActivity||!this.index?.historyCacheSource)return {complete:false,threadIds:[]};
+    const rows=this.index.list({limit:50}),present=new Set(rows.map(row=>row.id)),threadIds=[];
+    for(const id of this.activityHistory.keys())if(!present.has(id))this.activityHistory.delete(id);
+    for(const row of rows) {
+      await new Promise(resolve=>setImmediate(resolve));
+      if(this.stopped)return {complete:false,threadIds:[]};
+      try {
+        const source=this.index.historyCacheSource(row.id);let activity=this.activityHistory.get(row.id);
+        if(source&&activity?.source!==source){activity={source,...this.index.historyActivity(row.id)};this.activityHistory.set(row.id,activity);}
+        if(activity?.status==='active')threadIds.push(row.id);
+      }catch{/* 保存记录仅提供候选，缺失或失败仍是未知。 */}
+    }
+    return {complete:false,threadIds};
+  }
+  /** 前台优先；纯内部条目有独立上限，满额后按有界节奏轮转。 */
+  reserveEntry(deviceId) {
+    const internal=internalWatcher(deviceId);
+    const background=[...this.conversations].filter(([,value])=>![...value.watchers].some(id=>!internalWatcher(id)));
+    if((internal&&background.length>=50)||this.conversations.size>=64+CACHE_THREAD_LIMIT) {
+      if(!background.length)throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
+      if(internal) {
+        const now=Date.now();if(now-this.backgroundRotation.startedAt>=2000)this.backgroundRotation={startedAt:now,count:0};
+        if(this.backgroundRotation.count>=2)throw new BridgeError('TOO_MANY_THREADS','后台聊天正在分批核对');
+        this.backgroundRotation.count++;
+      }
+      const [id,entry]=background[0];for(const watcher of [...entry.watchers])this.unwatch(id,watcher);
+    }
+  }
   /** 列表状态来自桌面实时快照；不存在所有者或读取失败时明确返回未知，绝不猜测空闲。 */
   async list(params) {
     const rows=this.index.list(params), result=new Array(rows.length);
@@ -101,19 +134,20 @@ export class DesktopAdapter extends EventEmitter {
     try{return await loading;}finally{if(this.loadingThreads.get(threadId)===loading)this.loadingThreads.delete(threadId);}
   }
 
-  async watch(threadId, deviceId, {fresh=false,snapshotTimeoutMs=this.snapshotTimeoutMs,ownerTimeoutMs=500,history=true,activate=false,readSavedHistory} = {}) {
+  async watch(threadId, deviceId, {fresh=false,snapshotTimeoutMs=this.snapshotTimeoutMs,ownerTimeoutMs=500,history=true,activate=false,readSavedHistory,isCurrent=()=>true} = {}) {
     // 总等待留在中转十五秒超时以内；默认只读历史，明确 activate 才导航桌面。
     const navigation=activate?this.navigation.begin(threadId,deviceId):null;
     const requestDeadline=Date.now()+14000;
     await this.connect();
+    if(!isCurrent())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
     let entry=this.conversations.get(threadId);
     // 后台跟随有独立额度，不能挤占手机详情或列表既有订阅额度。
-    if (deviceId!==CACHE_WATCHER && (!entry || (entry.watchers.size===1&&entry.watchers.has(CACHE_WATCHER)))) {
-      const regular=[...this.conversations.values()].filter(item=>item.watchers.size>(item.watchers.has(CACHE_WATCHER)?1:0)).length;
+    if (!internalWatcher(deviceId) && (!entry || ![...entry.watchers].some(id=>!internalWatcher(id)))) {
+      const regular=[...this.conversations.values()].filter(item=>[...item.watchers].some(id=>!internalWatcher(id))).length;
       if(regular>=64) throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
     }
     if(!entry) {
-      if(this.conversations.size>=64+CACHE_THREAD_LIMIT) throw new BridgeError('TOO_MANY_THREADS','订阅聊天过多，请关闭不用的聊天');
+      this.reserveEntry(deviceId);
       entry={watchers:new Set(),owner:null,state:null,revision:null,waiters:[],publishTimer:null};
       this.conversations.set(threadId,entry);
     }
@@ -129,7 +163,7 @@ export class DesktopAdapter extends EventEmitter {
         }
         discovered=await this.discoverOwner(threadId,ownerTimeoutMs);
         // 用户切换会话或断开后，不再启动加载，也不遗留迟到的跟随订阅。
-        const current=()=>!this.stopped&&this.conversations.get(threadId)===entry&&entry.watchers.has(deviceId)&&(!navigation||this.navigation.isCurrent(navigation));
+        const current=()=>!this.stopped&&isCurrent()&&this.conversations.get(threadId)===entry&&entry.watchers.has(deviceId)&&(!navigation||this.navigation.isCurrent(navigation));
         if(!current()) throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
         if(!discovered&&activate){discovered=await this.loadOwner(threadId,requestDeadline-1000);if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');}
         if(!discovered&&history) {
@@ -186,8 +220,11 @@ export class DesktopAdapter extends EventEmitter {
       else { entry.state=null; this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:message.params.conversationId,following:true},1,[entry.owner.clientId]);return; }
       if(entry.state?.id!==message.params.conversationId)throw new BridgeError('HISTORY_ID_MISMATCH','桌面聊天快照编号不一致');
       if(previousAttention!==JSON.stringify([entry.state?.hasUnreadTurn,entry.state?.threadRuntimeStatus]))this.native?.schedule([message.params.conversationId]);
-      const normalized=this.snapshot(entry.state);
-      for(const waiter of entry.waiters.splice(0)) { clearTimeout(waiter.timer); waiter.resolve(normalized); }
+      // 没有首帧等待者时只合并补丁，完整投影留到固定发布帧，避免每个 token 重建长聊天。
+      if(entry.waiters.length) {
+        const normalized=this.snapshot(entry.state);
+        for(const waiter of entry.waiters.splice(0)) { clearTimeout(waiter.timer); waiter.resolve(normalized); }
+      }
       if(!entry.publishTimer) entry.publishTimer=setTimeout(()=>{entry.publishTimer=null;if(entry.state)this.emit('conversation',this.snapshot(entry.state));},200);
     } catch(error) {
       entry.state=null;

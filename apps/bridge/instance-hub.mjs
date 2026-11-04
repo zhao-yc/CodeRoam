@@ -41,21 +41,27 @@ export class InstanceHub extends EventEmitter {
   }
   connect() {
     if (this.stopped) return;
+    this.presenceSnapshots=new Map();
     const socket = new WebSocket(this.config.relayUrl, { headers: { Authorization: `Bearer ${this.config.token}` }, handshakeTimeout: 8000, perMessageDeflate: false, maxPayload: 2 * 1024 * 1024 }); this.socket = socket;
     let alive = true;
     const timer = setInterval(() => { if (socket.readyState !== WebSocket.OPEN) return; if (!alive) return socket.terminate(); alive = false; socket.ping(); }, 15000); timer.unref();
     socket.on('pong', () => { alive = true; });
     socket.on('message', data => {
+      if(this.socket!==socket)return;
       let message; try { message = JSON.parse(data.toString()); } catch { return; }
       if (message.type === 'welcome') {
         this.lastManifest = null;
         this.supported = message.capabilities?.hostInstances === true;
+        this.presenceSupported=message.capabilities?.clientPresence===true;
+        for(const runtime of this.runtimes.values())runtime.agent.configurePresence?.({supported:this.presenceSupported,hostId:runtime.instance.id,generation:runtime.instance.generation});
         this.send({ v: 1, type: 'host.ready', label: computerName(this.config.label), hostname: os.hostname(), connectionType: 'codex-desktop' });
         if (!this.supported) { this.emit('warning', { code: 'INSTANCES_RELAY_UNSUPPORTED', message: '请先更新中转服务以启用多实例连接' }); socket.close(4001); return; }
         this.retries = 0; this.emit('connected'); this.diagnostics?.record('connection.open', null, { role: 'host' });
         this.refresh().catch(() => {});
         if (!this.timer) { this.timer = setInterval(() => this.refresh().catch(() => {}), this.intervalMs); this.timer.unref(); }
         this.publish();
+      } else if(message.type==='clients.presence') {
+        if(this.presenceSupported){this.presenceSnapshots.set(message.hostId,message);this.runtimes.get(message.hostId)?.agent.clientPresence?.update(message);}
       } else if (message.type === 'request') this.request(message).then(response => {
         const delivered = this.socket === socket && this.send(response);
         this.diagnostics?.record(delivered ? 'bridge.sent' : 'bridge.dropped', this.diagnostics.context(message), { delivered, bufferedBytes: socket.bufferedAmount });
@@ -64,9 +70,12 @@ export class InstanceHub extends EventEmitter {
     socket.on('error', () => this.emit('warning', { code: 'RELAY_UNAVAILABLE', message: '中转暂时不可用，正在重连' }));
     socket.on('close', code => {
       // 只上报标准关闭码，不把服务端原因中的潜在配置或路径写入日志。
-      clearInterval(timer); this.supported = false; this.emit('disconnected', { code });
+      clearInterval(timer);if(this.socket!==socket)return; this.supported = false; this.emit('disconnected', { code });
       this.diagnostics?.record('connection.close', null, { role: 'host', closeCode: code });
-      for (const runtime of this.runtimes.values()) { runtime.agent.threadListFeed.devices.clear(); runtime.agent.threadListFeed.stop(); runtime.agent.threadCache?.clearSubscriptions(); }
+      for (const runtime of this.runtimes.values()) {
+        if(runtime.agent.relayDisconnected)runtime.agent.relayDisconnected();
+        else {runtime.agent.threadListFeed.devices.clear();runtime.agent.threadListFeed.stop();runtime.agent.threadCache?.clearSubscriptions();}
+      }
       if (!this.stopped && code !== 4001) this.reconnect = setTimeout(() => this.connect(), Math.min(15000, 500 * 2 ** Math.min(this.retries++, 5)));
     });
   }
@@ -101,7 +110,10 @@ export class InstanceHub extends EventEmitter {
           fs.mkdirSync(directory, { recursive: true });
           runtime = this.createRuntime({ instance, config: this.config, dataPath: directory, send: message => this.send(message), diagnostics: this.diagnostics });
           runtime.agent.on('warning', warning => this.emit('warning', warning));
+          runtime.agent.on('maintenance',()=>this.emit('maintenance'));
           this.runtimes.set(identity.id, runtime);
+          runtime.agent.configurePresence?.({supported:this.presenceSupported===true,hostId:instance.id,generation:instance.generation});
+          const presence=this.presenceSnapshots?.get(instance.id);if(presence)runtime.agent.clientPresence?.update(presence);
         }
         if (row.platform === 'darwin' && rows.filter(other => other.ipcSocketPath === row.ipcSocketPath).length !== 1) { runtime.instance.ready = false; this.emit('warning', { code: 'INSTANCE_DIRECTORY_SHARED', message: '多个 Mac 实例共用配置目录，请为每个实例使用独立目录后重连' }); continue; }
         try { await runtime.ready(); } catch { runtime.instance.ready = false; this.emit('warning', { code: 'INSTANCE_BINDING_FAILED', message: '实例连接尚未就绪，未选择其他桌面代替' }); }

@@ -13,7 +13,8 @@ export function computerIcon(computer: Computer | null): string { const icon = c
 export type NotificationAction = { kind: string, id: string, turnId: string }
 export type NotificationSnapshot = { latestTurnId: string, latestTurnStatus: string, pending: NotificationAction[] }
 export type LatestTurn = { turnId: string, status: string }
-export type ThreadSummary = { contentRevision?: string, latestTurn?: LatestTurn, notificationState?: NotificationSnapshot, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
+// 首次追平的完整通知状态只供建立基线；内部标记在每次列表快照重新计算。
+export type ThreadSummary = { notificationBaseline?: boolean, notificationBaselineState?: NotificationSnapshot, contentRevision?: string, latestTurn?: LatestTurn, notificationState?: NotificationSnapshot, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
 export type ChatMessage = { id: string, role: string, kind?: string, summary?: string, phase?: string, imageCount?: number, text: string, turnId: string, status: string }
 export type ConversationTurn = { turnId: string, status: string, durationMs?: number, errorMessage?: string }
 export type Approval = { id: string, kind: string, turnId: string, title: string, detail: string, cwd: string }
@@ -85,7 +86,7 @@ type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: 
 export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string, namespace?: string }
 type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, supportsConversationCache: boolean, supportsConversationPreview: boolean, contentRevision: string, subscriptionRevision: number, subscribedHostId: string, subscribedThreadId: string, configurationRevision: number, connectionAttempt: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, preview: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
-export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number }
+export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number, generation?: string, syncing?: boolean, syncError?: string, catchup?: boolean }
 type LiveThreadListsState = { updates: ThreadListUpdate[] }
 export const liveThreadLists = reactive<LiveThreadListsState>({ updates: [] as ThreadListUpdate[] })
 
@@ -381,10 +382,10 @@ class MobileBridge {
       if (snapshot != null) applyNativeDraftSnapshot(snapshot, hostId)
     } else if (type == 'threads.event') {
       const hostId = envelope.getString('hostId') ?? ''
-      if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId)) return
       const source = connection.computers.find((computer: Computer): boolean => computer.id == hostId)
+      if (!connection.connected || source == null || !source.online) return
       if ((source?.instanceGeneration ?? '').length > 0 && source?.instanceGeneration != envelope.getString('generation')) return
-      const update = { hostId, threads: JSON.parse<ThreadSummary[]>(JSON.stringify(envelope['threads'])) ?? [] as ThreadSummary[], revision: envelope.getNumber('revision') ?? 0 } as ThreadListUpdate
+      const update = { hostId, threads: JSON.parse<ThreadSummary[]>(JSON.stringify(envelope['threads'])) ?? [] as ThreadSummary[], revision: envelope.getNumber('revision') ?? 0, generation: envelope.getString('generation') ?? '', syncing: envelope['syncing'] == true, syncError: envelope.getString('syncError') ?? '', catchup: envelope['catchup'] == true } as ThreadListUpdate
       const existing = liveThreadLists.updates.findIndex((item: ThreadListUpdate): boolean => item.hostId == hostId)
       if (existing >= 0) { if (liveThreadLists.updates[existing].revision >= update.revision) return; liveThreadLists.updates.splice(existing, 1, update) }
       else liveThreadLists.updates.push(update)

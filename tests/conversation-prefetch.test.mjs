@@ -166,20 +166,28 @@ test('标题只读回退与列表版本一致，修改返回值不污染已有 e
   assert.deepEqual(entry, before);
 });
 
-test('普通列表和归档列表返回版本时保留原有行字段和响应结构', async t => {
+test('普通列表直接返回展示索引和已有可信状态，重建后不恢复运行状态，归档继续只读', async t => {
   const { agent, adapter, entry } = fixture(t);
   const row = { id: 'thread', title: '合成会话', cwd: '/workspace/demo', updatedAt: 42, status: 'active', approvalCount: 1 };
   adapter.list = async () => [row];
+  adapter.index.list = () => [row];
+  adapter.snapshot = value => normalizeConversation(value);
+  adapter.unwatch = (_id,watcher) => {assert.equal(watcher,'list-status');};
   const listRequest = { ...request(), method: 'threads.list', params: {} };
   let response = await agent.handleRequest(listRequest);
-  assert.deepEqual(response.result.threads, [{ ...row, contentRevision: conversationContentRevision(normalizeConversation(entry.state)) }]);
+  assert.equal(response.result.threads[0].id,row.id);
+  assert.equal(response.result.threads[0].status,'active');
+  assert.equal(response.result.threads[0].approvalCount,0);
+  assert.equal(response.result.threads[0].contentRevision,conversationContentRevision(normalizeConversation(entry.state)));
+  assert.equal(response.result.catchup,true);
   response = await agent.handleRequest({ ...listRequest, params: { archived: true } });
   assert.deepEqual(response.result, { threads: [row], archived: true });
   assert.equal(Object.hasOwn(row, 'contentRevision'), false);
   adapter.conversations.clear();
+  agent.threadListFeed.close();agent.threadListFeed=new ThreadListFeed(adapter,()=>{});
   response = await agent.handleRequest(listRequest);
-  assert.equal(response.result.threads[0].contentRevision, undefined);
-  assert.equal(response.result.threads[0].status, 'active');
+  assert.equal(response.result.threads[0].contentRevision,'saved:42');
+  assert.equal(response.result.threads[0].status,'unknown');
 });
 
 test('与真实 adapter.snapshot 的默认规范化窗口及全部标题回退一致', () => {

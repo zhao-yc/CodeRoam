@@ -15,6 +15,7 @@ import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
 import { BridgeError, READ_METHODS } from '../../packages/protocol/contracts.mjs';
 import { MacInstanceIpcClient, navigateMacInstance } from './macos-instance-client.mjs';
 import { withDesktopUi } from './desktop-ui-coordinator.mjs';
+import { readInstanceActivity } from './instance-activity.mjs';
 import { NewThreadService } from './new-thread-service.mjs';
 import { NativeDraftController } from './native-draft-controller.mjs';
 import { ThreadCreationClient, instanceCodexPath } from './thread-creation.mjs';
@@ -57,6 +58,12 @@ export class InstanceRuntime {
     this.native = new InstanceNativeDesktop(instance, this.client, { stateDirectory: instance.codexHome });
     this.adapter = new DesktopAdapter({ client: this.client, native: this.native, index: new StateReader(instance.codexHome), modelCatalog: new ModelCatalog({ codexHome: instance.codexHome }), attachments: new AttachmentStore({ root: path.join(dataPath, 'attachments') }), goalController: new InstanceGoalController(instance, this.client, { diagnosticPath: path.join(dataPath, 'goal-ui-diagnostics.jsonl') }), activateThread: this.isMac ? (id, options) => withDesktopUi(() => navigateMacInstance(instance, id, { ...options, verify: () => instance.verify() })) : undefined });
     const activate = this.adapter.activateThread;
+    this.adapter.readActivityInventory = async () => {
+      const current=await readInstanceActivity(instance);
+      if(current.complete)return current;
+      const saved=await DesktopAdapter.prototype.readActivityInventory.call(this.adapter);
+      return {complete:false,threadIds:[...new Set([...current.threadIds,...saved.threadIds])]};
+    };
     this.adapter.activateThread = async (id, options) => {
       const own = await this.adapter.discoverOwner(id, 400);
       if (!own && await this.client.ownedElsewhere(id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '此聊天正在另一个实例中打开，请切换到对应设备');
@@ -97,6 +104,7 @@ export class InstanceRuntime {
       if (this.closed || !this.instance.alive) return false;
       this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
       this.agent.threadCache.start();
+      this.agent.threadListFeed.start();
       await this.agent.predictions.start(); return true;
     })().finally(() => { this.bindings = null; });
     return this.bindings;

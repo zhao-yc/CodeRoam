@@ -27,3 +27,13 @@ test('旧实例的迟到会话及列表推送被拒绝，新代次列表可以�
   f.receive({ type: 'event', hostId: 'computer', threadId: 'thread', generation: 'stale', epoch: 'old', seq: 100 }); assert.equal(f.connection.sequence, 9);
   f.receive({ type: 'threads.event', hostId: 'computer', generation: 'old', revision: 1, threads: [{ id: 'correct' }] }); assert.equal(f.connection.threads[0].id, 'correct');
 });
+
+test('列表推送携带独立追平状态，过期序号和离线旧推送不能恢复旋转', () => {
+  const f=fixture();
+  f.receive({type:'threads.event',hostId:'computer',generation:'old',revision:1,threads:[{id:'ready'}],syncing:true,catchup:true});
+  assert.equal(f.liveThreadLists.updates[0].syncing,true);assert.equal(f.liveThreadLists.updates[0].catchup,true);
+  f.receive({type:'threads.event',hostId:'computer',generation:'old',revision:2,threads:[{id:'ready'}],syncing:false,syncError:'聊天状态同步超时',catchup:true});
+  assert.equal(f.liveThreadLists.updates[0].syncing,false);assert.equal(f.liveThreadLists.updates[0].syncError,'聊天状态同步超时');
+  f.receive({type:'threads.event',hostId:'computer',generation:'old',revision:1,threads:[],syncing:true});assert.equal(f.liveThreadLists.updates[0].syncing,false);
+  f.connection.connected=false;f.receive({type:'threads.event',hostId:'computer',generation:'old',revision:3,threads:[],syncing:true});assert.equal(f.liveThreadLists.updates[0].revision,2);
+});

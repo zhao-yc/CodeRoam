@@ -28,7 +28,9 @@ try {
     const ipcHost=process.platform==='win32'&&(config.ipcSocketPath??defaultSocket)===defaultSocket
       ? new WindowsIpcHost({onState:state=>console.log(state==='ready'?'本机多实例管道已就绪':'等待现有桌面释放本机管道')}) : null;
     const hub=new InstanceHub({config,dataPath,diagnostics,ipcHost});
-    const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
+    // 私有运行状态只记录模式计数，方便核验降频，不包含电脑或会话编号。
+    const status=connected=>{const maintenance={online:0,grace:0,light:0,legacy:0};for(const runtime of hub.runtimes.values()){const mode=runtime.agent.clientPresence?.mode;if(Object.hasOwn(maintenance,mode))maintenance[mode]++;}fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now(),maintenance}));};
+    hub.on('maintenance',()=>status(hub.socket?.readyState===1&&hub.supported));
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
     hub.on('disconnected',detail=>{status(false);console.log(`中转连接已断开（代码 ${detail.code}）`);});
     hub.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
@@ -38,7 +40,8 @@ try {
   const client=new IpcClient({socketPath:config.ipcSocketPath??defaultIpcSocketPath({codexHome:config.codexHome})});
   const adapter=new DesktopAdapter({client,index:new StateReader(config.codexHome),modelCatalog:new ModelCatalog({codexHome:config.codexHome}),attachments:new AttachmentStore({root:path.join(dataPath,'attachments')}),goalController:new DesktopGoalController({diagnosticPath:path.join(dataPath,'goal-ui-diagnostics.jsonl')})});
   const agent=new BridgeAgent({config,adapter,journal:new Journal(path.join(dataPath,'journal.sqlite')),deleteController:new DesktopDeleteController({diagnosticPath:path.join(dataPath,'delete-ui-diagnostics.jsonl')}),diagnostics});
-  const writeStatus=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now()}));
+  const writeStatus=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now(),maintenance:agent.clientPresence.mode}));
+  agent.on('maintenance',()=>writeStatus(agent.socket?.readyState===1));
   agent.on('connected',()=>{writeStatus(true);diagnostics.record('connection.open',null,{role:'host'});console.log('电脑已连接中转服务');});
   agent.on('disconnected',()=>{writeStatus(false);diagnostics.record('connection.close',null,{role:'host'});console.log('中转连接已断开');});
   agent.on('warning',warning=>{diagnostics.record('connection.warning',null,{errorCode:warning.code});console.log(`${warning.code}：${warning.message}`);});

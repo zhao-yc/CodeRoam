@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {readHistoricalActivity} from './history-activity.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
@@ -84,6 +85,8 @@ export class StateReader {
       return createHash('sha256').update(JSON.stringify([row.title, row.cwd, row.updatedAt, file, ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String)])).digest('hex');
     } catch { return ''; }
   }
+  /** 离线轻维护只核对明确的任务尾部事件，正文解析留到确认终态或用户重新查看。 */
+  historyActivity(threadId) { return readHistoricalActivity(this.historyRow(threadId),path.join(path.dirname(this.filePath),'sessions')); }
   /** 后台浏览只读取索引和已保存历史，不唤醒或导航桌面。 */
   readHistory(threadId, options = {}) {
     const row = this.historyRow(threadId);

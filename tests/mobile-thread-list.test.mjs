@@ -67,6 +67,74 @@ test('推送在列表隐藏时更新缓存，返回及筛选不重复订阅，�
  f.liveThreadLists.updates[0]={hostId:'pc0',revision:3,threads:[]};f.push();assert.equal(f.visibleComputerThreads('','').length,0);
 });
 
+test('完整首帧立即可用，独立追平跨电脑隔离，较早回执不覆盖完成或超时状态',async()=>{
+ const f=fixture();f.refreshComputerThreads();
+ f.liveThreadLists.updates=[{hostId:'pc0',revision:2,threads:[row('same','快首帧',2)],syncing:true,catchup:true}];f.push();
+ const first=f.threadList.computers[0];assert.equal(first.loaded,true);assert.equal(first.subscribed,true);assert.equal(first.syncing,true);assert.equal(first.loading,true);
+ assert.equal(f.computerThreadsLoading(''),false);assert.equal(f.threadList.computers[1].loaded,false);
+ f.liveThreadLists.updates[0]={hostId:'pc0',revision:3,threads:[row('same','已追平',3)],syncing:false,catchup:true};f.push();
+ f.requests[0].resolve({threads:[row('same','迟到首帧',1)],revision:1,syncing:true});await settle();
+ assert.equal(first.syncing,false);assert.equal(first.loading,false);assert.equal(first.threads[0].title,'已追平');
+ f.requests[1].resolve({threads:[row('same','另一电脑首帧',1)],revision:1,syncing:true});await settle();
+ const second=f.threadList.computers[1];
+ f.liveThreadLists.updates.push({hostId:'pc1',revision:2,threads:[row('same','另一电脑首帧',1)],syncing:false,syncError:'聊天状态同步超时',catchup:true});f.push();
+ assert.equal(second.syncing,false);assert.equal(second.syncError,'聊天状态同步超时');assert.equal(second.loaded,true);assert.equal(second.error,'');
+ assert.deepEqual(plain(f.visibleComputerThreads('','').map(item=>item.key)),['pc0:same','pc1:same']);
+ assert.equal(first.syncError,'');
+});
+
+test('追平状态不落盘，实时索引与新代次优先于旧推送和迟到磁盘',async()=>{
+ const f=fixture(1);f.connection.cacheNamespace='pair-a';f.connection.computers[0].instanceGeneration='g1';f.startThreadListCache();f.refreshComputerThreads();
+ f.liveThreadLists.updates=[{hostId:'pc0',generation:'g1',revision:1,threads:[row('now','完整索引',2)],syncing:true,catchup:true}];f.push();
+ f.restores[0].resolve([cachedHost('pc0',[row('old','迟到磁盘',1)],'g1')]);await settle();
+ assert.deepEqual(plain(f.visibleComputerThreads('','').map(item=>item.id)),['now']);
+ const saved=f.writes.findLast(item=>item.action==='replace').host;assert.deepEqual(Object.keys(saved.threads[0]).sort(),['cwd','id','title','updatedAt']);
+ f.connection.computers[0].instanceGeneration='g2';f.syncThreadComputers();
+ assert.equal(f.threadList.computers[0].syncing,false);assert.equal(f.threadList.computers[0].syncError,'');
+ f.liveThreadLists.updates[0]={hostId:'pc0',generation:'g1',revision:9,threads:[row('old','旧代次',9)],syncing:true};f.push();
+ f.requests[0].resolve({threads:[row('old','旧代次回执',1)],syncing:true});await settle();assert.equal(f.visibleComputerThreads('','').length,0);
+ f.liveThreadLists.updates[0]={hostId:'pc0',generation:'g2',revision:1,threads:[row('fresh','新代次',10)],syncing:true};f.push();
+ assert.equal(f.threadList.computers[0].syncing,true);f.disconnectThreadLists();assert.equal(f.threadList.computers[0].syncing,false);
+});
+
+test('基线标记只属于当前快照，晚到请求失败不撤销已接管的实时首帧',async()=>{
+ const f=fixture(1);f.refreshComputerThreads();
+ const baseline={latestTurnId:'old-turn',latestTurnStatus:'inProgress',pending:[]};
+ f.liveThreadLists.updates=[{hostId:'pc0',revision:1,threads:[{...row('a','基线',1),notificationBaselineState:baseline}],syncing:true,catchup:true}];f.push();
+ assert.equal(f.threadList.computers[0].threads[0].notificationBaseline,true);
+ assert.deepEqual(plain(f.threadList.computers[0].threads[0].notificationState),baseline);
+ f.requests[0].reject(new Error('旧请求超时'));await settle();assert.equal(f.threadList.computers[0].error,'');assert.equal(f.threadList.computers[0].subscribed,true);
+ f.liveThreadLists.updates[0]={hostId:'pc0',revision:2,threads:[row('a','实时',2)],syncing:false};f.push();
+ assert.equal(f.threadList.computers[0].threads[0].notificationBaseline,false);
+});
+
+test('真实列表基线映射保留首个实时终态通知，追平历史终态及重复帧不会补发',()=>{
+ const source=fs.readFileSync('apps/mobile/services/task-notification-state.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
+ const context=vm.createContext({});vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.Center=TaskNotificationCenter;',context);
+ const center=new context.Center(),f=fixture(1);f.refreshComputerThreads();
+ const running={latestTurnId:'turn',latestTurnStatus:'inProgress',pending:[]};
+ const push=(revision,threads,catchup=false)=>{f.liveThreadLists.updates=[{hostId:'pc0',revision,threads,catchup,syncing:catchup}];f.push();return center.observe('pc0','',f.threadList.computers[0].threads,revision);};
+ push(1,[{...row('a','正在运行',1),notificationBaselineState:running}],true);
+ const completed={...running,latestTurnStatus:'completed'};
+ assert.equal(push(2,[{...row('a','实时完成',2),notificationState:completed}])[0].kind,'completed');
+ center.dismiss(3);assert.equal(push(3,[{...row('a','重复完成',2),notificationState:completed}]).length,0);
+ assert.equal(push(4,[{...row('a','追平历史终态',4),notificationBaselineState:{...completed,latestTurnId:'history'}}],true).length,0);
+ assert.equal(push(5,[{...row('a','仍待交互',5),notificationBaselineState:{...completed,pending:[{kind:'approval',id:'a',turnId:'turn'}]}}],true)[0].kind,'approval');
+});
+
+test('电脑图标独立显示首次加载、后台追平及五秒超时警告，已有列表仍可用',()=>{
+ const source=fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue','utf8');
+ const methods=source.slice(source.indexOf('function computerSyncState('),source.indexOf('// 默认按项目展示'));
+ const connection={connected:true,error:'',status:'已连接',computers:[{id:'pc0',online:true}]};
+ const entry={hostId:'pc0',loading:true,loaded:false,error:'',syncing:false,syncError:''},threadList={computers:[entry]};
+ const context=vm.createContext({connection,threadList,displayComputers:{value:connection.computers}});
+ vm.runInContext(stripTypeScriptTypes(methods,{mode:'transform'})+';globalThis.subject={computerSyncState,computerSyncLabel};',context);
+ const {computerSyncState:state,computerSyncLabel:label}=context.subject;
+ assert.equal(state('pc0'),'loading');entry.loaded=true;assert.equal(state('pc0'),'');entry.syncing=true;assert.equal(state('pc0'),'loading');
+ entry.syncing=false;entry.syncError='聊天状态同步超时';assert.equal(state('pc0'),'error');assert.equal(label('pc0'),'聊天状态同步超时');assert.equal(entry.loaded,true);
+ entry.syncError='';assert.equal(state('pc0'),'');connection.computers[0].online=false;assert.equal(state('pc0'),'offline');
+});
+
 
 test('永久删除拦截迟到推送，不影响其他电脑的同号会话',async()=>{
  const f=fixture();f.connection.threads=[];f.refreshComputerThreads();

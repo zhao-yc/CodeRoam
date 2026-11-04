@@ -14,6 +14,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
   const mobiles = new Set();
   const pending = new Map();
   const tickets = new Map();
+  const presenceRevisions = new Map();
+  const presenceSnapshots = new Map();
   const authenticate = request => {
     const bearer=/^Bearer ([A-Za-z0-9_-]{32,256})$/.exec(request.headers.authorization??'')?.[1];
     return bearer?identities.find(entry=>matchesToken(bearer,entry.tokenSha256)):null;
@@ -71,6 +73,20 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
   const draftKey = (hostId, draftId) => JSON.stringify([hostId, draftId]);
   const draftRead = method => method === 'thread.draft.open' || method === 'thread.draft.read';
   const generationOf = hostId => instances.managed.has(instances.row(hostId)?.parentId ?? hostId) ? instances.row(hostId)?.generation : undefined;
+  /** 在线数只发给所属电脑，按授权范围统计真实连接，不泄露手机编号，也不依赖会话订阅。 */
+  const notifyPresence = (target = null, force = false) => {
+    for (const [hostId, host] of hosts) {
+      if (target && host !== target || host.readyState !== WebSocket.OPEN || !hostOnline(hostId)) continue;
+      const generation = generationOf(hostId);
+      const onlineCount = [...mobiles].filter(mobile => mobile.readyState === WebSocket.OPEN && instances.authorized(mobile.identity.hostIds, hostId)).length;
+      const previous = presenceSnapshots.get(hostId);
+      if (!force && previous?.host === host && previous.generation === generation && previous.onlineCount === onlineCount) continue;
+      const revision = (presenceRevisions.get(hostId) ?? 0) + 1;
+      presenceRevisions.set(hostId, revision);
+      presenceSnapshots.set(hostId, { host, generation, onlineCount });
+      send(host, { v: 1, type: 'clients.presence', hostId, ...(generation ? { generation } : {}), onlineCount, revision });
+    }
+  };
   /** 定向事件必须匹配实际注册连接及实例代次，不能借父电脑连接伪造其他电脑的来源。 */
   const hostSource = (socket, hostId, generation) => hosts.get(hostId) === socket && hostOnline(hostId) &&
     (instances.managed.has(socket.identity.hostId) ? instances.owns(socket.identity.hostId, hostId, generation) : hostId === socket.identity.hostId && generation === undefined);
@@ -135,11 +151,13 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       cacheRoutes.prune();
       hosts.set(identity.hostId, socket);
       previous?.close(4001, '电脑连接已更新');
-      send(socket, { v: 1, type: 'welcome', role: 'host', hostId: identity.hostId, capabilities: { hostInstances: true } });
+      send(socket, { v: 1, type: 'welcome', role: 'host', hostId: identity.hostId, capabilities: { hostInstances: true, clientPresence: true } });
+      notifyPresence(socket, true);
       notifyHosts();
     } else if (identity.role === 'mobile') {
       mobiles.add(socket);
       send(socket, { v: 1, type: 'welcome', role: 'mobile', deviceId: identity.id, hosts: hostList(identity), capabilities: { hostProfiles: true, hostInstances: true, conversationCache: true, conversationPreview: true } });
+      notifyPresence();
     } else { socket.close(1008, '设备角色不受支持'); return; }
     socket.on('error', () => {});
     socket.on('message', data => {
@@ -148,7 +166,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       if (identity.role === 'host') {
         if (hosts.get(identity.hostId) !== socket) return;
         if (message.type === 'host.ready') {
-          try { profiles.observe(identity.hostId, message); notifyHosts(); }
+          try { profiles.observe(identity.hostId, message); notifyHosts(); notifyPresence(socket, true); }
           catch { socket.close(1011, '连接信息暂时无法保存'); }
           return;
         }
@@ -167,6 +185,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
             invalidateDrafts(watch => watch.host === socket && !hostSource(socket, watch.hostId, watch.generation));
             cacheRoutes.prune();
             notifyHosts();
+            notifyPresence(socket, true);
           } catch { socket.close(1008, '实例清单或归属无效'); }
           return;
         }
@@ -274,6 +293,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       }
       let diagnostic;
       try {
+        // 手机无权提供在线控制帧，防止伪造无人状态影响电脑的采集模式。
+        if (message.type === 'clients.presence') { socket.close(1008, '手机不能发送在线状态控制消息'); return; }
         validateRequest(message);
         diagnostic = diagnostics?.context({ ...message, deviceId: identity.id });
         if (message.method === 'ping') { send(socket, { v: 1, type: 'response', requestId: message.requestId, result: { now: Date.now() } }); return; }
@@ -336,6 +357,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
     socket.on('close', closeCode => {
       diagnostics?.record('connection.close', null, { connection: socket.diagnosticId, role: identity.role, closeCode, ...counts(socket, socket) });
       mobiles.delete(socket);
+      if (identity.role === 'mobile') notifyPresence();
       if (identity.role === 'mobile') for (const route of socket.cacheWatches.values()) cacheRoutes.release(route);
       if (identity.role === 'mobile') for (const watch of socket.draftWatches.values()) releaseDraft(identity.id, watch);
       // 释放已离线手机的只读订阅；同一身份的其他在线连接仍在观看时保留。
@@ -365,6 +387,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
 
   const heartbeat = setInterval(() => {
     cacheRoutes.prune();
+    // 授权登记由现有策略维护；周期重算可同时反映授权范围撤销。
+    notifyPresence();
     for (const socket of sockets.clients) {
       if (!socket.alive) { socket.terminate(); continue; }
       socket.alive = false;

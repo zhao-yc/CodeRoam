@@ -117,6 +117,8 @@ test('两个列表路径只发送最新结果摘要，已读仍保留失败，�
     const rows=await adapter.list({});
     assert.deepEqual(rows[0].latestTurn,{turnId:'failed',status:'failed'});
     assert.equal(JSON.stringify(rows).includes('capacity'),false);
+    // 首帧复用已经核验的实时状态，不为静态列表逐条重新建立正文跟随。
+    await adapter.watch('thread','detail',{history:false});
     const initial=await feed.watch('phone');
     assert.deepEqual(initial.threads[0].latestTurn,rows[0].latestTurn);
     const snapshot=adapter.snapshot(adapter.conversations.get('thread').state);

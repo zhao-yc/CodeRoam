@@ -50,6 +50,7 @@ export class Journal {
     this.db.prepare('DELETE FROM events WHERE thread_id IN (' + placeholders + ')').run(...ids);
     this.db.prepare('DELETE FROM question_submissions WHERE thread_id IN (' + placeholders + ')').run(...ids);
     this.db.prepare('DELETE FROM conversation_cache WHERE thread_id IN (' + placeholders + ')').run(...ids);
+    if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_list_index'").get())this.db.prepare('DELETE FROM thread_list_index WHERE id IN ('+placeholders+')').run(...ids);
   }
 
   /** 仅按原请求指纹和完整删除范围收口未知结果，不重放删除。 */

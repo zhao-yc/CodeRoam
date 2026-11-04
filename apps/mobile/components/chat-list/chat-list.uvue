@@ -267,20 +267,21 @@ function showsThreadStatus(thread: ComputerThread): boolean {
 const selectedComputerOnline = computed((): boolean => connection.connected && selectedComputers.value.some((entry: ComputerThreads): boolean => entry.online))
 const showThreadLoading = computed((): boolean => computerThreadsLoading(selectedComputerId.value))
 const listUnavailable = computed((): boolean => selectedComputers.value.length > 0 && selectedComputers.value.every((entry: ComputerThreads): boolean => !entry.online || entry.error.length > 0))
-// 各电脑独立显示首次同步；有效快照到达后恢复设备图标，离线和失败不旋转。
+// 请求首帧和后台追平分开显示；已有完整索引时会话仍可立即打开。
 function computerSyncState(hostId: string): string {
   const computer = connection.computers.find((item: Computer): boolean => item.id == hostId)
   const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
   if (computer == null && !displayComputers.value.some((item: Computer): boolean => item.id == hostId)) return ''
   if (!connection.connected) return connection.error.length == 0 && (connection.status == '正在连接' || connection.status == '正在重新连接') ? 'loading' : 'offline'
   if (computer == null || !computer.online) return 'offline'
-  if (entry != null && entry.error.length > 0) return 'error'
-  return entry != null && entry.loading && !entry.loaded ? 'loading' : ''
+  if (entry != null && (entry.error.length > 0 || (entry.syncError ?? '').length > 0)) return 'error'
+  return entry != null && (entry.loading && !entry.loaded || entry.syncing == true) ? 'loading' : ''
 }
 // 图标保留无障碍说明，不再占用列表中的独立提示行。
 function computerSyncLabel(hostId: string): string {
   const state = computerSyncState(hostId)
-  return state == 'offline' ? '电脑离线' : state == 'error' ? '聊天读取失败' : state == 'loading' ? '正在同步聊天' : ''
+  const entry = threadList.computers.find((item: ComputerThreads): boolean => item.hostId == hostId)
+  return state == 'offline' ? '电脑离线' : state == 'error' ? ((entry?.syncError ?? '').length > 0 ? entry!.syncError! : '聊天读取失败') : state == 'loading' ? '正在同步聊天' : ''
 }
 
 // 默认按项目展示，切换排序和最近开关只影响当前筛选后的会话。

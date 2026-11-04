@@ -28,13 +28,42 @@ export class ThreadCacheFeed {
     this.nextProbe = new Map();
     this.probes = new Set();
     this.closed = false;
+    this.mode = 'legacy';this.activity = new Set();this.lifecycle = new Map();this.maintenanceGeneration=0;
+  }
+
+  /** 新协议只跟随实际活动，轻维护释放内部正文状态而不碰真实详情订阅。 */
+  setMode(mode) {
+    if(!['legacy','online','grace','light'].includes(mode)||mode===this.mode)return;
+    this.mode=mode;
+    this.maintenanceGeneration++;
+    if(mode==='light') {
+      clearTimeout(this.timer);this.timer=null;this.dirty=false;
+      for(const id of this.targets)this.stopFollowing(id);
+      this.saved.clear();this.reading.clear();this.liveVersions.clear();
+    }
+    if(this.interval){clearInterval(this.interval);this.interval=null;this.start();}
+    else this.start();
+  }
+  /** 不完整活动查询只增加候选；失败和缺席不能证明先前任务已经结束。 */
+  setActivityInventory(inventory) {
+    if(!inventory||!Array.isArray(inventory.threadIds))return;
+    if(inventory.complete)this.activity=new Set(inventory.threadIds);
+    else for(const id of inventory.threadIds)this.activity.add(id);
+  }
+  /** 终态先保存再释放内部跟随，静态副本不继续持有完整桌面 state。 */
+  settled(snapshot) {
+    if(this.closed||this.blocked(snapshot.threadId))return;
+    this.remember(snapshot.threadId);
+    if(this.liveEntry(snapshot.threadId))this.save(snapshot);
+    this.activity.delete(snapshot.threadId);this.liveVersions.delete(snapshot.threadId);
+    this.stopFollowing(snapshot.threadId);
   }
 
   /** 文件通知及时触发，低频元数据核对补偿漏报和在其他目录追加的日志。 */
   start() {
     if (this.interval || this.closed || !this.db || !this.adapter.index?.historyCacheSource || !this.adapter.index?.list) return;
     const file = this.adapter.index.filePath;
-    if (file) {
+    if (file && !this.watcher) {
       try {
         const name = path.basename(file);
         this.watcher = fs.watch(path.dirname(file), { persistent: false }, (_event, filename) => {
@@ -43,9 +72,9 @@ export class ThreadCacheFeed {
         this.watcher.on('error', () => { this.watcher?.close(); this.watcher = null; });
       } catch { /* 索引尚未创建时由低频核对恢复。 */ }
     }
-    this.interval = setInterval(() => this.schedule(0), 2000);
+    this.interval = setInterval(() => this.schedule(0), this.mode==='light'?15000:2000);
     this.interval.unref();
-    this.schedule(0);
+    if(this.mode!=='light')this.schedule(0);
   }
 
   /** 成功仅确认登记。初始快照和之后的更新都走同一条设备专属事件流。 */
@@ -77,6 +106,7 @@ export class ThreadCacheFeed {
 
   schedule(delay = 250) {
     if (this.closed || !this.db || !this.adapter.index?.historyCacheSource) return;
+    if(this.mode==='light'&&delay>0){this.dirty=true;return;}
     if (this.running) { this.dirty = true; return; }
     if (this.timer && delay > 0) return;
     clearTimeout(this.timer);
@@ -219,7 +249,7 @@ export class ThreadCacheFeed {
   /** 只从桌面适配器已确认所有者的实时数据提取展示缓存。 */
   captureLive(snapshot) {
     const id = snapshot.threadId;
-    if (this.closed || !this.db || snapshot.readOnly || this.blocked(id) || (!this.targets.has(id) && !this.recent.has(id))) return;
+    if (this.closed || this.mode==='light' || !this.db || snapshot.readOnly || this.blocked(id) || (!this.targets.has(id) && !this.recent.has(id))) return;
     const entry = this.liveEntry(id);
     if (!entry || (!this.verified.has(id) && !this.adapter.index?.containsThread?.(id))) return;
     this.save(snapshot);
@@ -268,17 +298,21 @@ export class ThreadCacheFeed {
   /** 少量并行探测可跟随的原桌面，已加载时共用现有 IPC 状态。 */
   follow(threadId) {
     const entry = this.liveEntry(threadId);
+    if(this.mode==='light'||this.mode!=='legacy'&&!this.activity.has(threadId)&&entry?.state?.threadRuntimeStatus?.type!=='active')return;
     if (entry) {
       entry.watchers.add(CACHE_WATCHER);
       return;
     }
+    // 列表或详情已经在取得同一快照时，让其现有请求完成，避免重复发现所有者。
+    if(this.adapter.conversations?.has(threadId))return;
     if (!this.adapter.watch || this.probes.size >= 2 || this.probes.has(threadId) || (this.nextProbe.get(threadId) ?? 0) > Date.now()) return;
     this.probes.add(threadId);
+    const generation=this.maintenanceGeneration;
     this.nextProbe.set(threadId, Date.now() + 10000);
-    this.adapter.watch(threadId, CACHE_WATCHER, { history: false, ownerTimeoutMs: 350, snapshotTimeoutMs: 1000 })
+    this.adapter.watch(threadId, CACHE_WATCHER, { history: false, ownerTimeoutMs: 350, snapshotTimeoutMs: 1000,isCurrent:()=>!this.closed&&generation===this.maintenanceGeneration&&this.mode!=='light'&&this.targets.has(threadId)&&!this.blocked(threadId) })
       .then(snapshot => this.captureLive(snapshot)).catch(() => {}).finally(() => {
         this.probes.delete(threadId);
-        if (this.closed || !this.targets.has(threadId) || this.blocked(threadId)) this.stopFollowing(threadId);
+        if (this.closed || generation!==this.maintenanceGeneration || this.mode==='light' || !this.targets.has(threadId) || this.blocked(threadId)) this.stopFollowing(threadId);
       });
   }
 
@@ -304,6 +338,8 @@ export class ThreadCacheFeed {
         this.stopFollowing(id);
       }
       this.targets = desired;
+      this.activity=new Set([...this.activity].filter(id=>desired.has(id)));
+      for(const id of this.lifecycle.keys())if(!desired.has(id))this.lifecycle.delete(id);
       for (const id of desired) {
         await nextTick();
         if (this.closed) return;
@@ -312,7 +348,7 @@ export class ThreadCacheFeed {
           // 每轮都核对是否已归档或删除，即使 IPC 仍保留先前的所有者。
           const source = this.adapter.index.historyCacheSource(id);
           this.verified.add(id);
-          const entry = this.liveEntry(id);
+          const entry = this.mode==='light'?undefined:this.liveEntry(id);
           this.follow(id);
           const row = this.db.prepare('SELECT revision, saved_source FROM conversation_cache WHERE thread_id = ?').get(id);
           if (entry) {
@@ -323,7 +359,15 @@ export class ThreadCacheFeed {
           }
           if (source && row?.saved_source === source) this.deliverStored(id, row.revision);
           else if (source && this.saved.get(id)?.source === source) this.save(this.saved.get(id).snapshot, source);
-          else if (source) await this.readSaved(id, source);
+          else if (source) {
+            if(this.mode!=='legacy'&&this.adapter.index.historyActivity) {
+              let activity=this.lifecycle.get(id);
+              if(activity?.source!==source){activity={source,...this.adapter.index.historyActivity(id)};this.lifecycle.set(id,activity);}
+              // 轻维护仅在明确终态时读取正文，输出中的文件变化只保留来源标记。
+              if(activity.status==='active'||this.mode==='light'&&!['completed','interrupted','failed'].includes(activity.status))continue;
+            }else if(this.mode==='light')continue;
+            await this.readSaved(id, source);
+          }
         } catch (error) {
           if (error.code === 'THREAD_NOT_FOUND') this.forget(id);
         }
@@ -345,5 +389,6 @@ export class ThreadCacheFeed {
     this.saved.clear();
     this.reading.clear();
     this.liveVersions.clear();
+    this.lifecycle.clear();this.activity.clear();
   }
 }

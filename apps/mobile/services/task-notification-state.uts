@@ -61,7 +61,7 @@ export class TaskNotificationCenter {
       const terminal = state.latestTurnStatus == 'completed' || state.latestTurnStatus == 'failed'
       const changed = old?.latestTurnId != state.latestTurnId || old?.latestTurnStatus != state.latestTurnStatus
       const needsInteraction = state.pending.some((action: NotificationAction): boolean => action.turnId == state.latestTurnId)
-      if (!baseline && (oldRow == null || old != null && old.latestTurnId.length > 0) && changed && terminal && state.latestTurnId.length > 0 && (state.latestTurnStatus == 'failed' || !needsInteraction)) this.add(hostId, generation, thread, state.latestTurnStatus, state.latestTurnId, '')
+      if (!baseline && thread.notificationBaseline != true && (oldRow == null || old != null && old.latestTurnId.length > 0) && changed && terminal && state.latestTurnId.length > 0 && (state.latestTurnStatus == 'failed' || !needsInteraction)) this.add(hostId, generation, thread, state.latestTurnStatus, state.latestTurnId, '')
     })
     this.queue = this.queue.filter((notice: TaskNotice): boolean => this.valid(notice))
     this.tick(now)
