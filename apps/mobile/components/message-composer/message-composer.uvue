@@ -40,7 +40,7 @@
       </view>
       <view v-show="!entryOnly || expanded" class="composer-send">
         <liquid-glass-control v-if="liquidGlass && expanded" :symbol="primaryIcon == 'stop' ? 'stop.fill' : 'arrow.up'" :label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" :busy="primaryPendingLabel.length > 0" prominent :disabled="!active || primaryDisabled" @activate="activateGlassPrimary" />
-        <view v-else class="primary-action action-frame" :style="{ opacity: primaryDisabled && primaryPendingLabel.length == 0 ? 0.4 : 1 }"><loading v-if="primaryPendingLabel.length > 0" class="primary-spinner" :paused="!active" /><app-icon v-else :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled || primaryPendingLabel.length > 0" :aria-label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" @click="emit('primary')"></button></view>
+        <view v-else class="primary-action action-frame" :class="{ 'primary-action-disabled': primaryDisabled && primaryPendingLabel.length == 0 }"><loading v-if="primaryPendingLabel.length > 0" class="primary-spinner" :paused="!active" /><app-icon v-else :name="primaryIcon" :size="22" tone="light" /><button class="action-hitbox" :disabled="!active || primaryDisabled || primaryPendingLabel.length > 0" :aria-label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" @click="emit('primary')"></button></view>
       </view>
     </view>
     <button v-if="entryOnly && !expanded" class="action-hitbox entry-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="emit('expand')"></button>
@@ -194,6 +194,8 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .settings-trigger-label { flex-shrink: 1; min-width: 0; color: #1a2135; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
 .primary-spinner { width: 18px; height: 18px; border-color: #ffffff; }
 .primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #4546bd; align-items: center; justify-content: center; }
+/* 禁用时保留发送箭头，用实心灰色底明确表达不可发送。 */
+.primary-action-disabled { background-color: #aeb5c2; }
 .plan-chip { flex-shrink: 0; height: 28px; padding: 0 8px; margin-left: 4px; border-radius: 14px; flex-direction: row; align-items: center; background-color: #f6f7fb; }
 .plan-close { margin-left: 8px; }
 .entry-placeholder { position: absolute; left: 43px; bottom: 10px; color: #737d91; font-size: 16px; line-height: 24px; }
