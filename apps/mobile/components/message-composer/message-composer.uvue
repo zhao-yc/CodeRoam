@@ -211,6 +211,8 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .file-remove { width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0; color: #596479; background-color: transparent; }
 .file-retry { font-size: 12px; color: #4546bd; background-color: transparent; padding: 0 8px; margin: 0; }
 /* #ifdef WEB */
+/* 新聊天浮层不在 .page 内，点击层须独立覆盖 Web 默认禁用底色，避免遮住箭头。 */
+.action-frame .action-hitbox[disabled] { background-color: transparent; }
 .draft-placeholder-measure { display: block; white-space: pre-wrap; overflow-wrap: break-word; }
 /* #endif */
 </style>
