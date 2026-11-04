@@ -89,26 +89,6 @@ test('原实例核验失败时不会向其他代次发送桌面写入',async t=>
   const record=f.agent.taskQueue.list('synthetic-phone',{taskId:submitted.result.taskId});assert.equal(record.tasks[0].state,'failed');assert.equal(record.paused,true);
 });
 
-test('已删除聊天无法订阅时，后台仍按原范围自动核对成功并继续队列',async t=>{
-  for(const partial of [true,false]){
-    const f=fixture(t),taskId=randomUUID(),device='synthetic-phone',params={threadId:'synthetic-deleted'};
-    f.agent.taskQueue.ready=()=>false;
-    await f.submit('thread.delete',params,taskId);
-    await assert.rejects(f.journal.execute(device,taskId,'thread.delete',params,async()=>{
-      f.journal.checkpoint(device,taskId,{deletionPending:true,threadId:params.threadId,deletedThreadIds:[params.threadId,'synthetic-child']});
-      throw Object.assign(new Error('合成删除回执丢失'),{outcomeUnknown:true});
-    }));
-    f.agent.taskQueue.finish(f.agent.taskQueue.row(device,taskId),'unknown',null,{code:'OUTCOME_UNKNOWN',message:'合成回执未知',outcomeUnknown:true});
-    let watches=0;const watch=f.adapter.watch;
-    f.adapter.watch=async(id,...args)=>{if(id===params.threadId){watches++;throw Error('已删除的聊天不可订阅');}return watch(id,...args);};
-    f.adapter.index.existingThreadIds=()=>partial?['synthetic-child']:[];
-    const next=await f.submit();f.agent.taskQueue.ready=()=>true;await f.agent.taskQueue.pump();
-    assert.equal(watches,0);assert.equal(f.agent.taskQueue.row(device,taskId).state,partial?'unknown':'succeeded');
-    assert.equal(f.agent.taskQueue.list(device).paused,partial);assert.equal(f.calls.length,partial?0:1);
-    if(!partial)assert.equal(f.agent.taskQueue.row(device,next.result.taskId).state,'succeeded');
-  }
-});
-
 /** 回环连接保留消息序列，所有鉴权令牌均为用例随机生成。 */
 function inbox(socket){const rows=[],all=[],waiting=[];socket.on('error',()=>{});socket.on('message',data=>{const value=JSON.parse(data);all.push(value);const at=waiting.findIndex(item=>item.match(value));if(at<0)rows.push(value);else{const item=waiting.splice(at,1)[0];clearTimeout(item.timer);item.resolve(value);}});return{socket,all,next(match){const at=rows.findIndex(match);if(at>=0)return Promise.resolve(rows.splice(at,1)[0]);return new Promise((resolve,reject)=>{const item={match,resolve};item.timer=setTimeout(()=>reject(new Error('等待合成任务集成消息超时')),3000);waiting.push(item);});}};}
 

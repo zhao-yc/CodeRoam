@@ -212,15 +212,13 @@ export class BridgeAgent extends EventEmitter {
   /** 未知任务只复用已有只读收口器；查询不会重新创建、发送或切换权限。 */
   async readTaskCommandStatus(deviceId,commandId,threadId='') {
     const original=this.journal.status(deviceId,commandId);
-    // 已删除的目标无法恢复正文订阅，必须先直接用完整删除范围核对原索引。
-    const deletion=deletionCommandStatus(this.adapter,this.journal,deviceId,commandId);
-    if(deletion.state!=='unknown'||original.result?.deletionPending===true)return deletion;
     const target=threadId||original.result?.permissionChange?.threadId||original.result?.goalChange?.threadId;
     let release=()=>{};
     // 仅对原账本保存的目标恢复只读观察，不能靠查询任意编号取得其他会话权限。
     if(original.state==='unknown'&&target){try{release=await this.retainTaskThread(target,deviceId,'reconcile:'+commandId);}catch{return original;}}
     try{
       const draft=await this.nativeDrafts.commandStatus(this.journal,deviceId,commandId);if(draft.state!=='unknown')return draft;
+      const deletion=deletionCommandStatus(this.adapter,this.journal,deviceId,commandId);if(deletion.state!=='unknown')return deletion;
       const status=await permissionCommandStatus(this.adapter,this.journal,deviceId,commandId);
       return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,deviceId,commandId):status;
     }finally{release();}

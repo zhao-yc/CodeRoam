@@ -4,7 +4,6 @@ import { validateTaskRequest } from '../../packages/protocol/tasks.mjs';
 
 const FINISHED = ['succeeded', 'failed', 'canceled', 'skipped'];
 const DAY = 86400000;
-const RECONCILE_INTERVAL = 5000;
 const unknownError = error => error?.outcomeUnknown === true || /超时|连接已关闭|not-connected|timeout/i.test(error?.message ?? '');
 const parse = (value, fallback = null) => value ? JSON.parse(value) : fallback;
 
@@ -13,7 +12,6 @@ export class TaskQueue {
   constructor({ journal, execute, changed = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, now = Date.now }) {
     this.db = journal.db; this.execute = execute; this.changed = changed; this.reconcile = reconcile; this.ready = ready; this.now = now;
     this.watchers = new Set(); this.waiters = new Map(); this.closed = false; this.running = null;
-    this.reconciling = new Map(); this.reconcileAfter = new Map();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS submission_tasks (
         position INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL, device_id TEXT NOT NULL,
@@ -60,7 +58,7 @@ export class TaskQueue {
     this.start();
   }
 
-  /** 独立定时器在暂停期间也核对未知结果，不依赖手机页面或订阅。 */
+  /** 独立定时器只领取任务，不依赖任何手机页面或订阅是否存在。 */
   start() {
     if (this.closed || this.timer) return;
     this.timer = setInterval(() => { this.pump().catch(() => {}); }, 1000); this.timer.unref?.();
@@ -197,13 +195,12 @@ export class TaskQueue {
   /** 领取、执行和下一次领取共用实例级唯一 Promise，杜绝跨会话同时写入。 */
   pump() {
     if (this.running) return this.running;
-    if (this.closed || !this.ready()) return Promise.resolve();
+    if (this.closed || !this.ready() || this.db.prepare('SELECT paused FROM submission_queue_state WHERE singleton=1').get().paused) return Promise.resolve();
     this.running = this.drain().finally(() => { this.running = null; });
     return this.running;
   }
   /** 每次执行前重新检查实例就绪和暂停标记，失败之后不领取下一项。 */
   async drain() {
-    await this.reconcileUnknownTasks();
     while (!this.closed && this.ready() && !this.db.prepare('SELECT paused FROM submission_queue_state WHERE singleton=1').get().paused) {
       const row = this.db.prepare("SELECT * FROM submission_tasks WHERE state='queued' ORDER BY position LIMIT 1").get();
       if (!row) break;
@@ -218,61 +215,6 @@ export class TaskQueue {
         this.finish(row, state, null, { code: state === 'unknown' ? 'OUTCOME_UNKNOWN' : error?.code ?? 'TASK_FAILED', message: state === 'unknown' ? '执行结果需要核对，不会自动重发' : String(error?.message ?? '任务执行失败').slice(0, 2000), outcomeUnknown: state === 'unknown' });
       }
     }
-  }
-
-  /** 每项未知结果最多每五秒只读核对一次；异常留待下一轮，不阻断其他项。 */
-  async reconcileUnknownTasks() {
-    const rows = this.db.prepare("SELECT * FROM submission_tasks WHERE state='unknown' ORDER BY position").all();
-    for (const row of rows) {
-      if (this.closed || !this.ready()) break;
-      if ((this.reconcileAfter.get(row.position) ?? 0) > this.now()) continue;
-      this.reconcileAfter.set(row.position, this.now() + RECONCILE_INTERVAL);
-      try { await this.reconcileTask(row); } catch { /* 只读核对失败不能当成业务失败或触发重发。 */ }
-    }
-  }
-
-  /** 手动与后台核对共用在途查询，成功后自动继续，未知结果绝不重新提交。 */
-  reconcileTask(row) {
-    if (this.reconciling.has(row.position)) return this.reconciling.get(row.position);
-    const pending = this.resolveTask(row).finally(() => { this.reconciling.delete(row.position); });
-    this.reconciling.set(row.position, pending);
-    return pending;
-  }
-
-  /** 等待只读回执后重读任务，防止旧回执覆盖人工跳过、新尝试或其他暂停原因。 */
-  async resolveTask(row) {
-    if (this.closed || row.state !== 'unknown') return;
-    const original = this.internal(row), status = await this.reconcile(original);
-    if (this.closed) return;
-    const current = this.row(row.device_id, row.id);
-    if (!current || current.state !== 'unknown' || current.attempt !== row.attempt || this.internal(current).pendingCommandId !== original.pendingCommandId) return;
-    if (status?.state !== 'done') return;
-    if (status.error) {
-      if (!status.error.outcomeUnknown) this.finish(current, 'failed', null, status.error, null, true);
-      return;
-    }
-    const pending = this.db.prepare("SELECT * FROM submission_task_steps WHERE task_position=? AND state!='succeeded' ORDER BY updated_at DESC LIMIT 1").get(row.position);
-    if (row.kind === 'command' || !pending || pending.name === '发送首条消息') {
-      this.finish(current, 'succeeded', row.kind === 'newConversation' ? { ok: true, threadId: status.result?.threadId ?? current.thread_id } : status.result, null, pending, true);
-    } else {
-      // 组合任务只继续尚未提交的步骤；已经成功的创建、设置等沿用原检查点。
-      this.db.exec('BEGIN IMMEDIATE');
-      try {
-        this.db.prepare("UPDATE submission_task_steps SET state='succeeded',result=?,updated_at=? WHERE task_position=? AND name=?").run(JSON.stringify(status.result ?? null), this.now(), row.position, pending.name);
-        this.db.prepare("UPDATE submission_tasks SET state='queued',stage='已自动核对，等待继续执行',error='',updated_at=? WHERE position=?").run(this.now(), row.position);
-        this.db.prepare("UPDATE submission_task_keys SET state='queued',error='' WHERE device_id=? AND id=?").run(row.device_id, row.id);
-        this.releaseResolvedBlocker(row.position);
-        this.db.exec('COMMIT');
-      } catch (error) { this.db.exec('ROLLBACK'); throw error; }
-      this.notify();
-      queueMicrotask(() => { this.pump().catch(() => {}); });
-    }
-    this.reconcileAfter.delete(row.position);
-  }
-
-  /** 仅释放原暂停原因；旧账本有多项未知结果时，继续由下一项阻塞领取。 */
-  releaseResolvedBlocker(position) {
-    this.db.prepare("UPDATE submission_queue_state SET paused=EXISTS(SELECT 1 FROM submission_tasks WHERE state='unknown'),blocker_position=(SELECT position FROM submission_tasks WHERE state='unknown' ORDER BY position LIMIT 1) WHERE singleton=1 AND blocker_position=?").run(position);
   }
 
   /** 步骤编号由任务与名称确定，开始前先落盘；重入时只读取已经成功的检查点。 */
@@ -302,7 +244,7 @@ export class TaskQueue {
   }
 
   /** 失败暂留原输入和已成功检查点供人工重试；成功、取消与跳过立即释放私有数据。 */
-  finish(row, state, result = null, error = null, resolvedStep = null, reconciled = false) {
+  finish(row, state, result = null, error = null, resolvedStep = null) {
     const time = this.now(), final = state !== 'unknown', release = final && state !== 'failed';
     const stage = ({ succeeded: '执行完成', failed: '执行失败，实例队列已暂停', unknown: '结果待核对，实例队列已暂停', canceled: '已取消', skipped: '人工跳过，原执行结果未确认' })[state];
     this.db.exec('BEGIN IMMEDIATE');
@@ -315,13 +257,10 @@ export class TaskQueue {
         this.db.prepare('DELETE FROM submission_task_scopes WHERE task_position=?').run(row.position);
       }
       if (result?.threadId) this.db.prepare('UPDATE submission_tasks SET thread_id=? WHERE position=?').run(result.threadId, row.position);
-      if (state === 'failed' || state === 'unknown') this.db.prepare('UPDATE submission_queue_state SET paused=1,blocker_position=? WHERE singleton=1 AND (?=0 OR paused=0 OR blocker_position=?)').run(row.position, reconciled ? 1 : 0, row.position);
-      if (state === 'succeeded' && reconciled) this.releaseResolvedBlocker(row.position);
+      if (state === 'failed' || state === 'unknown') this.db.prepare('UPDATE submission_queue_state SET paused=1,blocker_position=? WHERE singleton=1').run(row.position);
       this.db.exec('COMMIT');
     } catch (failure) { this.db.exec('ROLLBACK'); throw failure; }
     this.notify(); this.settle(row); this.cleanup();
-    if (state !== 'unknown') this.reconcileAfter.delete(row.position);
-    if (state === 'succeeded' && reconciled) queueMicrotask(() => { this.pump().catch(() => {}); });
   }
 
   /** 取消、核对和恢复是数据库管理动作，不会排在已暂停的桌面业务队列后面。 */
@@ -362,7 +301,22 @@ export class TaskQueue {
       } catch (error) { this.db.exec('ROLLBACK'); throw error; }
       this.notify(); queueMicrotask(() => { this.pump().catch(() => {}); });
     } else if (action === 'reconcile') {
-      await this.reconcileTask(row);
+      if (row.state !== 'unknown') return this.list(deviceId, { taskId });
+      const status = await this.reconcile(this.internal(row));
+      if (status?.state === 'done' && !status.error) {
+        const pending = this.db.prepare("SELECT * FROM submission_task_steps WHERE task_position=? AND state!='succeeded' ORDER BY updated_at DESC LIMIT 1").get(row.position);
+        if (row.kind === 'command' || !pending || pending.name === '发送首条消息') this.finish(row, 'succeeded', row.kind === 'newConversation' ? { ok: true, threadId: status.result?.threadId ?? row.thread_id } : status.result, null, pending);
+        else {
+          this.db.exec('BEGIN IMMEDIATE');
+          try {
+            this.db.prepare("UPDATE submission_task_steps SET state='succeeded',result=?,updated_at=? WHERE task_position=? AND name=?").run(JSON.stringify(status.result ?? null), this.now(), row.position, pending.name);
+            this.db.prepare("UPDATE submission_tasks SET state='waiting_resume',stage='已核对，等待人工继续',error='',updated_at=? WHERE position=?").run(this.now(), row.position);
+            this.db.prepare("UPDATE submission_task_keys SET state='waiting_resume',error='' WHERE device_id=? AND id=?").run(deviceId, taskId);
+            this.db.exec('COMMIT');
+          } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+          this.notify();
+        }
+      } else if (status?.state === 'done' && status.error && !status.error.outcomeUnknown) this.finish(row, 'failed', null, status.error);
     } else if (action === 'skip') {
       if (!['unknown', 'failed'].includes(row.state) || confirmed !== true) throw new BridgeError('TASK_CONFIRMATION_REQUIRED', '请先在电脑核对，再明确确认跳过原任务');
       this.finish(row, 'skipped', null, { code: 'TASK_SKIPPED', message: '用户已在电脑核对并跳过，原执行结果未确认' });
@@ -438,7 +392,6 @@ export class TaskQueue {
   async close() {
     this.closed = true; clearInterval(this.timer); this.timer = null;
     await this.running?.catch(() => {});
-    await Promise.allSettled([...this.reconciling.values()]);
     for (const entries of this.waiters.values()) for (const entry of entries) entry.reject(new BridgeError('TASK_QUEUE_CLOSED', '连接服务已停止，任务仍保存在数据库中'));
     this.waiters.clear(); this.watchers.clear();
   }
