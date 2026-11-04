@@ -5,6 +5,7 @@
       <view v-for="row in shownRows" :key="row.hostId + ':' + row.task.id" class="submission-row">
         <view class="submission-main" @click="openTask(row.hostId, row.task)"><text class="submission-row-title">{{ row.task.title.length > 0 ? row.task.title : taskTitle(row.task) }}</text><view class="submission-meta"><text class="submission-description">{{ hostName(row.hostId) }} · {{ cardMeta(row.hostId, row.task) }}</text><submission-task-status :state="row.task.state" /></view><text v-if="row.task.error.length > 0" class="submission-error submission-error-summary" @click.stop="showError(row.task)">{{ cardError(row.task) }}</text></view>
         <view class="submission-actions">
+          <button v-if="row.task.state == 'failed' && row.task.canRetry == true" class="submission-action" :disabled="working.length > 0" @click="retry(row.hostId, row.task)">重试</button>
           <button v-if="row.task.state == 'queued'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'cancel')">取消</button>
           <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'reconcile')">核对</button>
           <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="skip(row.hostId, row.task)">已核对并跳过</button>
@@ -57,12 +58,18 @@ function openTask(hostId: string, task: SubmissionTask) { if (task.threadId.leng
 async function act(hostId: string, task: SubmissionTask, action: string, confirmed: boolean = false) {
   if (working.value.length > 0) return
   working.value = task.id; error.value = ''
-  try { if (task.localOnly == true) { if (action == 'reconcile') await checkPendingSubmission(hostId, task.id); else if (action == 'skip' && confirmed) acknowledgePendingSubmission(hostId, task.id); else throw new Error('请先核对，或确认已在电脑核对后清除保护') } else await controlSubmissionTask(hostId, task.id, action, confirmed) }
+  try { if (task.localOnly == true) { if (action == 'reconcile') await checkPendingSubmission(hostId, task.id); else if (action == 'skip' && confirmed) acknowledgePendingSubmission(hostId, task.id); else throw new Error('请先核对，或确认已在电脑核对后清除保护') } else await controlSubmissionTask(hostId, task.id, action, confirmed, task.attempt ?? 0) }
   catch (reason) { error.value = (reason as Error).message }
   finally { working.value = '' }
 }
 function skip(hostId: string, task: SubmissionTask) {
   uni.showModal({ title: '跳过待核对任务', content: '请先在电脑核对原操作。跳过不会重发或撤回原操作，之后将继续该实例的排队任务。', confirmText: '已核对，继续', cancelText: '取消', success: (answer) => { if (answer.confirm) act(hostId, task, 'skip', true) } })
+}
+// 删除重试再次明确不可恢复；其他失败项由用户点击后重新入队，未知结果不开放重试。
+function retry(hostId: string, task: SubmissionTask) {
+  if (working.value.length > 0 || task.state != 'failed' || task.canRetry != true) return
+  if (task.method == 'thread.delete') { uni.showModal({ title: '重试永久删除聊天', content: '将再次删除原聊天及其附属聊天，删除后无法恢复。是否重试？', confirmText: '重试删除', cancelText: '取消', success: (answer) => { if (answer.confirm) act(hostId, task, 'retry', true) } }); return }
+  act(hostId, task, 'retry', true)
 }
 </script>
 

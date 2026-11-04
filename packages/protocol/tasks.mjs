@@ -28,8 +28,9 @@ export function validateTaskRequest(method, params, requestId) {
     return;
   }
   if (method === 'tasks.control') {
-    if (!keys(params,['taskId','action','confirmed']) || !id(params.taskId) || !['cancel','dismiss','reconcile','resume','skip'].includes(params.action) ||
-        params.confirmed !== undefined && typeof params.confirmed !== 'boolean' || params.action === 'skip' && params.confirmed !== true) fail('任务控制参数无效或尚未确认跳过');
+    if (!keys(params,['taskId','action','confirmed','expectedAttempt']) || !id(params.taskId) || !['cancel','dismiss','reconcile','resume','skip','retry'].includes(params.action) ||
+        params.confirmed !== undefined && typeof params.confirmed !== 'boolean' || ['skip','retry'].includes(params.action) && params.confirmed !== true ||
+        params.action === 'retry' && !integer(params.expectedAttempt) || params.action !== 'retry' && params.expectedAttempt !== undefined) fail('任务控制参数无效或尚未确认操作');
     return;
   }
   if (method !== 'tasks.submit' || !keys(params,['taskId','kind','payload']) || !id(params.taskId) || !['command','newConversation'].includes(params.kind) || !object(params.payload)) fail('任务提交参数无效');
@@ -66,10 +67,10 @@ export function validTaskSnapshot(snapshot) {
   if (!keys(snapshot,['supportsTaskQueue','revision','paused','blockerId','tasks','now','nextCursor']) || snapshot.supportsTaskQueue !== true || !integer(snapshot.revision) ||
       typeof snapshot.paused !== 'boolean' || !text(snapshot.blockerId,80) || snapshot.blockerId && !id(snapshot.blockerId) || !integer(snapshot.now) ||
       !Array.isArray(snapshot.tasks) || snapshot.tasks.length > 1000 || snapshot.nextCursor !== undefined && snapshot.nextCursor !== null && !integer(snapshot.nextCursor)) return false;
-  return snapshot.tasks.every(task => keys(task,['id','position','kind','method','title','threadId','projectId','state','stage','error','createdAt','startedAt','completedAt','updatedAt','dismissed','steps','result','historyExpired']) &&
+  return snapshot.tasks.every(task => keys(task,['id','position','kind','method','title','threadId','projectId','state','stage','error','createdAt','startedAt','completedAt','updatedAt','dismissed','steps','result','historyExpired','attempt','canRetry']) &&
     id(task.id) && integer(task.position) && ['command','newConversation'].includes(task.kind) && text(task.method,100) && text(task.title,300) && text(task.threadId,200) && text(task.projectId,200) &&
     TASK_STATES.includes(task.state) && text(task.stage,300) && text(task.error,2000) && integer(task.createdAt) && (task.startedAt === null || integer(task.startedAt)) &&
-    (task.completedAt === null || integer(task.completedAt)) && integer(task.updatedAt) && typeof task.dismissed === 'boolean' && (task.historyExpired === undefined || typeof task.historyExpired === 'boolean') && (task.result === undefined || object(task.result) && safeResult(task.result)) && Array.isArray(task.steps) && task.steps.length <= 100 &&
+    (task.completedAt === null || integer(task.completedAt)) && integer(task.updatedAt) && typeof task.dismissed === 'boolean' && (task.historyExpired === undefined || typeof task.historyExpired === 'boolean') && (task.attempt === undefined || integer(task.attempt)) && (task.canRetry === undefined || typeof task.canRetry === 'boolean') && (task.result === undefined || object(task.result) && safeResult(task.result)) && Array.isArray(task.steps) && task.steps.length <= 100 &&
     task.steps.every(step => keys(step,['name','state','at','startedAt','completedAt','error']) && text(step.name,300) && ['queued','running','succeeded','failed','unknown','done'].includes(step.state) &&
       (step.at === undefined || integer(step.at)) && (step.startedAt === undefined || step.startedAt === null || integer(step.startedAt)) &&
       (step.completedAt === undefined || step.completedAt === null || integer(step.completedAt)) && (step.error === undefined || text(step.error,2000))));

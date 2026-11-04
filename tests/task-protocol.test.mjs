@@ -40,6 +40,8 @@ test('任务查询控制与附件作用域都严格限制输入',()=>{
   const taskId=randomUUID();
   validateRequest(request('tasks.list',{view:'history',before:100,limit:50,state:'waiting_resume'}));
   validateRequest(request('tasks.control',{taskId,action:'skip',confirmed:true}));
+  validateRequest(request('tasks.control',{taskId,action:'retry',confirmed:true,expectedAttempt:0}));
+  for(const params of [{taskId,action:'retry',confirmed:true},{taskId,action:'retry',confirmed:true,expectedAttempt:-1},{taskId,action:'retry',expectedAttempt:0},{taskId,action:'resume',expectedAttempt:0}]) assert.throws(()=>validateRequest(request('tasks.control',params)));
   for(const params of [{taskId,action:'skip'},{taskId,action:'execute'},{taskId:'../escape',action:'cancel'}]) assert.throws(()=>validateRequest(request('tasks.control',params)));
   assert.throws(()=>validateRequest(request('tasks.list',{limit:10000})));
   assert.throws(()=>validateRequest(request('tasks.watch',{deviceId:'other'})));
@@ -50,6 +52,9 @@ test('任务查询控制与附件作用域都严格限制输入',()=>{
 
 test('任务快照只接受展示字段，拒绝嵌套凭据与步骤执行正文',()=>{
   const value=snapshot();assert.equal(validTaskSnapshot(value),true);
+  value.tasks[0].attempt=1;value.tasks[0].canRetry=true;assert.equal(validTaskSnapshot(value),true);
+  value.tasks[0].attempt=-1;assert.equal(validTaskSnapshot(value),false);value.tasks[0].attempt=0;
+  value.tasks[0].canRetry='yes';assert.equal(validTaskSnapshot(value),false);value.tasks[0].canRetry=false;
   value.tasks[0].historyExpired=true;assert.equal(validTaskSnapshot(value),true);delete value.tasks[0].historyExpired;
   value.tasks[0].result={ok:true,settings:{effort:'high'}};assert.equal(validTaskSnapshot(value),true);
   value.tasks[0].result={deviceId:'other'};assert.equal(validTaskSnapshot(value),false);delete value.tasks[0].result;

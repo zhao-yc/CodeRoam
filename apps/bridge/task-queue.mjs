@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { BridgeError, WRITE_METHODS, requestFingerprint } from '../../packages/protocol/contracts.mjs';
+import { validateTaskRequest } from '../../packages/protocol/tasks.mjs';
 
 const FINISHED = ['succeeded', 'failed', 'canceled', 'skipped'];
 const DAY = 86400000;
@@ -40,6 +41,7 @@ export class TaskQueue {
       INSERT OR IGNORE INTO submission_queue_state(singleton) VALUES (1);
     `);
     if (!this.db.prepare('PRAGMA table_info(submission_task_keys)').all().some(column => column.name === 'display_metadata')) this.db.exec('ALTER TABLE submission_task_keys ADD COLUMN display_metadata TEXT');
+    if (!this.db.prepare('PRAGMA table_info(submission_tasks)').all().some(column => column.name === 'attempt')) this.db.exec('ALTER TABLE submission_tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0');
     // 任务、去重状态与暂停标记一并恢复，不能留下 wait 永久等待的旧 running 状态。
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -100,10 +102,20 @@ export class TaskQueue {
 
   /** 原始任务仅在守护进程内部使用，展示投影另行剔除执行正文和设备编号。 */
   row(deviceId, id) { return this.db.prepare('SELECT * FROM submission_tasks WHERE device_id=? AND id=?').get(deviceId, id); }
+  /** 每次人工重试使用独立命令编号，原失败回执仍保留且不会被 Journal 当成新执行。 */
+  executionId(row) { return row.attempt ? 'task-retry-' + createHash('sha256').update(JSON.stringify([row.device_id, row.id, row.attempt])).digest('hex').slice(0, 48) : row.id; }
+  /** 旧版已清理的删除、归档任务可由原目标还原，其他操作不能猜测丢失的输入。 */
+  retryPayload(row) {
+    if (row.payload) return parse(row.payload);
+    if (row.kind === 'command' && row.thread_id && ['thread.delete', 'thread.archive'].includes(row.method)) return { method: row.method, params: { threadId: row.thread_id } };
+    return null;
+  }
+  /** 只有确定失败且仍持有原输入或无正文目标的任务才开放重试。 */
+  canRetry(row) { return row.state === 'failed' && !!this.retryPayload(row) && !this.db.prepare("SELECT 1 FROM submission_task_steps WHERE task_position=? AND state IN ('unknown','running') LIMIT 1").get(row.position); }
   /** 只把最近未确认步骤的命令编号交给只读核对器，避免以新编号误查或重放。 */
   internal(row) {
     const pending = this.db.prepare("SELECT command_id FROM submission_task_steps WHERE task_position=? AND state!='succeeded' ORDER BY updated_at DESC LIMIT 1").get(row.position);
-    return { ...this.publicRow(row), deviceId: row.device_id, payload: parse(row.payload), pendingCommandId: pending?.command_id ?? row.id };
+    return { ...this.publicRow(row), deviceId: row.device_id, payload: parse(row.payload), commandId: this.executionId(row), pendingCommandId: pending?.command_id ?? this.executionId(row) };
   }
   /** 查询不返回执行参数、原始返回对象或步骤检查点中的私有数据。 */
   publicRow(row, includeResult = false) {
@@ -111,7 +123,7 @@ export class TaskQueue {
     const steps = this.db.prepare('SELECT name,state,updated_at FROM submission_task_steps WHERE task_position=? ORDER BY rowid').all(row.position).map(step => ({ name: step.name, state: step.state, at: step.updated_at }));
     const receipt = includeResult && row.state === 'succeeded' ? this.db.prepare('SELECT result FROM submission_task_keys WHERE device_id=? AND id=?').get(row.device_id, row.id) : null;
     const original = parse(receipt?.result), result = original && typeof original === 'object' && !Array.isArray(original) ? Object.fromEntries(Object.entries(original).filter(([key]) => ['ok', 'commandId', 'threadId', 'draftId', 'snapshot', 'settings', 'models', 'mode', 'revision', 'options', 'reviewer', 'queued', 'queueId', 'edited', 'canceled', 'draft', 'archived', 'deleted', 'deletedThreadIds', 'goal', 'goalRevision', 'messageAccepted', 'planReset', 'reconciled'].includes(key))) : null;
-    return { id: row.id, position: row.position, kind: row.kind, method: row.method, title: row.title, threadId: row.thread_id, projectId: row.project_id, state: row.state, stage: row.stage, error: row.error, createdAt: row.created_at, startedAt: row.started_at, completedAt: row.completed_at, updatedAt: row.updated_at, dismissed: !!row.dismissed, steps, ...(result ? { result } : {}) };
+    return { id: row.id, position: row.position, kind: row.kind, method: row.method, title: row.title, threadId: row.thread_id, projectId: row.project_id, state: row.state, stage: row.stage, error: row.error, createdAt: row.created_at, startedAt: row.started_at, completedAt: row.completed_at, updatedAt: row.updated_at, dismissed: !!row.dismissed, attempt: row.attempt ?? 0, canRetry: this.canRetry(row), steps, ...(result ? { result } : {}) };
   }
 
   /** 活跃列表使用服务端完成时间，刷新不会重新开始五秒倒计时。 */
@@ -197,7 +209,7 @@ export class TaskQueue {
 
   /** 步骤编号由任务与名称确定，开始前先落盘；重入时只读取已经成功的检查点。 */
   context(row) {
-    const commandId = name => 'task-' + createHash('sha256').update(JSON.stringify([row.device_id, row.id, name])).digest('hex').slice(0, 48);
+    const commandId = name => 'task-' + createHash('sha256').update(JSON.stringify(row.attempt ? [row.device_id, row.id, name, row.attempt] : [row.device_id, row.id, name])).digest('hex').slice(0, 48);
     return {
       commandId,
       retainScope: scope => { this.db.prepare('INSERT OR IGNORE INTO submission_task_scopes(task_position,scope) VALUES (?,?)').run(row.position, scope); },
@@ -221,16 +233,16 @@ export class TaskQueue {
     };
   }
 
-  /** 终结记录保留展示与去重结果，清除不再需要的原始消息和私有步骤返回。 */
+  /** 失败暂留原输入和已成功检查点供人工重试；成功、取消与跳过立即释放私有数据。 */
   finish(row, state, result = null, error = null, resolvedStep = null) {
-    const time = this.now(), final = state !== 'unknown';
+    const time = this.now(), final = state !== 'unknown', release = final && state !== 'failed';
     const stage = ({ succeeded: '执行完成', failed: '执行失败，实例队列已暂停', unknown: '结果待核对，实例队列已暂停', canceled: '已取消', skipped: '人工跳过，原执行结果未确认' })[state];
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db.prepare('UPDATE submission_tasks SET state=?,stage=?,error=?,result=?,completed_at=?,updated_at=?,payload=CASE WHEN ? THEN NULL ELSE payload END WHERE position=?').run(state, stage, error?.message ?? '', null, final ? time : 0, time, final ? 1 : 0, row.position);
+      this.db.prepare('UPDATE submission_tasks SET state=?,stage=?,error=?,result=?,completed_at=?,updated_at=?,payload=CASE WHEN ? THEN NULL ELSE payload END WHERE position=?').run(state, stage, error?.message ?? '', null, final ? time : 0, time, release ? 1 : 0, row.position);
       this.db.prepare('UPDATE submission_task_keys SET state=?,result=?,error=? WHERE device_id=? AND id=?').run(state, JSON.stringify(result ?? null), error ? JSON.stringify(error) : '', row.device_id, row.id);
       if (resolvedStep) this.db.prepare("UPDATE submission_task_steps SET state='succeeded',updated_at=? WHERE task_position=? AND name=?").run(time, row.position, resolvedStep.name);
-      if (final) {
+      if (release) {
         this.db.prepare('UPDATE submission_task_steps SET result=NULL WHERE task_position=?').run(row.position);
         this.db.prepare('DELETE FROM submission_task_scopes WHERE task_position=?').run(row.position);
       }
@@ -242,7 +254,8 @@ export class TaskQueue {
   }
 
   /** 取消、核对和恢复是数据库管理动作，不会排在已暂停的桌面业务队列后面。 */
-  async control(deviceId, { taskId, action, confirmed }) {
+  async control(deviceId, { taskId, action, confirmed, expectedAttempt }) {
+    this.cleanup();
     const row = this.row(deviceId, taskId);
     if (!row) throw new BridgeError('TASK_NOT_FOUND', '任务不存在或不属于当前设备');
     const queue = this.db.prepare('SELECT * FROM submission_queue_state WHERE singleton=1').get();
@@ -251,7 +264,25 @@ export class TaskQueue {
       this.finish(row, 'canceled');
     } else if (action === 'dismiss') {
       if (!['failed', 'unknown', 'waiting_resume', 'succeeded', 'canceled', 'skipped'].includes(row.state)) throw new BridgeError('TASK_ACTIVE', '正在等待或执行的任务不能关闭');
-      this.db.prepare('UPDATE submission_tasks SET dismissed=1 WHERE position=?').run(row.position); this.notify();
+      this.db.prepare('UPDATE submission_tasks SET dismissed=1 WHERE position=?').run(row.position);
+      if (row.state === 'failed') this.releaseRetryData(row.position);
+      this.notify();
+    } else if (action === 'retry') {
+      // 重复点击或旧回执只能对应原尝试；即使新尝试很快再次失败也不会重放旧点击。
+      if (confirmed !== true || !Number.isSafeInteger(expectedAttempt) || expectedAttempt !== row.attempt) throw new BridgeError('TASK_RETRY_STALE', '任务已变化，请刷新后再重试');
+      if (!this.canRetry(row)) throw new BridgeError('TASK_RETRY_UNAVAILABLE', '该任务不能直接重试，请先核对结果或重新提交');
+      if (queue.paused && queue.blocker_position !== row.position) throw new BridgeError('TASK_NOT_BLOCKER', '请先处理当前导致队列暂停的任务');
+      const payload = this.retryPayload(row);
+      validateTaskRequest('tasks.submit', { taskId, kind: row.kind, payload }, taskId);
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.prepare("DELETE FROM submission_task_steps WHERE task_position=? AND state='failed'").run(row.position);
+        this.db.prepare("UPDATE submission_tasks SET state='queued',stage='等待重试',error='',payload=?,dismissed=0,started_at=0,completed_at=0,updated_at=?,attempt=attempt+1 WHERE position=?").run(JSON.stringify(payload), this.now(), row.position);
+        this.db.prepare("UPDATE submission_task_keys SET state='queued',result=NULL,error='' WHERE device_id=? AND id=?").run(deviceId, taskId);
+        if (queue.blocker_position === row.position) this.db.prepare('UPDATE submission_queue_state SET paused=0,blocker_position=NULL WHERE singleton=1').run();
+        this.db.exec('COMMIT');
+      } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+      this.notify(); queueMicrotask(() => { this.pump().catch(() => {}); });
     } else if (action === 'reconcile') {
       if (row.state !== 'unknown') return this.list(deviceId, { taskId });
       const status = await this.reconcile(this.internal(row));
@@ -297,11 +328,23 @@ export class TaskQueue {
     if (typeof scope !== 'string' || !scope) return false;
     const conditions = deviceId === undefined ? '' : ' AND t.device_id=?';
     const values = deviceId === undefined ? [scope] : [scope, deviceId];
-    return !!this.db.prepare("SELECT 1 FROM submission_task_scopes s JOIN submission_tasks t ON t.position=s.task_position WHERE s.scope=? AND t.state IN ('queued','running','unknown','waiting_resume')" + conditions + ' LIMIT 1').get(...values);
+    return !!this.db.prepare("SELECT 1 FROM submission_task_scopes s JOIN submission_tasks t ON t.position=s.task_position WHERE s.scope=? AND t.state IN ('queued','running','unknown','waiting_resume','failed')" + conditions + ' LIMIT 1').get(...values);
+  }
+
+  /** 关闭或超过三十天时释放重试正文、步骤返回和附件租约，保留最小执行记录。 */
+  releaseRetryData(position) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('UPDATE submission_tasks SET payload=NULL WHERE position=?').run(position);
+      this.db.prepare('UPDATE submission_task_steps SET result=NULL WHERE task_position=?').run(position);
+      this.db.prepare('DELETE FROM submission_task_scopes WHERE task_position=?').run(position);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   /** 历史有时限和数量上限；暂停原因、未知任务以及长期去重键均不自动删除。 */
   cleanup() {
+    for (const row of this.db.prepare("SELECT position FROM submission_tasks WHERE state='failed' AND payload IS NOT NULL AND completed_at<?").all(this.now() - 30 * DAY)) this.releaseRetryData(row.position);
     const blocker = this.db.prepare('SELECT blocker_position FROM submission_queue_state WHERE singleton=1').get().blocker_position ?? -1;
     const eligible = "state IN ('succeeded','failed','canceled','skipped') AND position!=?";
     const expired = this.db.prepare('SELECT position FROM submission_tasks WHERE ' + eligible + ' AND completed_at<?').all(blocker, this.now() - 30 * DAY);
@@ -314,10 +357,10 @@ export class TaskQueue {
       const row = this.db.prepare('SELECT * FROM submission_tasks WHERE position=?').get(position);
       // 历史过期后仅保留去重所需的最小回执，不长期保存撤回草稿或原生设置快照。
       const result = { ...(row.thread_id ? { threadId: row.thread_id } : {}), historyExpired: true };
-      const metadata = { ...this.publicRow(row), title: this.commandTitle(row.method), projectId: '', stage: '历史记录已清理，请核对电脑端结果', error: '', dismissed: true, historyExpired: true, steps: [], result };
+      const metadata = { ...this.publicRow(row), title: this.commandTitle(row.method), projectId: '', stage: '历史记录已清理，请核对电脑端结果', error: '', dismissed: true, canRetry: false, historyExpired: true, steps: [], result };
       this.db.prepare("UPDATE submission_task_keys SET result=NULL,error='',display_metadata=? WHERE device_id=? AND id=?").run(JSON.stringify(metadata), row.device_id, row.id);
       // 旧 command.status 也不能绕过保留期取回完整草稿；仅处理本任务明确关联且已结束的原命令。
-      const commandIds = new Set([row.id, ...this.db.prepare('SELECT command_id FROM submission_task_steps WHERE task_position=?').all(position).map(step => step.command_id)]);
+      const commandIds = new Set([row.id, this.executionId(row), ...this.db.prepare('SELECT command_id FROM submission_task_steps WHERE task_position=?').all(position).map(step => step.command_id)]);
       const expiredReceipt = JSON.stringify({ error: { code: 'TASK_RESULT_EXPIRED', message: '原执行记录已清理，请先核对电脑端结果；该任务不会重新执行', outcomeUnknown: false } });
       for (const commandId of commandIds) this.db.prepare("UPDATE commands SET payload=? WHERE device_id=? AND command_id=? AND state='done'").run(expiredReceipt, row.device_id, commandId);
       this.db.prepare('DELETE FROM submission_task_steps WHERE task_position=?').run(position);

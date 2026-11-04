@@ -19,8 +19,11 @@ function generationFor(hostId: string): string { return connection.computers.fin
 
 // 跨电脑调用固定任务接口，不改变当前聊天与所选电脑。
 export function readSubmissionTasks(hostId: string, params: UTSJSONObject): Promise<UTSJSONObject> { return bridge.requestTaskChannel(hostId, 'tasks.list', params) }
-export async function controlSubmissionTask(hostId: string, id: string, action: string, confirmed: boolean = false): Promise<void> {
-  await bridge.requestTaskChannel(hostId, 'tasks.control', { taskId: id, action, confirmed })
+export async function controlSubmissionTask(hostId: string, id: string, action: string, confirmed: boolean = false, expectedAttempt: number = -1): Promise<void> {
+  const params: UTSJSONObject = { taskId: id, action, confirmed }
+  // 重试绑定原尝试编号；回执迟到或重复点击不能再次执行下一次尝试。
+  if (action == 'retry') params['expectedAttempt'] = expectedAttempt
+  await bridge.requestTaskChannel(hostId, 'tasks.control', params)
   await refreshSubmissionTasks(hostId)
 }
 

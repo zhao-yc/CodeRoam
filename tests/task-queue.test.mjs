@@ -222,7 +222,7 @@ test('失败事件发出时数据库已同时持久化暂停、终态和去重�
   const request = command(); f.queue.watch('phone'); f.queue.submit('phone', request); await f.queue.pump();
   assert.deepEqual(failures, [true]);
   assert.equal(f.journal.db.prepare('SELECT state FROM submission_task_keys WHERE id=?').get(request.taskId).state, 'failed');
-  assert.equal(f.queue.row('phone', request.taskId).payload, null);
+  assert.deepEqual(JSON.parse(f.queue.row('phone', request.taskId).payload), request.payload);
 });
 
 test('终结历史最多保留一千条，数量清理保留原提交的去重墓碑', async t => {

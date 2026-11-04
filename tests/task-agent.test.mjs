@@ -42,6 +42,17 @@ test('旧写接口等待领取时 command.status 返回 pending，执行结果�
   assert.equal((await f.request('command.status',{commandId})).result.state,'done');assert.equal(f.calls.length,1);
 });
 
+test('真实 Agent 人工重试通过新命令重新执行，原失败回执保留且旧尝试不能再次执行',async t=>{
+  let attempts=0;const f=fixture(t,{operate:async()=>{if(++attempts===1)throw Object.assign(new Error('合成暂时失败'),{code:'SYNTHETIC_FAILURE'});return {ok:true};}});
+  const accepted=await f.submit('thread.settings.update',{threadId:'synthetic-thread',changes:{effort:'high'}}),taskId=accepted.result.taskId;
+  await f.agent.taskQueue.pump();assert.equal((await f.request('tasks.list',{taskId})).result.tasks[0].canRetry,true);
+  const retried=await f.request('tasks.control',{taskId,action:'retry',confirmed:true,expectedAttempt:0});assert.equal(retried.error,undefined);
+  await f.agent.taskQueue.pump();assert.equal(attempts,2);assert.notEqual(f.calls[0].commandId,f.calls[1].commandId);
+  const result=(await f.request('tasks.list',{taskId})).result.tasks[0];assert.equal(result.state,'succeeded');assert.equal(result.attempt,1);
+  assert.equal((await f.request('command.status',{commandId:taskId})).result.state,'done');
+  assert.equal((await f.request('tasks.control',{taskId,action:'retry',confirmed:true,expectedAttempt:0})).error.code,'TASK_RETRY_STALE');assert.equal(attempts,2);
+});
+
 test('真实 Agent 任务快照通过中转展示校验，原设备控制隔离且退订不会撤销任务',async t=>{
   let release;const gate=new Promise(resolve=>{release=resolve;});t.after(()=>release());
   const f=fixture(t,{operate:async()=>{await gate;return {ok:true};}}),events=[];

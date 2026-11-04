@@ -60,7 +60,7 @@ export class BridgeAgent extends EventEmitter {
     this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
     this.taskQueue=journal.db?new TaskQueue({journal,
       ready:()=>!this.taskClosed&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
-      execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.id,task.payload.firstMessageGuard),
+      execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.commandId,task.payload.firstMessageGuard),
       reconcile:task=>this.readTaskCommandStatus(task.deviceId,task.pendingCommandId,task.threadId),
       changed:(deviceId,snapshot)=>this.send({v:1,type:'tasks.changed',deviceId,snapshot})}):null;
     if(adapter.attachments)adapter.attachments.retainScope=(deviceId,scope)=>this.taskQueue?.holdsScope(scope,deviceId)===true||!!this.messageQueue?.db.prepare('SELECT 1 FROM message_queue WHERE device_id=? AND thread_id=? LIMIT 1').get(deviceId,scope);
@@ -231,7 +231,7 @@ export class BridgeAgent extends EventEmitter {
     const record=this.taskQueue.db.prepare('SELECT * FROM submission_task_keys WHERE device_id=? AND id=?').get(deviceId,commandId);
     if(task.state==='succeeded')return {state:'done',result:JSON.parse(record.result??'{}')};
     if(['failed','canceled','cancelled','skipped'].includes(task.state))return {state:'done',error:record.error?JSON.parse(record.error):{code:'TASK_CANCELED',message:'该提交任务已取消'}};
-    const status=await this.readTaskCommandStatus(deviceId,commandId);
+    const status=await this.readTaskCommandStatus(deviceId,this.taskQueue.internal(task).pendingCommandId,task.thread_id);
     // 原命令已只读收口时同步提交任务状态，重放原编号仍返回同一回执而不再执行。
     if(status.state==='done')await this.taskQueue.control(deviceId,{taskId:commandId,action:'reconcile'});
     return status.state==='not_found'?{state:'unknown',error:{code:'OUTCOME_UNKNOWN',message:'操作结果需要核对，请勿重复提交',outcomeUnknown:true}}:status;
