@@ -1,5 +1,7 @@
 # 手机端图标
 
+快速模式补充：`bolt` 为项目自行绘制的实心闪电图标，沿用 72×72 PNG 与三种基础颜色；选择快速速度后显示在输入区模型名称及速度摘要旁。
+
 来源：[@tabler/icons 3.49.0](https://github.com/tabler/tabler-icons)，MIT 许可证见 LICENSE。由官方 SVG 按深色、灰色、白色导出 72×72 PNG，以兼容 uni-app x 原生 image；没有运行时网络依赖。
 
 本次输入区补充的 `camera`、`photo`、`plan` 为项目自行绘制的线性图标，按相同尺寸和三种颜色导出 PNG。

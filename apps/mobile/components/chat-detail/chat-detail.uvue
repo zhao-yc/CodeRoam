@@ -101,7 +101,7 @@
     <view v-if="composerMenu.length > 0" class="composer-dismiss" @click="closeComposerMenu"></view>
     <view id="composer-dock" class="composer-dock" :class="{ 'composer-menu-open': composerMenu.length > 0 }">
       <goal-card :goal="connection.snapshot?.goal ?? null" :revision="connection.snapshot?.goalRevision ?? 'none'" :disabled="!canWrite || !goalHostOnline || connection.snapshot?.supportsGoalControl != true" :busy="goalBusy" :pending-action="pendingAction" :unavailable-reason="goalUnavailableReason" :open-request="goalOpenRequest" :close-request="goalCloseRequest" :reset-key="pageHostId + ':' + pageThreadId" :content-height="goalContentHeight" @operate="operateGoal" @expanded="goalExpansion" @keyboard="goalKeyboard" />
-      <message-composer :instance-id="composerInstanceId" :reset-key="pageHostId + ':' + pageThreadId" :cursor="mentionCursor" :model-label="modelLabel" :layout-width="props.paneWidth"
+      <message-composer :instance-id="composerInstanceId" :reset-key="pageHostId + ':' + pageThreadId" :cursor="mentionCursor" :model-label="modelLabel" :service-tier="composerSettings?.serviceTier ?? ''" :layout-width="props.paneWidth"
         :active="pageVisible" :text="draft" :expanded="composerExpanded" :input-height="composerHeight" :focus="predictionFocus"
         :images="draftImages" :files="draftFiles" :plugins="draftPlugins" :mentions="draftMentions"
         :disabled="readOnly || queueEditing" :chips-disabled="!canWrite" :images-disabled="busy || imageBusy || connection.pendingCommandId.length > 0" :files-disabled="busy || connection.pendingCommandId.length > 0"

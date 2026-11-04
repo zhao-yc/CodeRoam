@@ -36,7 +36,7 @@
       <view v-show="expanded" class="composer-actions">
         <slot name="permissions"></slot>
         <view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: planDisabled ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!active || planDisabled" aria-label="关闭计划模式" @click="emit('toggleplan')"></button></view>
-        <view class="settings-trigger action-frame"><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" aria-label="选择模型、推理强度和速度" @click="emit('settings')"></button></view>
+        <view class="settings-trigger action-frame"><app-icon v-if="serviceTier == 'priority'" class="fast-speed-icon" name="bolt" :size="14" /><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" :aria-label="serviceTier == 'priority' ? '选择模型、推理强度和速度，当前为快速' : '选择模型、推理强度和速度'" @click="emit('settings')"></button></view>
       </view>
       <view v-show="!entryOnly || expanded" class="composer-send">
         <liquid-glass-control v-if="liquidGlass && expanded" :symbol="primaryIcon == 'stop' ? 'stop.fill' : 'arrow.up'" :label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" :busy="primaryPendingLabel.length > 0" prominent :disabled="!active || primaryDisabled" @activate="activateGlassPrimary" />
@@ -66,10 +66,10 @@ const props = withDefaults(defineProps<{
   images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], mentions: SelectedThreadMention[],
   disabled: boolean, chipsDisabled: boolean, imagesDisabled: boolean, filesDisabled: boolean,
   addDisabled: boolean, primaryDisabled: boolean, primaryLabel: string, primaryPendingLabel?: string, modelLabel: string,
-  settingsDisabled: boolean, planEnabled: boolean, planDisabled: boolean,
+  settingsDisabled: boolean, planEnabled: boolean, planDisabled: boolean, serviceTier?: string,
   focus?: boolean, cursor?: number, placeholder?: string, prediction?: string, primaryIcon?: string,
   contentHeight?: number, maxContentHeight?: number, layoutWidth?: number, contentTarget?: string, entryOnly?: boolean, retryFiles?: boolean, retryDisabled?: boolean, retryingFileIds?: string[]
-}>(), { focus: false, cursor: -1, placeholder: '问问 Codex', prediction: '', primaryIcon: 'send', primaryPendingLabel: '', contentHeight: 0, maxContentHeight: 0, layoutWidth: 0, contentTarget: '', entryOnly: false, retryFiles: false, retryDisabled: false, retryingFileIds: [] as string[] })
+}>(), { focus: false, cursor: -1, placeholder: '问问 Codex', prediction: '', primaryIcon: 'send', primaryPendingLabel: '', serviceTier: '', contentHeight: 0, maxContentHeight: 0, layoutWidth: 0, contentTarget: '', entryOnly: false, retryFiles: false, retryDisabled: false, retryingFileIds: [] as string[] })
 const emit = defineEmits<{
   input: [event: UniInputEvent], syncinput: [text: string], focus: [], blur: [], linechange: [event: UniTextareaLineChangeEvent],
   keyboardheightchange: [event: UniInputKeyboardHeightChangeEvent], submit: [], acceptprediction: [], primary: [], add: [], settings: [],
@@ -191,6 +191,8 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .add-action { align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0; padding: 0; background-color: transparent; }
 .composer-actions { position: absolute; left: 44px; right: 40px; bottom: 0; height: 44px; flex-direction: row; align-items: center; }
 .settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
+/* 快速标识保持完整，窄屏继续由模型文字收缩省略。 */
+.fast-speed-icon { flex-shrink: 0; margin-right: 4px; }
 .settings-trigger-label { flex-shrink: 1; min-width: 0; color: #1a2135; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
 .primary-spinner { width: 18px; height: 18px; border-color: #ffffff; }
 .primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #4546bd; align-items: center; justify-content: center; }
