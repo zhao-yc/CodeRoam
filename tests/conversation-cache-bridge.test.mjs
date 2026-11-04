@@ -43,6 +43,101 @@ function fixture(t, journal = new Journal()) {
   return { feed, sent, data, journal, adapter };
 }
 
+test('无人订阅时缓存换版不读出旧正文，上一版仍可续接且同版来源变化不旋转基线', t => {
+  const f = fixture(t);
+  let largeReadBytes = 0;
+  // 统计真实 SQLite 返回到 JS 的长字符串，验证低分配路径而非模拟写入结果。
+  f.feed.db = new Proxy(f.journal.db, { get(db, key) {
+    if (key === 'prepare') return sql => {
+      const statement = db.prepare(sql);
+      return new Proxy(statement, { get(target, method) {
+        if (method === 'get') return (...args) => {
+          const row = target.get(...args);
+          for (const value of Object.values(row ?? {})) if (typeof value === 'string' && value.length > 256) largeReadBytes += Buffer.byteLength(value);
+          return row;
+        };
+        const value = Reflect.get(target, method, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    };
+    const value = Reflect.get(db, key, db);
+    return typeof value === 'function' ? value.bind(db) : value;
+  } });
+  const first = snapshot(), second = snapshot('乙'), third = snapshot('乙丙');
+  f.feed.save(first, 'source-1');
+  f.feed.save(second, 'source-2');
+  f.feed.save(second, 'source-3');
+  assert.equal(largeReadBytes, 0);
+  assert.equal(f.feed.row(threadId).previous_revision, conversationContentRevision(first));
+  assert.equal(f.feed.baseline(threadId, conversationContentRevision(first)).messages[0].text, text);
+  f.feed.save(third, 'source-4');
+  assert.equal(f.feed.baseline(threadId, conversationContentRevision(first)), undefined);
+  assert.equal(f.feed.baseline(threadId, conversationContentRevision(second)).messages[0].text, text + '乙');
+  f.feed.watch('phone', { subscriptionId, threads: [{ threadId, revision: conversationContentRevision(third) }] });
+  const beforeSubscribed = largeReadBytes;
+  f.feed.save(snapshot('乙丙丁'), 'source-5');
+  assert.ok(largeReadBytes > beforeSubscribed);
+  assert.deepEqual(f.sent.at(-1).update.appends, [{ id: 'message', text: '丁', status: 'inProgress' }]);
+});
+
+test('复用列表最近排序时仍核验成员，旧列表不能让已删除正文继续驻留', async t => {
+  const f = fixture(t);
+  f.feed.listRows = () => [{ id: threadId }];
+  f.adapter.index.list = () => { throw new Error('已有列表时不重复扫描排序'); };
+  await f.feed.refresh();
+  assert.equal(f.adapter.reads, 1);
+  assert.ok(f.feed.row(threadId));
+  f.data.delete(threadId);
+  await f.feed.refresh();
+  assert.equal(f.feed.row(threadId), undefined);
+  assert.equal(f.adapter.reads, 1);
+});
+
+test('后台来源批次跨事件循环时归档，不能保存或补发该聊天的迟到正文', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-archive-round-'));
+  const sessions = path.join(home, 'sessions');fs.mkdirSync(sessions);
+  const db = new DatabaseSync(path.join(home, 'state_5.sqlite'));
+  db.exec('PRAGMA journal_mode=WAL; CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,cwd TEXT,updated_at INTEGER,rollout_path TEXT,archived INTEGER)');
+  const ids = ['synthetic-a', 'synthetic-b'];
+  for (const id of ids) {
+    const file = path.join(sessions, id + '.jsonl');
+    fs.writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id } }) + '\n');
+    db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,0)').run(id, '合成聊天', '/workspace/demo', 1, file);
+  }
+  const adapter = new EventEmitter(), journal = new Journal(), sent = [];
+  adapter.index = new StateReader(home);
+  adapter.client = { allowedClients: new Set(['owner']), assertCurrent() {} };
+  adapter.conversations = new Map(ids.map(id => [id, { owner: { clientId: 'owner' }, state: { id }, watchers: new Set() }]));
+  adapter.snapshot = state => snapshot('', state.id);
+  adapter.unwatch = (id, watcher) => adapter.conversations.get(id)?.watchers.delete(watcher);
+  const feed = new ThreadCacheFeed({ adapter, db: journal.db, send: event => sent.push(event), blocked: () => false });
+  t.after(() => { feed.close();journal.close();db.close();fs.rmSync(home, { recursive: true, force: true }); });
+  feed.save(snapshot('', ids[1]));
+  feed.watch('phone', { subscriptionId, threads: [{ threadId: ids[1], revision: '' }] });
+  const sourceView = adapter.index.historySourceView.bind(adapter.index);
+  adapter.index.historySourceView = requested => {
+    const view = sourceView(requested);
+    setImmediate(() => db.prepare('UPDATE threads SET archived=1 WHERE id=?').run(ids[1]));
+    return view;
+  };
+  await feed.refresh();
+  assert.equal(feed.row(ids[1]), undefined);
+  assert.ok(sent.some(event => event.threadId === ids[1] && event.removed === true));
+  assert.equal(sent.some(event => event.threadId === ids[1] && event.snapshot), false);
+});
+
+test('旧中转无人订阅列表时，后台缓存仍能发现桌面新建聊天', async t => {
+  const adapter = new EventEmitter(), journal = new Journal();let rows = [{ id: threadId, title: '合成旧聊天' }];
+  adapter.conversations = new Map();adapter.close = () => {};
+  adapter.index = { list: () => rows, historyCacheSource: id => 'source-' + id, visibleThreadIds: ids => new Set(ids), readHistory: id => snapshot('', id) };
+  const agent = new BridgeAgent({ config: {}, adapter, journal, newThreads: {} });t.after(() => agent.close());
+  agent.threadListFeed.start();
+  assert.equal(agent.threadListFeed.mode, 'legacy');assert.equal(agent.threadListFeed.devices.size, 0);
+  const created = 'synthetic-new';rows = [{ id: created, title: '合成新聊天' }, ...rows];
+  await agent.threadCache.refresh();
+  assert.ok(agent.threadCache.row(created));
+});
+
 test('后台缓存按设备隔离、静默复用相同版本，仅文件版本变化时补发增量', async t => {
   const f = fixture(t), before = conversationContentRevision(snapshot());
   f.feed.watch('phone-a', { subscriptionId, threads: [{ threadId, revision: before }] });

@@ -9,6 +9,18 @@ import { readHistoricalSnapshot } from './history-reader.mjs';
 import { readHistoricalPage } from './history-pager.mjs';
 import { readProjectedHistory, readProjectedFileReport } from './projected-history.mjs';
 
+/** 来源指纹只使用已核验的行和会话根目录；每个文件仍独立核对真实路径及元数据。 */
+function historySource(row, sessionRoot) {
+  if (!row.rollout_path) return '';
+  try {
+    const root=sessionRoot(),file=fs.realpathSync.native(row.rollout_path),relative=path.relative(root,file);
+    if(!relative||relative.startsWith('..')||path.isAbsolute(relative)||!file.endsWith('.jsonl'))return '';
+    const stat=fs.statSync(file,{bigint:true});
+    if(!stat.isFile())return '';
+    return createHash('sha256').update(JSON.stringify([row.title,row.cwd,row.updatedAt,file,...[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].map(String)])).digest('hex');
+  } catch {return '';}
+}
+
 /** 只读查询 Codex 自有索引，不启动第二个执行进程，也不更改数据库。 */
 export class StateReader {
   constructor(codexHome = path.join(os.homedir(), '.codex')) { this.filePath = path.join(codexHome, 'state_5.sqlite'); }
@@ -73,17 +85,66 @@ export class StateReader {
   /** 轻量核对历史来源，只在会话文件或索引记录变化时重建缓存。 */
   historyCacheSource(threadId) {
     const row = this.historyRow(threadId);
-    if (!row.rollout_path) return '';
-    try {
-      const root = fs.realpathSync.native(path.join(path.dirname(this.filePath), 'sessions'));
-      const file = fs.realpathSync.native(row.rollout_path);
-      const relative = path.relative(root, file);
-      if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !file.endsWith('.jsonl')) return '';
-      const stat = fs.statSync(file, { bigint: true });
-      if (!stat.isFile()) return '';
-      // 路径仅用于本机指纹，SQLite 缓存不会重复保存源文件路径。
-      return createHash('sha256').update(JSON.stringify([row.title, row.cwd, row.updatedAt, file, ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String)])).digest('hex');
-    } catch { return ''; }
+    return historySource(row,()=>fs.realpathSync.native(path.join(path.dirname(this.filePath),'sessions')));
+  }
+  /** 仅供单轮后台维护共享行、schema和根目录；不能跨请求保留或用于交互授权。 */
+  historySourceView(ids) {
+    const requested=[...new Set(ids.filter(id=>typeof id==='string'))],rows=new Map(),sources=new Map(),file=this.filePath;
+    const directory=path.join(path.dirname(file),'sessions');let root,db,closed=false,rowsVersion,versionQuery,rowsQuery;
+    const unavailable=()=>new BridgeError('HISTORY_UNAVAILABLE','聊天索引正在变化，请稍后重新核对');
+    const close=()=>{if(closed)return;closed=true;db?.close();};
+    let identity;
+    // data_version识别外部提交；dev/ino额外识别路径被替换，不能靠Windows可能延迟更新的mtime。
+    const fileIdentity=()=>{const stat=fs.statSync(file,{bigint:true});return {dev:stat.dev,ino:stat.ino};};
+    const version=()=>{
+      if(closed)throw unavailable();
+      try {const current=fileIdentity();if(current.dev!==identity.dev||current.ino!==identity.ino)throw unavailable();return versionQuery.get().data_version;}
+      catch {close();throw unavailable();}
+    };
+    /** 不建立长读事务，每条查询结束后允许同一连接看到其他连接的新提交。 */
+    const reload=()=>{
+      for(let attempt=0;attempt<3;attempt++) {
+        const before=version(),next=rowsQuery.all(JSON.stringify(requested)),after=version();
+        if(before!==after)continue;
+        rows.clear();for(const row of next)rows.set(row.id,row);
+        sources.clear();rowsVersion=after;return;
+      }
+      throw unavailable();
+    };
+    if(requested.length)try {
+      identity=fileIdentity();db=new DatabaseSync(file,{readOnly:true});
+      versionQuery=db.prepare('PRAGMA data_version');version();
+      const columns=new Set(db.prepare('PRAGMA table_info(threads)').all().map(column=>column.name));
+      const title=columns.has('name')?"COALESCE(NULLIF(name,''),title)":'title';
+      const time=columns.has('updated_at_ms')?'COALESCE(updated_at_ms,updated_at*1000)':'updated_at*1000';
+      rowsQuery=db.prepare(`SELECT id,${title} AS title,cwd,rollout_path,${time} AS updatedAt FROM threads WHERE archived=0 AND id IN (SELECT value FROM json_each(?))`);
+      reload();
+    } catch(error) {close();throw error;}
+    const sessionRoot=()=>root??=fs.realpathSync.native(directory);
+    const rowFor=id=>{const row=rows.get(id);if(!row)throw new BridgeError('THREAD_NOT_FOUND','这条聊天已不存在或已经归档，请刷新聊天列表');return row;};
+    /** 包括缺失成员错误在内都检查查询前后版本，不把旧行或旧错误带过外部提交。 */
+    const consistent=read=>{
+      if(closed)throw unavailable();
+      if(!requested.length)return read();
+      for(let attempt=0;attempt<3;attempt++) {
+        const before=version();if(before!==rowsVersion)reload();
+        const expected=rowsVersion;let result,error;
+        try {result=read();}catch(failure){error=failure;}
+        if(version()!==expected){reload();continue;}
+        if(error)throw error;
+        return result;
+      }
+      throw unavailable();
+    };
+    return Object.freeze({
+      source:id=>consistent(()=>{
+        if(!sources.has(id))sources.set(id,historySource(rowFor(id),sessionRoot));
+        return sources.get(id);
+      }),
+      // 尾读仍由既有实现核对文件身份和读前后元数据，不信任上一轮保存的活动结论。
+      activity:id=>consistent(()=>readHistoricalActivity(rowFor(id),sessionRoot())),
+      close,
+    });
   }
   /** 离线轻维护只核对明确的任务尾部事件，正文解析留到确认终态或用户重新查看。 */
   historyActivity(threadId) { return readHistoricalActivity(this.historyRow(threadId),path.join(path.dirname(this.filePath),'sessions')); }
