@@ -1,0 +1,7 @@
+export type ComposerMenuPosition = { left: number, bottom: number, height: number }
+
+// 菜单贴住实际点击入口，并限制在当前分栏内；高度扣除标题与内边距后交给滚动区域。
+export function composerMenuPosition(triggerLeft: number, triggerRight: number, triggerTop: number, containerLeft: number, containerTop: number, containerBottom: number, containerWidth: number, menuWidth: number, alignRight: boolean): ComposerMenuPosition {
+  const left = (alignRight ? triggerRight - menuWidth : triggerLeft) - containerLeft
+  return { left: Math.max(14, Math.min(left, containerWidth - menuWidth - 14)), bottom: Math.max(8, containerBottom - triggerTop + 8), height: Math.max(80, triggerTop - containerTop - 8 - 56 - 12) }
+}

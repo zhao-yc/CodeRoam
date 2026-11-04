@@ -29,14 +29,14 @@
         </view>
       </scroll-view>
       <text v-if="entryOnly && !expanded" class="entry-placeholder">问问 Codex</text>
-      <view class="composer-add">
+      <view :id="instanceId + '-add'" class="composer-add">
         <liquid-glass-control v-if="liquidGlass && expanded" symbol="plus" label="添加附件、插件、计划模式或追求目标" :disabled="!active || addDisabled" @activate="activateGlassAdd" />
         <view v-else class="add-action action-frame" :style="{ opacity: addDisabled ? 0.45 : 1 }"><composer-plus /><button class="action-hitbox" :disabled="!active || addDisabled" aria-label="添加附件、插件、计划模式或追求目标" @click="emit('add')"></button></view>
       </view>
       <view v-show="expanded" class="composer-actions">
         <slot name="permissions"></slot>
         <view v-if="planEnabled" class="plan-chip action-frame" :style="{ opacity: planDisabled ? 0.4 : 1 }"><app-icon name="plan" :size="20" tone="muted" /><view class="plan-close"><app-icon name="close" :size="12" tone="muted" /></view><button class="action-hitbox" :disabled="!active || planDisabled" aria-label="关闭计划模式" @click="emit('toggleplan')"></button></view>
-        <view class="settings-trigger action-frame"><app-icon v-if="serviceTier == 'priority'" class="fast-speed-icon" name="bolt" :size="14" /><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" :aria-label="serviceTier == 'priority' ? '选择模型、推理强度和速度，当前为快速' : '选择模型、推理强度和速度'" @click="emit('settings')"></button></view>
+        <view :id="instanceId + '-settings'" class="settings-trigger action-frame"><app-icon v-if="serviceTier == 'priority'" class="fast-speed-icon" name="bolt" :size="14" /><text class="settings-trigger-label">{{ modelLabel }}</text><app-icon name="chevron-down" :size="14" tone="muted" /><button class="action-hitbox" :disabled="!active || settingsDisabled" :aria-label="serviceTier == 'priority' ? '选择模型、推理强度和速度，当前为快速' : '选择模型、推理强度和速度'" @click="emit('settings')"></button></view>
       </view>
       <view v-show="!entryOnly || expanded" class="composer-send">
         <liquid-glass-control v-if="liquidGlass && expanded" :symbol="primaryIcon == 'stop' ? 'stop.fill' : 'arrow.up'" :label="primaryPendingLabel.length > 0 ? primaryPendingLabel : primaryLabel" :busy="primaryPendingLabel.length > 0" prominent :disabled="!active || primaryDisabled" @activate="activateGlassPrimary" />

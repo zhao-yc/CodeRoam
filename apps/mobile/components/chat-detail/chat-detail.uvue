@@ -124,7 +124,7 @@
         </template>
       </message-composer>
     </view>
-      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
+      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ left: menuLeft + 'px', bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view>
@@ -195,6 +195,7 @@ import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.
 import GoalCard from '../../components/goal-card/goal-card.uvue'
 import { ThreadGoal } from '../../services/goals.uts'
 import ComposerOptions from '../../components/composer-options/composer-options.uvue'
+import { composerMenuPosition } from '../../services/composer-menu-position.uts'
 import { readMessageChoices, messageChoicesParams, saveMessageChoices, hasMessageChoices, messageChoicesRevision, chooseMessageSetting, settingsWithMessageChoices, consumeRealtimeChoice, MessageChoices } from '../../services/message-choices.uts'
 import { submissionHasMessageChoices } from '../../services/composer.uts'
 import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel, mergeSettingsSnapshot, mergeSettingsRead, resolveSettingsEffort } from '../../services/execution-settings.uts'
@@ -263,7 +264,7 @@ const settingChoice = ref('')
 const settingsError = ref('')
 const pendingSetting = ref('')
 const menuHeight = ref(280)
-const menuBottom = ref(134)
+const menuLeft = ref(14), menuBottom = ref(60)
 const menuWidth = ref(Math.min(330, props.paneWidth - 28))
 let settingsRequest = 0
 let settingsRetryTimer = 0
@@ -1172,12 +1173,13 @@ function onDraftBlur() {
 function onPermissionVisibility(value: boolean) { permissionMenuOpen.value = value }
 function updateMenuHeight() {
   const windowHeight = uni.getWindowInfo().windowHeight
-  const pageBottom = uni.getElementById('conversation-page')?.getBoundingClientRect().bottom ?? windowHeight
+  const page = uni.getElementById('conversation-page')?.getBoundingClientRect()
   menuWidth.value = Math.min(330, props.paneWidth - 28)
-  const measuredTop = uni.getElementById('composer-dock')?.getBoundingClientRect().top ?? windowHeight - keyboardInset.value - 134
-  const dockTop = Math.max(210, measuredTop)
-  menuBottom.value = Math.max(0, pageBottom - dockTop)
-  const available = dockTop - 110
+  // 与权限菜单一致，从点击图标上沿留出 8px；加号靠左，模型入口靠右。
+  const trigger = uni.getElementById(composerInstanceId + (composerMenu.value == 'add' ? '-add' : '-settings'))?.getBoundingClientRect()
+  const position = composerMenuPosition(trigger?.left ?? props.paneLeft + 14, trigger?.right ?? props.paneLeft + props.paneWidth - 54, trigger?.top ?? windowHeight - keyboardInset.value - 60, page?.left ?? props.paneLeft, page?.top ?? 0, page?.bottom ?? windowHeight, props.paneWidth, menuWidth.value, composerMenu.value != 'add')
+  menuLeft.value = position.left; menuBottom.value = position.bottom
+  const available = position.height
   const model = models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)
   // 附件菜单按六行按钮与分隔线计算高度，避免计划模式下方留下额外空白；提示超出时仍可滚动。
   const desired = composerMenu.value == 'add' ? 6 * 46 + 17 : composerMenu.value == 'models' ? models.value.length * 48 : composerMenu.value == 'speeds' ? (model?.speeds.length ?? 1) * 66 : (model?.efforts.length ?? 0) * 46 + 145
@@ -1843,7 +1845,7 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 /* #endif */
 .composer-menu-open { z-index: 40; }
 .composer-dismiss { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 35; background-color: rgba(26, 33, 53, 0.08); }
-.composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
+.composer-options-anchor { position: absolute; z-index: 41; }
 .plan-fallback { margin: 8px 16px 10px; }
 .plan-confirm { margin: 4px 16px 16px; border-width: 1px; border-style: solid; border-color: #e5e8f1; border-radius: 18px; background-color: #ffffff; overflow: hidden; flex-shrink: 0; }
 .plan-confirm-header { min-height: 44px; padding: 0 16px; flex-direction: row; align-items: center; background-color: #f6f7fb; }

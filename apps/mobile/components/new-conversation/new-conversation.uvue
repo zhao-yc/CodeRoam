@@ -1,5 +1,5 @@
 <template>
-  <view class="new-conversation" :class="{ 'new-conversation-compact': !props.expanded }" :style="{ paddingBottom: keyboardInset + 'px' }">
+  <view :id="composerInstanceId + '-root'" class="new-conversation" :class="{ 'new-conversation-compact': !props.expanded }" :style="{ paddingBottom: keyboardInset + 'px' }">
     <view v-show="props.expanded" class="new-space" @click="dismissEditor"></view>
     <!-- 多台已授权电脑时才显示切换入口，单台时直接使用当前电脑。 -->
     <view v-if="props.expanded && connection.computers.length > 1" class="destination-row action-frame"><view class="destination-icon"><app-icon :class="currentComputerIcon == 'laptop' ? 'destination-laptop' : ''" :name="currentComputerIcon" :size="currentComputerIcon == 'laptop' ? 22 : 20" tone="muted" /></view><text class="destination-label">{{ computerLabel }}</text><view class="destination-chevron"><app-icon name="chevron-down" :size="16" tone="muted" /></view><button class="action-hitbox" :disabled="busy" aria-label="选择执行电脑" @click="openPicker('computers')"></button></view>
@@ -37,7 +37,7 @@
           <template v-else><text v-if="projectsLoading" class="picker-note">正在读取项目…</text><text v-else-if="projects.length == 0" class="picker-note">{{ !connection.configured ? '请先连接电脑' : '请在电脑端添加项目，或重新读取' }}</text><view v-for="project in projects" :key="project.id" class="picker-row action-frame"><app-icon name="folder" :size="20" /><view class="project-copy"><text class="picker-label">{{ project.label }}</text><text class="project-path">{{ project.cwd }}</text></view><app-icon v-if="project.id == projectId" name="check" :size="20" /><button class="action-hitbox" :aria-label="'选择项目 ' + project.label" @click="chooseProject(project.id)"></button></view></template>
         </scroll-view>
       </view>
-      <view v-else class="new-options" @click.stop><composer-options :section="menu" :settings="settings" :models="models" :loading="settingsLoading" :busy="operationBusy" :error="settingsError" :width="menuWidth" :height="pickerHeight" :images-enabled="!imageBusy && draft.images.length + draft.files.length < 3 && modelSupportsImages" :files-enabled="!imageBusy && draft.images.length + draft.files.length < 3" :settings-enabled="projectReady && settings != null && models.length > 0" :plan-disabled="!projectReady" note="附件最多3个，首次发送时上传到所选电脑" @section="changeSection" @action="composerAction" @select="selectSetting" @dismiss="closeMenus" @retry="loadSettings()" /></view>
+      <view v-else class="new-options" :style="{ left: menuLeft + 'px', bottom: menuBottom + 'px' }" @click.stop><composer-options :section="menu" :settings="settings" :models="models" :loading="settingsLoading" :busy="operationBusy" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="!imageBusy && draft.images.length + draft.files.length < 3 && modelSupportsImages" :files-enabled="!imageBusy && draft.images.length + draft.files.length < 3" :settings-enabled="projectReady && settings != null && models.length > 0" :plan-disabled="!projectReady" note="附件最多3个，首次发送时上传到所选电脑" @section="changeSection" @action="composerAction" @select="selectSetting" @dismiss="closeMenus" @retry="loadSettings()" /></view>
     </view>
     <thread-mention-picker v-if="mentionOpen && props.expanded && projectReady && mentionsAvailable" :host-id="connection.hostId" thread-id="" :scope-id="projectId" :initial-query="mentionTrigger?.query ?? ''" :mentions="draft.threadMentions" @confirm="selectThreadMentions" @close="closeThreadMentions()" />
     <plugin-picker v-if="pluginOpen && props.expanded" :host-id="connection.hostId" thread-id="" :project-id="projectId" :plugins="draft.plugins" @confirm="selectPlugins" @close="pluginOpen = false" />
@@ -50,6 +50,7 @@ import PermissionsControl from '../permissions-control/permissions-control.uvue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import MessageComposer from '../message-composer/message-composer.uvue'
 import ComposerOptions from '../composer-options/composer-options.uvue'
+import { composerMenuPosition } from '../../services/composer-menu-position.uts'
 import ThreadMentionPicker from '../thread-mention-picker/thread-mention-picker.uvue'
 import { SelectedThreadMention, ThreadMentionTrigger, findThreadMentionTrigger, replaceThreadMentionTrigger } from '../../services/thread-mentions.uts'
 import { setNewDraftThreadMentions } from '../../services/new-conversation.uts'
@@ -82,6 +83,7 @@ const projectsLoading = ref(false), settingsLoading = ref(false)
 const projectSettings = ref<SettingsResponse | null>(null)
 const error = ref(''), settingsError = ref(''), busy = ref(false), imageBusy = ref(false), progress = ref('')
 const focused = ref(false), draftHeight = ref(64), keyboardInset = ref(0), picker = ref(''), menu = ref('')
+const menuLeft = ref(14), menuBottom = ref(60), menuHeight = ref(280)
 const menuWidth = computed((): number => Math.min(330, (props.paneWidth > 0 ? props.paneWidth : uni.getWindowInfo().windowWidth) - 28))
 let baseWindowHeight = uni.getWindowInfo().windowHeight
 const currentWindowHeight = ref(baseWindowHeight)
@@ -159,8 +161,18 @@ function closeMenus() { picker.value = ''; menu.value = ''; pluginOpen.value = f
 function dismissEditor() { if (busy.value) return; closeMenus(); focused.value = false; uni.hideKeyboard(); emit('dismiss') }
 function openConnection() { closeMenus(); uni.navigateTo({ url: '/pages/connection/index' }) }
 function openPicker(section: string) { if (busy.value) return; focused.value = false; uni.hideKeyboard(); menu.value = ''; picker.value = section }
-function openOptions(section: string) { if (!props.expanded || busy.value || imageBusy.value) return; picker.value = ''; menu.value = menu.value == section ? '' : section }
-function changeSection(section: string) { menu.value = section }
+// 每次展开及切换子菜单都重新测量，输入区高度与键盘变化不再形成固定空隙。
+function updateOptionsPosition() {
+  const info = uni.getWindowInfo(), width = props.paneWidth > 0 ? props.paneWidth : info.windowWidth
+  const container = uni.getElementById(composerInstanceId + '-root')?.getBoundingClientRect()
+  const trigger = uni.getElementById(composerInstanceId + (menu.value == 'add' ? '-add' : '-settings'))?.getBoundingClientRect()
+  const position = composerMenuPosition(trigger?.left ?? props.paneLeft + 14, trigger?.right ?? props.paneLeft + width - 54, trigger?.top ?? info.windowHeight - keyboardInset.value - 60, container?.left ?? props.paneLeft, container?.top ?? 0, container?.bottom ?? info.windowHeight, width, menuWidth.value, menu.value != 'add')
+  menuLeft.value = position.left; menuBottom.value = position.bottom; menuHeight.value = Math.min(340, position.height)
+}
+function openOptions(section: string) { if (!props.expanded || busy.value || imageBusy.value) return; picker.value = ''; menu.value = menu.value == section ? '' : section; nextTick(() => { if (menu.value.length > 0) updateOptionsPosition() }) }
+function changeSection(section: string) { menu.value = section; nextTick(() => { updateOptionsPosition() }) }
+// 旋转屏幕、切换分栏或键盘伸缩后重新贴齐入口。
+watch((): string => props.paneWidth + ':' + props.paneLeft + ':' + keyboardInset.value + ':' + currentWindowHeight.value, () => { if (menu.value.length > 0) nextTick(() => { updateOptionsPosition() }) })
 
 // 电脑先发送时只打开已提升的聊天，手机输入转为正式聊天的本地草稿。
 async function followPromotion() {
@@ -515,7 +527,7 @@ watch((): string => (native.value.snapshot?.status ?? '') + ':' + native.value.b
 .project-path { color: #596479; font-size: 11px; margin: 4px 0 0 10px; lines: 1; text-overflow: ellipsis; }
 .picker-note { font-size: 13px; color: #596479; margin: 12px; line-height: 22px; }
 .connect-action { height: 44px; line-height: 44px; margin: 10px; color: #4546bd; background-color: #e7e9fd; font-size: 15px; }
-.new-options { align-self: flex-end; margin-bottom: 130px; }
+.new-options { position: absolute; }
 /* #ifdef WEB */
 .destination-label, .model-label, .file-name, .picker-label, .project-path { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
