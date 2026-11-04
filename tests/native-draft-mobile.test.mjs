@@ -501,17 +501,35 @@ test('电脑默认完整访问时也需要手机确认，确认后复用同一�
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.send').length,1);
 });
 
-test('普通启动时提示用专用入口打开桌面，保留本地输入且不创建会话',async()=>{
+test('缺少新建能力声明时提示重新读取，保留本地输入且不创建会话',async()=>{
   const f=fixture({component:true});
   f.props.expanded=true;
   f.draft.value.text='合成输入';
   f.hooks.set('projects.list',()=>({supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,projects:[]}));
   f.loadProjects();
   await tick(); await tick();
-  assert.match(f.error.value,/用掌上 Codex 启动入口重新打开/);
+  assert.equal(f.error.value,'暂时无法确认电脑的新建聊天能力，请重新读取');
   assert.equal(f.canSend.value,false);
   assert.equal(f.draft.value.text,'合成输入');
   assert.equal(f.calls.some(call=>call.method==='thread.draft.open'||call.method==='thread.create'),false);
+});
+
+test('无法安全新建时优先显示电脑返回的原因，旧创建能力不绕过绑定', async () => {
+  const f = fixture({ component: true });
+  f.props.expanded = true;
+  f.draft.value.text = '合成输入';
+  f.hooks.set('projects.list', () => ({
+    supportsThreadCreation: true, supportsNativeNewDraft: false, nativeNewDraftNeedsDesktopPage: true,
+    newConversationUnavailableReason: '所选电脑的实例连接尚未就绪，请重新连接后读取项目',
+    projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }],
+  }));
+  await f.loadProjects(); await tick();
+  assert.equal(f.error.value, '所选电脑的实例连接尚未就绪，请重新连接后读取项目');
+  assert.equal(f.newConversationMode.value, '');
+  assert.equal(f.canSend.value, false);
+  assert.equal(f.draft.value.text, '合成输入');
+  await f.send();
+  assert.equal(f.calls.some(call => call.write), false);
 });
 
 /** 普通连接由电脑明确声明，设置读取与首次提交使用实际组件和服务。 */

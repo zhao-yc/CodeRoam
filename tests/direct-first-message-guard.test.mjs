@@ -20,6 +20,7 @@ function adapterFixture(context,permissions=workspace) {
   const requests=[],watches=[];
   const client=new EventEmitter();
   client.instance={directIpc:true,ready:true,alive:true,generation};
+  client.assertCurrent=()=>{};
   client.request=async (...args)=>{requests.push(args);return {resultType:'success'};};
   client.close=()=>{};
   const adapter=new DesktopAdapter({client,attachments:{materialize:()=>[]}});
@@ -64,7 +65,7 @@ test('首条 IPC 固定已核验沙箱和审查设置，完整访问须独立确
 
 test('外层首条保护参与账本去重且只接纳就绪的普通单实例',async context=>{
   const adapter=new EventEmitter(), journal=new Journal();
-  adapter.client={instance:{directIpc:true,ready:true,alive:true,generation}};
+  adapter.client={instance:{directIpc:true,ready:true,alive:true,generation},assertCurrent(){}};
   adapter.close=()=>{};
   let calls=0;
   const guard={permissionRevision:'a'.repeat(64),confirmedFullAccess:false};
@@ -90,6 +91,33 @@ test('转发标记是新代次时仍拒绝手机预期旧代次的请求',async(
   await assert.rejects(InstanceRuntime.prototype.request.call(runtime,{
     generation,expectedGeneration:'00000000-0000-4000-8000-000000000003',method:'thread.create',
   }),{code:'INSTANCE_CHANGED'});
+});
+
+test('有页面且完成绑定的多实例可走首条 IPC，绑定丢失立即停止',async context=>{
+  const f=adapterFixture(context), client=f.adapter.client;
+  client.instance={platform:'win32',directIpc:false,port:9222,ready:true,alive:true,generation};
+  client.allowedClients=new Set(['example-desktop']);
+  await f.adapter.operate('turn.send',params,command,phone,()=>{},f.guard);
+  assert.equal(f.requests.length,1);
+  assert.equal(f.requests[0][3].targetClientId,'example-desktop');
+  client.allowedClients.clear();
+  await assert.rejects(f.adapter.operate('turn.send',params,command,phone,()=>{},f.guard),{code:'INSTANCE_CHANGED'});
+  assert.equal(f.requests.length,1);
+});
+
+test('原生草稿不兼容时首条 guard 仍只接受当前多实例绑定和原代次',async context=>{
+  const adapter=new EventEmitter(), journal=new Journal();
+  adapter.client={instance:{platform:'win32',port:9222,ready:true,alive:true,generation},allowedClients:new Set(['example-desktop']),assertCurrent(){}};
+  adapter.close=()=>{};
+  let calls=0;
+  adapter.operate=async()=>{calls++;return {ok:true};};
+  const agent=new BridgeAgent({config:{},adapter,journal});
+  context.after(()=>agent.close());
+  const request={v:1,type:'request',requestId:command,deviceId:phone,method:'turn.send',params,expectedGeneration:generation,firstMessageGuard:{permissionRevision:'a'.repeat(64),confirmedFullAccess:false}};
+  assert.deepEqual((await agent.handleRequest(request)).result,{ok:true});
+  adapter.client.allowedClients.clear();
+  assert.equal((await agent.handleRequest({...request,requestId:command+'-new'})).error.code,'INSTANCE_CHANGED');
+  assert.equal(calls,1);
 });
 
 test('普通首条消息保留引用链接，历史正文通过独立的不可信上下文交给原桌面', async context => {

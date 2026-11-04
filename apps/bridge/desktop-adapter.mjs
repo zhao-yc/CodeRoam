@@ -19,7 +19,7 @@ import { readGoal, updateGoal } from './goals.mjs';
 import { readThreadPlugins, selectThreadPlugins, pluginPrompt } from './plugins.mjs';
 import { threadMentionPrompt } from './thread-mentions.mjs';
 import { CACHE_WATCHER, CACHE_THREAD_LIMIT } from './thread-cache.mjs';
-import { usesWindowsIpcWithoutPage } from './windows-ipc-mode.mjs';
+import { usesWindowsIpcWithoutPage, supportsDesktopIpcNewConversation } from './windows-ipc-mode.mjs';
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
@@ -307,7 +307,7 @@ export class DesktopAdapter extends EventEmitter {
   /** 发送首条消息前以当前绑定和最新快照核对空会话，并返回本次明确使用的权限。 */
   firstMessageContext(threadId,deviceId,guard,expected=null) {
     const instance=this.client.instance;
-    if(!usesWindowsIpcWithoutPage(instance)||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通桌面连接已变化，请重新连接');
+    if(!supportsDesktopIpcNewConversation(this))throw new BridgeError('INSTANCE_CHANGED','桌面连接已变化，请重新连接');
     const entry=this.subscribed(threadId,deviceId), owner=entry.owner;
     const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd;
     if(expected&&(expected.instance!==instance||expected.generation!==instance.generation||expected.entry!==entry||expected.ownerId!==owner.clientId||expected.hostId!==owner.hostId||expected.cwd!==cwd)){

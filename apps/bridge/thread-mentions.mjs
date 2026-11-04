@@ -1,5 +1,6 @@
 import { BridgeError, validateThreadMentionIds } from '../../packages/protocol/contracts.mjs';
 import { ThreadMentionDesktop } from './thread-mention-desktop.mjs';
+import { supportsDesktopIpcNewConversation } from './windows-ipc-mode.mjs';
 
 const unavailable = () => new BridgeError('THREAD_MENTIONS_UNAVAILABLE', '当前电脑暂不支持聊天引用，请更新连接服务或重新连接');
 const changed = () => new BridgeError('THREAD_MENTIONS_CHANGED', '所选电脑或聊天已变化，请重新选择引用后发送');
@@ -72,11 +73,10 @@ export class ThreadMentionService {
   constructor(adapter, desktop = new ThreadMentionDesktop()) { this.adapter = adapter; this.desktop = desktop; this.supported = false; this.checkedAt = 0; this.checking = null; }
   /** 普通实例只为新聊天提供已保存引用；现有聊天继续按原生能力判断。 */
   savedContextAvailable() {
-    const { client, index, stopped } = this.adapter, instance = client?.instance;
-    if (stopped || instance?.alive !== true || instance.ready !== true || !instance.generation ||
-      !(instance.directIpc === true || instance.routerManaged === true && !instance.port) ||
+    const { index } = this.adapter;
+    if (!supportsDesktopIpcNewConversation(this.adapter) ||
       typeof index?.readHistory !== 'function' || typeof index?.readMentionThreads !== 'function' || typeof index?.listMentions !== 'function') return false;
-    try { client.assertCurrent(); return true; } catch { return false; }
+    return true;
   }
   async available() {
     const identity = JSON.stringify([this.adapter.client?.instance?.id,this.adapter.client?.instance?.generation]);

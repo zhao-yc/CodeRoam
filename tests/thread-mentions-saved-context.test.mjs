@@ -7,7 +7,7 @@ import { ThreadMentionService, threadMentionPrompt } from '../apps/bridge/thread
 function fixture(ids = ['reference-a'], route = { directIpc: true }) {
   const allowed = new Set(ids), reads = [], lists = [], probes = [];
   const entry = { owner: { clientId: 'desktop', hostId: 'local' } };
-  const client = { instance: { alive: true, ready: true, generation: 'generation-a', ...route }, assertCurrent() {} };
+  const client = { instance: { alive: true, ready: true, generation: 'generation-a', ...route }, allowedClients: new Set(['desktop']), assertCurrent() {} };
   const history = id => ({ threadId: id, readOnly: true, messages: [{ id: 'message-a', role: 'user', kind: 'userMessage', text: '合成正文' }] });
   const index = {
     readMentionThreads(selected) { return selected.filter(id => allowed.has(id)).map(id => ({ id, title: '合成聊天 ' + id })); },
@@ -19,8 +19,8 @@ function fixture(ids = ['reference-a'], route = { directIpc: true }) {
   return { allowed, reads, lists, probes, adapter, entry, client, index, service, select: (selected = ids) => service.select(selected, 'current-thread', 'device', { savedContext: true }) };
 }
 
-test('普通直连和无端口路由只为新聊天提供已保存引用候选', async () => {
-  for (const route of [{ directIpc: true }, { routerManaged: true }]) {
+test('已核验的普通直连、路由和页面实例为新聊天提供已保存引用候选', async () => {
+  for (const route of [{ directIpc: true }, { routerManaged: true }, { port: 9222 }, { routerManaged: true, port: 9222 }]) {
     const f = fixture(undefined, route);
     assert.equal(f.service.savedContextAvailable(), true);
     const list = await f.service.list({});
@@ -32,7 +32,7 @@ test('普通直连和无端口路由只为新聊天提供已保存引用候选',
     await assert.rejects(f.service.select(['reference-a'], 'current-thread', 'device'), { code: 'THREAD_MENTIONS_UNAVAILABLE' });
     assert.equal(f.reads.length, 0);
   }
-  for (const route of [{ routerManaged: true, port: 9222 }, { directIpc: true, ready: false }, { directIpc: true, alive: false }, { directIpc: true, generation: '' }, {}]) {
+  for (const route of [{ directIpc: true, ready: false }, { directIpc: true, alive: false }, { directIpc: true, generation: '' }, {}]) {
     const f = fixture(undefined, route);
     assert.equal(f.service.savedContextAvailable(), false);
     await assert.rejects(f.select(), { code: 'THREAD_MENTIONS_UNAVAILABLE' });

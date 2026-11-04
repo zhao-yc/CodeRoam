@@ -249,9 +249,11 @@ async function loadProjects() {
     if (mode != 'nativeDraft') closeNativeDraft(hostId, projectId.value)
     if (mode.length == 0) {
       projects.value = [] as NewProject[]; projectSettings.value = null
-      // 缺少页面连接和旧桥接未声明能力需要不同的处理。
-      if (advertisedMode == 'desktopIpc') error.value = '请重新连接电脑以确认当前 Codex 实例'
-      else error.value = result.getBoolean('nativeNewDraftNeedsDesktopPage') == true ? '请在电脑用掌上 Codex 启动入口重新打开 Codex，再使用原生新聊天' : '请更新电脑连接服务后使用原生新聊天'
+      // 由电脑返回安全的能力说明，未声明原因时只提示重新读取。
+      const unavailableReason = result.getString('newConversationUnavailableReason') ?? ''
+      if (unavailableReason.trim().length > 0) error.value = unavailableReason
+      else if (advertisedMode == 'desktopIpc') error.value = '请重新连接电脑以确认当前 Codex 实例'
+      else error.value = '暂时无法确认电脑的新建聊天能力，请重新读取'
       return
     }
     projects.value = JSON.parse<NewProject[]>(JSON.stringify(result['projects'])) ?? [] as NewProject[]

@@ -16,7 +16,7 @@ test('电脑发送积压时主动断开以恢复快照，不静默丢弃最后�
   assert.equal(agent.send({type:'event'}),false);assert.equal(terminated,true);
 });
 
-test('普通启动仍提供项目列表，并说明原生新聊天需要桌面页面连接',async t=>{
+test('未就绪的普通启动返回项目及连接原因，不误报需要专用启动入口',async t=>{
   const adapter=new EventEmitter();
   adapter.client={instance:{directIpc:true}};
   adapter.close=()=>{};
@@ -25,5 +25,5 @@ test('普通启动仍提供项目列表，并说明原生新聊天需要桌面�
   t.after(()=>agent.close());
   agent.nativeDrafts.controller.capabilities=()=>assert.fail('普通启动不再探测原生页面');
   const reply=await agent.handleRequest({v:1,type:'request',requestId:'synthetic-projects-request',method:'projects.list',deviceId:'phone',params:{}});
-  assert.deepEqual(reply.result,{projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true});
+  assert.deepEqual(reply.result,{projects,supportsNativeNewDraft:false,newConversationUnavailableReason:'电脑实例连接尚未就绪，请重新连接后读取项目'});
 });

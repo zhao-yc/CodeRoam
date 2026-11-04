@@ -23,7 +23,7 @@ import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
 import { ThreadMentionService } from './thread-mentions.mjs';
-import { usesWindowsIpcWithoutPage } from './windows-ipc-mode.mjs';
+import { usesWindowsIpcWithoutPage, supportsDesktopIpcNewConversation } from './windows-ipc-mode.mjs';
 
 /** 更新时间是本次规范化的生成时间，不单独推进传输游标。 */
 function sameSnapshot(snapshot, previous) {
@@ -168,7 +168,7 @@ export class BridgeAgent extends EventEmitter {
             typeof guard.permissionRevision!=='string'||!/^[a-f0-9]{64}$/.test(guard.permissionRevision)||typeof guard.confirmedFullAccess!=='boolean'){
           throw new BridgeError('BAD_PARAMS','首条消息保护参数无效');
         }
-        if(!usesWindowsIpcWithoutPage(instance)||instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','普通桌面连接已变化，请重新连接');
+        if(!supportsDesktopIpcNewConversation(this.adapter))throw new BridgeError('INSTANCE_CHANGED','桌面连接已变化，请重新连接');
       }
       let deletionTarget = null;
       let lockQueued = false;
@@ -189,14 +189,14 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='projects.list'){
           const projects=this.newThreads.projects();
           const instance=this.adapter.client?.instance;
-          // 只有完成独占 IPC 绑定的普通单实例可使用直接创建，原生共享草稿仍需要桌面页面。
-          if(usesWindowsIpcWithoutPage(instance)){
-            const ready=instance.alive===true&&instance.ready===true;
-            const supportsNewChatMentions=ready&&this.adapter.threadMentions.savedContextAvailable?.()===true;
-            return {...projects,supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,...(ready?{newConversationMode:'desktopIpc'}:{}),...(supportsNewChatMentions?{supportsNewChatMentions:true}:{})};
+          // 页面草稿不兼容时，已完成实例绑定的连接仍可经原桌面 IPC 新建聊天。
+          const supportsNativeNewDraft=!usesWindowsIpcWithoutPage(instance)&&await this.nativeDrafts.controller.capabilities();
+          if(supportsNativeNewDraft)return {...projects,supportsNativeNewDraft:true,newConversationMode:'nativeDraft'};
+          if(supportsDesktopIpcNewConversation(this.adapter)){
+            const supportsNewChatMentions=this.adapter.threadMentions.savedContextAvailable?.()===true;
+            return {...projects,supportsNativeNewDraft:false,newConversationMode:'desktopIpc',...(supportsNewChatMentions?{supportsNewChatMentions:true}:{})};
           }
-          const supportsNativeNewDraft=await this.nativeDrafts.controller.capabilities();
-          return {...projects,supportsNativeNewDraft,...(supportsNativeNewDraft?{newConversationMode:'nativeDraft'}:{})};
+          return {...projects,supportsNativeNewDraft:false,newConversationUnavailableReason:'电脑实例连接尚未就绪，请重新连接后读取项目'};
         }
         if(message.method.startsWith('thread.draft.')) {
           if(['thread.draft.open','thread.draft.read'].includes(message.method))await this.adapter.threadMentions.available();
