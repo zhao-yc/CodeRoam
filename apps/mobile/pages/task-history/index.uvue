@@ -129,9 +129,12 @@ async function loadMore() {
   if (loading.value || !connection.connected) return
   const revision = request, namespace = connection.cacheNamespace
   loading.value = true; error.value = ''
+  const failures: string[] = []
   try {
     for (const cursor of cursors.value) {
       if (!cursor.more) continue
+      // 各实例分别结算；旧版或离线实例不能阻断其他记录及聊天标题的读取。
+      try {
       const params: UTSJSONObject = { view: 'history', limit: 30 }
       if (category.value == 'operation') params['category'] = 'operation'
       if (cursor.before > 0) params['before'] = cursor.before
@@ -144,9 +147,15 @@ async function loadMore() {
       tasks.forEach((task: SubmissionTask) => { if (!rows.value.some((row: HistoryRow): boolean => row.hostId == cursor.hostId && row.task.id == task.id)) rows.value.push({ hostId: cursor.hostId, task } as HistoryRow) })
       const next = result.getNumber('nextCursor') ?? 0
       cursor.before = next; cursor.more = next > 0
+      } catch (reason) {
+        if (revision != request || namespace != connection.cacheNamespace) return
+        cursor.more = false
+        failures.push(hostName(cursor.hostId) + '：' + (reason as Error).message)
+      }
     }
     rows.value = rows.value.sort((a: HistoryRow, b: HistoryRow): number => submissionHistoryOrder(a.task, b.task))
     for (const cursor of cursors.value) await loadChatTitles(cursor.hostId, revision, namespace)
+    if (revision == request) error.value = failures.join('；')
   } catch (reason) { if (revision == request) error.value = (reason as Error).message }
   finally { if (revision == request) { loading.value = false; refreshing.value = false } }
 }

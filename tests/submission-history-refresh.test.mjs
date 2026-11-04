@@ -71,7 +71,7 @@ test('下拉刷新失败、离线和离开页面都能收起刷新状态', async
   await f.scope.subject.refreshHistory();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.scope.subject.refreshing.value, false);
-  assert.equal(f.scope.subject.error.value, '合成读取失败');
+  assert.equal(f.scope.subject.error.value, '原实例：合成读取失败');
   f.scope.connection.connected = false;
   await f.scope.subject.refreshHistory();
   assert.equal(f.scope.subject.refreshing.value, false);
