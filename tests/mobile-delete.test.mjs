@@ -22,7 +22,7 @@ function fixture(storage = new Map()) {
     uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), showToast: options => notices.push(options.title), showModal: options => modals.push(options), showLoading() { throw new Error('后台删除不能全屏等待'); }, hideKeyboard() {}, navigateBack: () => { c.returned++; }, reLaunch: () => { c.returned++; } },
     clearFileReportCache: (...args) => caches.push(args), clearDeletedDrafts: (...args) => drafts.push(args), removeDeletedThreads: (...args) => removed.push(args),
     ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }),
-    pageHostId: { value: 'pc' }, pageThreadId: { value: 'root' }, pageVisible: { value: true }, busy: { value: false }, operationError: { value: '' }, archivePromptOpen: false,
+    pageHostId: { value: 'pc' }, pageThreadId: { value: 'root' }, pageVisible: { value: true }, busy: { value: false }, operationError: { value: '' }, archivePromptOpen: false, removalSubmissionId: { value: '' }, removalReturnStarted: { value: false },
     cachedDetail: { value: null }, cacheDirty: false, cacheWriteTimer: 0, historyRequest: 0, historyPage: { value: { messages: ['合成历史'] } }, historyError: { value: '' },
     closeActions() {}, notify: message => notices.push(message), onHide: fn => { life.hide = fn; }, onUnload: fn => { life.unload = fn; }, getCurrentPages: () => [{}, {}], returned: 0,
   };

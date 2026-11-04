@@ -291,11 +291,18 @@ const modelSupportsImages = computed((): boolean => models.value.find((item: Mod
 const busy = ref(false)
 const goalBusy = ref(false)
 // 入队即释放页面操作锁；模型/桌面结果继续由应用级任务跟随。
+const removalSubmissionId = ref('')
+const removalReturnStarted = ref(false)
 if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.accepted.revision, () => {
   const accepted = submissionTasks.accepted
   if (accepted.hostId != pageHostId.value || accepted.threadId != pageThreadId.value) return
   settleSubmission(accepted.hostId, accepted.taskId, true)
   busy.value = false; goalBusy.value = false; pendingAction.value = ''
+  // 只响应本详情发起的删除或归档；迟到入队回执不能关闭重新打开的聊天。
+  if (accepted.taskId != removalSubmissionId.value || (accepted.method != 'thread.delete' && accepted.method != 'thread.archive')) return
+  removalSubmissionId.value = ''
+  if (removalReturnStarted.value || !pageVisible.value || !isCurrentPage()) return
+  removalReturnStarted.value = true; hideArchiveLoading(); emit('close')
 })
 const goalExpanded = ref(false)
 const goalOpenRequest = ref(0)
@@ -671,9 +678,10 @@ onUnmounted(() => { invalidateDeletePrompt() })
 const pageDeletionRevision = computed((): number => deletionTasks.revision)
 watch(pageDeletionRevision, () => {
   if (!deletedThread(pageHostId.value, pageThreadId.value)) return
-  const returnToList = pageVisible.value && isCurrentPage()
+  const returnToList = pageVisible.value && isCurrentPage() && !removalReturnStarted.value
   historyRequest++; historyPage.value = null; historyError.value = ''; operationError.value = ''; invalidateDeletePrompt()
   if (returnToList) {
+    removalReturnStarted.value = true
     emit('removed', 'delete')
   }
 }, { flush: 'sync' })
@@ -693,7 +701,8 @@ function deleteFromMenu() {
     showDeleteFinalModal('正在执行的任务会先停止。确认永久删除吗？', (confirmed: boolean) => {
       if (!confirmed || !current()) { finishPrompt(); return }
       finishPrompt(); operationError.value = ''
-      try { startDeletion(hostId, threadId) } catch (error) { operationError.value = (error as Error).message; notify(operationError.value) }
+      try { if (startDeletion(hostId, threadId)) removalSubmissionId.value = deletionTask(hostId, threadId)?.commandId ?? '' }
+      catch (error) { removalSubmissionId.value = ''; operationError.value = (error as Error).message; notify(operationError.value) }
     })
   }, fail: (_) => { finishPrompt() } })
 }
@@ -706,9 +715,9 @@ function checkDeleteOutcome() {
 
 // 归档只在原生回执确认后移除列表项；草稿继续按原会话编号保留。
 function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, commandId: string = ''): boolean {
-  if (receipt?.getBoolean('archived') != true || receipt?.getString('threadId') != pageThreadId.value || connection.hostId != hostId) return false
+  if (props.target.cacheNamespace != connection.cacheNamespace || receipt?.getBoolean('archived') != true || receipt?.getString('threadId') != pageThreadId.value || connection.hostId != hostId) return false
   const threadId = pageThreadId.value
-  const returnToList = isCurrentPage() && pageVisible.value
+  const returnToList = isCurrentPage() && pageVisible.value && !removalReturnStarted.value
   if (commandId.length > 0) bridge.clearCommand(commandId, hostId)
   removeArchivedThread(hostId, threadId)
   clearFileReportCache(props.target.cacheNamespace, hostId, [threadId])
@@ -717,6 +726,7 @@ function acceptArchiveReceipt(hostId: string, receipt: UTSJSONObject | null, com
   operationError.value = ''
   // 列表页在显示时消费结果，详情页卸载及全局加载框清理不会移除列表页提示。
   if (returnToList) {
+    removalReturnStarted.value = true
     queueArchiveSuccessNotice()
     emit('removed', 'archive')
   }
@@ -738,7 +748,10 @@ function archiveFromMenu() {
     if (!choice.confirm || !isCurrentPage() || !pageVisible.value || connection.hostId != hostId || pageThreadId.value != threadId || !canWrite.value) return
     busy.value = true; pendingAction.value = 'archive'; operationError.value = ''
     archiveLoading = true; uni.showLoading({ title: '正在归档…', mask: true })
-    bridge.request('thread.archive', { threadId }, true).then((result: UTSJSONObject) => {
+    const request = bridge.request('thread.archive', { threadId }, true)
+    // 桥接在发送前保存编号，后续只由这个编号的持久化入队回执触发返回。
+    removalSubmissionId.value = bridge.pendingCommand(hostId, threadId)
+    request.then((result: UTSJSONObject) => {
       hideArchiveLoading(); busy.value = false; pendingAction.value = ''
       if (pageThreadId.value == threadId) acceptArchiveReceipt(hostId, result)
     }, (error: Error) => { hideArchiveLoading(); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { operationError.value = error.message; notify(error.message) } })
