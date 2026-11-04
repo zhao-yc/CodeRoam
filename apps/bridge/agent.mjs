@@ -322,7 +322,7 @@ export class BridgeAgent extends EventEmitter {
             const supportsNewChatMentions=this.adapter.threadMentions.savedContextAvailable?.()===true;
             return {...projects,supportsNativeNewDraft:false,supportsDirectMessageChoices:true,newConversationMode:'desktopIpc',...(supportsNewChatMentions?{supportsNewChatMentions:true}:{})};
           }
-          const supportsNativeNewDraft=!usesWindowsIpcWithoutPage(instance)&&await this.nativeDrafts.controller.capabilities();
+          const supportsNativeNewDraft=!usesWindowsIpcWithoutPage(instance)&&await this.nativeDrafts.controller.capabilities({reuse:true});
           if(supportsNativeNewDraft)return {...projects,supportsNativeNewDraft:true,supportsDirectMessageChoices:false,newConversationMode:'nativeDraft'};
           return {...projects,supportsNativeNewDraft:false,newConversationUnavailableReason:'电脑实例连接尚未就绪，请重新连接后读取项目'};
         }

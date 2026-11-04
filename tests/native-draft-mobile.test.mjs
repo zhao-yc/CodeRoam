@@ -658,6 +658,16 @@ async function projectPickerFixture() {
   f.props.expanded=true;f.loadProjects();await tick();await tick();f.focused.value=false;
   return f;
 }
+test('展开与连接状态同时触发时只读取一次项目，换电脑后迟到的旧结果不覆盖新列表',async()=>{
+  const f=fixture({component:true}),old=deferred();f.props.expanded=true;
+  f.hooks.set('projects.list',(_params,hostId)=>hostId==='pc-a'?old.promise:{supportsNativeNewDraft:true,projects:[{id:'project-b',label:'示例乙',cwd:'/example/b'}]});
+  const first=f.loadProjects();await f.loadProjects();await tick();
+  assert.equal(f.calls.filter(call=>call.method==='projects.list').length,1);
+  f.connection.hostId='pc-b';const listener=f.watches.find(watch=>watch.get()===f.connection.hostId);listener.run('pc-b','pc-a');await tick();await tick();
+  assert.equal(f.calls.filter(call=>call.method==='projects.list').length,2);
+  old.resolve({supportsNativeNewDraft:true,projects:[{id:'project-a',label:'示例甲',cwd:'/example/a'}],selectedProjectId:'project-a'});
+  await first;assert.equal(f.projectId.value,'');assert.equal(f.calls.some(call=>call.hostId==='pc-b'&&call.method==='thread.create.settings'&&call.params.projectId==='project-a'),false);
+});
 test('选择项目确认成功后聚焦，切回原项目仍保留各自草稿且不发送消息',async()=>{
   const f=await projectPickerFixture();
   f.newDraft('pc-a','project-a').text='项目甲合成草稿';f.newDraft('pc-a','project-b').text='项目乙合成草稿';
