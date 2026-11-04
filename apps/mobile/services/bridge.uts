@@ -21,9 +21,35 @@ export type Approval = { id: string, kind: string, turnId: string, title: string
 export type QuestionOption = { label: string, description: string }
 export type Question = { id: string, title: string, header: string, options: QuestionOption[], isOther: boolean, isSecret: boolean, answer: string }
 export type QuestionGroup = { id: string, kind: string, turnId: string, state: string, questions: Question[] }
+export type QuestionPreviewItem = { id: string, title: string, header: string, options: QuestionOption[], isOther: boolean, isSecret: boolean }
+export type QuestionPreview = { id: string, questions: QuestionPreviewItem[] }
 export type QuestionAnswer = { questionId: string, text: string }
 export type PendingPlan = { id: string, turnId: string, text: string }
-export type Conversation = { latestTurn?: LatestTurn, supportsTurnRetry?: boolean, supportsQueueEditing?: boolean, supportsThreadMentions?: boolean, supportsMessageQueue?: boolean, queuedMessages?: QueuedMessage[], notificationState?: NotificationSnapshot, pendingPlan?: PendingPlan | null, supportsPlanImplementation?: boolean, supportsFileReports?: boolean, hasUnreadTurn?: boolean, activeFlags?: string[], goal?: ThreadGoal | null, goalRevision?: string, supportsGoals?: boolean, supportsGoalControl?: boolean, supportsComposerPrediction?: boolean, predictionTurnId?: string, executionSettings?: ExecutionSettings | null, supportsPlanReset?: boolean, supportsPermissionSettings?: boolean, permissionSettings?: PermissionState, supportsExecutionSettings?: boolean, supportsAttachments?: boolean, threadId: string, title: string, cwd: string, status: string, activeTurnId: string, activity?: string, messages: ChatMessage[], turns?: ConversationTurn[], approvals: Approval[], questionGroups: QuestionGroup[], updatedAt: number, readOnly?: boolean, supportsImages?: boolean, supportsHistoryPages?: boolean }
+export type Conversation = { questionPreviews?: QuestionPreview[], latestTurn?: LatestTurn, supportsTurnRetry?: boolean, supportsQueueEditing?: boolean, supportsThreadMentions?: boolean, supportsMessageQueue?: boolean, queuedMessages?: QueuedMessage[], notificationState?: NotificationSnapshot, pendingPlan?: PendingPlan | null, supportsPlanImplementation?: boolean, supportsFileReports?: boolean, hasUnreadTurn?: boolean, activeFlags?: string[], goal?: ThreadGoal | null, goalRevision?: string, supportsGoals?: boolean, supportsGoalControl?: boolean, supportsComposerPrediction?: boolean, predictionTurnId?: string, executionSettings?: ExecutionSettings | null, supportsPlanReset?: boolean, supportsPermissionSettings?: boolean, permissionSettings?: PermissionState, supportsExecutionSettings?: boolean, supportsAttachments?: boolean, threadId: string, title: string, cwd: string, status: string, activeTurnId: string, activity?: string, messages: ChatMessage[], turns?: ConversationTurn[], approvals: Approval[], questionGroups: QuestionGroup[], updatedAt: number, readOnly?: boolean, supportsImages?: boolean, supportsHistoryPages?: boolean }
+// 缓存问题只接收展示白名单，忽略答案、请求编号和任意权限字段。
+export function readQuestionPreviews(source: QuestionPreview[] | null): QuestionPreview[] {
+  const result = [] as QuestionPreview[]
+  if (source == null || !Array.isArray(source)) return result
+  for (let i = 0; i < Math.min(source.length, 80); i++) {
+    const group = source[i]
+    if (group == null || typeof group.id != 'string' || !/^preview:[a-f0-9]{32}$/.test(group.id) || !Array.isArray(group.questions)) continue
+    if (result.some((item: QuestionPreview): boolean => item.id == group.id)) continue
+    const questions = [] as QuestionPreviewItem[]
+    for (let j = 0; j < Math.min(group.questions.length, 20); j++) {
+      const item = group.questions[j]
+      if (item == null || typeof item.title != 'string' || !Array.isArray(item.options)) continue
+      const options = [] as QuestionOption[]
+      for (let k = 0; k < Math.min(item.options.length, 50); k++) {
+        const option = item.options[k]
+        if (option != null && typeof option.label == 'string') options.push({ label: option.label, description: typeof option.description == 'string' ? option.description : '' } as QuestionOption)
+      }
+      questions.push({ id: group.id + ':' + j, title: item.title, header: typeof item.header == 'string' ? item.header : '', options, isOther: item.isOther != false, isSecret: item.isSecret == true } as QuestionPreviewItem)
+    }
+    if (questions.length > 0) result.push({ id: group.id, questions } as QuestionPreview)
+  }
+  return result
+}
+
 // 连接与任务分开判断：离线不展示过期旋转；需要用户操作时优先显示等待原因。
 export function taskState(status: string, activeTurnId: string, approvalCount: number, questionCount: number, online: boolean, activeFlags: string[] = [], latestTurnStatus: string = ''): string {
   if (!online) return 'offline'
@@ -756,7 +782,7 @@ class MobileBridge {
     if (new Set(source.messages.map((message: ChatMessage): string => message.id)).size != source.messages.length) return
     preview.base = { revision, messages: source.messages } as ConversationContentBase
     if (connection.snapshot != null) return
-    connection.preview = { threadId: source.threadId, title: source.title, cwd: source.cwd, messages: source.messages, turns: source.turns, latestTurn: source.latestTurn, readOnly: true, status: 'unknown', activeTurnId: '', approvals: [] as Approval[], questionGroups: [] as QuestionGroup[], updatedAt: 0 } as Conversation
+    connection.preview = { threadId: source.threadId, title: source.title, cwd: source.cwd, messages: source.messages, turns: source.turns, latestTurn: source.latestTurn, readOnly: true, status: 'unknown', activeTurnId: '', approvals: [] as Approval[], questionGroups: [] as QuestionGroup[], questionPreviews: readQuestionPreviews(source.questionPreviews ?? null), updatedAt: 0 } as Conversation
   }
 
   // 订阅和主动加载共用游标、电脑及会话归属检查，忽略迟到的旧响应。

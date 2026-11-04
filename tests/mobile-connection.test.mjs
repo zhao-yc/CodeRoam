@@ -591,3 +591,19 @@ test('电脑排序边界不写存储，保存失败保持原列表，损坏缓�
   }
   assert.match(fs.readFileSync(new URL('../apps/mobile/services/bridge.uts',import.meta.url),'utf8'),/this\.sortComputers\(JSON\.parse<Computer\[\]>/);
 });
+
+test('问题首屏只接收展示副本，不接收答案和交互目标，实时确认会完整移除失效问题', async () => {
+  const f = connectedFixture(); f.connection.supportsConversationPreview = true;
+  const opening = f.bridge.openThread('thread'), request = f.sent[0];
+  const id = 'preview:' + 'a'.repeat(32);
+  sendPreview(f, request, { ...previewSnapshot(), questionGroups: [{ id: 'unsafe-live-target' }], questionPreviews: [{ id, requestId: 'unsafe-request', turnId: 'unsafe-turn', questions: [{ id: 'unsafe-question', title: '合成问题', header: '', options: [{ label: '甲', description: '合成说明', command: 'unsafe-command' }], answer: 'unsafe-answer', isOther: true, isSecret: true }] }] });
+  assert.equal(f.connection.snapshot, null); assert.equal(f.connection.subscribedThreadId, '');
+  assert.deepEqual(Array.from(f.connection.preview.questionGroups), []);
+  assert.equal(f.connection.preview.questionPreviews[0].questions[0].title, '合成问题');
+  assert.equal(JSON.stringify(f.connection.preview).includes('unsafe-'), false);
+  respond(f, request, { snapshot: { ...previewSnapshot(), readOnly: false, status: 'idle', activeTurnId: '', approvals: [], questionGroups: [] }, epoch: 'current', seq: 1, desktopActivated: true });
+  await opening;
+  assert.equal(f.connection.preview, null);
+  assert.equal(f.connection.snapshot.questionGroups.length, 0);
+  assert.equal(f.connection.snapshot.questionPreviews, undefined);
+});

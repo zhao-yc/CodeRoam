@@ -83,7 +83,7 @@
         </view>
         <view id="questions-anchor"></view>
         <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
-        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="pendingAction == 'question:' + group.id" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
+        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="pendingAction == 'question:' + group.id" :disabled="!canWrite || group.kind == 'preview'" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
         <view id="approvals-anchor"></view>
         <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><view class="approval-button button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'approval:decline:' + approval.id" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">拒绝</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')" :aria-label="(pendingAction == 'approval:decline:' + approval.id) ? '正在提交拒绝' : '拒绝'"></button></view><view class="approval-button button-primary inline-progress-button"><action-progress :busy="pendingAction == 'approval:accept:' + approval.id" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 14px;">本次允许</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')" :aria-label="(pendingAction == 'approval:accept:' + approval.id) ? '正在提交本次允许' : '本次允许'"></button></view></view></view>
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
@@ -156,7 +156,7 @@ import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, rea
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
-import { bridge, connection, ChatMessage, Computer, ThreadSummary, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
+import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, QuestionPreview, QuestionPreviewItem, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { clearFileReportCache } from '../../services/file-report-cache.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
@@ -448,8 +448,18 @@ let pageAlive = true
 const activeTurnId = computed((): string => liveConversation.value?.activeTurnId ?? '')
 const queuedMessages = computed((): QueuedMessage[] => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.queuedMessages ?? [] as QueuedMessage[] : [] as QueuedMessage[])
 const approvalCount = computed((): number => liveConversation.value?.approvals.length ?? 0)
-// 末尾只保留可回答题组；已回答记录沿原聊天时间线展示，不再追加重复卡片。
-const pendingQuestionGroups = computed((): QuestionGroup[] => liveConversation.value?.questionGroups.filter((group: QuestionGroup): boolean => group.state == 'pending') ?? [])
+// 展示副本不拥有桌面的题组和轮次编号，只能渲染锁定卡片。
+function previewQuestionGroups(): QuestionGroup[] {
+  return (previewConversation.value?.questionPreviews ?? []).map((group: QuestionPreview): QuestionGroup => ({
+    id: group.id, kind: 'preview', turnId: '', state: 'pending',
+    questions: group.questions.map((item: QuestionPreviewItem): Question => ({ ...item, answer: '' } as Question))
+  } as QuestionGroup))
+}
+// 实时结果完整接管展示；已回答、失效或被移除的问题不能由旧缓存复活。
+const pendingQuestionGroups = computed((): QuestionGroup[] => {
+  const live = liveConversation.value
+  return live != null ? live.questionGroups.filter((group: QuestionGroup): boolean => group.state == 'pending') : previewQuestionGroups()
+})
 const pendingQuestionCount = computed((): number => pendingQuestionGroups.value.length)
 const currentTaskState = computed((): string => conversationTaskState(connection.snapshot, connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == pageHostId.value && computer.online)))
 const hostName = computed((): string => connection.computers.find((computer: Computer): boolean => computer.id == pageHostId.value)?.label ?? '电脑')
@@ -1413,6 +1423,8 @@ function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
 // 成功响应先锁定本组，防止桌面状态尚未广播时再次点击；失败保留组件草稿。
 function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[]) {
   if (!canWrite.value || submittedGroupIds.value.indexOf(questionGroupId) >= 0) return
+  // 只能提交当前实时快照中仍有效的题组，缓存展示编号永远不能成为写入目标。
+  if (!liveConversation.value?.questionGroups.some((group: QuestionGroup): boolean => group.id == questionGroupId && group.turnId == turnId && group.state == 'pending')) return
   const threadId = pageThreadId.value
   busy.value = true; pendingAction.value = 'question:' + questionGroupId
   bridge.request('question.reply', { threadId, questionGroupId, turnId, answers }, true).then((_: UTSJSONObject) => {

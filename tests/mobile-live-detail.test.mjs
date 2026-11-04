@@ -112,3 +112,31 @@ test('实时连接失败时保留本次预览，提示失败并允许重新同�
   f.api.refresh();
   assert.deepEqual(f.calls, ['watch', 'watch']);
 });
+
+test('缓存问题先显示但不能提交，实时确认后仅保留仍待回答的问题', () => {
+  const f = fixture();
+  const id = 'preview:' + 'a'.repeat(32);
+  f.connection.preview = { ...snapshot(), readOnly: true, questionPreviews: [{ id, questions: [{ id: id + ':0', title: '合成问题', header: '', options: [{ label: '甲', description: '' }], isOther: true, isSecret: false }] }] };
+  assert.equal(f.api.pendingQuestionGroups.value[0].questions[0].title, '合成问题');
+  assert.equal(f.api.pendingQuestionGroups.value[0].kind, 'preview');
+  assert.equal(f.api.pendingQuestionGroups.value[0].turnId, '');
+  assert.equal(f.api.canWrite.value, false);
+  const sent = [];
+  f.context.bridge.request = (...args) => { sent.push(args); return Promise.resolve({}); };
+  vm.runInContext(`submitAnswers('${id}', '', [{questionId: '${id}:0', text: '甲'}]);`, f.context);
+  assert.equal(sent.length, 0);
+  f.connection.snapshot = { ...snapshot(), questionGroups: [{ id: 'current-question', turnId: 'current-turn', kind: 'native', state: 'pending', questions: [] }] };
+  Object.assign(f.connection, { subscribedHostId: 'pc', subscribedThreadId: 'thread' });
+  assert.equal(f.api.canWrite.value, true);
+  assert.deepEqual(Array.from(f.api.pendingQuestionGroups.value, group => group.id), ['current-question']);
+  vm.runInContext(`submitAnswers('${id}', '', []);`, f.context);
+  assert.equal(sent.length, 0, '旧展示编号不能借实时订阅提交');
+  f.connection.snapshot.questionGroups[0].state = 'answered';
+  assert.equal(f.api.pendingQuestionGroups.value.length, 0);
+  vm.runInContext("submitAnswers('current-question', 'current-turn', []);", f.context);
+  assert.equal(sent.length, 0, '已回答题组不能提交');
+  f.connection.snapshot.questionGroups[0].state = 'pending';
+  f.connection.connected = false;
+  vm.runInContext("submitAnswers('current-question', 'current-turn', []);", f.context);
+  assert.equal(sent.length, 0, '断线立即关闭回答入口');
+});

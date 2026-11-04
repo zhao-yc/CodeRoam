@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { normalizeConversation } from './conversation.mjs';
+import { questionPreviews } from './question-preview.mjs';
 
 const MESSAGE_FIELDS = ['id', 'role', 'kind', 'summary', 'phase', 'imageCount', 'text', 'turnId', 'status'];
 
@@ -11,6 +12,7 @@ function displayFields(source, fields) {
 
 /** 列表版本和预加载共用纯展示投影，不携带图片、权限或可操作的审批、问答目标。 */
 export function conversationProjection(source) {
+  const previews = questionPreviews(source);
   return {
     threadId: typeof source.threadId === 'string' ? source.threadId : '',
     title: typeof source.title === 'string' ? source.title : '未命名聊天',
@@ -18,6 +20,7 @@ export function conversationProjection(source) {
     messages: (source.messages ?? []).map(message => displayFields(message, MESSAGE_FIELDS)),
     turns: (source.turns ?? []).map(turn => displayFields(turn, ['turnId', 'status', 'durationMs', 'errorMessage'])),
     ...(source.latestTurn ? { latestTurn: displayFields(source.latestTurn, ['turnId', 'status']) } : {}),
+    ...(previews.length ? { questionPreviews: previews } : {}),
   };
 }
 
