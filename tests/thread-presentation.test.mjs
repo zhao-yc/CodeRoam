@@ -27,10 +27,10 @@ test('按完整路径和电脑归属分组，组内倒序，同名项目不会�
   assert.equal(groups.length,3);assert.deepEqual(plain(groups[0].threads.map(t=>t.id)),['new','old']);assert.ok(groups.every(g=>g.title.includes('app')));
   assert.equal(rows[0].id,'old');
 });
-test('优先级按待处理、执行中、未读和其他排列，离线运行不冒充在线任务',()=>{
+test('优先级按待处理、未读、执行中和其他排列，离线运行不冒充在线任务',()=>{
   const rows=[row('offline','',99,{online:false,status:'active'}),row('idle','',9,{status:'idle'}),row('running','',1,{status:'active'}),row('question','',2,{unansweredQuestionCount:1}),row('unread','',8,{status:'idle',hasUnreadTurn:true}),row('approval','',3,{approvalCount:1})];
   const groups=subject().groupThreads(rows,'priority',false,[],0);
-  assert.deepEqual(plain(groups.map(g=>g.title)),['待处理','执行中','未读','其他聊天']);assert.deepEqual(plain(groups[0].threads.map(t=>t.id)),['approval','question']);
+  assert.deepEqual(plain(groups.map(g=>g.title)),['待处理','未读','执行中','其他聊天']);assert.deepEqual(plain(groups[0].threads.map(t=>t.id)),['approval','question']);
 });
 test('最近访问去重置顶、限定当前结果且不影响原排序；时间分组保留',()=>{
   const s=subject(),rows=[row('new','/work',100),row('old','/work',1)];
