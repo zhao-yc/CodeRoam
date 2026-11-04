@@ -1,7 +1,18 @@
 <template>
   <view class="page history-page">
     <view class="history-header"><view class="history-back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回上一页" @click="goBack"></button></view><text class="history-heading">执行记录</text></view>
-    <view class="history-filters"><button class="history-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''" hover-class="action-pressed" @click="chooseHost">{{ selectedHostLabel }} ⌄</button><button class="history-filter" :class="state.length > 0 ? 'history-filter-active' : ''" hover-class="action-pressed" @click="chooseState">{{ selectedStateLabel }} ⌄</button><button class="history-filter history-refresh" hover-class="action-pressed" :disabled="loading" @click="reload">{{ loading ? '读取中…' : '刷新' }}</button></view>
+    <view class="history-filters">
+      <!-- 按文字和图标的整体宽度居中，避免按钮默认布局和字符箭头基线造成偏移。 -->
+      <view class="history-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
+        <view class="history-filter-content"><text class="history-filter-label" :class="hostId.length > 0 ? 'history-filter-label-active' : ''">{{ selectedHostLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
+        <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选电脑" @click="chooseHost"></button>
+      </view>
+      <view class="history-filter" :class="state.length > 0 ? 'history-filter-active' : ''">
+        <view class="history-filter-content"><text class="history-filter-label" :class="state.length > 0 ? 'history-filter-label-active' : ''">{{ selectedStateLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
+        <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选执行状态" @click="chooseState"></button>
+      </view>
+      <view class="history-filter history-refresh" :class="loading ? 'history-refresh-loading' : ''"><text class="history-filter-label history-refresh-label" :class="loading ? 'history-filter-label-disabled' : ''">{{ loading ? '读取中…' : '刷新' }}</text><button class="action-hitbox" hover-class="history-filter-pressed" aria-label="刷新执行记录" :disabled="loading" @click="reload"></button></view>
+    </view>
     <text v-if="error.length > 0" class="history-error">{{ error }}</text>
     <scroll-view direction="vertical" class="history-scroll" :show-scrollbar="false" @scrolltolower="loadMore">
       <view v-if="rows.length == 0 && !loading" class="history-empty"><text>{{ !connection.connected ? '正在等待连接' : cursors.length == 0 ? '电脑暂未在线' : error.length > 0 ? '记录读取失败' : '暂无执行记录' }}</text><text class="history-empty-note">{{ !connection.connected ? '连接恢复后会自动读取；尚未配对时请返回首页连接电脑。' : cursors.length == 0 ? '请确认所选电脑在线，上线后将自动读取。' : error.length > 0 ? '请稍后点击刷新重试。' : '记录保存在原守护进程，可切换筛选条件查看。' }}</text></view>
@@ -144,11 +155,16 @@ onUnload(() => { pageVisible.value = false; request++ })
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 .history-filters { flex-direction: row; align-items: center; padding: 12px 16px; flex-shrink: 0; }
-.history-filter { flex: 1; min-width: 0; margin: 0 8px 0 0; padding: 8px 10px; border-width: 1px; border-style: solid; border-color: #e4e7ef; border-radius: 12px; background-color: #f7f8fc; color: #596479; font-size: 13px; line-height: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.history-filter::after { border-width: 0; }
-.history-filter-active { background-color: #eeefff; border-color: #c9cdf5; color: #4546bd; }
-.history-refresh { flex: none; width: 80px; margin-right: 0; background-color: #eeefff; border-color: #eeefff; color: #4546bd; }
-.history-refresh[disabled] { color: #8590a4; background-color: #f1f2f7; }
+.history-filter { position: relative; flex: 1; min-width: 0; height: 44px; margin: 0 8px 0 0; padding: 0 10px; flex-direction: row; align-items: center; justify-content: center; border-width: 1px; border-style: solid; border-color: #e4e7ef; border-radius: 12px; background-color: #f7f8fc; overflow: hidden; }
+.history-filter-content { flex-direction: row; align-items: center; justify-content: center; max-width: 100%; min-width: 0; height: 20px; }
+.history-filter-label { flex-shrink: 1; min-width: 0; height: 20px; font-size: 13px; line-height: 20px; text-align: center; color: #596479; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-filter-chevron { width: 14px; height: 20px; margin-left: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
+.history-filter-active { background-color: #eeefff; border-color: #c9cdf5; }
+.history-filter-label-active, .history-refresh-label { color: #4546bd; }
+.history-refresh { flex: none; width: 80px; margin-right: 0; background-color: #eeefff; border-color: #eeefff; }
+.history-refresh-loading { background-color: #f1f2f7; }
+.history-filter-label-disabled { color: #8590a4; }
+.history-filter-pressed { background-color: rgba(69, 70, 189, 0.08); }
 .history-scroll { flex: 1; min-height: 0; }
 .history-task { margin: 8px 16px; padding: 14px; border-radius: 14px; background-color: #f5f6fc; }
 .history-task-heading { flex-direction: row; align-items: center; }
