@@ -65,9 +65,11 @@ import { openPromotedConversation } from '../../services/new-conversation.uts'
 import { prepareImage } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
 import { validateFile } from '../../services/files.uts'
+import { supportsSubmissionTasks } from '../../services/submission-task-state.uts'
+import { submitNewConversationTask } from '../../services/submission-tasks.uts'
 
 const props = withDefaults(defineProps<{ expanded?: boolean, paneWidth?: number, paneLeft?: number }>(), { expanded: false, paneWidth: 0, paneLeft: 0 })
-const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadId: string], dismiss: [] }>()
+const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadId: string], queued: [], dismiss: [] }>()
 // 输入测量和粘贴按面板实例隔离，标识不包含电脑或聊天信息。
 const composerInstanceId = 'composer-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
 const projectId = ref(''), projects = ref<NewProject[]>([])
@@ -401,7 +403,10 @@ async function send() {
   busy.value = true; pendingNewAction.value = 'send'; emit('busy', true); closeMenus(); error.value = ''
   const updateProgress = (message: string): void => { progress.value = message }
   try {
-    if (mode == 'desktopIpc') {
+    if (typeof supportsSubmissionTasks == 'function' && supportsSubmissionTasks(target.hostId)) {
+      await submitNewConversationTask(target, mode, updateProgress)
+      if (alive && props.expanded && draft.value == target && revision == connection.configurationRevision) { busy.value = false; emit('busy', false); uni.hideKeyboard(); emit('queued') }
+    } else if (mode == 'desktopIpc') {
       const id = await sendDirectNewConversation(target, updateProgress)
       deliverDirectConversation(target, revision, id)
     } else {

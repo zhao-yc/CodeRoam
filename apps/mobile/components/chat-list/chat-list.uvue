@@ -28,6 +28,7 @@
       <view v-if="displayComputers.length > 1" :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
       <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in displayComputers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><view class="computer-connection-content" :aria-label="computerSyncLabel(computer.id)"><view v-if="computerSyncState(computer.id) == 'loading'" class="computer-loading-indicator" role="img" aria-label="正在同步聊天"><cache-activity-icon :spinning="pageVisible" /></view><app-icon v-else :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view><view v-if="computerSyncState(computer.id) == 'offline' || computerSyncState(computer.id) == 'error'" class="computer-sync-badge" :aria-label="computerSyncLabel(computer.id)"><app-icon name="alert-triangle" :size="14" tone="warning" /></view></view></view></scroll-view>
     </view>
+    <submission-task-list :host-id="selectedComputerId" @open="openSubmittedTask" />
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
@@ -88,6 +89,7 @@ import { useManualReconnect } from '../../services/manual-reconnect.uts'
 import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.uvue'
 import ConnectionEditor from '../../components/connection-editor/connection-editor.uvue'
 import HomeMenu from '../../components/home-menu/home-menu.uvue'
+import SubmissionTaskList from '../../components/submission-task-list/submission-task-list.uvue'
 import { groupThreads, limitThreadGroups, normalizeListPreferences, rememberRecentThread, ThreadGroup, ListPreferences, RecentThread } from '../../services/thread-presentation.uts'
 
 const liquidGlass = useLiquidGlass()
@@ -408,6 +410,14 @@ function reloadThreads() { loadFromListButton('reload') }
 // 跳转时携带列表标题和项目名，让详情页在快照返回前即可显示相同名称。
 // 离线时允许查看对应配对和电脑的缓存，不触发桌面导航。
 function openThread(thread: ComputerThread) { emit('open', thread) }
+// 创建回执可能早于普通列表刷新，仍可从任务结果打开明确关联的原聊天。
+function openSubmittedTask(hostId: string, threadId: string, title: string) {
+  const found = allVisibleThreads.value.find((thread: ComputerThread): boolean => thread.hostId == hostId && thread.id == threadId)
+  if (found != null) { openThread(found); return }
+  const computer = connection.computers.find((item: Computer): boolean => item.id == hostId)
+  if (computer == null) return
+  openThread({ key: hostId + ':' + threadId, hostId, hostLabel: computer.label, online: computer.online, id: threadId, title, cwd: '', updatedAt: Date.now() } as ComputerThread)
+}
 function resetThreadScroll() { savedThreadScrollTop = 0; threadScrollTop.value = -1; nextTick(() => { threadScrollTop.value = 0 }) }
 
 // 列表偏好即时生效，不等菜单退场。

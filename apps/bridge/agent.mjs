@@ -22,6 +22,9 @@ import { CACHE_WATCHER, ThreadCacheFeed } from './thread-cache.mjs';
 import { ClientPresenceController } from './client-presence.mjs';
 import { readAccountUsage } from './account-usage.mjs';
 import { MessageQueue } from './message-queue.mjs';
+import { TaskQueue } from './task-queue.mjs';
+import { runNewConversationTask } from './new-conversation-task.mjs';
+import { randomUUID } from 'node:crypto';
 import { PluginCatalog, pluginInstanceVerifier, readProjectPlugins } from './plugins.mjs';
 import { ThreadMentionService } from './thread-mentions.mjs';
 import { usesWindowsIpcWithoutPage, supportsDesktopIpcNewConversation } from './windows-ipc-mode.mjs';
@@ -54,7 +57,15 @@ export class BridgeAgent extends EventEmitter {
     // 能力由当前文件汇总读取器决定，普通启动也可使用已核验的原生离线算法。
     this.adapter.nativeFileReportAvailable=()=>this.fileReports.supports(this.adapter);
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
-    this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
+    this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
+    this.taskQueue=journal.db?new TaskQueue({journal,
+      ready:()=>!this.taskClosed&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
+      execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.id,task.payload.firstMessageGuard),
+      reconcile:task=>this.readTaskCommandStatus(task.deviceId,task.pendingCommandId,task.threadId),
+      changed:(deviceId,snapshot)=>this.send({v:1,type:'tasks.changed',deviceId,snapshot})}):null;
+    if(adapter.attachments)adapter.attachments.retainScope=(deviceId,scope)=>this.taskQueue?.holdsScope(scope,deviceId)===true||!!this.messageQueue?.db.prepare('SELECT 1 FROM message_queue WHERE device_id=? AND thread_id=? LIMIT 1').get(deviceId,scope);
+    this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)||this.taskQueuePaused(),
+      dispatch:async(method,params,commandId,deviceId)=>{const taskId=randomUUID();this.taskQueue.submit(deviceId,{taskId,kind:'command',payload:{method,params}});return this.taskQueue.wait(deviceId,taskId);}}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event),{db:journal.db,
       onActivity:inventory=>this.threadCache?.setActivityInventory(inventory),
       onSettled:snapshot=>this.threadCache?.settled(snapshot)});
@@ -97,6 +108,7 @@ export class BridgeAgent extends EventEmitter {
   /** 断开只废弃设备传输，新协议保留五分钟本地维护宽限。 */
   relayDisconnected() {
     this.threadListFeed.devices.clear();this.threadCache.clearSubscriptions();this.clientPresence.disconnected();
+    this.taskQueue?.watchers.clear();
     if(this.clientPresence.mode==='legacy')this.threadListFeed.stop();
   }
   send(message) {
@@ -154,7 +166,98 @@ export class BridgeAgent extends EventEmitter {
     const entry=this.adapter.conversations?.get(threadId);
     if(entry?.state)this.publish(this.adapter.snapshot(entry.state));
   }
-  async handleRequest(message) {
+
+  /** 只读取暂停标记；消息队列不能绕过实例级暂停继续投递。 */
+  taskQueuePaused() {return this.taskQueue?.db.prepare('SELECT paused FROM submission_queue_state WHERE singleton=1').get()?.paused===1;}
+
+  /** 后台租约独立于手机详情订阅，仍使用原提交设备核验附件和业务权限。 */
+  async retainTaskThread(threadId,deviceId,taskId) {
+    if(!this.adapter.watch)return ()=>{};
+    const watcher='submission:'+taskId+':'+randomUUID(),key=JSON.stringify([threadId,deviceId]);
+    // 兼容已经建立的真实/旧客户端订阅；嵌套步骤不能把后台观察者误认成手机页面。
+    if(!this.taskLeaseCounts.has(key)&&this.adapter.conversations?.get(threadId)?.watchers.has(deviceId)){
+      const watching=this.detailDevices.get(threadId)??new Set();watching.add(deviceId);this.detailDevices.set(threadId,watching);
+    }
+    const leases=this.adapter.taskLeases??=new Map();
+    const devices=leases.get(threadId)??new Set();devices.add(deviceId);leases.set(threadId,devices);
+    this.taskLeaseCounts.set(key,(this.taskLeaseCounts.get(key)??0)+1);
+    let released=false;
+    const release=()=>{
+      if(released)return;released=true;
+      const count=(this.taskLeaseCounts.get(key)??1)-1;
+      if(count>0)this.taskLeaseCounts.set(key,count);
+      else {this.taskLeaseCounts.delete(key);devices.delete(deviceId);if(!devices.size)leases.delete(threadId);if(!this.detailDevices.get(threadId)?.has(deviceId))this.adapter.unwatch?.(threadId,deviceId);}
+      this.adapter.unwatch?.(threadId,watcher);
+    };
+    try{await this.adapter.watch(threadId,watcher,{fresh:true,history:false});return release;}
+    catch(error){release();throw error;}
+  }
+
+  /** 内部步骤保留原白名单、Journal 和会话锁，不能递归再次入队。 */
+  async runTaskCommand(method,params,deviceId,commandId,firstMessageGuard) {
+    if(!WRITE_METHODS.has(method))throw new BridgeError('METHOD_NOT_ALLOWED','此操作不在任务白名单中');
+    const instance=this.adapter.client?.instance;
+    // 组合入口也保留普通启动的能力边界，必须在删除前的停止任务等步骤之前拒绝。
+    if(method==='thread.delete'&&usesWindowsIpcWithoutPage(instance))throw new BridgeError('DELETE_UNSUPPORTED','普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
+    if(instance){await instance.verify?.();if(instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','原实例连接已变化，请核对后继续');}
+    const release=params.threadId?await this.retainTaskThread(params.threadId,deviceId,commandId):()=>{};
+    try {
+      const response=await this.handleRequest({v:1,type:'request',requestId:commandId,deviceId,method,params,...(instance?{expectedGeneration:instance.generation}:{}),...(firstMessageGuard?{firstMessageGuard}:{})},{taskExecution:true});
+      if(response.error)throw new BridgeError(response.error.code,response.error.message,response.error.outcomeUnknown);
+      return response.result;
+    }finally{release();}
+  }
+
+  /** 未知任务只复用已有只读收口器；查询不会重新创建、发送或切换权限。 */
+  async readTaskCommandStatus(deviceId,commandId,threadId='') {
+    const original=this.journal.status(deviceId,commandId);
+    const target=threadId||original.result?.permissionChange?.threadId||original.result?.goalChange?.threadId;
+    let release=()=>{};
+    // 仅对原账本保存的目标恢复只读观察，不能靠查询任意编号取得其他会话权限。
+    if(original.state==='unknown'&&target){try{release=await this.retainTaskThread(target,deviceId,'reconcile:'+commandId);}catch{return original;}}
+    try{
+      const draft=await this.nativeDrafts.commandStatus(this.journal,deviceId,commandId);if(draft.state!=='unknown')return draft;
+      const deletion=deletionCommandStatus(this.adapter,this.journal,deviceId,commandId);if(deletion.state!=='unknown')return deletion;
+      const status=await permissionCommandStatus(this.adapter,this.journal,deviceId,commandId);
+      return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,deviceId,commandId):status;
+    }finally{release();}
+  }
+
+  /** 旧客户端仍按原请求编号核对；等待领取也必须返回 pending，不能误报未提交。 */
+  async legacyCommandStatus(deviceId,commandId) {
+    const task=this.taskQueue?.row(deviceId,commandId);
+    if(!task||task.kind!=='command')return this.readTaskCommandStatus(deviceId,commandId);
+    if(['queued','running','waiting_resume'].includes(task.state))return {state:'pending'};
+    const record=this.taskQueue.db.prepare('SELECT * FROM submission_task_keys WHERE device_id=? AND id=?').get(deviceId,commandId);
+    if(task.state==='succeeded')return {state:'done',result:JSON.parse(record.result??'{}')};
+    if(['failed','canceled','cancelled','skipped'].includes(task.state))return {state:'done',error:record.error?JSON.parse(record.error):{code:'TASK_CANCELED',message:'该提交任务已取消'}};
+    const status=await this.readTaskCommandStatus(deviceId,commandId);
+    // 原命令已只读收口时同步提交任务状态，重放原编号仍返回同一回执而不再执行。
+    if(status.state==='done')await this.taskQueue.control(deviceId,{taskId:commandId,action:'reconcile'});
+    return status.state==='not_found'?{state:'unknown',error:{code:'OUTCOME_UNKNOWN',message:'操作结果需要核对，请勿重复提交',outcomeUnknown:true}}:status;
+  }
+
+  /** 新协议立即确认落盘，旧写接口等待相同任务结果，全部共用持久化执行器。 */
+  async handleTaskRequest(message) {
+    const {method,params,deviceId}=message;
+    if(!this.taskQueue)throw new BridgeError('TASK_QUEUE_UNAVAILABLE','请更新电脑连接服务后使用提交任务');
+    if(method==='tasks.submit') {
+      const scope='task:'+params.taskId;
+      // 已接纳任务先核对指纹；临时附件已经释放也不能破坏原编号的去重回执。
+      const accepted=this.taskQueue.db.prepare('SELECT 1 FROM submission_task_keys WHERE device_id=? AND id=?').get(deviceId,params.taskId);
+      if(!accepted&&params.kind==='newConversation')for(const id of params.payload.attachments??[]){const {metadata}=this.adapter.attachments.metadata(deviceId,scope,id);if(!metadata.complete)throw new BridgeError('UPLOAD_INCOMPLETE','附件尚未上传完成，输入已保留');}
+      return this.taskQueue.submit(deviceId,params);
+    }
+    if(method==='tasks.list')return this.taskQueue.list(deviceId,params);
+    if(method==='tasks.watch')return this.taskQueue.watch(deviceId);
+    if(method==='tasks.unwatch')return this.taskQueue.unwatch(deviceId);
+    if(method==='tasks.control')return this.taskQueue.control(deviceId,params);
+    const payload={method,params,...(message.firstMessageGuard?{firstMessageGuard:message.firstMessageGuard}:{})};
+    this.taskQueue.submit(deviceId,{taskId:message.requestId,kind:'command',payload});
+    return this.taskQueue.wait(deviceId,message.requestId);
+  }
+
+  async handleRequest(message,{taskExecution=false}={}) {
     const response={v:1,type:'response',transportId:message.transportId};
     const diagnostic=this.diagnostics?.context(message);
     this.diagnosticInFlight++;
@@ -162,6 +265,12 @@ export class BridgeAgent extends EventEmitter {
     try {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
+      // 详情读订阅只记录手机本身的存活意图，后台写步骤不会改变它。
+      if(!taskExecution&&['thread.watch','thread.history','thread.unwatch'].includes(message.method)&&!message.params.view){
+        const devices=this.detailDevices.get(message.params.threadId)??new Set();
+        if(message.method==='thread.unwatch')devices.delete(message.deviceId);else devices.add(message.deviceId);
+        if(devices.size)this.detailDevices.set(message.params.threadId,devices);else this.detailDevices.delete(message.params.threadId);
+      }
       const instance=this.adapter.client?.instance;
       const expectedGeneration=message.expectedGeneration;
       if(expectedGeneration!==undefined&&(typeof expectedGeneration!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(expectedGeneration)))throw new BridgeError('BAD_PARAMS','预期实例代次无效');
@@ -182,6 +291,7 @@ export class BridgeAgent extends EventEmitter {
         }
         if(!supportsDesktopIpcNewConversation(this.adapter))throw new BridgeError('INSTANCE_CHANGED','桌面连接已变化，请重新连接');
       }
+      if(!taskExecution&&(message.method.startsWith('tasks.')||WRITE_METHODS.has(message.method))&&this.taskQueue){response.result=await this.handleTaskRequest(message);return response;}
       let deletionTarget = null;
       let lockQueued = false;
       const execute=async()=>{
@@ -243,8 +353,11 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='thread.history'&&message.params.view==='file-report')return this.fileReports.read(this.adapter,message.params,message.deviceId);
         if(message.method==='thread.settings.read')return this.adapter.readSettings(message.params.threadId,message.deviceId);
         if(message.method==='thread.goal.read')return this.adapter.readGoal(message.params.threadId,message.deviceId);
-        if(UPLOAD_METHODS.has(message.method))return message.params.draftId?this.nativeDrafts.transfer(message.method,message.params,message.deviceId):this.adapter.transfer(message.method,message.params,message.deviceId);
-        if(message.method==='threads.watch')return this.threadListFeed.watch(message.deviceId);
+        if(UPLOAD_METHODS.has(message.method)){
+          if(message.params.taskId)return this.adapter.attachments[message.method.slice('attachment.'.length)](message.deviceId,'task:'+message.params.taskId,message.params);
+          return message.params.draftId?this.nativeDrafts.transfer(message.method,message.params,message.deviceId):this.adapter.transfer(message.method,message.params,message.deviceId);
+        }
+        if(message.method==='threads.watch')return {...await this.threadListFeed.watch(message.deviceId),...(this.taskQueue?{supportsTaskQueue:true}:{})};
         if(message.method==='threads.unwatch')return this.threadListFeed.unwatch(message.deviceId);
         if(message.method==='threads.cache.watch')return this.threadCache.watch(message.deviceId,message.params);
         if(message.method==='threads.cache.unwatch')return this.threadCache.unwatch(message.deviceId,message.params);
@@ -260,7 +373,7 @@ export class BridgeAgent extends EventEmitter {
               result={...result,threads:this.adapter.index.list(message.params).map(row=>({...this.threadListFeed.contentSummary(row),...(known.get(row.id)??{}),...row}))};
             }else result={...result,threads:result.threads.slice(0,limit)};
           }
-          return {...result,...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
+          return {...result,...(this.taskQueue?{supportsTaskQueue:true}:{}),...(message.params.includeUsage===true?{usage:await readAccountUsage(this.newThreads)}:{})};
         }
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
@@ -288,7 +401,7 @@ export class BridgeAgent extends EventEmitter {
           return result;
         }
         if(message.method==='thread.unwatch'){const result=this.adapter.unwatch(message.params.threadId,message.deviceId);if(!hasDetailWatcher(this.adapter,message.params.threadId))this.published.delete(message.params.threadId);return result;}
-        if(message.method==='command.status') { const draft=await this.nativeDrafts.commandStatus(this.journal,message.deviceId,message.params.commandId);if(draft.state!=='unknown')return draft;const deletion=deletionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);if(deletion.state!=='unknown')return deletion;const status=await permissionCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId);return status.state==='unknown'?goalCommandStatus(this.adapter,this.journal,message.deviceId,message.params.commandId):status; }
+        if(message.method==='command.status')return this.legacyCommandStatus(message.deviceId,message.params.commandId);
         if(WRITE_METHODS.has(message.method))return this.adapter.operate(message.method,message.params,message.requestId,message.deviceId,result=>this.journal.checkpoint(message.deviceId,message.requestId,result),guard);
         throw new BridgeError('METHOD_NOT_ALLOWED','此接口不支持通过电脑执行');
       };
@@ -322,5 +435,5 @@ export class BridgeAgent extends EventEmitter {
     }
     return response;
   }
-  async close(){this.stopped=true;this.clientPresence.close();this.threadCache.close();this.messageQueue?.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
+  async close(){this.stopped=true;this.taskClosed=true;this.messageQueue?.close();await this.taskQueue?.close();this.clientPresence.close();this.threadCache.close();this.adapter.threadMentions?.close();await this.nativeDrafts.close();clearTimeout(this.reconnectTimer);this.socket?.terminate();this.fileReports.close();this.threadListFeed.close();this.adapter.close();await Promise.allSettled(this.threadLocks.values());this.journal.close();}
 }

@@ -3,7 +3,8 @@
     { "path": "pages/index/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "掌上 Codex" } },
     { "path": "pages/conversation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "聊天" } },
     { "path": "pages/connection/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "电脑连接" } },
-    { "path": "pages/settings/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "设置" } }
+    { "path": "pages/settings/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "设置" } },
+    { "path": "pages/task-history/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "执行记录" } }
   ],
   "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#ffffff", "backgroundColor": "#ffffff" }
 }

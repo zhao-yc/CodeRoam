@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { MAX_MESSAGE_BYTES, WRITE_METHODS, validateRequest, validateDraftId, validDraftRevision, validConversationPreviewEvent, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
+import { MAX_MESSAGE_BYTES, isMutatingRequest, validateRequest, validateDraftId, validDraftRevision, validConversationPreviewEvent, validTaskSnapshot, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
 import { HostProfiles } from './host-profiles.mjs';
 import { HostInstances } from './host-instances.mjs';
 import { ConversationCacheRoutes } from './conversation-cache-routes.mjs';
@@ -110,6 +110,15 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       for (const [key, watch] of mobile.draftReleases) if (predicate(watch)) mobile.draftReleases.delete(key);
     }
   };
+  /** 任务观察绑定到原连接及代次；换代不继承旧订阅。 */
+  const invalidateTaskWatches = predicate => {
+    for (const mobile of mobiles) for (const [hostId,watch] of mobile.taskWatches) if (predicate(watch)) mobile.taskWatches.delete(hostId);
+  };
+  /** 最后一个观看者释放后才撤销服务端观察；超时和失败也不能遗留订阅。 */
+  const releaseTaskWatch = (deviceId,watch) => {
+    if (!watch || [...mobiles].some(mobile => mobile.identity.id === deviceId && mobile.taskWatches.get(watch.hostId)?.host === watch.host && mobile.taskWatches.get(watch.hostId)?.generation === watch.generation) || !hostSource(watch.host,watch.hostId,watch.generation)) return;
+    send(watch.host,{v:1,type:'request',requestId:randomUUID(),transportId:randomUUID(),deviceId,hostId:watch.hostId,...(watch.generation?{generation:watch.generation}:{}),method:'tasks.unwatch',params:{}});
+  };
 
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, 'http://localhost');
@@ -135,6 +144,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       client.draftWatches = new Map();
       client.draftReleases = new Map();
       client.draftSequence = 0;
+      client.taskWatches = new Map();
+      client.taskSequence = 0;
       client.on('pong', () => { client.alive = true; });
       sockets.emit('connection', client);
     });
@@ -146,6 +157,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
     if (identity.role === 'host') {
       const previous = hosts.get(identity.hostId);
       if (previous) invalidateDrafts(watch => watch.host === previous);
+      if (previous) invalidateTaskWatches(watch => watch.host === previous);
       if (previous) for (const [id, connection] of hosts) if (connection === previous) hosts.delete(id);
       instances.disconnect(identity.hostId);
       cacheRoutes.prune();
@@ -180,9 +192,10 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
             }
             // 同一连接中的一个实例换代，只结束该实例的在途请求；写请求保持结果待核对。
             for (const [id, entry] of pending) if (entry.host === socket && (!hostOnline(entry.hostId) || entry.generation && instances.row(entry.hostId)?.generation !== entry.generation)) {
-              complete(id); recordEnd('request.cancelled', entry, { errorCode: 'INSTANCE_CHANGED', outcomeUnknown: WRITE_METHODS.has(entry.method) }); fail(entry.mobile, entry.requestId, new BridgeError(WRITE_METHODS.has(entry.method) ? 'OUTCOME_UNKNOWN' : 'INSTANCE_CHANGED', '实例连接已变化，请先核对原操作', WRITE_METHODS.has(entry.method)));
+              complete(id); recordEnd('request.cancelled', entry, { errorCode: 'INSTANCE_CHANGED', outcomeUnknown: isMutatingRequest(entry.method) }); fail(entry.mobile, entry.requestId, new BridgeError(isMutatingRequest(entry.method) ? 'OUTCOME_UNKNOWN' : 'INSTANCE_CHANGED', '实例连接已变化，请先核对原操作', isMutatingRequest(entry.method)));
             }
             invalidateDrafts(watch => watch.host === socket && !hostSource(socket, watch.hostId, watch.generation));
+            invalidateTaskWatches(watch => watch.host === socket && !hostSource(socket,watch.hostId,watch.generation));
             cacheRoutes.prune();
             notifyHosts();
             notifyPresence(socket, true);
@@ -192,10 +205,24 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         if (message.type === 'response') {
           const entry = pending.get(message.transportId);
           if (!entry) { diagnostics?.record('response.late', diagnostics.context(message), { connection: socket.diagnosticId, pendingTotal: pending.size }); return; }
-          if (entry.host !== socket || entry.generation && (message.hostId !== entry.hostId || message.generation !== entry.generation || !instances.owns(identity.hostId, entry.hostId, entry.generation)) || (entry.cacheRoute || entry.method.startsWith('thread.draft.')) && !hostSource(socket, entry.hostId, entry.generation)) {
+          if (entry.host !== socket || entry.generation && (message.hostId !== entry.hostId || message.generation !== entry.generation || !instances.owns(identity.hostId, entry.hostId, entry.generation)) || (entry.cacheRoute || entry.method.startsWith('thread.draft.') || entry.method.startsWith('tasks.')) && !hostSource(socket, entry.hostId, entry.generation)) {
             recordEnd('response.ignored', entry, { errorCode: 'INSTANCE_CHANGED' }); return;
           }
           complete(message.transportId);
+          if (entry.method.startsWith('tasks.')) {
+            const authorized = instances.authorized(entry.mobile.identity.hostIds,entry.hostId);
+            const isSnapshot = ['tasks.list','tasks.watch'].includes(entry.method);
+            const valid = !isSnapshot || validTaskSnapshot(message.result);
+            if (message.error || !authorized || !valid) {
+              if (entry.method === 'tasks.watch' && entry.mobile.taskWatches.get(entry.hostId)?.sequence === entry.taskSequence) {
+                const watch = entry.mobile.taskWatches.get(entry.hostId);entry.mobile.taskWatches.delete(entry.hostId);releaseTaskWatch(entry.mobile.identity.id,watch);
+              }
+              if (!authorized || !valid) {
+                const error = new BridgeError(!authorized ? 'HOST_FORBIDDEN' : 'BAD_TASK_RESPONSE',!authorized ? '这台电脑已不在当前手机的授权范围内' : '电脑返回的任务状态无效，请更新连接服务');
+                recordEnd('request.completed',entry,{failed:true,errorCode:error.code});fail(entry.mobile,entry.requestId,error);return;
+              }
+            }
+          }
           if (entry.cacheRoute) {
             const authorized = instances.authorized(entry.mobile.identity.hostIds, entry.hostId);
             const current = entry.mobile.cacheWatches.get(entry.hostId) === entry.cacheRoute;
@@ -234,6 +261,16 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           const result = entry.cacheRoute && !message.error ? { ok: true } : message.result;
           const delivered = send(entry.mobile, { v: 1, type: 'response', requestId: entry.requestId, result, error: message.error });
           recordEnd('request.completed', entry, { failed: !!message.error, errorCode: message.error?.code, outcomeUnknown: message.error?.outcomeUnknown === true, delivered });
+        } else if (message.type === 'tasks.changed') {
+          const hostId = message.hostId ?? identity.hostId;
+          if (message.v !== 1 || typeof message.deviceId !== 'string' || !validTaskSnapshot(message.snapshot) || !hostSource(socket,hostId,message.generation)) return;
+          // 同一配对的其他标签必须自己订阅，其他手机始终收不到这份历史或进度。
+          for (const mobile of mobiles) {
+            const watch = mobile.taskWatches.get(hostId);
+            if (mobile.identity.id === message.deviceId && instances.authorized(mobile.identity.hostIds,hostId) && watch?.host === socket && watch.generation === message.generation) {
+              send(mobile,{v:1,type:'tasks.changed',hostId,...(message.generation ? {generation:message.generation} : {}),snapshot:message.snapshot});
+            }
+          }
         } else if (message.type === 'thread.draft.changed') {
           if (message.v !== 1 || typeof message.deviceId !== 'string' || !draftSnapshot(message.snapshot)) return;
           const hostId = message.hostId ?? identity.hostId;
@@ -323,6 +360,13 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         diagnostic = diagnostics?.context({ ...message, transportId, deviceId: identity.id });
         const generation = generationOf(message.hostId);
         const draftSequence = message.method.startsWith('thread.draft.') ? ++socket.draftSequence : undefined;
+        const taskSequence = ['tasks.watch','tasks.unwatch'].includes(message.method) ? ++socket.taskSequence : undefined;
+        if (message.method === 'tasks.watch') socket.taskWatches.set(message.hostId,{host,hostId:message.hostId,generation,sequence:taskSequence});
+        if (message.method === 'tasks.unwatch') {
+          socket.taskWatches.delete(message.hostId);
+          const shared = [...mobiles].some(other => other !== socket && other.identity.id === identity.id && other.taskWatches.get(message.hostId)?.host === host && other.taskWatches.get(message.hostId)?.generation === generation);
+          if (shared) {send(socket,{v:1,type:'response',requestId:message.requestId,result:{ok:true}});return;}
+        }
         // 同配对多标签页仅释放当前观看者，最后一个观看者才通知电脑停止轮询。
         if (message.method === 'thread.draft.unwatch') {
           const key = draftKey(message.hostId, message.params.draftId), watch = { host, hostId: message.hostId, generation, draftId: message.params.draftId };
@@ -345,10 +389,13 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const timer = setTimeout(() => {
           const entry = complete(transportId);
           if (entry?.cacheRoute) cacheRoutes.release(entry.cacheRoute);
-          if (entry) { recordEnd('request.timeout', entry, { errorCode: 'REQUEST_TIMEOUT', outcomeUnknown: WRITE_METHODS.has(message.method) }); fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method))); }
+          if (entry?.method === 'tasks.watch' && socket.taskWatches.get(entry.hostId)?.sequence === entry.taskSequence) {
+            const watch = socket.taskWatches.get(entry.hostId);socket.taskWatches.delete(entry.hostId);releaseTaskWatch(identity.id,watch);
+          }
+          if (entry) { recordEnd('request.timeout', entry, { errorCode: 'REQUEST_TIMEOUT', outcomeUnknown: isMutatingRequest(message.method) }); fail(socket, message.requestId, new BridgeError(isMutatingRequest(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', isMutatingRequest(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', isMutatingRequest(message.method))); }
         }, message.method === 'thread.delete' ? Math.max(60000, requestTimeoutMs) : message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
         const contentRevision = message.method === 'thread.watch' ? message.params.contentRevision : undefined;
-        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, cacheRoute, contentRevision, previewId: message.params.previewId, timer, diagnostic });
+        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, taskSequence, cacheRoute, contentRevision, previewId: message.params.previewId, timer, diagnostic });
         const params = cacheRoute ? { ...message.params, subscriptionId: cacheRoute.upstreamId } : message.params;
         const delivered = send(host, { ...message, params, deviceId: identity.id, transportId, ...(generation ? { generation } : {}) });
         diagnostics?.record('request.forwarded', diagnostic, { ...counts(socket, host), connection: socket.diagnosticId, delivered, bufferedBytes: host.bufferedAmount });
@@ -371,7 +418,10 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const host=hosts.get(hostId);
         if(host)send(host,{v:1,type:'request',requestId:randomUUID(),transportId:randomUUID(),deviceId:identity.id,hostId,generation:instances.row(hostId)?.generation,method:'threads.unwatch',params:{}});
       }
-      if (identity.role === 'host' && hosts.get(identity.hostId) === socket) { invalidateDrafts(watch => watch.host === socket); for (const [id, connection] of hosts) if (connection === socket) hosts.delete(id); instances.disconnect(identity.hostId); cacheRoutes.prune(); notifyHosts(); }
+      if(identity.role==='mobile')for(const [hostId,watch] of socket.taskWatches){
+        releaseTaskWatch(identity.id,watch);
+      }
+      if (identity.role === 'host' && hosts.get(identity.hostId) === socket) { invalidateDrafts(watch => watch.host === socket); invalidateTaskWatches(watch=>watch.host===socket); for (const [id, connection] of hosts) if (connection === socket) hosts.delete(id); instances.disconnect(identity.hostId); cacheRoutes.prune(); notifyHosts(); }
       for (const [id, entry] of pending) if (entry.host === socket || entry.mobile === socket) {
         // 打开回执可能晚于手机断线，保留 transport 到原超时，以便拿到编号后只转发 unwatch。
         if (entry.mobile === socket && entry.host !== socket && draftRead(entry.method)) {
@@ -379,8 +429,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           continue;
         }
         complete(id);
-        recordEnd('request.cancelled', entry, { errorCode: 'HOST_OFFLINE', outcomeUnknown: WRITE_METHODS.has(entry.method) });
-        if (entry.mobile !== socket) fail(entry.mobile, entry.requestId, new BridgeError(WRITE_METHODS.has(entry.method) ? 'OUTCOME_UNKNOWN' : 'HOST_OFFLINE', '电脑连接已断开，请先核对会话状态', WRITE_METHODS.has(entry.method)));
+        recordEnd('request.cancelled', entry, { errorCode: 'HOST_OFFLINE', outcomeUnknown: isMutatingRequest(entry.method) });
+        if (entry.mobile !== socket) fail(entry.mobile, entry.requestId, new BridgeError(isMutatingRequest(entry.method) ? 'OUTCOME_UNKNOWN' : 'HOST_OFFLINE', '电脑连接已断开，请先核对会话状态', isMutatingRequest(entry.method)));
       }
     });
   });
@@ -400,6 +450,6 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
   return {
     server,
     listen: (port = 0, host = '127.0.0.1') => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(server.address()); }); }),
-    async close() { clearInterval(heartbeat); for (const entry of pending.values()) { clearTimeout(entry.timer); recordEnd('request.cancelled', entry, { errorCode: 'HOST_OFFLINE', outcomeUnknown: WRITE_METHODS.has(entry.method) }); } pending.clear(); for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => sockets.close(resolve)); if (server.listening) await new Promise(resolve => server.close(resolve)); },
+    async close() { clearInterval(heartbeat); for (const entry of pending.values()) { clearTimeout(entry.timer); recordEnd('request.cancelled', entry, { errorCode: 'HOST_OFFLINE', outcomeUnknown: isMutatingRequest(entry.method) }); } pending.clear(); for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => sockets.close(resolve)); if (server.listening) await new Promise(resolve => server.close(resolve)); },
   };
 }

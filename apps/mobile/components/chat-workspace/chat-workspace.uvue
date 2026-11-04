@@ -9,7 +9,7 @@
       <view v-if="!props.detailRoute || wide || mode == 'new'" v-show="mode == 'new'" class="workspace-new">
         <view class="workspace-status-space"></view>
         <view id="new-conversation-header" class="workspace-new-header"><view class="workspace-header-button"><app-icon :name="wide ? 'close' : 'back'" :size="23" /><button class="workspace-hitbox" :disabled="creating" aria-label="关闭新聊天" @click="closeNewConversation"></button></view><text class="workspace-new-title">新聊天</text><view class="workspace-header-button"></view></view>
-        <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" @busy="onNewConversationBusy" @created="onConversationCreated" @dismiss="closeNewConversation" />
+        <new-conversation :expanded="mode == 'new' && props.active && newReady" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" @busy="onNewConversationBusy" @created="onConversationCreated" @queued="onConversationQueued" @dismiss="closeNewConversation" />
       </view>
     </view>
     <task-notice :active="props.active" :header-id="mode == 'conversation' ? 'conversation-header' : mode == 'new' ? 'new-conversation-header' : 'home-header'" :host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" :pane-left="wide && mode != 'list' ? 341 : 0" :pane-width="wide && mode == 'list' ? 340 : wide ? detailWidth : props.windowWidth" />
@@ -121,6 +121,12 @@ async function openNewConversation(hostId: string = '') {
   catch (reason) { closeNewConversation(); uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
 }
 function onNewConversationBusy(value: boolean) { creating.value = value }
+// 入队只返回列表，不由迟到的执行结果抢走用户正在查看的聊天。
+function onConversationQueued() {
+  creating.value = false; switchRevision++; newReady.value = false
+  if (props.detailRoute || props.initialTarget != null) { uni.reLaunch({ url: '/pages/index/index' }); return }
+  selected.value = null; detailMounted.value = false; mode.value = 'list'
+}
 function onConversationCreated(id: string): Promise<boolean> {
   creating.value = false
   return selectConversation(workspaceTarget(connection.hostId, id, '', '', connection.cacheNamespace), false)

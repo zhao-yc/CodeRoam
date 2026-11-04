@@ -1,0 +1,43 @@
+import { reactive } from 'vue'
+
+export type SubmissionStep = { name: string, state: string, at?: number }
+export type SubmissionTask = { id: string, position: number, kind: string, method: string, title: string, threadId: string, projectId: string, state: string, stage: string, error: string, createdAt: number, startedAt: number, completedAt: number, updatedAt: number, dismissed: boolean, steps: SubmissionStep[], result?: UTSJSONObject, localOnly?: boolean, historyExpired?: boolean }
+export type SubmissionSnapshot = { supportsTaskQueue: boolean, revision: number, paused: boolean, blockerId: string, tasks: SubmissionTask[], now: number, nextCursor?: number }
+export type InstanceSubmissionTasks = { hostId: string, generation: string, supported: boolean, loading: boolean, error: string, snapshot: SubmissionSnapshot | null, clockOffset: number }
+type AcceptedSubmission = { revision: number, hostId: string, taskId: string, threadId: string, method: string }
+export type PendingSubmission = { hostId: string, id: string, kind: string, generation: string, accepted: boolean, unknown: boolean, createdAt: number }
+type SubmissionTaskState = { namespace: string, instances: InstanceSubmissionTasks[], pending: PendingSubmission[], clock: number, accepted: AcceptedSubmission }
+
+// 只缓存用于展示的状态；任务正文与执行责任均属于守护进程。
+export const submissionTasks = reactive<SubmissionTaskState>({ namespace: '', instances: [] as InstanceSubmissionTasks[], pending: [] as PendingSubmission[], clock: Date.now(), accepted: { revision: 0, hostId: '', taskId: '', threadId: '', method: '' } as AcceptedSubmission })
+
+export function submissionInstance(hostId: string): InstanceSubmissionTasks | null { return submissionTasks.instances.find((item: InstanceSubmissionTasks): boolean => item.hostId == hostId) ?? null }
+export function supportsSubmissionTasks(hostId: string): boolean { return submissionInstance(hostId)?.supported == true }
+
+// 服务端时间校准仅用于五秒展示期限，不把手机时间当作执行完成时间。
+export function acceptSubmissionSnapshot(hostId: string, generation: string, raw: UTSJSONObject): boolean {
+  const snapshot = JSON.parse<SubmissionSnapshot>(JSON.stringify(raw))
+  if (snapshot == null || snapshot.supportsTaskQueue != true || !Array.isArray(snapshot.tasks) || typeof snapshot.revision != 'number' || typeof snapshot.now != 'number') return false
+  const instance = submissionInstance(hostId)
+  if (instance == null || instance.generation != generation) return false
+  if (instance.snapshot != null && instance.snapshot!.revision > snapshot.revision) return false
+  instance.snapshot = snapshot; instance.supported = true; instance.loading = false; instance.error = ''; instance.clockOffset = snapshot.now - Date.now()
+  return true
+}
+
+export function submissionVisible(task: SubmissionTask, now: number): boolean {
+  if (task.dismissed) return false
+  if (task.state == 'succeeded') return task.completedAt > 0 && now < task.completedAt + 5000
+  return ['queued', 'running', 'failed', 'unknown', 'waiting_resume'].indexOf(task.state) >= 0
+}
+export function submissionStateLabel(state: string): string {
+  if (state == 'queued') return '等待执行'
+  if (state == 'running') return '执行中'
+  if (state == 'succeeded') return '已完成'
+  if (state == 'failed') return '执行失败'
+  if (state == 'unknown') return '结果待核对'
+  if (state == 'waiting_resume') return '已核对，等待继续'
+  if (state == 'cancelled' || state == 'canceled') return '已取消'
+  if (state == 'skipped') return '已人工跳过'
+  return state
+}

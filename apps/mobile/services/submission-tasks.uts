@@ -1,0 +1,204 @@
+import { watch } from 'vue'
+import { bridge, connection, Computer } from './bridge.uts'
+import { submissionTasks, submissionInstance, supportsSubmissionTasks, acceptSubmissionSnapshot, SubmissionTask, SubmissionSnapshot, InstanceSubmissionTasks, PendingSubmission } from './submission-task-state.uts'
+import { NewDraft, NewDraftChoices } from './new-conversation.uts'
+import { DraftImage, DraftFile, settleSubmission } from './composer.uts'
+import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
+import { SelectedPlugin } from './plugins.uts'
+import { SelectedThreadMention, copyThreadMentions } from './thread-mentions.uts'
+
+let installed = false, pollTimer = 0, ticking = 0
+const pending = submissionTasks.pending
+const cleaning = new Set<string>()
+
+export function newSubmissionId(): string { return Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2) }
+function pendingKey(): string { return 'codex-mobile-submission-pending-' + connection.cacheNamespace }
+function savePending() { uni.setStorageSync(pendingKey(), JSON.stringify(pending)) }
+function removePending(id: string) { const index = pending.findIndex((item: PendingSubmission): boolean => item.id == id); if (index >= 0) pending.splice(index, 1); savePending() }
+function generationFor(hostId: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == hostId)?.instanceGeneration ?? '' }
+
+// 跨电脑调用固定任务接口，不改变当前聊天与所选电脑。
+export function readSubmissionTasks(hostId: string, params: UTSJSONObject): Promise<UTSJSONObject> { return bridge.requestTaskChannel(hostId, 'tasks.list', params) }
+export async function controlSubmissionTask(hostId: string, id: string, action: string, confirmed: boolean = false): Promise<void> {
+  await bridge.requestTaskChannel(hostId, 'tasks.control', { taskId: id, action, confirmed })
+  await refreshSubmissionTasks(hostId)
+}
+
+export async function refreshSubmissionTasks(hostId: string): Promise<void> {
+  const instance = submissionInstance(hostId)
+  if (instance == null || !connection.connected || !connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return
+  const generation = instance.generation
+  try {
+    const result = await bridge.requestTaskChannel(hostId, 'tasks.watch', {})
+    if (!acceptSubmissionSnapshot(hostId, generation, result)) throw new Error('任务列表回执无效，请更新电脑连接服务')
+    cleanAcceptedMetadata(hostId, result)
+  } catch (reason) { if (submissionInstance(hostId) == instance && instance.generation == generation) { instance.loading = false; instance.error = (reason as Error).message } }
+}
+
+// 已接纳的新建任务也收口手机编号记录；后台完成后只读核对，不长期堆积本地元数据。
+async function cleanAcceptedMetadata(hostId: string, raw: UTSJSONObject) {
+  const namespace = connection.cacheNamespace
+  const active = JSON.parse<SubmissionTask[]>(JSON.stringify(raw['tasks'] ?? [])) ?? [] as SubmissionTask[]
+  const records = pending.filter((record: PendingSubmission): boolean => record.hostId == hostId && record.accepted)
+  for (const record of records) {
+    if (cleaning.has(record.id)) continue
+    cleaning.add(record.id)
+    try {
+      let task = active.find((item: SubmissionTask): boolean => item.id == record.id) ?? null
+      if (task == null) task = findTask(await readSubmissionTasks(hostId, { taskId: record.id }), record.id)
+      if (connection.cacheNamespace == namespace && task != null && ['succeeded', 'failed', 'canceled', 'cancelled', 'skipped'].indexOf(task.state) >= 0) removePending(record.id)
+    } catch (_) { /* 只读暂时失败保留编号，下次恢复连接继续核对。 */ }
+    finally { cleaning.delete(record.id) }
+  }
+}
+
+function findTask(raw: UTSJSONObject, id: string): SubmissionTask | null {
+  const direct = raw['task'] as UTSJSONObject | null
+  if (direct != null) return JSON.parse<SubmissionTask>(JSON.stringify(direct))
+  return (JSON.parse<SubmissionTask[]>(JSON.stringify(raw['tasks'] ?? [])) ?? [] as SubmissionTask[]).find((task: SubmissionTask): boolean => task.id == id) ?? null
+}
+
+// 只持久化原编号。回执丢失后查询原任务，不自动重发执行内容。
+export async function submitTask(hostId: string, id: string, kind: string, payload: UTSJSONObject): Promise<UTSJSONObject> {
+  const namespace = connection.cacheNamespace, generation = generationFor(hostId)
+  if (!supportsSubmissionTasks(hostId)) throw new Error('请更新电脑连接服务后使用提交任务')
+  const previous = pending.find((item: PendingSubmission): boolean => item.hostId == hostId && item.kind == kind && !item.accepted)
+  if (previous != null && previous.id != id) throw new Error('上次提交是否入队尚未确认，请先在提交任务中核对，勿重复发送')
+  if (!pending.some((item: PendingSubmission): boolean => item.id == id)) { pending.push({ hostId, id, kind, generation, accepted: false, unknown: false, createdAt: Date.now() } as PendingSubmission); savePending() }
+  let result: UTSJSONObject
+  try { result = await bridge.requestTaskChannel(hostId, 'tasks.submit', { taskId: id, kind, payload }) }
+  catch (reason) {
+    if (connection.cacheNamespace != namespace) throw reason
+    try {
+      const observed = await readSubmissionTasks(hostId, { taskId: id })
+      const task = findTask(observed, id)
+      if (task == null) throw reason
+      result = { accepted: true, taskId: id, task }
+    } catch (_) { const record = pending.find((item: PendingSubmission): boolean => item.id == id); if (record != null) { record.unknown = true; savePending() }; throw new Error('提交是否入队尚未确认，请在提交任务中核对，勿重复发送') }
+  }
+  if (result.getBoolean('accepted') != true || result.getString('taskId') != id) throw new Error('未取得有效入队回执，请核对原任务')
+  if (connection.cacheNamespace == namespace) {
+    const record = pending.find((item: PendingSubmission): boolean => item.id == id)
+    if (record != null) { record.accepted = true; savePending() }
+    const task = findTask(result, id)
+    const commandParams = payload['params'] as UTSJSONObject | null
+    submissionTasks.accepted = { revision: submissionTasks.accepted.revision + 1, hostId, taskId: id, threadId: task?.threadId ?? commandParams?.getString('threadId') ?? '', method: task?.method ?? payload.getString('method') ?? '' }
+    refreshSubmissionTasks(hostId)
+  }
+  return result
+}
+
+// 兼容原业务成功回执；等待由应用级任务持有，不依赖页面存活或长连接请求。
+export async function submitTaskCommand(hostId: string, method: string, params: UTSJSONObject, commandId: string = '', guard: UTSJSONObject | null = null): Promise<UTSJSONObject> {
+  const id = commandId.length > 0 ? commandId : newSubmissionId(), namespace = connection.cacheNamespace
+  const payload: UTSJSONObject = { method, params }
+  if (guard != null) payload['firstMessageGuard'] = guard
+  await submitTask(hostId, id, 'command', payload)
+  // 页面离开后也消费已入队的原发送快照，防止返回旧输入时再次发送。
+  settleSubmission(hostId, id, true)
+  bridge.clearCommand(id, hostId)
+  return await awaitSubmissionResult(hostId, id, namespace)
+}
+
+export async function awaitSubmissionResult(hostId: string, id: string, namespace: string): Promise<UTSJSONObject> {
+  while (connection.cacheNamespace == namespace) {
+    if (connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) {
+      let raw: UTSJSONObject | null = null
+      try { raw = await readSubmissionTasks(hostId, { taskId: id }) }
+      catch (_) { /* 读取超时不改变已接纳任务的执行结果，等待重连后继续只读核对。 */ }
+      if (raw == null) { await new Promise<void>((resolve) => { setTimeout(() => { resolve() }, 1000) }); continue }
+      const task = findTask(raw, id)
+      if (task != null) {
+        if (task.historyExpired == true) { removePending(id); throw new Error('执行记录已过保留期，原任务不会重发，请在电脑核对') }
+        if (task.state == 'succeeded') { removePending(id); return task.result ?? {} }
+        if (['failed', 'cancelled', 'canceled', 'skipped'].indexOf(task.state) >= 0) { removePending(id); throw new Error(task.error.length > 0 ? task.error : '提交任务' + task.state) }
+        if (task.state == 'unknown' || task.state == 'waiting_resume') throw new Error(task.error.length > 0 ? task.error : '执行结果需要核对，请到提交任务中处理')
+      }
+    }
+    await new Promise<void>((resolve) => { setTimeout(() => { resolve() }, 1000) })
+  }
+  throw new Error('配对已变化，请回到原连接核对提交任务')
+}
+
+// 未确认入队记录没有服务端任务时也保留保护，查不到不等于未执行。
+export async function checkPendingSubmission(hostId: string, id: string): Promise<void> {
+  const raw = await readSubmissionTasks(hostId, { taskId: id })
+  if (findTask(raw, id) == null) throw new Error('尚未查到原任务，请在电脑核对后再清除手机提交保护')
+  removePending(id); bridge.clearCommand(id, hostId); await refreshSubmissionTasks(hostId)
+}
+export function acknowledgePendingSubmission(hostId: string, id: string) { removePending(id); bridge.clearCommand(id, hostId) }
+
+// 文件先完整写入任务作用域；只有守护进程确认接管后才消费手机草稿。
+export async function submitNewConversationTask(draft: NewDraft, mode: string, progress: (message: string) => void): Promise<string> {
+  const hostId = draft.hostId, namespace = draft.cacheNamespace, id = newSubmissionId()
+  const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), choices = { ...draft.choices } as NewDraftChoices
+  const plugins = draft.plugins.slice(), mentions = copyThreadMentions(draft.threadMentions), mentionRevision = draft.threadMentionRevision
+  if (draft.projectId.length == 0) throw new Error('请先选择项目')
+  if (mode != 'desktopIpc' && mode != 'nativeDraft') throw new Error('电脑的新建聊天方式尚未就绪，请重新读取')
+  if (text.length == 0 && images.length == 0 && files.length == 0) throw new Error('请先输入内容或添加附件')
+  if (text.length > 32000) throw new Error('消息最多32000个字符')
+  if (images.length + files.length > 3) throw new Error('每次最多添加3个附件')
+  if (mode == 'nativeDraft' && plugins.length > 0) throw new Error('原生草稿暂不支持插件，请先移除插件后发送')
+  if (choices.permissionMode == 'full-access' && choices.confirmedFullAccess != true) throw new Error('请先确认电脑完整访问权限')
+  for (const file of files) {
+    if (connection.cacheNamespace != namespace || connection.hostId != hostId) throw new Error('连接目标已变化，输入已保留')
+    if (file.data.length == 0) file.data = await readFileBase64(file.source)
+    file.status = 'uploading'; file.progress = 0; file.error = ''
+    try {
+      progress('正在上传附件：' + file.name + ' 0%')
+      const started = await bridge.requestTaskUpload(hostId, 'attachment.begin', { taskId: id, uploadId: file.id, name: file.name, size: file.size })
+      let index = started.getNumber('nextChunk') ?? 0
+      const length = FILE_CHUNK_BYTES * 4 / 3
+      while (index * length < file.data.length) {
+        const part = await bridge.requestTaskUpload(hostId, 'attachment.chunk', { taskId: id, uploadId: file.id, index, data: file.data.slice(index * length, (index + 1) * length) })
+        index = part.getNumber('nextChunk') ?? index + 1
+        file.progress = Math.min(99, Math.floor((part.getNumber('received') ?? 0) * 100 / file.size)); progress('正在上传附件：' + file.name + ' ' + file.progress + '%')
+      }
+      await bridge.requestTaskUpload(hostId, 'attachment.finish', { taskId: id, uploadId: file.id })
+      file.status = 'ready'; file.progress = 100
+    } catch (reason) { file.status = 'paused'; file.error = (reason as Error).message; throw reason }
+  }
+  progress('正在保存提交任务…')
+  const taskChoices: UTSJSONObject = {}
+  if (choices.model != null) taskChoices['model'] = choices.model
+  if (choices.effort != null) taskChoices['effort'] = choices.effort
+  if (choices.serviceTier != null) taskChoices['serviceTier'] = choices.serviceTier
+  if (choices.mode != null) taskChoices['mode'] = choices.mode
+  if (choices.permissionMode != null) taskChoices['permissionMode'] = choices.permissionMode
+  if (choices.confirmedFullAccess != null) taskChoices['confirmedFullAccess'] = choices.confirmedFullAccess
+  await submitTask(hostId, id, 'newConversation', { projectId: draft.projectId, mode, text, images: images.map((image: DraftImage): string => image.src), attachments: files.map((file: DraftFile): string => file.id), choices: taskChoices, pluginIds: plugins.map((plugin: SelectedPlugin): string => plugin.id), threadMentionIds: mentions.map((mention: SelectedThreadMention): string => mention.id) })
+  // 迟到回执只消费原快照，后续输入与重新选择的引用不会被清空。
+  if (draft.text.trim() == text) draft.text = ''
+  draft.images = draft.images.filter((image: DraftImage): boolean => !images.some((sent: DraftImage): boolean => sent.id == image.id))
+  draft.files = draft.files.filter((file: DraftFile): boolean => !files.some((sent: DraftFile): boolean => sent.id == file.id))
+  if (draft.threadMentionRevision == mentionRevision) { draft.threadMentions = [] as SelectedThreadMention[]; draft.threadMentionRevision++ }
+  if (JSON.stringify(draft.choices) == JSON.stringify(choices)) draft.choices = {} as NewDraftChoices
+  return id
+}
+
+// 配对或实例代次改变只重建只读订阅，绝不重发提交。
+export function startSubmissionTasks() {
+  if (installed) return
+  installed = true
+  watch((): string => connection.cacheNamespace, (namespace: string) => {
+    submissionTasks.namespace = namespace; submissionTasks.instances = [] as InstanceSubmissionTasks[]; pending.splice(0, pending.length)
+    try { const saved = uni.getStorageSync(pendingKey()); if (typeof saved == 'string' && saved.length > 0) { const records = JSON.parse<PendingSubmission[]>(saved) ?? [] as PendingSubmission[]; records.forEach((record: PendingSubmission) => { if (record.id.length >= 16 && record.hostId.length > 0) { if (!record.accepted) record.unknown = true; pending.push(record) } }) } } catch (_) {}
+  }, { immediate: true })
+  watch((): string => connection.connected.toString() + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online.toString() + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
+    submissionTasks.instances = submissionTasks.instances.filter((item: InstanceSubmissionTasks): boolean => connection.computers.some((computer: Computer): boolean => computer.id == item.hostId))
+    if (!connection.connected) return
+    connection.computers.forEach((computer: Computer) => {
+      if (!computer.online) return
+      const previous = submissionInstance(computer.id), generation = computer.instanceGeneration ?? ''
+      if (previous == null) submissionTasks.instances.push({ hostId: computer.id, generation, supported: false, loading: true, error: '', snapshot: null, clockOffset: 0 } as InstanceSubmissionTasks)
+      else if (previous.generation != generation) { previous.generation = generation; previous.snapshot = null; previous.supported = false }
+      refreshSubmissionTasks(computer.id)
+    })
+  }, { immediate: true })
+  function schedulePoll() {
+    clearTimeout(pollTimer)
+    pollTimer = setTimeout(() => { if (connection.connected && bridge.foreground) submissionTasks.instances.forEach((instance: InstanceSubmissionTasks) => { if (instance.supported && ((instance.snapshot?.tasks.length ?? 0) > 0 || pending.some((record: PendingSubmission): boolean => record.hostId == instance.hostId && record.accepted))) refreshSubmissionTasks(instance.hostId) }); schedulePoll() }, 4000)
+  }
+  schedulePoll()
+  ticking = setInterval(() => { submissionTasks.clock = Date.now() }, 500)
+}

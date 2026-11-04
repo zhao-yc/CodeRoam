@@ -5,12 +5,13 @@ import { retireConversationCacheBodies } from './services/retired-conversation-c
 import { startThreadListCache } from './services/thread-list.uts'
 import { startTaskNotifications, resetTaskNotifications } from './services/task-notifications.uts'
 import { startDeletionTasks, resumeDeletionTasks, backgroundDeletionTasks } from './services/delete-tasks.uts'
+import { startSubmissionTasks } from './services/submission-tasks.uts'
 // #ifdef WEB
 import { startTaskBrowserNotifications } from './services/task-browser-notifications.uts'
 // #endif
 export default {
   onLaunch() {
-    retireConversationCacheBodies(); startConversationCacheLifecycle(); startThreadListCache(); startTaskNotifications(); startDeletionTasks()
+    retireConversationCacheBodies(); startConversationCacheLifecycle(); startThreadListCache(); startTaskNotifications(); startDeletionTasks(); startSubmissionTasks()
     // #ifdef WEB
     startTaskBrowserNotifications()
     // #endif

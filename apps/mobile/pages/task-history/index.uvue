@@ -1,0 +1,103 @@
+<template>
+  <view class="page history-page">
+    <view class="history-header"><button class="history-back" @click="goBack">返回</button><text class="history-heading">执行记录</text></view>
+    <view class="history-filters"><button class="history-filter" @click="chooseHost">{{ selectedHostLabel }}</button><button class="history-filter" @click="chooseState">{{ selectedStateLabel }}</button><button class="history-filter" :disabled="loading" @click="reload">刷新</button></view>
+    <text v-if="error.length > 0" class="history-error">{{ error }}</text>
+    <scroll-view direction="vertical" class="history-scroll" :show-scrollbar="false" @scrolltolower="loadMore">
+      <view v-if="rows.length == 0 && !loading" class="history-empty"><text>暂无执行记录</text><text class="history-empty-note">记录保存在原守护进程，电脑在线时可以查询。</text></view>
+      <view v-for="row in rows" :key="row.hostId + ':' + row.task.id" class="history-task">
+        <view class="history-task-heading" @click="openTask(row.hostId, row.task)"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><text class="history-state">{{ stateLabel(row.task.state) }}</text></view>
+        <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · {{ dateLabel(row.task.createdAt) }}</text>
+        <text v-if="row.task.completedAt > 0 && row.task.startedAt > 0" class="history-meta">耗时 {{ Math.max(0, Math.round((row.task.completedAt - row.task.startedAt) / 1000)) }} 秒</text>
+        <text v-if="row.task.stage.length > 0" class="history-stage">{{ row.task.stage }}</text>
+        <text v-if="row.task.error.length > 0" class="history-error">{{ row.task.error }}</text>
+        <view v-if="row.task.steps.length > 0" class="history-steps"><text v-for="step in row.task.steps" :key="step.name" class="history-step">{{ step.name }} · {{ stateLabel(step.state) }}</text></view>
+        <view class="history-actions"><button v-if="row.task.threadId.length > 0 && row.task.method != 'thread.delete'" class="history-action" @click="openTask(row.hostId, row.task)">打开聊天</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="control(row, 'reconcile')">核对结果</button><button v-if="row.task.state == 'unknown'" class="history-action" :disabled="working.length > 0" @click="skip(row)">已核对并跳过</button><button v-if="canResume(row)" class="history-action" :disabled="working.length > 0" @click="control(row, 'resume')">继续队列</button></view>
+      </view>
+      <button v-if="hasMore" class="history-more" :disabled="loading" @click="loadMore">{{ loading ? '正在读取…' : '加载更多' }}</button>
+      <text class="history-footnote">每实例保留最近30天且最多1000条已结束记录；待核对任务保留至处理。</text>
+    </scroll-view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref } from 'vue'
+import { bridge, connection, Computer } from '../../services/bridge.uts'
+import { SubmissionTask, submissionStateLabel, submissionInstance } from '../../services/submission-task-state.uts'
+import { readSubmissionTasks, controlSubmissionTask } from '../../services/submission-tasks.uts'
+type HistoryRow = { hostId: string, task: SubmissionTask }
+type HistoryCursor = { hostId: string, before: number, more: boolean }
+const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
+const cursors = ref<HistoryCursor[]>([])
+let request = 0
+const stateValues = ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped']
+const stateLabels = ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过']
+const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全部电脑' : hostName(hostId.value))
+const selectedStateLabel = computed((): string => stateLabels[stateValues.indexOf(state.value)] ?? '全部状态')
+const hasMore = computed((): boolean => cursors.value.some((cursor: HistoryCursor): boolean => cursor.more))
+function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
+function stateLabel(value: string): string { return submissionStateLabel(value) }
+function canResume(row: HistoryRow): boolean { const snapshot = submissionInstance(row.hostId)?.snapshot; return snapshot?.paused == true && snapshot.blockerId == row.task.id && ['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(row.task.state) >= 0 }
+function dateLabel(value: number): string { const date = new Date(value); return date.getFullYear() + '-' + (date.getMonth() + 1) + '-' + date.getDate() + ' ' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0') }
+// 每实例独立游标，全部电脑仅合并显示，不能把一个实例游标传给另一实例。
+async function loadMore() {
+  if (loading.value || !connection.connected) return
+  const revision = request, namespace = connection.cacheNamespace
+  loading.value = true; error.value = ''
+  try {
+    for (const cursor of cursors.value) {
+      if (!cursor.more) continue
+      const params: UTSJSONObject = { view: 'history', limit: 30 }
+      if (cursor.before > 0) params['before'] = cursor.before
+      if (state.value.length > 0) params['state'] = state.value
+      const result = await readSubmissionTasks(cursor.hostId, params)
+      if (revision != request || namespace != connection.cacheNamespace) return
+      const tasks = JSON.parse<SubmissionTask[]>(JSON.stringify(result['tasks'] ?? [])) ?? [] as SubmissionTask[]
+      tasks.forEach((task: SubmissionTask) => { if (!rows.value.some((row: HistoryRow): boolean => row.hostId == cursor.hostId && row.task.id == task.id)) rows.value.push({ hostId: cursor.hostId, task } as HistoryRow) })
+      const next = result.getNumber('nextCursor') ?? 0
+      cursor.before = next; cursor.more = next > 0
+    }
+    rows.value = rows.value.sort((a: HistoryRow, b: HistoryRow): number => b.task.createdAt - a.task.createdAt || b.task.position - a.task.position)
+  } catch (reason) { if (revision == request) error.value = (reason as Error).message }
+  finally { if (revision == request) loading.value = false }
+}
+function reload() {
+  request++; loading.value = false; rows.value = [] as HistoryRow[]
+  cursors.value = connection.computers.filter((computer: Computer): boolean => computer.online && (hostId.value.length == 0 || computer.id == hostId.value)).map((computer: Computer): HistoryCursor => ({ hostId: computer.id, before: 0, more: true } as HistoryCursor))
+  if (!connection.connected) { error.value = '请连接电脑后查询执行记录'; return }
+  loadMore()
+}
+function chooseHost() { const computers = connection.computers; uni.showActionSheet({ itemList: ['全部电脑'].concat(computers.map((computer: Computer): string => computer.label)), success: (answer) => { hostId.value = answer.tapIndex == 0 ? '' : computers[answer.tapIndex - 1].id; reload() } }) }
+function chooseState() { uni.showActionSheet({ itemList: stateLabels, success: (answer) => { state.value = stateValues[answer.tapIndex]; reload() } }) }
+function openTask(id: string, task: SubmissionTask) {
+  if (task.threadId.length == 0 || task.method == 'thread.delete') return
+  try { bridge.selectComputer(id); uni.navigateTo({ url: '/pages/conversation/index?hostId=' + encodeURIComponent(id) + '&threadId=' + encodeURIComponent(task.threadId) + '&title=' + encodeURIComponent(task.title) }) } catch (reason) { error.value = (reason as Error).message }
+}
+async function control(row: HistoryRow, action: string, confirmed: boolean = false) { working.value = row.task.id; try { await controlSubmissionTask(row.hostId, row.task.id, action, confirmed); reload() } catch (reason) { error.value = (reason as Error).message } finally { working.value = '' } }
+function skip(row: HistoryRow) { uni.showModal({ title: '跳过待核对任务', content: '请先在电脑核对。确认后不会重发原任务，并继续该实例队列。', confirmText: '已核对，继续', success: (answer) => { if (answer.confirm) control(row, 'skip', true) } }) }
+function goBack() { if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+onLoad((options: OnLoadOptions) => { hostId.value = options['hostId'] ?? '' })
+onShow(() => { reload() })
+onUnload(() => { request++ })
+</script>
+
+<style>
+.history-page { flex: 1; height: 100%; padding-top: var(--status-bar-height); }
+.history-header { height: 60px; flex-direction: row; align-items: center; padding: 0 16px; flex-shrink: 0; }
+.history-back { margin: 0 14px 0 0; padding: 6px 0; font-size: 15px; background-color: transparent; color: #4546bd; }
+.history-heading { font-size: 20px; font-weight: bold; color: #1a2135; }
+.history-filters { flex-direction: row; padding: 0 12px 8px; flex-shrink: 0; }
+.history-filter { margin: 0 4px; padding: 5px 10px; background-color: #f1f2fb; color: #4546bd; font-size: 13px; line-height: 24px; }
+.history-scroll { flex: 1; min-height: 0; }
+.history-task { margin: 8px 16px; padding: 14px; border-radius: 14px; background-color: #f5f6fc; }
+.history-task-heading { flex-direction: row; align-items: center; }
+.history-task-title { flex: 1; font-weight: bold; font-size: 15px; color: #1a2135; }
+.history-state { margin-left: 10px; font-size: 12px; color: #4546bd; }
+.history-meta, .history-stage, .history-step { margin-top: 5px; font-size: 12px; line-height: 19px; color: #596479; }
+.history-error { margin: 4px 16px; font-size: 12px; line-height: 20px; color: #9b493a; }
+.history-actions { margin-top: 8px; flex-direction: row; flex-wrap: wrap; }
+.history-action { margin: 4px 8px 0 0; padding: 4px 8px; background-color: #e7e9fd; color: #4546bd; font-size: 12px; line-height: 22px; }
+.history-empty { padding: 48px 20px; align-items: center; color: #596479; font-size: 16px; }
+.history-empty-note, .history-footnote { padding: 12px 20px; font-size: 12px; line-height: 20px; color: #8590a4; }
+.history-more { margin: 12px 20px; background-color: #e7e9fd; color: #4546bd; font-size: 14px; }
+</style>

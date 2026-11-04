@@ -265,7 +265,9 @@ export class DesktopAdapter extends EventEmitter {
   /** 设置读取和附件上传均要求手机已订阅，绝不借上传或选择菜单唤醒其他会话。 */
   subscribed(threadId,deviceId) {
     const entry=this.conversations.get(threadId);
-    if(!entry?.watchers.has(deviceId)||!entry.owner||!entry.state)throw new BridgeError('SUBSCRIPTION_REQUIRED','请先加载此聊天后再操作');
+    // 已确认入队的写操作使用守护进程租约；手机切页不能撤销后台执行的授权上下文。
+    const retained=this.taskLeases?.get(threadId)?.has(deviceId)===true;
+    if((!entry?.watchers.has(deviceId)&&!retained)||!entry?.owner||!entry.state)throw new BridgeError('SUBSCRIPTION_REQUIRED','请先加载此聊天后再操作');
     return entry;
   }
 

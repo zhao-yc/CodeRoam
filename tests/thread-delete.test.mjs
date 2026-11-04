@@ -91,10 +91,14 @@ test('删除排队时已入账并保留内部订阅，手机退订不取消任�
   agent.threadLocks.set('root', new Promise(resolve => { releasePrevious = resolve; }));
   const request = { v: 1, type: 'request', requestId: 'queued-delete-command', method: 'thread.delete', deviceId: 'phone', params: { threadId: 'root' } };
   const pending = agent.handleRequest(request);
-  assert.equal(journal.status('phone', request.requestId).state, 'pending');
-  assert.ok([...f.adapter.conversations.get('root').watchers].some(id => id.startsWith('delete:')));
-  f.adapter.unwatch('root', 'phone');
-  releasePrevious();
+  try {
+    // 新队列先保存任务；真正开始桌面步骤后，原命令账本与删除租约才进入 pending。
+    assert.equal(agent.taskQueue.row('phone', request.requestId).state, 'queued');
+    for (let attempt = 0; attempt < 50 && journal.status('phone', request.requestId).state !== 'pending'; attempt++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(journal.status('phone', request.requestId).state, 'pending');
+    assert.ok([...f.adapter.conversations.get('root').watchers].some(id => id.startsWith('delete:')));
+    f.adapter.unwatch('root', 'phone');
+  } finally { releasePrevious(); }
   assert.equal((await pending).result?.deleted, true);
   assert.equal(f.calls.filter(call => call === 'delete').length, 1);
   assert.equal(f.adapter.conversations.size, 0);
@@ -122,6 +126,8 @@ test('后台删除仍要求首次请求已订阅，并拒绝复用原编号更�
   const request = { v: 1, type: 'request', requestId: 'guard-delete-command', method: 'thread.delete', deviceId: 'other-phone', params: { threadId: 'root' } };
   assert.ok((await agent.handleRequest(request)).error);
   assert.equal(f.calls.includes('prepare'), false);
+  // 原提交设备处理自己的明确失败，不能让后续有效请求绕过实例暂停。
+  await agent.taskQueue.control('other-phone', { taskId: agent.taskQueue.list('other-phone').blockerId, action: 'resume' });
   request.deviceId = 'phone';
   const pending = agent.handleRequest(request);
   const changed = await agent.handleRequest({ ...request, params: { threadId: 'child' } });

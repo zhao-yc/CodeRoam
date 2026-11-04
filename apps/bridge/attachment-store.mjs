@@ -11,6 +11,8 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 export class AttachmentStore {
   constructor({ root = '.local/bridge/attachments', now = Date.now } = {}) {
     this.root = path.resolve(root); this.now = now;
+    // 队列只保留仍被持久化任务引用的作用域，不延长普通未发送附件的寿命。
+    this.retainScope = () => false;
   }
 
   /** 创建目录前核验现有祖先，避免符号链接把上传引到项目外。 */
@@ -43,7 +45,7 @@ export class AttachmentStore {
     if (fs.lstatSync(file).isSymbolicLink()) throw new BridgeError('UNSAFE_ATTACHMENT_PATH', '附件元数据不可用');
     const metadata = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (metadata.deviceId !== deviceId || metadata.threadId !== threadId || metadata.id !== id) throw new BridgeError('UPLOAD_FORBIDDEN', '附件不属于当前聊天');
-    if (!metadata.sent && this.now() - metadata.createdAt >= EXPIRY) throw new BridgeError('UPLOAD_EXPIRED', '附件已过期，请移除后重新选择');
+    if (!metadata.sent && !this.retainScope(deviceId, threadId) && this.now() - metadata.createdAt >= EXPIRY) throw new BridgeError('UPLOAD_EXPIRED', '附件已过期，请移除后重新选择');
     return { directory, metadata };
   }
 
@@ -61,7 +63,14 @@ export class AttachmentStore {
         const directory = path.join(parent, id);
         if (fs.lstatSync(directory).isSymbolicLink() || !fs.statSync(directory).isDirectory()) continue;
         // 未完成和已发送的临时副本均可清理，已发送的项目附件不会在这里删除。
-        if (this.now() - fs.statSync(directory).mtimeMs >= EXPIRY) fs.rmSync(directory, { recursive: true });
+        if (this.now() - fs.statSync(directory).mtimeMs >= EXPIRY) {
+          // 文件只在已核验的自有目录读取，不能因其他手机重用了编号而错误保留。
+          const file = path.join(directory, 'metadata.json');
+          if (fs.existsSync(file) && !fs.lstatSync(file).isSymbolicLink()) {
+            try { const metadata = JSON.parse(fs.readFileSync(file, 'utf8')); if (this.retainScope(metadata.deviceId, metadata.threadId)) continue; } catch { /* 损坏的过期元数据不再被任务使用。 */ }
+          }
+          fs.rmSync(directory, { recursive: true });
+        }
       }
     }
   }
@@ -125,10 +134,31 @@ export class AttachmentStore {
   }
 
   abort(deviceId, threadId, { uploadId }) {
+    if (this.retainScope(deviceId, threadId)) throw new BridgeError('UPLOAD_IN_USE', '附件已由提交任务接管，不能删除');
     const directory = this.directory(deviceId, threadId, uploadId);
     if (!fs.existsSync(directory)) return { ok: true };
     this.metadata(deviceId, threadId, uploadId);
     fs.rmSync(directory, { recursive: true }); return { ok: true };
+  }
+
+  /** 任务上传校验完成后绑定到新草稿或聊天，手机不能指定任何本地路径。 */
+  bindScope(deviceId, sourceScope, targetScope, ids = []) {
+    if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS || new Set(ids).size !== ids.length) throw new BridgeError('BAD_ATTACHMENTS', '附件编号无效');
+    for (const id of ids) {
+      const { directory, metadata } = this.metadata(deviceId, sourceScope, id);
+      if (!metadata.complete) throw new BridgeError('UPLOAD_INCOMPLETE', '附件尚未上传完成');
+      const data = this.readData(directory, metadata);
+      if (digest(data) !== metadata.sha256) throw new BridgeError('UPLOAD_CORRUPT', '附件校验失败，请重新上传');
+      const target = this.directory(deviceId, targetScope, id);
+      this.safeDirectory(path.dirname(target)); this.safeDirectory(target);
+      const existing = path.join(target, 'data');
+      if (fs.existsSync(existing)) {
+        if (fs.lstatSync(existing).isSymbolicLink() || digest(fs.readFileSync(existing)) !== metadata.sha256) throw new BridgeError('ATTACHMENT_CONFLICT', '目标附件已变化，请核对后重试');
+      } else fs.writeFileSync(existing, data, { flag: 'wx', mode: 0o600 });
+      // 新绑定副本已被任务接管，后续执行仍复核完整摘要。
+      this.save(target, { ...metadata, threadId: targetScope, createdAt: this.now() });
+    }
+    return { ok: true };
   }
 
   /** 手机仅传附件编号，文件引用由桥接在原会话工作目录内生成。 */

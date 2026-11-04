@@ -119,6 +119,7 @@
         <template #feedback>
           <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
           <text v-if="composerExpanded && executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
+          <text v-if="composerExpanded && pendingSetting.length > 0 && composerMenu.length == 0" class="composer-caption">{{ pendingSetting }}</text>
           <text v-if="composerExpanded && settingsError.length > 0 && composerMenu.length == 0" class="composer-caption">{{ settingsError }}</text>
         </template>
       </message-composer>
@@ -159,6 +160,8 @@ import { bindImagePaste } from '../../services/image-paste.uts'
 import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, QuestionPreview, QuestionPreviewItem, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { clearFileReportCache } from '../../services/file-report-cache.uts'
+import { submissionTasks, supportsSubmissionTasks } from '../../services/submission-task-state.uts'
+import { newSubmissionId, submitTask, awaitSubmissionResult } from '../../services/submission-tasks.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
@@ -256,6 +259,7 @@ const settingsLoading = ref(false)
 const settingsBusy = ref(false)
 const settingChoice = ref('')
 const settingsError = ref('')
+const pendingSetting = ref('')
 const menuHeight = ref(280)
 const menuBottom = ref(134)
 const menuWidth = ref(Math.min(330, props.paneWidth - 28))
@@ -286,6 +290,13 @@ const modelLabel = computed((): string => {
 const modelSupportsImages = computed((): boolean => models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)?.supportsImages != false)
 const busy = ref(false)
 const goalBusy = ref(false)
+// 入队即释放页面操作锁；模型/桌面结果继续由应用级任务跟随。
+if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.accepted.revision, () => {
+  const accepted = submissionTasks.accepted
+  if (accepted.hostId != pageHostId.value || accepted.threadId != pageThreadId.value) return
+  settleSubmission(accepted.hostId, accepted.taskId, true)
+  busy.value = false; goalBusy.value = false; pendingAction.value = ''
+})
 const goalExpanded = ref(false)
 const goalOpenRequest = ref(0)
 const goalCloseRequest = ref(0)
@@ -1211,6 +1222,16 @@ function selectSetting(key: string, value: string): boolean {
   if (key == 'mode' && ((connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active')) return false
   const changes: UTSJSONObject = {}
   changes[key] = value
+  if (typeof supportsSubmissionTasks == 'function' && supportsSubmissionTasks(pageHostId.value)) {
+    const hostId = pageHostId.value, threadId = pageThreadId.value, namespace = connection.cacheNamespace, id = newSubmissionId()
+    const request = ++settingsRequest
+    settingsBusy.value = true; busy.value = true; settingChoice.value = key + ':' + value; settingsError.value = ''; pendingSetting.value = ''
+    submitTask(hostId, id, 'command', { method: 'thread.settings.update', params: { threadId, changes } }).then((_: UTSJSONObject) => {
+      if (request == settingsRequest && isCurrentPage()) { settingsBusy.value = false; busy.value = false; closeComposerMenu(); pendingSetting.value = '待执行：' + (key == 'effort' ? '思考强度 ' + effortLabel(value) : key == 'model' ? '模型 ' + value : key == 'mode' ? value == 'plan' ? '计划模式' : '默认模式' : '速度 ' + value) }
+      awaitSubmissionResult(hostId, id, namespace).then((_: UTSJSONObject) => { if (request == settingsRequest && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { settingsError.value = ''; pendingSetting.value = ''; settingChoice.value = ''; loadSettings() } }, (reason: Error) => { if (request == settingsRequest && isCurrentPage()) { pendingSetting.value = ''; settingChoice.value = ''; settingsError.value = reason.message } })
+    }, (reason: Error) => { if (request == settingsRequest && isCurrentPage()) { settingsBusy.value = false; busy.value = false; settingChoice.value = ''; settingsError.value = reason.message } })
+    return true
+  }
   const request = ++settingsRequest
   const snapshotRevision = settingsSnapshotRevision
   settingChoice.value = key == 'mode' ? 'mode' : key + ':' + value; settingsBusy.value = true; busy.value = true; settingsLoading.value = false; settingsError.value = ''

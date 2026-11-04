@@ -1,5 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { validateGoalUpdate } from './goals.mjs';
+import { TASK_METHODS, validateTaskRequest } from './tasks.mjs';
+
+export { TASK_METHODS, validTaskSnapshot } from './tasks.mjs';
 
 export const PROTOCOL_VERSION = 1;
 export const READ_METHODS = new Set(['ping', 'threads.list', 'threads.watch', 'threads.unwatch', 'thread.watch', 'thread.unwatch', 'thread.history', 'thread.images', 'thread.settings.read', 'command.status']);
@@ -29,7 +32,9 @@ READ_METHODS.add('thread.draft.unwatch');
 WRITE_METHODS.add('thread.draft.open');
 WRITE_METHODS.add('thread.draft.update');
 WRITE_METHODS.add('thread.draft.send');
-export const METHODS = new Set([...READ_METHODS, ...WRITE_METHODS, ...UPLOAD_METHODS, ...RELAY_METHODS]);
+export const METHODS = new Set([...READ_METHODS, ...WRITE_METHODS, ...UPLOAD_METHODS, ...RELAY_METHODS, ...TASK_METHODS]);
+/** 任务管理不进入桌面串行执行集合，但丢失提交或控制回执仍须按未知结果处理。 */
+export const isMutatingRequest = method => WRITE_METHODS.has(method) || method === 'tasks.submit' || method === 'tasks.control';
 export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_CONVERSATION_CACHE_THREADS = 20;
 
@@ -96,6 +101,10 @@ export function validateRequest(message) {
   if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(message.requestId)) throw new BridgeError('BAD_REQUEST_ID', '请求编号不合法');
   if (!METHODS.has(message.method)) throw new BridgeError('METHOD_NOT_ALLOWED', '此操作不在允许的接口列表中');
   if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) throw new BridgeError('BAD_PARAMS', '请求参数必须是对象');
+  if (TASK_METHODS.has(message.method)) {
+    validateTaskRequest(message.method, message.params, message.requestId);
+    return message;
+  }
   if (message.method === 'threads.cache.watch' || message.method === 'threads.cache.unwatch') {
     validateConversationCacheRequest(message.method, message.params);
     return message;
@@ -208,12 +217,16 @@ export function validateDraftId(value) {
   return value;
 }
 
-/** 上传必须明确选择一个公开作用域；内部 draft: 命名空间不接受手机直接指定。 */
+/** 上传必须明确选择一个公开作用域；内部草稿和任务命名空间不接受手机直接指定。 */
 export function validateAttachmentScope(params) {
-  if (!params || typeof params !== 'object' || Array.isArray(params) || Object.hasOwn(params, 'draftId') === Object.hasOwn(params, 'threadId')) throw new BridgeError('BAD_PARAMS', '附件必须且只能指定草稿编号或聊天编号');
+  if (!params || typeof params !== 'object' || Array.isArray(params) || ['draftId','threadId','taskId'].filter(key => Object.hasOwn(params,key)).length !== 1) throw new BridgeError('BAD_PARAMS', '附件必须且只能指定草稿、聊天或任务编号');
+  if (Object.hasOwn(params,'taskId')) {
+    if (typeof params.taskId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(params.taskId)) throw new BridgeError('BAD_PARAMS','任务附件编号无效');
+    return {taskId:params.taskId};
+  }
   if (Object.hasOwn(params, 'draftId')) return { draftId: validateDraftId(params.draftId) };
   requireString(params.threadId, '聊天编号', 200);
-  if (params.threadId.startsWith('draft:')) throw new BridgeError('BAD_PARAMS', '不能直接指定内部附件作用域');
+  if (/^(draft|task):/.test(params.threadId)) throw new BridgeError('BAD_PARAMS', '不能直接指定内部附件作用域');
   return { threadId: params.threadId };
 }
 

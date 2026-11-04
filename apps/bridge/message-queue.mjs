@@ -6,8 +6,9 @@ const WATCHER = 'message-queue';
 
 /** 队列只保存在连接服务自己的账本中；手机退出不影响已经确认入队的消息。 */
 export class MessageQueue {
-  constructor({ journal, adapter, exclusive, changed, blocked = () => false }) {
+  constructor({ journal, adapter, exclusive, changed, blocked = () => false, dispatch = null }) {
     this.db = journal.db; this.adapter = adapter; this.exclusive = exclusive; this.changed = changed; this.blocked = blocked;
+    this.dispatch = dispatch;
     this.closed = false; this.pumping = false;
     this.db.exec(`CREATE TABLE IF NOT EXISTS message_queue (
       position INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
@@ -105,12 +106,14 @@ export class MessageQueue {
   }
 
   /** 发送前先落盘占位；断线或超时保留未知状态，明确失败也暂停队列供用户处理。 */
-  async deliver(row, method, previousTurn) {
+  async deliver(row, method, previousTurn, background = false) {
     this.db.prepare("UPDATE message_queue SET state='sending', previous_turn=? WHERE id=?").run(previousTurn, row.id); this.changed(row.thread_id);
     try {
       // 展示名称只供队列快照使用；投递重新解析编号和最新名称，不信任持久化的标记。
       const { plugins, threadMentions, ...params } = JSON.parse(row.payload);
-      const result = await this.adapter.operate(method, { ...params, expectedTurnId: previousTurn }, row.id, row.device_id);
+      // 自动投递同样先进入实例提交队列；手动追加已经由当前提交任务持有执行槽。
+      const input = { ...params, expectedTurnId: previousTurn };
+      const result = background && this.dispatch ? await this.dispatch(method, input, row.id, row.device_id) : await this.adapter.operate(method, input, row.id, row.device_id);
       if (method === 'turn.steer') this.db.prepare('DELETE FROM message_queue WHERE id=?').run(row.id);
       else this.db.prepare("UPDATE message_queue SET state='dispatched' WHERE id=?").run(row.id);
       this.changed(row.thread_id); this.release(row.thread_id); return result;
@@ -140,7 +143,7 @@ export class MessageQueue {
       return;
     }
     if (head.state !== 'queued' || snapshot.status !== 'idle' || snapshot.activeTurnId || snapshot.readOnly || snapshot.approvals?.length || snapshot.pendingPlan || snapshot.questionGroups?.some(group => group.state === 'pending' && group.kind === 'native')) return;
-    await this.deliver(head, 'turn.send', snapshot.turns?.at(-1)?.turnId ?? '');
+    await this.deliver(head, 'turn.send', snapshot.turns?.at(-1)?.turnId ?? '', true);
   }
 
   async pump() {
@@ -148,7 +151,8 @@ export class MessageQueue {
     this.pumping = true;
     try {
       const threads = this.db.prepare('SELECT DISTINCT thread_id FROM message_queue').all();
-      await Promise.allSettled(threads.map(row => this.exclusive(row.thread_id, () => this.drain(row.thread_id))));
+      // 新执行器在实际写入时取得统一锁，不能在等待入队结果期间占住同一会话锁。
+      await Promise.allSettled(threads.map(row => this.dispatch ? this.drain(row.thread_id) : this.exclusive(row.thread_id, () => this.drain(row.thread_id))));
     } finally { this.pumping = false; }
   }
 

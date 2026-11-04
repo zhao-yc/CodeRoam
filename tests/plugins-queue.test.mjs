@@ -16,6 +16,9 @@ test('入队保存编号和已核对名称，decorate 仅展示约定插件字�
 test('插件不可用或只有插件不能入队，拒绝前不产生可投递记录', async t => {
   const f = fixture(t, { active: true });
   assert.equal((await f.enqueue({ pluginIds: ['search@example'] })).error.code, 'BAD_PARAMS');
+  // 已接纳但业务校验失败会暂停实例，人工处理后才允许继续测试下一次提交。
+  const blocker = f.agent.taskQueue.list('phone').blockerId;
+  if (blocker) await f.agent.taskQueue.control('phone', { taskId: blocker, action: 'resume' });
   assert.equal(f.reads.length, 0);
   f.data = directory();
   assert.equal((await f.enqueue({ text: '合成消息', pluginIds: ['search@example'] })).error.code, 'PLUGIN_UNAVAILABLE');

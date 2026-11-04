@@ -30,7 +30,9 @@ function fixture(t) {
   clearInterval(agent.messageQueue.timer);
   t.after(() => agent.close());
   const send = async (queueAction, extra = {}, requestId = randomUUID(), deviceId = 'phone') => agent.handleRequest({ v: 1, type: 'request', requestId, transportId: requestId, deviceId, method: 'turn.send', params: { threadId: 'thread', queueAction, ...extra } });
-  return { client, journal, adapter, agent, queue: agent.messageQueue, send };
+  // 新提交队列在任何明确失败后暂停整个实例；兼容场景必须显式处理原失败后继续。
+  const resume = async (deviceId = 'phone') => { const { blockerId } = agent.taskQueue.list(deviceId); if (blockerId) await agent.taskQueue.control(deviceId, { taskId: blockerId, action: 'resume' }); };
+  return { client, journal, adapter, agent, queue: agent.messageQueue, send, resume };
 }
 
 test('运行中发送只入队，重复请求不重复保存，手机退订后仍按顺序开始下一轮', async t => {
@@ -65,7 +67,9 @@ test('手动追加使用同一条队列正文，成功后移除且不会在空�
 test('旧轮次追加失败保留队列；其他设备不能操作；取消不会发送正文', async t => {
   const f = fixture(t), { result } = await f.send('enqueue', { text: '合成消息' });
   assert.equal((await f.send('steer', { queueId: result.queueId, expectedTurnId: 'stale' })).error.code, 'STALE_TURN');
+  await f.resume();
   assert.equal((await f.send('cancel', { queueId: result.queueId }, randomUUID(), 'other-phone')).error.code, 'QUEUE_FORBIDDEN');
+  await f.resume('other-phone');
   assert.equal(f.queue.rows('thread').length, 1);
   assert.equal((await f.send('cancel', { queueId: result.queueId })).result.canceled, true);
   assert.equal(f.client.calls.length, 0); assert.equal(f.queue.rows('thread').length, 0);
@@ -135,9 +139,11 @@ test('撤回回执丢失可再次恢复，退出或切页不自动发送，后�
 test('已发送或待核对状态拒绝编辑，跨设备和过期附件也不能借编辑改变原队列', async t => {
   const f = fixture(t), first = await f.send('enqueue', { text: '合成消息' }), queueId = first.result.queueId;
   assert.equal((await f.send('edit', { queueId }, randomUUID(), 'other-phone')).error.code, 'QUEUE_FORBIDDEN');
+  await f.resume('other-phone');
   for (const state of ['sending', 'dispatched', 'unknown', 'failed']) {
     f.journal.db.prepare('UPDATE message_queue SET state=? WHERE id=?').run(state, queueId);
     assert.equal((await f.send('edit', { queueId })).error.code, 'QUEUE_CHANGED'); assert.equal(f.queue.rows('thread')[0].state, state);
+    await f.resume();
   }
   f.journal.db.prepare("UPDATE message_queue SET state='queued',payload=? WHERE id=?").run(JSON.stringify({ threadId: 'thread', text: '合成附件', images: [], attachments: ['synthetic-upload-00001'] }), queueId);
   f.adapter.attachments.metadata = () => { throw Object.assign(Error('附件已过期'), { code: 'UPLOAD_EXPIRED' }); };
@@ -150,7 +156,7 @@ test('空闲聊天的排队偏好直接发送，回执不谎报排队，重复�
   assert.equal(first.error, undefined); assert.equal(first.result.queued, false); assert.equal(f.queue.rows('thread').length, 0);
   assert.equal(f.client.calls.length, 1); assert.equal(f.client.calls[0].method, 'thread-follower-start-turn');
   assert.equal(f.client.calls[0].params.turnStart.request.input[0].text, '空闲时正常发送');
-  assert.equal(f.adapter.conversations.get('thread').watchers.has('message-queue'), false);
+  assert.equal(f.adapter.conversations.get('thread')?.watchers.has('message-queue') ?? false, false);
   const replay = await f.send('enqueue', { text: '空闲时正常发送' }, commandId); assert.equal(replay.result.queued, false); await f.queue.pump(); assert.equal(f.client.calls.length, 1);
 });
 

@@ -42,6 +42,8 @@ test('追加成功也清除下一轮计划，但正在执行的轮次仍保留�
 
 test('发送失败或超时不执行事后恢复，旧手机发送保持兼容',async t=>{
  const f=fixture(t);f.client.failSend='发送超时';const result=await f.agent.handleRequest(request('timeout'));assert.equal(result.error.code,'OUTCOME_UNKNOWN');assert.equal(f.client.calls.some(call=>call.method==='thread-follower-update-thread-settings'),false);
+ // 合成桌面确认原发送没有开始后，显式跳过未知任务并恢复实例，绝不自动重发。
+ assert.equal(f.client.started.length,0);await f.agent.taskQueue.control('phone',{taskId:request('timeout').requestId,action:'skip',confirmed:true});
  f.client.failSend='';const old=request('old');delete old.params.resetPlanAfterSend;delete old.params.planMode;const response=await f.agent.handleRequest(old);assert.equal(response.result.messageAccepted,undefined);assert.equal(f.client.state.latestThreadSettings.collaborationMode.mode,'plan');
 });
 

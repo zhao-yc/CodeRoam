@@ -1,0 +1,79 @@
+<template>
+  <view v-if="available" class="submission-panel">
+    <view class="submission-heading"><text class="submission-title">{{ rows.length > 0 ? '提交任务 · ' + rows.length : '提交任务' }}</text><button class="submission-history" @click="openHistory">执行记录</button></view>
+    <text v-if="pausedNames.length > 0" class="submission-paused">{{ pausedNames }}的队列已暂停，处理异常后继续</text>
+    <scroll-view v-if="shownRows.length > 0" direction="vertical" class="submission-rows" :show-scrollbar="false" :style="{ maxHeight: expanded ? '280px' : '222px' }">
+      <view v-for="row in shownRows" :key="row.hostId + ':' + row.task.id" class="submission-row">
+        <view class="submission-main" @click="openTask(row.hostId, row.task)"><text class="submission-row-title">{{ row.task.title.length > 0 ? row.task.title : taskTitle(row.task) }}</text><text class="submission-description">{{ hostName(row.hostId) }} · {{ row.task.localOnly == true ? '入队回执待核对' : '#' + row.task.position + ' · ' + stateLabel(row.task.state) }}</text><text v-if="row.task.stage.length > 0 && row.task.state != 'queued'" class="submission-stage">{{ row.task.stage }}</text><text v-if="row.task.error.length > 0" class="submission-error">{{ row.task.error }}</text></view>
+        <view class="submission-actions">
+          <button v-if="row.task.state == 'queued'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'cancel')">取消</button>
+          <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'reconcile')">核对</button>
+          <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="skip(row.hostId, row.task)">已核对并跳过</button>
+          <button v-if="canResume(row.hostId, row.task)" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'resume')">继续队列</button>
+          <button v-if="row.task.localOnly != true && (row.task.state == 'failed' || row.task.state == 'unknown' || row.task.state == 'waiting_resume')" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'dismiss')">关闭</button>
+        </view>
+      </view>
+    </scroll-view>
+    <button v-if="rows.length > 3" class="submission-expand" @click="expanded = !expanded">{{ expanded ? '收起' : '展开全部 ' + rows.length + ' 项' }}</button>
+    <text v-if="error.length > 0" class="submission-error">{{ error }}</text>
+    <view v-for="instance in hiddenBlockers" :key="instance.hostId" class="submission-recovery"><text class="submission-error">{{ hostName(instance.hostId) }}的队列仍暂停</text><button class="submission-action" @click="openHistory">查看记录并处理</button></view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed, ref } from 'vue'
+import { connection, Computer } from '../../services/bridge.uts'
+import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, submissionVisible, submissionStateLabel } from '../../services/submission-task-state.uts'
+import { controlSubmissionTask, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
+type TaskRow = { hostId: string, task: SubmissionTask }
+const props = withDefaults(defineProps<{ hostId?: string }>(), { hostId: '' })
+const emit = defineEmits<{ open: [hostId: string, threadId: string, title: string] }>()
+const expanded = ref(false), error = ref(''), working = ref('')
+const instances = computed((): InstanceSubmissionTasks[] => submissionTasks.instances.filter((instance: InstanceSubmissionTasks): boolean => props.hostId.length == 0 || instance.hostId == props.hostId))
+const available = computed((): boolean => instances.value.some((instance: InstanceSubmissionTasks): boolean => instance.supported) || submissionTasks.pending.some((record: PendingSubmission): boolean => record.unknown && !record.accepted && (props.hostId.length == 0 || record.hostId == props.hostId)))
+const rows = computed((): TaskRow[] => {
+  const result = [] as TaskRow[]
+  instances.value.forEach((instance: InstanceSubmissionTasks) => { instance.snapshot?.tasks.forEach((task: SubmissionTask) => { if (submissionVisible(task, submissionTasks.clock + instance.clockOffset)) result.push({ hostId: instance.hostId, task } as TaskRow) }) })
+  submissionTasks.pending.forEach((record: PendingSubmission) => {
+    if (record.accepted || !record.unknown || props.hostId.length > 0 && record.hostId != props.hostId || result.some((row: TaskRow): boolean => row.hostId == record.hostId && row.task.id == record.id)) return
+    result.push({ hostId: record.hostId, task: { id: record.id, position: 0, kind: record.kind, method: '', title: '提交入队待核对', threadId: '', projectId: '', state: 'unknown', stage: '请先查询原提交编号', error: '手机未收到有效入队回执，请勿重复提交', createdAt: record.createdAt, startedAt: 0, completedAt: 0, updatedAt: record.createdAt, dismissed: false, steps: [] as SubmissionStep[], localOnly: true } as SubmissionTask } as TaskRow)
+  })
+  return result.sort((a: TaskRow, b: TaskRow): number => a.task.createdAt - b.task.createdAt || a.task.position - b.task.position)
+})
+const shownRows = computed((): TaskRow[] => expanded.value ? rows.value : rows.value.slice(0, 3))
+const pausedNames = computed((): string => instances.value.filter((instance: InstanceSubmissionTasks): boolean => instance.snapshot?.paused == true).map((instance: InstanceSubmissionTasks): string => hostName(instance.hostId)).join('、'))
+const hiddenBlockers = computed((): InstanceSubmissionTasks[] => instances.value.filter((instance: InstanceSubmissionTasks): boolean => instance.snapshot?.paused == true && !rows.value.some((row: TaskRow): boolean => row.hostId == instance.hostId && row.task.id == instance.snapshot!.blockerId)))
+function stateLabel(state: string): string { return submissionStateLabel(state) }
+function canResume(hostId: string, task: SubmissionTask): boolean { const snapshot = instances.value.find((instance: InstanceSubmissionTasks): boolean => instance.hostId == hostId)?.snapshot; return snapshot?.paused == true && snapshot.blockerId == task.id && ['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(task.state) >= 0 }
+function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
+function taskTitle(task: SubmissionTask): string { return task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }
+function openHistory() { uni.navigateTo({ url: '/pages/task-history/index' + (props.hostId.length > 0 ? '?hostId=' + encodeURIComponent(props.hostId) : '') }) }
+function openTask(hostId: string, task: SubmissionTask) { if (task.threadId.length > 0 && task.method != 'thread.delete') emit('open', hostId, task.threadId, task.title) }
+// 管理操作只修改原任务；失败或关闭都不隐式恢复整个实例。
+async function act(hostId: string, task: SubmissionTask, action: string, confirmed: boolean = false) {
+  if (working.value.length > 0) return
+  working.value = task.id; error.value = ''
+  try { if (task.localOnly == true) { if (action == 'reconcile') await checkPendingSubmission(hostId, task.id); else if (action == 'skip' && confirmed) acknowledgePendingSubmission(hostId, task.id); else throw new Error('请先核对，或确认已在电脑核对后清除保护') } else await controlSubmissionTask(hostId, task.id, action, confirmed) }
+  catch (reason) { error.value = (reason as Error).message }
+  finally { working.value = '' }
+}
+function skip(hostId: string, task: SubmissionTask) {
+  uni.showModal({ title: '跳过待核对任务', content: '请先在电脑核对原操作。跳过不会重发或撤回原操作，之后将继续该实例的排队任务。', confirmText: '已核对，继续', cancelText: '取消', success: (answer) => { if (answer.confirm) act(hostId, task, 'skip', true) } })
+}
+</script>
+
+<style>
+.submission-panel { margin: 0 16px 6px; flex-shrink: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; padding-bottom: 6px; }
+.submission-heading { flex-direction: row; align-items: center; min-height: 32px; }
+.submission-title { flex: 1; font-size: 13px; font-weight: bold; color: #596479; }
+.submission-history, .submission-action, .submission-expand { margin: 0; padding: 4px 6px; background-color: transparent; color: #4546bd; font-size: 12px; line-height: 20px; }
+.submission-rows { flex-shrink: 1; }
+.submission-row { flex-direction: row; align-items: center; background-color: #f3f4ff; border-radius: 10px; margin-top: 5px; padding: 9px 10px; }
+.submission-main { flex: 1; min-width: 0; }
+.submission-row-title { color: #1a2135; font-size: 13px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.submission-description, .submission-stage { color: #596479; font-size: 11px; line-height: 17px; }
+.submission-actions { flex-shrink: 0; margin-left: 6px; max-width: 96px; }
+.submission-paused, .submission-error { color: #9b493a; font-size: 12px; line-height: 18px; }
+.submission-expand { align-self: center; }
+.submission-recovery { flex-direction: row; align-items: center; justify-content: space-between; }
+</style>

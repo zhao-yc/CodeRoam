@@ -13,7 +13,7 @@ export const request = (method, params) => ({ v: 1, type: 'request', requestId: 
 class Desktop extends EventEmitter {
   constructor(active, home) {
     super(); this.socket = { writable: true }; this.calls = []; this.revision = 0;
-    this.instance = { id: 'example-instance', generation: 'generation-a', pid: 100, startedAt: 1, codexHome: home, executable: path.resolve('fixture-desktop/Codex.exe'), alive: true, ready: true };
+    this.instance = { id: 'example-instance', generation: randomUUID(), pid: 100, startedAt: 1, codexHome: home, executable: path.resolve('fixture-desktop/Codex.exe'), alive: true, ready: true };
     this.state = { id: 'thread', title: '合成聊天', cwd: path.resolve('fixture-project'), turns: [{ turnId: 'original', status: active ? 'inProgress' : 'completed', items: [] }], requests: [], threadRuntimeStatus: { type: active ? 'active' : 'idle' } };
   }
   async connect() {}

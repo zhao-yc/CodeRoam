@@ -160,7 +160,11 @@ test('未选或空引用不probe、不读索引，原发送和追加input保持�
 
 test('引用标签不能独立构成消息，只有图片加引用可以发送', async t => {
   const f = fixture(t);
-  for (const text of ['', '   ']) assert.equal((await f.send({ text, threadMentionIds: ['reference-a'] })).error.code, 'BAD_PARAMS');
+  for (const text of ['', '   ']) {
+    assert.equal((await f.send({ text, threadMentionIds: ['reference-a'] })).error.code, 'BAD_PARAMS');
+    const blocker = f.agent.taskQueue.list('phone').blockerId;
+    if (blocker) await f.agent.taskQueue.control('phone', { taskId: blocker, action: 'resume' });
+  }
   assert.equal(f.client.calls.length, 0);
   assert.equal((await f.send({ images: [image], threadMentionIds: ['reference-a'] })).error, undefined);
   assert.equal(nativeMessage(f).restore.text, '[@合成聊天甲](thread://reference-a?hostId=local)');
@@ -193,7 +197,7 @@ test('原生能力不支持、引用缺失或上下文为空均明确失败，�
   }
 });
 
-test('异步prepare期间实例、客户端、generation、所有者及订阅变化阻止发送和追加', { timeout: 15000 }, async t => {
+test('异步prepare期间退订保留后台提交，实例、客户端和所有者变化仍阻止发送和追加', { timeout: 15000 }, async t => {
   for (const active of [false, true]) for (const change of ['instance', 'client', 'generation', 'owner', 'host', 'unwatch']) {
     const f = fixture(t, { active }), pause = pausePrepare(f), pending = send(f, active);
     await pause.entered;
@@ -201,14 +205,17 @@ test('异步prepare期间实例、客户端、generation、所有者及订阅变
       const entry = f.adapter.conversations.get('thread');
       if (change === 'instance') f.client.instance = { ...f.client.instance };
       if (change === 'client') f.adapter.client = Object.assign(Object.create(f.client), { instance: f.client.instance });
-      if (change === 'generation') f.client.instance.generation = 'generation-b';
+      if (change === 'generation') f.client.instance.generation = randomUUID();
       if (change === 'owner') entry.owner.clientId = 'example-other-owner';
       if (change === 'host') entry.owner.hostId = 'durable';
       if (change === 'unwatch') f.adapter.unwatch('thread', 'phone');
     } finally { pause.release(); }
     const response = await pending;
-    assert.ok(['THREAD_MENTIONS_CHANGED', 'SUBSCRIPTION_REQUIRED'].includes(response.error?.code), change);
-    assert.equal(f.client.calls.length, 0, change);
+    if (change === 'unwatch') { assert.equal(response.error, undefined); assert.equal(f.client.calls.length, 1); }
+    else {
+      assert.ok(['THREAD_MENTIONS_CHANGED', 'SUBSCRIPTION_REQUIRED'].includes(response.error?.code), change);
+      assert.equal(f.client.calls.length, 0, change);
+    }
   }
 });
 
@@ -361,7 +368,7 @@ test('首条无引用不增加probe或修改input，引用已删除及异步实�
     if (kind === 'deleted') f.mentionRows.delete('reference-a');
     const pause = kind === 'generation' ? pausePrepare(f) : null;
     const pending = f.agent.handleRequest(request('thread.draft.send', { draftId: opened.result.draftId, expectedRevision: 1, text: '分析合成资料', ...(kind === 'none' ? {} : { threadMentionIds: ['reference-a'] }) }));
-    if (pause) { await pause.entered; f.client.instance.generation = 'generation-b'; pause.release(); }
+    if (pause) { await pause.entered; f.client.instance.generation = randomUUID(); pause.release(); }
     const response = await pending;
     if (kind === 'none') { assert.equal(response.error, undefined); assert.equal(f.prepares.length, before); assert.deepEqual(f.nativeCalls[0].input, { text: '分析合成资料', images: [], attachments: [] }); }
     else { assert.equal(response.error.code, kind === 'deleted' ? 'THREAD_MENTION_UNAVAILABLE' : 'THREAD_MENTIONS_CHANGED'); assert.equal(f.nativeCalls.length, 0); }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fixture, pauseCatalog, plugin, directory, request } from './plugins-fixture.mjs';
 
 const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
@@ -34,6 +35,9 @@ test('只有图片或文件加插件可以发送，只有插件或空白正文�
   const f = fixture(t);
   for (const text of [undefined, '', '   ']) {
     const response = await f.send({ text, pluginIds: ['search@example'] }); assert.equal(response.error.code, 'BAD_PARAMS');
+    // 每次明确失败都须由原设备人工继续，不能在夹具中自动跳过暂停策略。
+    const blocker = f.agent.taskQueue.list('phone').blockerId;
+    if (blocker) await f.agent.taskQueue.control('phone', { taskId: blocker, action: 'resume' });
   }
   assert.equal(f.client.calls.length, 0);
   assert.equal((await f.send({ images: [image], pluginIds: ['search@example'] })).error, undefined);
@@ -64,17 +68,23 @@ test('每次发送重新读最新目录，已撤销、伪造编号与直接伪�
   await f.adapter.watch('thread','phone'); await f.adapter.readPlugins('thread','phone');
   f.data = directory(plugin('search@example', { enabled: false }));
   assert.equal((await f.send({ text: '合成消息', pluginIds: ['search@example'] })).error.code, 'PLUGIN_UNAVAILABLE');
+  await f.agent.taskQueue.control('phone', { taskId: f.agent.taskQueue.list('phone').blockerId, action: 'resume' });
   assert.equal((await f.send({ text: '合成消息', pluginIds: ['forged@example'] })).error.code, 'PLUGIN_UNAVAILABLE');
   for (const extra of [{ input: [{ type: 'mention', name: '伪造', path: 'file:///example' }] }, { pluginIds: ['../example'] }, { plugins: [{ id: 'search@example', displayName: '伪造' }] }]) await assert.rejects(f.adapter.operate('turn.send', { threadId: 'thread', text: '合成消息', ...extra }, 'command', 'phone'), { code: 'BAD_PARAMS' });
   assert.equal(f.reads.length, 3); assert.equal(f.client.calls.length, 0);
 });
 
-test('插件异步核对期间退订、cwd 或实例改变，发送和追加均停止', async t => {
-  for (const active of [false, true]) for (const mutate of [f => f.adapter.unwatch('thread','phone'), f => { f.adapter.conversations.get('thread').state.cwd = path.resolve('other-project'); }, f => { f.client.instance.generation = 'generation-b'; }]) {
+test('插件异步核对期间退订保留后台提交，cwd 或实例改变仍阻止发送和追加', async t => {
+  for (const active of [false, true]) for (const change of ['unwatch', 'cwd', 'generation']) {
     const f = fixture(t, { active }), pause = pauseCatalog(f);
     const sending = f.agent.handleRequest(request(active ? 'turn.steer' : 'turn.send', { threadId: 'thread', text: '合成消息', pluginIds: ['search@example'], expectedTurnId: 'original' }));
-    await pause.entered; mutate(f); pause.release(); const response = await sending;
-    assert.ok(['SUBSCRIPTION_REQUIRED','PLUGINS_CHANGED'].includes(response.error.code)); assert.equal(f.client.calls.length, 0);
+    await pause.entered;
+    if (change === 'unwatch') f.adapter.unwatch('thread', 'phone');
+    if (change === 'cwd') f.adapter.conversations.get('thread').state.cwd = path.resolve('other-project');
+    if (change === 'generation') f.client.instance.generation = randomUUID();
+    pause.release(); const response = await sending;
+    if (change === 'unwatch') { assert.equal(response.error, undefined); assert.equal(f.client.calls.length, 1); }
+    else { assert.ok(['SUBSCRIPTION_REQUIRED','PLUGINS_CHANGED'].includes(response.error.code)); assert.equal(f.client.calls.length, 0); }
   }
 });
 

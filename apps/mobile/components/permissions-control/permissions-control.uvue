@@ -7,9 +7,9 @@
         <view class="permission-heading"><text class="permission-title">{{ label }}</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: panelHeight + 'px' }">
           <text v-if="loading && !manualRetry" class="permission-note">正在读取电脑权限…</text>
-          <template v-else><view v-for="option in state?.options ?? []" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }"><view class="permission-symbol"><app-icon :name="permissionIcon(option.id)" :size="24" :tone="option.id == 'full-access' ? 'warning' : 'dark'" /></view><view class="permission-copy"><text class="permission-name">{{ option.label }}</text><text class="permission-description">{{ option.enabled ? option.description : option.disabledReason }}</text></view><loading v-if="pendingMode == option.id" class="permission-spinner" /><view v-else-if="mode == option.id" class="permission-check"><app-icon name="check" :size="22" /></view><button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="pendingMode == option.id ? '正在同步' + option.label : '选择' + option.label" @click="choose(option.id)"></button></view></template>
+          <template v-else><view v-for="option in state?.options ?? []" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }"><view class="permission-symbol"><app-icon :name="permissionIcon(option.id)" :size="24" :tone="option.id == 'full-access' ? 'warning' : 'dark'" /></view><view class="permission-copy"><text class="permission-name">{{ option.label }}</text><text class="permission-description">{{ option.enabled ? option.description : option.disabledReason }}</text></view><loading v-if="pendingMode == option.id && !pendingQueued" class="permission-spinner" /><text v-else-if="pendingMode == option.id && pendingQueued" class="permission-queued">待执行</text><view v-else-if="mode == option.id" class="permission-check"><app-icon name="check" :size="22" /></view><button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="pendingMode == option.id ? '正在同步' + option.label : '选择' + option.label" @click="choose(option.id)"></button></view></template>
           <text v-if="threadId.length > 0 && activeTurn" class="permission-note">沙箱权限用于下一轮；当前轮次审批方式按电脑能力同步。</text>
-          <text v-if="busy && pendingMode.length == 0" class="permission-note">正在同步电脑权限…</text>
+          <text v-if="pendingQueued" class="permission-note">权限修改已入队，当前显示电脑已确认的权限。</text><text v-if="busy && pendingMode.length == 0" class="permission-note">正在同步电脑权限…</text>
           <text v-if="error.length > 0" class="permission-error">{{ error }}</text><view v-if="error.length > 0 || manualRetry" class="permission-retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="font-size: 13px; color: #4546bd;">重新读取</text><button class="inline-progress-hitbox" :disabled="busy || loading || manualRetry" :aria-label="manualRetry ? '正在重新读取权限' : '重新读取'" @click="retry"></button></view>
         </scroll-view>
       </view>
@@ -21,9 +21,11 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
+import { submissionTasks } from '../../services/submission-task-state.uts'
 const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
 const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
 const manualRetry = ref(false), pendingMode = ref('')
+const pendingPermissionCommand = ref(''), pendingQueued = ref(false)
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
 const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeight = ref(360)
 let alive = true, request = 0
@@ -32,6 +34,12 @@ const isNative = computed((): boolean => props.nativeDraft == true || (props.dra
 const available = computed((): boolean => props.active && connection.connected && connection.computers.some((computer): boolean => computer.id == connection.hostId && computer.online) && (isNative.value ? (props.draftId ?? '').length > 0 && props.nativeState != null && props.nativeStatus == 'ready' : props.threadId.length > 0 ? connection.snapshot?.threadId == props.threadId && connection.snapshot?.readOnly != true && connection.snapshot?.supportsPermissionSettings == true : props.projectId.length > 0))
 
 const context = computed((): string => connection.hostId + ':' + props.threadId + ':' + props.projectId + ':' + props.draftId + ':' + props.nativeStatus + ':' + (props.nativeState?.revision ?? '') + ':' + (props.threadId.length > 0 ? connection.subscriptionRevision.toString() : '') + ':' + connection.connected.toString() + ':' + props.active.toString() + ':' + available.value.toString())
+// 入队只释放控件及父级操作锁，只有最终确认成功才发送 applied 事件。
+if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.accepted.revision, () => {
+  const accepted = submissionTasks.accepted
+  if (accepted.method != 'thread.permissions.update' || accepted.hostId != connection.hostId || accepted.threadId != props.threadId || accepted.taskId != pendingPermissionCommand.value) return
+  pendingQueued.value = true; busy.value = false; opened.value = false; emit('busy', false)
+})
 const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : (props.draftId ?? '').length > 0 ? props.draftId! : 'new'))
 const mode = computed((): string => isNative.value ? props.nativeState?.mode ?? 'unknown' : props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
 const label = computed((): string => loading.value ? '正在读取电脑权限…' : permissionLabel(mode.value))
@@ -83,13 +91,17 @@ async function choose(value: string) {
   }
   if (isNative.value || props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }
   let applied = false
-  pendingMode.value = value; busy.value = true; emit('busy', true); error.value = ''
+  pendingMode.value = value; pendingQueued.value = false; busy.value = true; emit('busy', true); error.value = ''
+  let commandId = ''
   try {
-    const result = await bridge.request('thread.permissions.update', { threadId: props.threadId, mode: value, expectedRevision: revision, confirmedFullAccess: value == 'full-access' }, true)
-    if (current(key, id)) { state.value = JSON.parse<PermissionState>(JSON.stringify(result)); opened.value = false; applied = true }
-  } catch (reason) { if (current(key, id)) error.value = (reason as Error).message }
+    const operation = bridge.request('thread.permissions.update', { threadId: props.threadId, mode: value, expectedRevision: revision, confirmedFullAccess: value == 'full-access' }, true)
+    commandId = typeof bridge.pendingCommand == 'function' ? bridge.pendingCommand(connection.hostId, props.threadId) : ''
+    pendingPermissionCommand.value = commandId
+    const result = await operation
+    if (current(key, id) && pendingPermissionCommand.value == commandId) { state.value = JSON.parse<PermissionState>(JSON.stringify(result)); opened.value = false; applied = true }
+  } catch (reason) { if (current(key, id) && pendingPermissionCommand.value == commandId) error.value = (reason as Error).message }
   // 成功事件在父级操作锁释放后发出，仅当前电脑与聊天可以恢复编辑焦点。
-  finally { if (current(key, id)) { busy.value = false; pendingMode.value = ''; emit('busy', false); if (applied) emit('applied', connection.hostId, props.threadId) } }
+  finally { if (alive && context.value == key && pendingPermissionCommand.value == commandId) { busy.value = false; pendingMode.value = ''; pendingQueued.value = false; pendingPermissionCommand.value = ''; emit('busy', false); if (applied) emit('applied', connection.hostId, props.threadId) } }
 }
 // 菜单打开时保持父级输入区展开，避免键盘失焦卸载菜单。
 // 面板尺寸变化时关闭旧坐标的菜单，避免旋转后遮住另一栏。
@@ -97,7 +109,7 @@ watch((): string => props.paneLeft + ':' + props.paneWidth, () => { opened.value
 watch(opened, (value: boolean) => { emit('visibility', value) })
 // 同步失效旧请求，避免快速收起再展开或切回原目标后，旧结果重新变为有效。
 watch(context, () => {
-  request++; state.value = null; error.value = ''; opened.value = false; loading.value = false; manualRetry.value = false; pendingMode.value = ''
+  request++; state.value = null; error.value = ''; opened.value = false; loading.value = false; manualRetry.value = false; pendingMode.value = ''; pendingQueued.value = false; pendingPermissionCommand.value = ''
   if (busy.value) emit('busy', false)
   busy.value = false
   if (isNative.value) state.value = props.nativeState
@@ -121,6 +133,7 @@ onUnmounted(() => { emit('visibility', false); alive = false; request++; if (bus
 .permission-copy { flex: 1; }
 .permission-name { font-size: 17px; color: #1a2135; line-height: 26px; }
 .permission-description { font-size: 13px; line-height: 21px; color: #596479; }
+.permission-queued { font-size: 12px; color: #4546bd; margin-left: 8px; }
 .permission-spinner { width: 16px; height: 16px; border-color: #4546bd; }
 .permission-check { width: 24px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center; }
 .permission-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; background-color: transparent; }
