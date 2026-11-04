@@ -1,5 +1,5 @@
 <template>
-  <view id="home-page" class="page" :class="{ 'page-wide': props.wide }">
+  <view id="home-page" class="page">
     <view id="home-header" class="header">
       <template v-if="searchVisible">
         <view class="search-field header-search"><app-icon name="search" :size="20" tone="muted" /><input v-model="search" class="search-input" :focus="searchFocused" placeholder="搜索聊天或项目" :maxlength="100" confirm-type="search" @blur="searchFocused = false" /></view>
@@ -461,9 +461,7 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
-/* 手机单栏与聊天详情统一白底，宽屏侧栏沿用原有底色。 */
-.page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #ffffff; }
-.page-wide { background-color: #f6f7fb; }
+.page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f6f7fb; }
 .header { height: 48px; padding: 2px 12px 2px 20px; flex-direction: row; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .header-button { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
 .header-glass-close, .header-glass-group { position: relative; height: 44px; width: 44px; flex-shrink: 0; }
