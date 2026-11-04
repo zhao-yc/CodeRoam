@@ -4,7 +4,7 @@
       <chat-list ref="listPane" :active="props.active && (wide || mode == 'list')" :wide="wide" :busy="creating" :selected-host-id="mode == 'conversation' ? selected?.hostId ?? '' : ''" :selected-thread-id="mode == 'conversation' ? selected?.threadId ?? '' : ''" @open="openThread" @create="createFromList" />
     </view>
     <view v-show="wide || mode != 'list'" class="workspace-detail" :class="{ 'workspace-detail-wide': wide }">
-      <view v-if="mode == 'list'" class="workspace-empty"><app-icon name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
+      <view v-if="mode == 'list'" class="workspace-empty"><app-icon class="workspace-empty-icon" name="recent" :size="36" tone="muted" /><text class="workspace-empty-title">选择一个聊天</text><text class="workspace-empty-note">点击左侧聊天，在这里继续</text></view>
       <chat-detail v-if="detailMounted && selected != null" v-show="mode == 'conversation'" ref="detailPane" :key="selectedKey" :target="selected!" :active="props.active && mode == 'conversation'" :pane-width="detailWidth" :pane-left="wide ? 341 : 0" :pane-height="props.windowHeight" :embedded="wide" @close="closeConversation" @removed="onConversationRemoved" @connect-cached="connectCachedConversation" />
       <view v-if="!props.detailRoute || wide || mode == 'new'" v-show="mode == 'new'" class="workspace-new">
         <view class="workspace-status-space"></view>

@@ -1,7 +1,7 @@
 <template>
   <view v-if="active && taskNotifications.current != null" :id="'task-notice-' + headerId" class="task-notice" :class="{ 'task-notice-visible': taskNotifications.phase == 'visible', 'task-notice-dragging': dragging }" :style="{ top: top + 'px', left: paneLeft + 12 + 'px', right: paneWidth > 0 ? 'auto' : '12px', width: paneWidth > 0 ? Math.max(0, paneWidth - 24) + 'px' : 'auto', transform: noticeTransform, opacity: noticeOpacity }" role="status" aria-live="polite">
     <view class="task-notice-copy"><text class="task-notice-title">{{ title }}</text><text class="task-notice-subtitle">{{ taskNotifications.current!.threadTitle }}</text></view>
-    <app-icon name="chevron-right" :size="20" />
+    <app-icon class="task-notice-chevron" name="chevron-right" :size="20" />
     <button class="task-notice-hit" :aria-label="title + '，' + taskNotifications.current!.threadTitle + '，点击打开聊天，向上滑动关闭'" @touchstart.stop="beginTouch" @touchmove.stop="moveTouch" @touchend.stop="finishTouch" @touchcancel.stop="cancelTouch" @click.stop="openNotice"></button>
   </view>
 </template>

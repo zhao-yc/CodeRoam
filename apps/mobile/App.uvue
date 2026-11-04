@@ -77,25 +77,40 @@ button::after { border: none; }
 .chat-workspace.workspace-wide #home-page .list-new-button :is(.plus-horizontal, .plus-vertical) { background-color: #ffffff; }
 .chat-workspace.workspace-wide #home-page .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 
-/* 宽屏聊天详情只替换配色，尺寸和间距由原组件管理。 */
+/* 宽屏右侧页面和站内通知共用设计稿色值，尺寸和间距由原组件管理。 */
+.chat-workspace.workspace-wide {
+  --workspace-ink: #1a2135;
+  --workspace-muted: #596479;
+  --workspace-line: #e5e8f1;
+  --workspace-accent: #4546bd;
+}
 .chat-workspace.workspace-wide #conversation-page {
-  --detail-ink: #1a2135;
-  --detail-muted: #596479;
-  --detail-line: #e5e8f1;
-  --detail-accent: #4546bd;
   --detail-tint: #eff0fe;
   --detail-soft: #f6f7fb;
   background-color: #ffffff;
 }
-.chat-workspace.workspace-wide #conversation-page :is(.thread-title, .message-text, .inline-text, .code-text, .message-input, .empty-title) { color: var(--detail-ink); }
-.chat-workspace.workspace-wide #conversation-page :is(.meta-host, .meta-project, .history-note, .process-label, .execution-label, .execution-summary, .composer-caption, .connection-note, .empty-detail) { color: var(--detail-muted); }
-.chat-workspace.workspace-wide #conversation-page :is(.conversation-header, .process-toggle) { border-bottom-color: var(--detail-line); }
-.chat-workspace.workspace-wide #conversation-page :is(.composer-panel, .jump-latest, .table-cell) { border-color: var(--detail-line); }
+.chat-workspace.workspace-wide #conversation-page :is(.thread-title, .message-text, .inline-text, .code-text, .message-input, .empty-title) { color: var(--workspace-ink); }
+.chat-workspace.workspace-wide #conversation-page :is(.meta-host, .meta-project, .history-note, .process-label, .execution-label, .execution-summary, .composer-caption, .connection-note, .empty-detail) { color: var(--workspace-muted); }
+.chat-workspace.workspace-wide #conversation-page :is(.conversation-header, .process-toggle) { border-bottom-color: var(--workspace-line); }
+.chat-workspace.workspace-wide #conversation-page :is(.composer-panel, .jump-latest, .table-cell) { border-color: var(--workspace-line); }
 .chat-workspace.workspace-wide #conversation-page :is(.jump-latest, .menu-panel) { background-color: #ffffff; }
 .chat-workspace.workspace-wide #conversation-page :is(.message-user, .button-secondary, .draft-file) { background-color: var(--detail-tint); }
 .chat-workspace.workspace-wide #conversation-page :is(.detail-cache-indicator, .md-code, .run-code, .table-heading) { background-color: var(--detail-soft); }
-.chat-workspace.workspace-wide #conversation-page :is(.primary-action, .button-primary) { background-color: var(--detail-accent); }
-.chat-workspace.workspace-wide #conversation-page :is(.run-link, .code-copy) { color: var(--detail-accent); }
+.chat-workspace.workspace-wide #conversation-page :is(.primary-action, .button-primary) { background-color: var(--workspace-accent); }
+.chat-workspace.workspace-wide #conversation-page :is(.run-link, .code-copy) { color: var(--workspace-accent); }
 .chat-workspace.workspace-wide #conversation-page .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
+
+.chat-workspace.workspace-wide .workspace-empty { background-color: #ffffff; }
+.chat-workspace.workspace-wide :is(.workspace-empty-title, .task-notice-title) { color: var(--workspace-ink); }
+.chat-workspace.workspace-wide :is(.workspace-empty-note, .task-notice-subtitle) { color: var(--workspace-muted); }
+/* 沿用 PNG 的透明轮廓，用滤镜将图标统一为靛蓝。 */
+.chat-workspace.workspace-wide :is(.workspace-empty-icon, .task-notice-chevron) {
+  filter: brightness(0) invert(28%) sepia(66%) saturate(1591%) hue-rotate(221deg) brightness(86%);
+}
+.chat-workspace.workspace-wide .task-notice {
+  background-color: rgba(255, 255, 255, 0.96);
+  border-color: var(--workspace-line);
+  box-shadow: 0 5px 18px rgba(35, 43, 72, 0.12);
+}
 /* #endif */
 </style>
