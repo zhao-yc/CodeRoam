@@ -1099,7 +1099,8 @@ function chooseImages(source: string = 'album') {
   const remaining = MAX_COMPOSER_IMAGES - readDraftImages(hostId, threadId).length - readDraftFiles(hostId, threadId).length
   if (remaining <= 0) { notify('每次最多发送3张图片'); return }
   imageBusy.value = true
-  uni.chooseImage({ count: remaining, albumMode: 'system', sizeType: ['compressed'], sourceType: [source], success: (result) => {
+  // 获取原图后统一处理大小，避免系统预压缩与发送压缩叠加损伤文字。
+  uni.chooseImage({ count: remaining, albumMode: 'system', sizeType: ['original'], sourceType: [source], success: (result) => {
     Promise.all(result.tempFilePaths.slice(0, remaining).map((path: string): Promise<string> => prepareImage(path))).then((sources: string[]) => {
       const images = readDraftImages(hostId, threadId).slice()
       sources.forEach((src: string, index: number) => { images.push({ id: Date.now().toString() + '-' + Math.random().toString(36).slice(2) + '-' + index, src } as DraftImage) })

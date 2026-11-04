@@ -23,8 +23,8 @@ function imageIdentity(): string { return JSON.stringify([props.scopeId ?? '', p
 function imageRequestReady(): boolean { return alive && props.connected && props.ready != false && connection.hostId == props.hostId && connection.activeThreadId == props.threadId && (props.scopeId == null || props.scopeId == connection.cacheNamespace) }
 // 占位、错误提示和缩略图替换均通知父页；图片解码完成沿用同一位置保持链。
 function beforeImageLayout() { emit('beforelayout'); nextTick(() => { if (alive) emit('layout') }) }
-// 大图按片读取，避免设计稿超过中转单条消息上限；离页或断线立即停止后续请求。
-async function loadLargeImages(version: number): Promise<string[]> {
+// 用户和助手图片统一按片读取，单张支持 12 MiB；离页或断线立即停止后续请求。
+async function loadImageChunks(version: number): Promise<string[]> {
   const images: string[] = []
   for (let index = 0; index < Math.min(props.count ?? 1, 3); index++) {
     let source = ''
@@ -46,22 +46,11 @@ function loadImages(manual: boolean = false) {
   loading = true; manualRetry.value = manual; error.value = ''
   const version = ++requestVersion
   const identity = imageIdentity()
-  if (props.large == true) {
-    loadLargeImages(version).then((images: string[]) => {
-      if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-      loading = false; manualRetry.value = false; sources.value = images
-      if (images.length == 0) error.value = '这条记录未保留图片'
-    }, (failure: Error) => {
-      if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-      loading = false; manualRetry.value = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
-    })
-    return
-  }
-  bridge.request('thread.images', { threadId: props.threadId, messageId: props.messageId }).then((result: UTSJSONObject) => {
+  loadImageChunks(version).then((images: string[]) => {
     if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
     loading = false; manualRetry.value = false
-    sources.value = JSON.parse<string[]>(JSON.stringify(result['images'])) ?? [] as string[]
-    if (sources.value.length == 0) error.value = '这条记录未保留图片'
+    sources.value = images
+    if (images.length == 0) error.value = '这条记录未保留图片'
   }, (failure: Error) => {
     if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
     loading = false; manualRetry.value = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'

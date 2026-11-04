@@ -53,6 +53,24 @@ test('独立生成图片不泄露提示词，大图按片返回并保持原图�
   for(const params of [{imageIndex:-1,chunkIndex:0},{imageIndex:0,chunkIndex:17},{imageIndex:0},{imageIndex:0,chunkIndex:0,path:file}])assert.throws(()=>validateRequest({...request,params:{threadId:'thread',messageId:'generated',...params}}),{code:'BAD_PARAMS'});
 });
 
+test('用户原图通过分片预览支持12 MiB，超限拒绝且不改变上传限制',async t=>{
+  const {state,file,data}=fixture(t);
+  const limit=12*1024*1024;
+  const original=Buffer.alloc(limit);data.copy(original);fs.writeFileSync(file,original);
+  const adapter=new DesktopAdapter({client:Object.assign(new EventEmitter(),{close(){}})});t.after(()=>adapter.close());
+  adapter.conversations.set('thread',{state,watchers:new Set(['phone']),waiters:[]});
+  const parts=[];let chunks=1;
+  for(let chunkIndex=0;chunkIndex<chunks;chunkIndex++) {
+    const result=await adapter.messageImages('thread','message','phone',{imageIndex:0,chunkIndex});
+    chunks=result.chunkCount;parts.push(result.data);
+    assert.ok(Buffer.byteLength(JSON.stringify(result))<2*1024*1024);
+  }
+  assert.equal(chunks,17);assert.deepEqual(Buffer.from(parts.join('').split(',')[1],'base64'),original);
+  await assert.rejects(adapter.messageImages('thread','message','phone'),{code:'IMAGE_TOO_LARGE'});
+  fs.appendFileSync(file,Buffer.from([0]));
+  await assert.rejects(adapter.messageImages('thread','message','phone',{imageIndex:0,chunkIndex:0}),{code:'IMAGE_TOO_LARGE'});
+});
+
 test('桌面本地图片按需读取，普通快照只包含数量，不暴露文件路径或正文',t=>{
   const {state,file,data}=fixture(t),normal=normalizeConversation(state);
   assert.equal(normal.messages[0].imageCount,1);assert.equal(normal.messages[0].images,undefined);assert.equal(JSON.stringify(normal).includes(file),false);
@@ -94,6 +112,6 @@ test('手机保留明确的图片错误原因，重试时清除旧错误，离�
   const source=fs.readFileSync('apps/mobile/components/message-images/message-images.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   const pending=[],unmount=[];const context=vm.createContext({connection:{hostId:'host',activeThreadId:'thread',cacheNamespace:''},ref:value=>({value}),defineProps:()=>({hostId:'host',threadId:'thread',messageId:'message',connected:true}),defineEmits:()=>()=>{},watch(){},onUnmounted:cb=>unmount.push(cb),bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.ui={loadImages,sources,error};',context);const ui=context.ui;
-  ui.loadImages();pending.shift().reject(Error('电脑上的原图已不存在，请重新发送'));await Promise.resolve();assert.match(ui.error.value,/原图已不存在/);
-  ui.loadImages();assert.equal(ui.error.value,'');unmount[0]();pending.shift().resolve({images:['synthetic-image']});await Promise.resolve();assert.equal(ui.sources.value.length,0);
+  ui.loadImages();pending.shift().reject(Error('电脑上的原图已不存在，请重新发送'));await new Promise(setImmediate);assert.match(ui.error.value,/原图已不存在/);
+  ui.loadImages();assert.equal(ui.error.value,'');unmount[0]();pending.shift().resolve({chunkCount:1,data:'synthetic-image'});await new Promise(setImmediate);assert.equal(ui.sources.value.length,0);
 });

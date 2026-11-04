@@ -322,7 +322,8 @@ async function acceptImages(target: NewDraft, paths: string[]) {
 function chooseImages(source: string) {
   if (imageBusy.value || !modelSupportsImages.value || remaining() == 0) return
   const target = draft.value
-  uni.chooseImage({ count: remaining(), sourceType: source == 'camera' ? ['camera'] : ['album'], sizeType: ['compressed'], success: (result) => { acceptImages(target, result.tempFilePaths) } })
+  // 获取原图后统一处理大小，避免系统预压缩与发送压缩叠加损伤文字。
+  uni.chooseImage({ count: remaining(), sourceType: source == 'camera' ? ['camera'] : ['album'], sizeType: ['original'], success: (result) => { acceptImages(target, result.tempFilePaths) } })
 }
 // 固定粘贴时的电脑与项目草稿，处理期间切换目标也不会串入其他草稿。
 async function pasteImages(paths: string[]) {

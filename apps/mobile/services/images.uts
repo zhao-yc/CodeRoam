@@ -1,30 +1,82 @@
 export const MAX_COMPOSER_IMAGES = 3
 const MAX_IMAGE_BYTES = 320 * 1024
+const MAX_IMAGE_DIMENSION = 1600
 
-// Web 使用浏览器解码与画布压缩；App 沿用系统选图、压缩和沙盒文件读取接口。
+// 按实际解码字节计算预算，避免把 data URI 前缀或 base64 补位算入图片体积。
+function imageBytes(data: string): number {
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
+  return data.length * 3 / 4 - padding
+}
+
+// 仅接受协议支持的 JPEG 和 PNG，并根据文件头确定真实格式。
+function imageDataUrl(data: string): string {
+  const mime = data.startsWith('/9j/') ? 'jpeg' : data.startsWith('iVBORw0KGgo') ? 'png' : ''
+  if (mime.length == 0) throw new Error('请选择JPEG或PNG图片')
+  return 'data:image/' + mime + ';base64,' + data
+}
+
+function withinImageBudget(source: string): boolean {
+  const separator = source.indexOf(',')
+  return separator >= 0 && imageBytes(source.substring(separator + 1)) <= MAX_IMAGE_BYTES
+}
+
+// #ifdef WEB
+// 先读取原始文件，让预算内的小图和透明 PNG 无须经过画布重编码。
+function readWebOriginal(source: string): Promise<string> {
+  if (source.startsWith('data:')) return Promise.resolve(source)
+  return fetch(source).then((response) => response.blob()).then((blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(new Error('读取图片失败'))
+    reader.readAsDataURL(blob)
+  }))
+}
+// #endif
+
+// Web 与 App 都先尝试保留原图；必须压缩时，先调整质量，确实超预算才降低尺寸。
 export function prepareImage(source: string): Promise<string> {
   // #ifdef WEB
   return new Promise<string>((resolve, reject) => {
     const image = new Image()
     image.onload = () => {
-      try {
-        const canvas = document.createElement('canvas')
-        let width = image.naturalWidth
-        let height = image.naturalHeight
-        const ratio = Math.min(1, 1600 / Math.max(width, height))
-        width = Math.max(1, Math.round(width * ratio)); height = Math.max(1, Math.round(height * ratio))
-        for (let attempt = 0; attempt < 5; attempt++) {
-          canvas.width = width; canvas.height = height
-          const context = canvas.getContext('2d')
-          if (context == null) { reject(new Error('当前浏览器无法处理图片')); return }
-          context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height)
-          context.drawImage(image, 0, 0, width, height)
-          const result = canvas.toDataURL('image/jpeg', Math.max(0.45, 0.85 - attempt * 0.1))
-          if (result.length <= MAX_IMAGE_BYTES * 4 / 3) { resolve(result); return }
-          width = Math.max(1, Math.round(width * 0.8)); height = Math.max(1, Math.round(height * 0.8))
+      const compress = (): void => {
+        try {
+          const canvas = document.createElement('canvas')
+          const ratio = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight))
+          let width = Math.max(1, Math.round(image.naturalWidth * ratio))
+          let height = Math.max(1, Math.round(image.naturalHeight * ratio))
+          const qualities = [0.92, 0.85, 0.75, 0.65]
+          for (let attempt = 0; attempt < 5; attempt++) {
+            canvas.width = width; canvas.height = height
+            const context = canvas.getContext('2d')
+            if (context == null) { reject(new Error('当前浏览器无法处理图片')); return }
+            context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height)
+            // 每个尺寸均从原图绘制，避免累计缩放和重复有损编码。
+            context.drawImage(image, 0, 0, width, height)
+            for (let index = 0; index < qualities.length; index++) {
+              const result = canvas.toDataURL('image/jpeg', qualities[index])
+              // 编码结果仍须符合上传白名单，防止不支持的格式进入协议。
+              try { imageDataUrl(result.substring(result.indexOf(',') + 1)) } catch (_) { reject(new Error('请选择JPEG或PNG图片')); return }
+              if (withinImageBudget(result)) { resolve(result); return }
+            }
+            width = Math.max(1, Math.round(width * 0.8)); height = Math.max(1, Math.round(height * 0.8))
+          }
+          reject(new Error('图片仍然过大，请裁剪后重试'))
+        } catch (_) { reject(new Error('图片处理失败，请换一张图片')) }
+      }
+      readWebOriginal(source).then((original) => {
+        try {
+          const separator = original.indexOf(',')
+          const preserved = imageDataUrl(original.substring(separator + 1))
+          if (Math.max(image.naturalWidth, image.naturalHeight) <= MAX_IMAGE_DIMENSION && withinImageBudget(preserved)) {
+            resolve(preserved); return
+          }
+          compress()
+        } catch (_) {
+          // GIF 等原图已成功解码，仍可转为协议支持的 JPEG。
+          compress()
         }
-        reject(new Error('图片仍然过大，请裁剪后重试'))
-      } catch (_) { reject(new Error('图片处理失败，请换一张图片')) }
+      }, (_) => compress())
     }
     image.onerror = () => reject(new Error('无法读取图片，请选择JPEG或PNG图片'))
     image.src = source
@@ -33,16 +85,37 @@ export function prepareImage(source: string): Promise<string> {
   // #ifndef WEB
   return new Promise<string>((resolve, reject) => {
     uni.getImageInfo({ src: source, success: (info) => {
-      const ratio = Math.min(1, 1600 / Math.max(info.width, info.height))
-      uni.compressImage({ src: source, quality: 75, compressedWidth: Math.max(1, Math.round(info.width * ratio)), compressedHeight: Math.max(1, Math.round(info.height * ratio)), success: (compressed) => {
-        uni.getFileSystemManager().readFile({ filePath: compressed.tempFilePath, encoding: 'base64', success: (result) => {
-          const data = result.data as string
-          if (data.length > MAX_IMAGE_BYTES * 4 / 3) { reject(new Error('图片仍然过大，请裁剪后重试')); return }
-          const mime = data.startsWith('/9j/') ? 'jpeg' : data.startsWith('iVBORw0KGgo') ? 'png' : ''
-          if (mime.length == 0) { reject(new Error('请选择JPEG或PNG图片')); return }
-          resolve('data:image/' + mime + ';base64,' + data)
-        }, fail: (_) => reject(new Error('读取图片失败，请重新选择')) })
-      }, fail: (_) => reject(new Error('压缩图片失败，请重新选择')) })
+      const ratio = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(info.width, info.height))
+      let width = Math.max(1, Math.round(info.width * ratio))
+      let height = Math.max(1, Math.round(info.height * ratio))
+      const qualities = [90, 80, 70]
+      // 每次使用原始路径压缩；同尺寸尝试完整质量阶梯后，再缩小下一档。
+      const compress = (attempt: number, qualityIndex: number): void => {
+        if (attempt >= 5) { reject(new Error('图片仍然过大，请裁剪后重试')); return }
+        uni.compressImage({ src: source, quality: qualities[qualityIndex], compressedWidth: width, compressedHeight: height, success: (compressed) => {
+          uni.getFileSystemManager().readFile({ filePath: compressed.tempFilePath, encoding: 'base64', success: (result) => {
+            const data = result.data as string
+            try {
+              const prepared = imageDataUrl(data)
+              if (imageBytes(data) <= MAX_IMAGE_BYTES) { resolve(prepared); return }
+              if (qualityIndex + 1 < qualities.length) { compress(attempt, qualityIndex + 1); return }
+              width = Math.max(1, Math.round(width * 0.8)); height = Math.max(1, Math.round(height * 0.8))
+              compress(attempt + 1, 0)
+            } catch (_) { reject(new Error('请选择JPEG或PNG图片')) }
+          }, fail: (_) => reject(new Error('读取图片失败，请重新选择')) })
+        }, fail: (_) => reject(new Error('压缩图片失败，请重新选择')) })
+      }
+      uni.getFileSystemManager().readFile({ filePath: source, encoding: 'base64', success: (result) => {
+        const data = result.data as string
+        try {
+          const original = imageDataUrl(data)
+          if (Math.max(info.width, info.height) <= MAX_IMAGE_DIMENSION && imageBytes(data) <= MAX_IMAGE_BYTES) { resolve(original); return }
+          compress(0, 0)
+        } catch (_) {
+          // HEIC 等系统可解码原图先尝试转换，压缩结果仍需校验格式。
+          compress(0, 0)
+        }
+      }, fail: (_) => compress(0, 0) })
     }, fail: (_) => reject(new Error('无法读取图片，请重新选择')) })
   })
   // #endif

@@ -20,28 +20,28 @@ function fixture(options={}){
 test('缓存图片等聊天订阅就绪后自动加载，不提前请求或要求手动点击',async()=>{
   const f=fixture();assert.equal(f.requests.length,0);f.loadImages();assert.equal(f.requests.length,0);
   f.props.ready=true;f.props.subscriptionRevision=1;f.flush();await settle();assert.equal(f.requests.length,1);assert.equal(f.requests[0].method,'thread.images');
-  f.requests[0].resolve({images:['synthetic-image']});await settle();assert.equal(f.sources.value[0],'synthetic-image');assert.equal(f.previews.length,0);
+  f.requests[0].resolve({chunkCount:1,data:'synthetic-image'});await settle();assert.equal(f.sources.value[0],'synthetic-image');assert.equal(f.previews.length,0);
   f.props.subscriptionRevision=2;f.flush();assert.equal(f.requests.length,1,'已有图片不重复下载');
 });
 
 test('旧订阅失败后，新订阅回执自动重试并清除旧错误',async()=>{
   const f=fixture({ready:true});await settle();f.requests[0].reject(Error('请先打开这条聊天再查看图片'));await settle();assert.match(f.error.value,/请先打开/);
   f.props.subscriptionRevision++;f.flush();await settle();assert.equal(f.error.value,'');assert.equal(f.requests.length,2);
-  f.requests[1].resolve({images:['recovered-image']});await settle();assert.equal(f.sources.value[0],'recovered-image');
+  f.requests[1].resolve({chunkCount:1,data:'recovered-image'});await settle();assert.equal(f.sources.value[0],'recovered-image');
 });
 
 test('断线重连保留旧快照也不会提前加载，重新订阅后恢复，不重放手动操作',async()=>{
   const f=fixture({ready:true});await settle();f.props.connected=false;f.props.ready=false;f.flush();
-  f.requests[0].resolve({images:['late-old-image']});await settle();assert.equal(f.sources.value.length,0);
+  f.requests[0].resolve({chunkCount:1,data:'late-old-image'});await settle();assert.equal(f.sources.value.length,0);
   f.props.connected=true;f.flush();assert.equal(f.requests.length,1);
   f.props.ready=true;f.props.subscriptionRevision++;f.flush();await settle();assert.equal(f.requests.length,2);
-  f.requests[1].resolve({images:['new-image']});await settle();assert.equal(f.sources.value[0],'new-image');assert.equal(f.previews.length,0);
+  f.requests[1].resolve({chunkCount:1,data:'new-image'});await settle();assert.equal(f.sources.value[0],'new-image');assert.equal(f.previews.length,0);
 });
 
 test('同编号消息切换配对后废弃旧回执，不能串图或保留旧配对图片',async()=>{
   const f=fixture({ready:true});await settle();f.connection.cacheNamespace='pairing-b';f.props.scopeId='pairing-b';f.flush();await settle();assert.equal(f.requests.length,2);
-  f.requests[0].resolve({images:['private-old-image']});await settle();assert.equal(f.sources.value.length,0);
-  f.requests[1].resolve({images:['current-image']});await settle();assert.equal(f.sources.value[0],'current-image');
+  f.requests[0].resolve({chunkCount:1,data:'private-old-image'});await settle();assert.equal(f.sources.value.length,0);
+  f.requests[1].resolve({chunkCount:1,data:'current-image'});await settle();assert.equal(f.sources.value[0],'current-image');
 });
 
 test('切换电脑立即停止大图后续分片，旧回执不能请求到新电脑或写入页面',async()=>{
@@ -49,15 +49,26 @@ test('切换电脑立即停止大图后续分片，旧回执不能请求到新�
   f.connection.hostId='other-host';f.requests[0].resolve({chunkCount:2,data:'old-part'});await settle();assert.equal(f.requests.length,1);assert.equal(f.sources.value.length,0);
 });
 
-test('助手大图订阅后自动读取全部分片，卸载后丢弃后续回执',async()=>{
-  const f=fixture({large:true});f.props.ready=true;f.flush();await settle();f.requests[0].resolve({chunkCount:2,data:'first-'});await settle();assert.equal(f.requests[1].params.chunkIndex,1);
+test('用户大图订阅后自动读取全部分片，卸载后丢弃后续回执',async()=>{
+  const f=fixture();f.props.ready=true;f.flush();await settle();f.requests[0].resolve({chunkCount:2,data:'first-'});await settle();assert.equal(f.requests[1].params.chunkIndex,1);
   f.requests[1].resolve({chunkCount:2,data:'second'});await settle();assert.equal(f.sources.value[0],'first-second');
   const removed=fixture({ready:true,large:true});await settle();removed.dispose();removed.requests[0].resolve({chunkCount:2,data:'late'});await settle();assert.equal(removed.requests.length,1);assert.equal(removed.sources.value.length,0);
 });
 
+test('用户多图按图片编号逐张拼接，缩略图样式不影响分片读取',async()=>{
+  const f=fixture({ready:true,count:2,large:false});await settle();
+  assert.equal(f.requests[0].params.imageIndex,0);
+  f.requests[0].resolve({chunkCount:2,data:'first-'});await settle();
+  assert.equal(f.requests[1].params.imageIndex,0);assert.equal(f.requests[1].params.chunkIndex,1);
+  f.requests[1].resolve({chunkCount:2,data:'image'});await settle();
+  assert.equal(f.requests[2].params.imageIndex,1);assert.equal(f.requests[2].params.chunkIndex,0);
+  f.requests[2].resolve({chunkCount:1,data:'second-image'});await settle();
+  assert.deepEqual(Array.from(f.sources.value),['first-image','second-image']);
+});
+
 test('父页分别同步就绪与订阅代次时，下一次渲染只发送一份图片请求',async()=>{
   const f=fixture();await settle();f.props.ready=true;f.flush();f.props.subscriptionRevision=1;f.flush();assert.equal(f.requests.length,0);
-  await settle();assert.equal(f.requests.length,1);f.requests[0].resolve({images:['single-image']});await settle();assert.equal(f.sources.value[0],'single-image');
+  await settle();assert.equal(f.requests.length,1);f.requests[0].resolve({chunkCount:1,data:'single-image'});await settle();assert.equal(f.sources.value[0],'single-image');
 });
 
 test('当前聊天已订阅才允许图片读取，缓存、后台页面和其他电脑同编号快照均不能冒充',()=>{
