@@ -51,6 +51,8 @@ export class TaskQueue {
       this.db.prepare("UPDATE submission_task_keys SET error=? WHERE state='unknown'").run(JSON.stringify({ code: 'OUTCOME_UNKNOWN', message: '上次执行中断，结果需要核对，不会自动重发', outcomeUnknown: true }));
       const unfinished = this.db.prepare("SELECT position FROM submission_tasks WHERE state='unknown' ORDER BY position LIMIT 1").get();
       if (unfinished) this.db.prepare('UPDATE submission_queue_state SET paused=1,blocker_position=? WHERE singleton=1').run(unfinished.position);
+      // 兼容旧版已关闭的明确失败：隐藏操作已经确认放弃该项，恢复后续领取；未知结果仍保持暂停。
+      else this.db.prepare("UPDATE submission_queue_state SET paused=0,blocker_position=NULL WHERE singleton=1 AND EXISTS(SELECT 1 FROM submission_tasks WHERE position=blocker_position AND state='failed' AND dismissed=1)").run();
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
     this.start();
@@ -272,9 +274,16 @@ export class TaskQueue {
       this.finish(row, 'canceled');
     } else if (action === 'dismiss') {
       if (!['failed', 'unknown', 'waiting_resume', 'succeeded', 'canceled', 'skipped'].includes(row.state)) throw new BridgeError('TASK_ACTIVE', '正在等待或执行的任务不能关闭');
-      this.db.prepare('UPDATE submission_tasks SET dismissed=1 WHERE position=?').run(row.position);
       if (row.state === 'failed') this.releaseRetryData(row.position);
+      // 关闭明确失败的暂停原因时一并解除暂停，避免卡片消失后后续任务永久等待。
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.prepare('UPDATE submission_tasks SET dismissed=1 WHERE position=?').run(row.position);
+        if (row.state === 'failed') this.db.prepare('UPDATE submission_queue_state SET paused=0,blocker_position=NULL WHERE singleton=1 AND blocker_position=?').run(row.position);
+        this.db.exec('COMMIT');
+      } catch (error) { this.db.exec('ROLLBACK'); throw error; }
       this.notify();
+      if (row.state === 'failed') queueMicrotask(() => { this.pump().catch(() => {}); });
     } else if (action === 'retry') {
       // 重复点击或旧回执只能对应原尝试；即使新尝试很快再次失败也不会重放旧点击。
       if (confirmed !== true || !Number.isSafeInteger(expectedAttempt) || expectedAttempt !== row.attempt) throw new BridgeError('TASK_RETRY_STALE', '任务已变化，请刷新后再重试');

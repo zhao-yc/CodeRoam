@@ -46,16 +46,56 @@ test('相同提交编号只执行一次，不同指纹及跨设备管理被拒�
   assert.equal(f.queue.list('other-phone', { taskId: request.taskId }).tasks.length, 0);
 });
 
-test('失败暂停整个实例，关闭异常不恢复，人工继续才执行后续停止操作', async t => {
+test('失败暂停整个实例，关闭失败项后自动执行后续任务且不重试原操作', async t => {
   let attempt = 0;
   const f = fixture(t, { execute: async () => { if (++attempt === 1) throw new BridgeError('SETTINGS_CHANGED', '合成设置变化'); return { ok: true }; } });
   const failed = command(), next = command(randomUUID(), 'turn.stop', { threadId: 'another' });
   f.queue.submit('phone', failed); f.queue.submit('phone', next); await f.queue.pump();
   assert.equal(attempt, 1); assert.equal(f.queue.list('phone').paused, true);
+  const snapshots = []; f.queue.changed = (_device, snapshot) => snapshots.push(snapshot); f.queue.watch('phone');
+  await f.queue.control('phone', { taskId: failed.taskId, action: 'dismiss' });
+  await f.queue.wait('phone', next.taskId);
+  assert.equal(attempt, 2); assert.equal(f.queue.list('phone').paused, false);
+  assert.equal(f.queue.list('phone').blockerId, '');
+  assert.ok(snapshots.every(snapshot => !snapshot.paused));
+  const history = f.queue.list('phone', { taskId: failed.taskId }).tasks[0];
+  assert.equal(history.state, 'failed'); assert.equal(history.dismissed, true);
+  assert.equal(f.queue.row('phone', failed.taskId).payload, null);
+  assert.equal(f.queue.submit('phone', failed).duplicate, true);
   await f.queue.control('phone', { taskId: failed.taskId, action: 'dismiss' }); await f.queue.pump();
-  assert.equal(attempt, 1); assert.equal(f.queue.list('phone').tasks.length, 1);
-  await f.queue.control('phone', { taskId: failed.taskId, action: 'resume' }); await f.queue.pump(); assert.equal(attempt, 2);
-  assert.equal(f.queue.list('phone', { taskId: failed.taskId }).tasks[0].state, 'failed');
+  assert.equal(attempt, 2);
+});
+
+test('未关闭失败项可手动继续，重复关闭旧失败项不能解除新暂停原因', async t => {
+  let attempt = 0;
+  const f = fixture(t, { execute: async () => { attempt++; throw new BridgeError('SYNTHETIC_FAILURE', '合成失败'); } });
+  const first = command(), second = command(), third = command();
+  for (const request of [first, second, third]) f.queue.submit('phone', request);
+  await f.queue.pump();
+  await f.queue.control('phone', { taskId: first.taskId, action: 'resume' }); await f.queue.pump();
+  assert.equal(attempt, 2); assert.equal(f.queue.list('phone').blockerId, second.taskId);
+  await f.queue.control('phone', { taskId: first.taskId, action: 'dismiss' }); await f.queue.pump();
+  assert.equal(attempt, 2); assert.equal(f.queue.list('phone').paused, true);
+  assert.equal(f.queue.list('phone').blockerId, second.taskId);
+});
+
+test('重启恢复旧版已关闭失败项的队列，不越过未知任务，也不重放失败项', async t => {
+  for (const unknown of [false, true]) {
+    const journal = new Journal(), calls = [];
+    const queue = new TaskQueue({ journal, execute: async () => { throw new BridgeError('SYNTHETIC_FAILURE', '合成失败'); } });
+    const first = command(), next = command(); queue.submit('phone', first); queue.submit('phone', next); await queue.pump();
+    // 构造旧版已经隐藏失败卡片、但暂停标记尚未解除的持久化现场。
+    journal.db.prepare('UPDATE submission_tasks SET dismissed=1 WHERE id=?').run(first.taskId);
+    if (unknown) journal.db.prepare("UPDATE submission_tasks SET state='unknown' WHERE id=?").run(first.taskId);
+    await queue.close();
+    const restored = new TaskQueue({ journal, execute: async task => { calls.push(task.id); return { ok: true }; } });
+    try {
+      await restored.pump();
+      assert.deepEqual(calls, unknown ? [] : [next.taskId]);
+      assert.equal(restored.list('phone').paused, unknown);
+      assert.equal(restored.list('phone', { taskId: first.taskId }).tasks[0].state, unknown ? 'unknown' : 'failed');
+    } finally { await restored.close(); journal.close(); }
+  }
 });
 
 test('未知结果不可重发，核对不到不能继续，明确人工跳过会留下说明', async t => {

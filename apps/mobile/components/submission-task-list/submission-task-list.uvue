@@ -16,7 +16,7 @@
     </scroll-view>
     <button v-if="rows.length > 3" class="submission-expand" @click="expanded = !expanded">{{ expanded ? '收起' : '展开全部 ' + rows.length + ' 项' }}</button>
     <text v-if="error.length > 0" class="submission-error">{{ error }}</text>
-    <view v-for="instance in hiddenBlockers" :key="instance.hostId" class="submission-recovery"><text class="submission-error">{{ hostName(instance.hostId) }} · 队列已暂停</text><button class="submission-action" @click="openInstanceHistory(instance.hostId)">查看并处理</button></view>
+    <view v-for="instance in hiddenBlockers" :key="instance.hostId" class="submission-recovery"><text class="submission-error">{{ hostName(instance.hostId) }} · 队列已暂停</text><button class="submission-action" :disabled="working.length > 0" @click="recoverPaused(instance)">{{ (instance.snapshot?.blockerId ?? '').length > 0 ? '继续队列' : '查看执行记录' }}</button></view>
   </view>
 </template>
 
@@ -26,7 +26,7 @@ import SubmissionTaskStatus from '../submission-task-status/submission-task-stat
 import { connection, Computer } from '../../services/bridge.uts'
 import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, submissionVisible } from '../../services/submission-task-state.uts'
 import { submissionCardMeta, submissionCardError, submissionNeedsPauseNotice } from '../../services/submission-task-presentation.uts'
-import { controlSubmissionTask, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
+import { controlSubmissionTask, readSubmissionTasks, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
 type TaskRow = { hostId: string, task: SubmissionTask }
 const props = withDefaults(defineProps<{ hostId?: string }>(), { hostId: '' })
 const emit = defineEmits<{ open: [hostId: string, threadId: string, title: string] }>()
@@ -51,10 +51,32 @@ function hostName(id: string): string { return connection.computers.find((comput
 function taskTitle(task: SubmissionTask): string { return task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }
 function openHistory() { uni.navigateTo({ url: '/pages/task-history/index' + (props.hostId.length > 0 ? '?hostId=' + encodeURIComponent(props.hostId) : '') }) }
 function openInstanceHistory(hostId: string) { uni.navigateTo({ url: '/pages/task-history/index?hostId=' + encodeURIComponent(hostId) }) }
+// 暂停源卡片已关闭或折叠时仍可直接恢复；先核对原任务，未知结果由用户确认后跳过。
+async function recoverPaused(instance: InstanceSubmissionTasks) {
+  if (working.value.length > 0) return
+  const blockerId = instance.snapshot?.blockerId ?? ''
+  if (blockerId.length == 0) { openInstanceHistory(instance.hostId); return }
+  working.value = blockerId; error.value = ''
+  try {
+    let snapshot = await readSubmissionTasks(instance.hostId, { taskId: blockerId })
+    let task = (JSON.parse<SubmissionTask[]>(JSON.stringify(snapshot['tasks'] ?? [])) ?? [] as SubmissionTask[]).find((item: SubmissionTask): boolean => item.id == blockerId) ?? null
+    if (task?.state == 'unknown') {
+      await controlSubmissionTask(instance.hostId, blockerId, 'reconcile')
+      snapshot = await readSubmissionTasks(instance.hostId, { taskId: blockerId })
+      task = (JSON.parse<SubmissionTask[]>(JSON.stringify(snapshot['tasks'] ?? [])) ?? [] as SubmissionTask[]).find((item: SubmissionTask): boolean => item.id == blockerId) ?? null
+    }
+    if (snapshot.getBoolean('paused') != true) return
+    if (snapshot.getString('blockerId') != blockerId || task == null) throw new Error('暂停原因已变化，请刷新后处理当前任务')
+    if (task.state == 'unknown') { skip(instance.hostId, task); return }
+    if (['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(task.state) < 0) throw new Error('原任务仍在执行，请稍后核对')
+    await controlSubmissionTask(instance.hostId, blockerId, 'resume')
+  } catch (reason) { error.value = (reason as Error).message }
+  finally { working.value = '' }
+}
 // 首页错误只占一行，用户点击仍能读取完整原因。
 function showError(task: SubmissionTask) { uni.showModal({ title: '执行失败详情', content: task.error, showCancel: false, confirmText: '知道了' }) }
 function openTask(hostId: string, task: SubmissionTask) { if (task.threadId.length > 0 && task.method != 'thread.delete') emit('open', hostId, task.threadId, task.title) }
-// 管理操作只修改原任务；失败或关闭都不隐式恢复整个实例。
+// 关闭明确失败项后继续后续任务；结果未知或待恢复的任务仍需核对、继续或明确跳过。
 async function act(hostId: string, task: SubmissionTask, action: string, confirmed: boolean = false) {
   if (working.value.length > 0) return
   working.value = task.id; error.value = ''
