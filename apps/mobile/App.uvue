@@ -95,7 +95,7 @@ button::after { border: none; }
 .chat-workspace.workspace-wide #conversation-page :is(.composer-panel, .jump-latest, .table-cell) { border-color: var(--workspace-line); }
 .chat-workspace.workspace-wide #conversation-page :is(.jump-latest, .menu-panel) { background-color: #ffffff; }
 .chat-workspace.workspace-wide #conversation-page :is(.message-user, .button-secondary, .draft-file) { background-color: var(--detail-tint); }
-.chat-workspace.workspace-wide #conversation-page :is(.detail-cache-indicator, .md-code, .run-code, .table-heading) { background-color: var(--detail-soft); }
+.chat-workspace.workspace-wide #conversation-page :is(.md-code, .run-code, .table-heading) { background-color: var(--detail-soft); }
 .chat-workspace.workspace-wide #conversation-page :is(.primary-action, .button-primary) { background-color: var(--workspace-accent); }
 .chat-workspace.workspace-wide #conversation-page :is(.run-link, .code-copy) { color: var(--workspace-accent); }
 .chat-workspace.workspace-wide #conversation-page .action-pressed { background-color: rgba(69, 70, 189, 0.07); }

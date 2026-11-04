@@ -8,7 +8,7 @@
         <!-- 状态紧跟标题，长标题省略时仍为状态保留完整宽度。 -->
         <view class="thread-heading">
           <text class="thread-title">{{ displayTitle }}</text>
-          <view v-if="showingCachedContent" class="detail-cache-indicator" role="img" :aria-label="cacheSyncHint"><app-icon name="clock" :size="14" tone="muted" /></view>
+          <view v-if="showingCachedContent" class="detail-cache-indicator" role="img" :aria-label="cacheSyncHint"><cache-activity-icon :spinning="pageVisible && cacheDetailSyncing" /></view>
           <view v-if="!cacheOnly && connection.snapshot != null" class="title-status"><task-status :hide-running-label="true" :state="currentTaskState" :visible="pageVisible" /></view>
         </view>
         <view class="thread-meta"><view v-if="connection.computers.length > 1" class="meta-computer"><app-icon class="meta-icon" :name="hostIcon" :size="14" tone="muted" /><text class="meta-host">{{ hostName }}</text></view><app-icon class="meta-icon" name="folder" :size="14" tone="muted" /><text class="meta-project">{{ projectName }}</text></view>
@@ -185,6 +185,7 @@ import PermissionsControl from '../../components/permissions-control/permissions
 import { taskNotifications, pendingTaskNotice, showTaskNoticeThread, hideTaskNoticeThread } from '../../services/task-notifications.uts'
 import { taskNoticeAnchor } from '../../services/task-notification-state.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
+import CacheActivityIcon from '../cache-activity-icon/cache-activity-icon.uvue'
 import MessageComposer from '../message-composer/message-composer.uvue'
 import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvue'
 import { useLiquidGlass } from '../../services/liquid-glass.uts'
@@ -346,7 +347,8 @@ const canConnectCached = computed((): boolean => cacheOnly && connection.connect
 const subscriptionReady = computed((): boolean => connection.connected && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value && connection.subscribedHostId == pageHostId.value && connection.subscribedThreadId == pageThreadId.value && liveConversation.value != null)
 const imagesReady = computed((): boolean => pageVisible.value && subscriptionReady.value)
 const showingCachedContent = computed((): boolean => cachedDetail.value != null && pageCacheNamespace.value == connection.cacheNamespace && (liveConversation.value == null || (connection.connected && goalHostOnline.value && !subscriptionReady.value)))
-// 时钟图标统一提示缓存，读屏和聊天信息仍能区分只读、同步和失败。
+// 缓存标记仅在同步或手动重试期间转动，本地只读和失败时保持静止。
+const cacheDetailSyncing = computed((): boolean => !cacheOnly && (refreshSource.value == 'cache' || (connection.connected && goalHostOnline.value && detailError.value.length == 0)))
 const cacheSyncHint = computed((): string => {
   if (cacheOnly) return '本地副本，仅供阅读'
   if (refreshSource.value == 'cache') return '正在重试同步，当前显示缓存'
@@ -1750,7 +1752,7 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 .thread-heading { flex-direction: row; align-items: center; }
 .thread-title { color: #202c28; font-size: 17px; line-height: 25px; font-weight: bold; flex-shrink: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
 .title-status { margin-left: 10px; flex-shrink: 0; }
-.detail-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 6px; border-radius: 11px; background-color: #edf0e9; align-items: center; justify-content: center; }
+.detail-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 6px; align-items: center; justify-content: center; }
 .thread-meta { flex-direction: row; align-items: center; margin-top: 3px; }
 .meta-computer { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 10px; }
 .meta-icon { flex-shrink: 0; }

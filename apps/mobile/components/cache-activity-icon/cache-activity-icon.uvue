@@ -1,0 +1,46 @@
+<template>
+  <view class="cache-activity-icon" aria-hidden="true" :class="{ 'cache-activity-icon-spinning': spinning }" :style="{ transform: 'rotate(' + angle + 'deg)' }">
+    <view v-for="(opacity, index) in spokes" :key="index" class="cache-activity-spoke" :style="{ transform: 'rotate(' + (index * 45) + 'deg)', opacity: spinning ? opacity : 0.58 }">
+      <view class="cache-activity-stroke"></view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { ref, watch, onUnmounted } from 'vue'
+
+const props = defineProps<{ spinning: boolean }>()
+// 八条圆角短线依次变浅，旋转时形成系统进度指示器的拖尾。
+const spokes = [1, 0.22, 0.31, 0.42, 0.54, 0.66, 0.78, 0.9]
+const angle = ref(0)
+
+// #ifndef WEB
+let timer = 0
+// 原生端每次转一格，仅在可见且正在同步时更新。
+function stopSpinning() {
+  clearInterval(timer)
+  timer = 0
+  angle.value = 0
+}
+watch((): boolean => props.spinning, (spinning: boolean) => {
+  stopSpinning()
+  if (spinning) timer = setInterval(() => { angle.value = (angle.value + 45) % 360 }, 100)
+}, { immediate: true })
+onUnmounted(() => { stopSpinning() })
+// #endif
+</script>
+
+<style scoped>
+.cache-activity-icon { position: relative; flex-shrink: 0; width: 16px; height: 16px; }
+.cache-activity-spoke { position: absolute; top: 0; left: 0; width: 16px; height: 16px; align-items: center; }
+.cache-activity-stroke { width: 2px; height: 4px; border-radius: 1px; background-color: #667085; }
+/* #ifdef WEB */
+@media (prefers-reduced-motion: no-preference) {
+  .cache-activity-icon-spinning { animation: cache-activity-turn 800ms steps(8, end) infinite; }
+}
+@keyframes cache-activity-turn {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+/* #endif */
+</style>

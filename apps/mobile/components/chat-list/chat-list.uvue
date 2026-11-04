@@ -16,8 +16,8 @@
             <!-- #endif -->
           </view>
           <!-- 缓存状态独立于标题菜单，读屏可识别且不占聊天列表高度。 -->
-          <view v-if="showCachedList" class="list-cache-indicator" role="img" aria-label="上次同步的聊天">
-            <app-icon name="clock" :size="14" tone="muted" />
+          <view v-if="showCachedList" class="list-cache-indicator" role="img" :aria-label="cacheListSyncing ? '正在同步聊天列表，显示上次同步的聊天' : '上次同步的聊天'">
+            <cache-activity-icon :spinning="pageVisible && cacheListSyncing" />
           </view>
         </view>
         <view v-if="liquidGlass" class="header-glass-group">
@@ -83,6 +83,7 @@ import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../s
 import DeletionTaskList from '../../components/deletion-tasks/deletion-tasks.uvue'
 import { DeleteTask, deletionTask as findDeletionTask, deletionLabel as formatDeletionLabel } from '../../services/delete-tasks.uts'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
+import CacheActivityIcon from '../cache-activity-icon/cache-activity-icon.uvue'
 import ComposerPlus from '../composer-plus/composer-plus.uvue'
 import LiquidGlassControl from '../liquid-glass-control/liquid-glass-control.uvue'
 import { useLiquidGlass } from '../../services/liquid-glass.uts'
@@ -243,6 +244,10 @@ let archiveToastRequest = 0
 const selectedComputers = computed((): ComputerThreads[] => threadList.computers.filter((entry: ComputerThreads): boolean => selectedComputerId.value.length == 0 || entry.hostId == selectedComputerId.value))
 const allVisibleThreads = computed((): ComputerThread[] => visibleComputerThreads(selectedComputerId.value, ''))
 const showCachedList = computed((): boolean => allVisibleThreads.value.some((thread: ComputerThread): boolean => thread.cached == true))
+// 缓存还在时用静态图标表示离线，仅在连接或首次读取列表期间转动。
+const cacheListSyncing = computed((): boolean => !connection.connected
+  ? connection.error.length == 0 && (connection.status == '正在连接' || connection.status == '正在重新连接')
+  : selectedComputers.value.some((entry: ComputerThreads): boolean => entry.online && entry.loading && !entry.loaded && entry.error.length == 0))
 type ComputerIndicator = { hostId: string, state: string }
 // 列表状态来自实际读取结果，当前订阅会话优先采用实时快照。
 function threadState(thread: ComputerThread): string {
@@ -481,7 +486,7 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 /* 让标题和展开箭头整体居中，两侧与按下背景保持相同留白。 */
 .list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding: 0 8px; border-radius: 12px; }
 .list-title-text { flex-shrink: 0; margin-right: 6px; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
-.list-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 2px; border-radius: 11px; background-color: #edf0e9; align-items: center; justify-content: center; }
+.list-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 2px; align-items: center; justify-content: center; }
 .list-menu-arrow { flex-shrink: 0; width: 18px; height: 18px; transform: rotate(0deg); transition-property: transform; transition-duration: 140ms; transition-timing-function: ease-in; }
 .list-menu-arrow-open { transform: rotate(180deg); transition-duration: 200ms; transition-timing-function: ease-out; }
 /* #ifdef WEB */
