@@ -1762,7 +1762,8 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
 /* 按聊天视口水平居中，44px 点击区域仍随输入区高度一起上移。 */
 .jump-latest { position: absolute; bottom: 8px; left: 50%; width: 44px; height: 44px; padding: 0; margin: 0; margin-left: -22px; border-radius: 22px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e5e8f1; align-items: center; justify-content: center; overflow: hidden; }
 .jump-latest-glass { background-color: transparent; border-width: 0; overflow: visible; }
-.composer-dock { position: relative; z-index: 10; flex-shrink: 0; padding: 12px 12px 8px; }
+/* 与列表新聊天入口保持相同的左右及底部间距，避免进入详情时输入框变宽、下移。 */
+.composer-dock { position: relative; z-index: 10; flex-shrink: 0; padding: 12px 16px 12px; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 /* 图标由圆形容器居中，透明按钮保留原生点击与禁用行为，不再依赖文字基线。 */
 /* 图形与透明点击层分离，与权限、模型和发送操作共用中心轴。 */
