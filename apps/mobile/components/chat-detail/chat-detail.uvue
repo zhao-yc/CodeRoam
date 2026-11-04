@@ -1752,7 +1752,8 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
 .approval-detail { color: #1a2135; font-size: 13px; line-height: 21px; margin-top: 8px; }
 .approval-cwd { color: #596479; font-size: 11px; margin-top: 8px; }
 .approval-actions { flex-direction: row; margin-top: 10px; }
-.approval-button { flex: 1; height: 44px; line-height: 44px; padding: 0 12px; margin: 0 4px; font-size: 14px; }
+/* 窄屏为对称加载占位留出空间，四字审批文案保持单行。 */
+.approval-button { flex: 1; height: 44px; line-height: 44px; padding: 0 8px; margin: 0 4px; font-size: 14px; }
 .approval-feedback { color: #596479; font-size: 13px; margin-top: 12px; }
 .working { flex-direction: row; align-items: center; padding: 6px 16px; }
 .working-text { color: #596479; font-size: 13px; margin-left: 6px; }

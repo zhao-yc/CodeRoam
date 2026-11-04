@@ -8,7 +8,7 @@
           <text class="goal-counter">{{ objective.length }} / 4000</text>
         </view>
         <text v-if="editorRevision != revision" class="goal-note">电脑端目标已变化，请取消后重新编辑。</text>
-        <view class="goal-editor-actions"><button class="goal-action goal-cancel" :disabled="busy" @click="cancelEdit">取消</button><view class="goal-save" :class="{ 'goal-save-disabled': disabled && !busy || objective.trim().length == 0 || editorRevision != revision }"><text class="goal-save-label">保存目标</text><action-progress v-if="busy" :busy="true" light /><text v-else class="goal-save-arrow">→</text><button class="action-hitbox" :aria-label="busy ? '正在同步目标' : '保存目标'" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save"></button></view></view>
+        <view class="goal-editor-actions"><button class="goal-action goal-cancel" :disabled="busy" @click="cancelEdit">取消</button><view class="goal-save" :class="{ 'goal-save-disabled': disabled && !busy || objective.trim().length == 0 || editorRevision != revision }"><view class="goal-save-slot" aria-hidden="true"></view><text class="goal-save-label">保存目标</text><view class="goal-save-slot" aria-hidden="true"><action-progress v-if="busy" :busy="true" light /><text v-else class="goal-save-arrow">→</text></view><button class="action-hitbox" :aria-label="busy ? '正在同步目标' : '保存目标'" :disabled="disabled || busy || objective.trim().length == 0 || editorRevision != revision" @click="save"></button></view></view>
       </template>
       <template v-else-if="goal != null">
         <scroll-view direction="vertical" class="goal-body" :style="{ maxHeight: contentHeight + 'px' }"><text class="goal-objective" selectable>{{ goal.objective }}</text></scroll-view>
@@ -89,8 +89,10 @@ watch((): boolean => props.busy, (value: boolean, previous: boolean) => { if (!v
 .goal-editor-actions { flex-direction: row; align-items: center; margin-top: 16px; }
 .goal-cancel { flex: 1; min-width: 0; height: 46px; margin: 0 10px 0 0; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 13px; background-color: #ffffff; color: #1a2135; line-height: 44px; font-size: 15px; align-items: center; justify-content: center; }
 .goal-save { position: relative; flex: 1.8; min-width: 0; height: 46px; padding: 0 12px; background-color: #4546bd; border-radius: 13px; flex-direction: row; align-items: center; justify-content: center; }
+/* 两侧保留等宽位置，右侧箭头切换为加载动画时，文字仍对齐按钮中心。 */
+.goal-save-slot { width: 24px; height: 24px; flex-shrink: 0; align-items: center; justify-content: center; }
 .goal-save-label { color: #ffffff; font-size: 15px; line-height: 24px; }
-.goal-save-arrow { color: #ffffff; font-size: 18px; line-height: 24px; margin-left: 8px; }
+.goal-save-arrow { color: #ffffff; font-size: 18px; line-height: 24px; }
 .goal-save-disabled { background-color: #e5e8f1; color: #737d91; }
 .goal-save-disabled .goal-save-label { color: #737d91; }
 .goal-save-disabled .goal-save-arrow { color: #737d91; }
