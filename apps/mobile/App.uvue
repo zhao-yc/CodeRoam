@@ -55,7 +55,7 @@ button::after { border: none; }
 .chat-workspace.workspace-wide .composer-panel { border-radius: 13px; }
 .chat-workspace.workspace-wide .message-user { border-radius: 13px 13px 4px 13px; }
 
-/* 靛蓝配色仅覆盖宽屏聊天列表，详情与新聊天编辑区沿用原配色。 */
+/* 聊天列表的靛蓝配色仅作用于宽屏侧栏。 */
 .chat-workspace.workspace-wide #home-page {
   --list-ink: #1a2135;
   --list-muted: #596479;
@@ -76,5 +76,26 @@ button::after { border: none; }
 .chat-workspace.workspace-wide #home-page .list-new-button-label { color: #ffffff; }
 .chat-workspace.workspace-wide #home-page .list-new-button :is(.plus-horizontal, .plus-vertical) { background-color: #ffffff; }
 .chat-workspace.workspace-wide #home-page .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
+
+/* 宽屏聊天详情只替换配色，尺寸和间距由原组件管理。 */
+.chat-workspace.workspace-wide #conversation-page {
+  --detail-ink: #1a2135;
+  --detail-muted: #596479;
+  --detail-line: #e5e8f1;
+  --detail-accent: #4546bd;
+  --detail-tint: #eff0fe;
+  --detail-soft: #f6f7fb;
+  background-color: #ffffff;
+}
+.chat-workspace.workspace-wide #conversation-page :is(.thread-title, .message-text, .inline-text, .code-text, .message-input, .empty-title) { color: var(--detail-ink); }
+.chat-workspace.workspace-wide #conversation-page :is(.meta-host, .meta-project, .history-note, .process-label, .execution-label, .execution-summary, .composer-caption, .connection-note, .empty-detail) { color: var(--detail-muted); }
+.chat-workspace.workspace-wide #conversation-page :is(.conversation-header, .process-toggle) { border-bottom-color: var(--detail-line); }
+.chat-workspace.workspace-wide #conversation-page :is(.composer-panel, .jump-latest, .table-cell) { border-color: var(--detail-line); }
+.chat-workspace.workspace-wide #conversation-page :is(.jump-latest, .menu-panel) { background-color: #ffffff; }
+.chat-workspace.workspace-wide #conversation-page :is(.message-user, .button-secondary, .draft-file) { background-color: var(--detail-tint); }
+.chat-workspace.workspace-wide #conversation-page :is(.detail-cache-indicator, .md-code, .run-code, .table-heading) { background-color: var(--detail-soft); }
+.chat-workspace.workspace-wide #conversation-page :is(.primary-action, .button-primary) { background-color: var(--detail-accent); }
+.chat-workspace.workspace-wide #conversation-page :is(.run-link, .code-copy) { color: var(--detail-accent); }
+.chat-workspace.workspace-wide #conversation-page .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 /* #endif */
 </style>
