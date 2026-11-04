@@ -90,3 +90,9 @@ test('已读后出现新的未读结果可再次确认；首屏挂载前切到�
   f.c.pageVisible.value=true;f.confirm();f.flush();assert.equal(f.requests.length,1);f.requests[0].resolve(f.result);await new Promise(setImmediate);assert.equal(f.snapshot.hasUnreadTurn,false);
   f.confirm();f.snapshot.hasUnreadTurn=true;f.confirm();f.flush();assert.equal(f.requests.length,2);
 });
+
+test('目录未返回未读标记时仍确认查看，成功后新的未读结果不被旧去重标记阻挡',async()=>{
+  const f=visibleReadFixture();delete f.snapshot.hasUnreadTurn;f.confirm();f.flush();assert.equal(f.requests.length,1);
+  f.requests[0].resolve(f.result);await new Promise(setImmediate);assert.equal(f.snapshot.hasUnreadTurn,false);
+  f.snapshot.hasUnreadTurn=true;f.confirm();f.flush();assert.equal(f.requests.length,2);
+});
