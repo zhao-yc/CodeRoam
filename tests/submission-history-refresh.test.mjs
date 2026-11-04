@@ -8,20 +8,22 @@ import { stripTypeScriptTypes } from 'node:module';
 function fixture(read = async () => ({ tasks: [], getNumber: () => 0 }), tick = async () => {}) {
   const page = fs.readFileSync('apps/mobile/pages/task-history/index.uvue', 'utf8');
   const source = page.split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\r?\n/gm, '');
-  let changed, show, hide;
+  let changed, show, hide, back, resize;
   const calls = [];
   const scope = vm.createContext({
     ref: value => ({ value }), computed: read => ({ get value() { return read(); } }),
     nextTick: tick,
     watch: (read, callback) => { changed = callback; },
     onLoad: () => {}, onShow: callback => { show = callback; }, onHide: callback => { hide = callback; }, onUnload: () => {},
+    onBackPress: callback => { back = callback; }, onResize: callback => { resize = callback; },
+    uni: { hideKeyboard: () => {}, getWindowInfo: () => ({ windowHeight: 640 }) },
     connection: { connected: false, computers: [], cacheNamespace: 'synthetic' },
     bridge: { resume: () => calls.push('恢复连接') },
     readSubmissionTasks: async (id, params) => { calls.push(id); return read(id, params); },
     submissionHistoryOrder: () => 0,
   });
-  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={error,loading,reload,refreshHistory,refreshing,cursors,hostId,state};', scope);
-  return { scope, calls, show: () => show(), hide: () => hide(), changed: () => changed() };
+  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={error,loading,reload,refreshHistory,refreshing,cursors,hostId,state,chooseHost,selectHost,hostPickerOpen,hostPickerHeight};', scope);
+  return { scope, calls, show: () => show(), hide: () => hide(), changed: () => changed(), back: () => back(), resize: () => resize() };
 }
 
 test('刷新直达记录页，握手和电脑列表分别恢复时自动查询', async () => {
@@ -106,4 +108,42 @@ test('未配对时先渲染刷新开始再结束；渲染期间离页则取消�
   const leaving = f.scope.subject.refreshHistory();
   f.hide(); render(); await leaving;
   assert.deepEqual(f.calls, ['恢复连接']);
+});
+
+test('实例面板选择只改变记录筛选，重复选择不重查，移除的实例不能被选中', async () => {
+  const f = fixture();
+  f.scope.connection.connected = true;
+  f.scope.connection.hostId = 'current-chat-instance';
+  f.scope.connection.computers = [{ id: 'history-instance', online: true }];
+  const page = f.scope.subject;
+  page.state.value = 'failed'; page.chooseHost();
+  assert.equal(page.hostPickerOpen.value, true);
+  page.selectHost('history-instance');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(page.hostId.value, 'history-instance');
+  assert.equal(page.state.value, 'failed');
+  assert.equal(f.scope.connection.hostId, 'current-chat-instance');
+  assert.equal(page.hostPickerOpen.value, false);
+  assert.deepEqual(f.calls, ['history-instance']);
+  page.chooseHost(); page.selectHost('history-instance');
+  assert.deepEqual(f.calls, ['history-instance']);
+  assert.equal(page.hostPickerOpen.value, false);
+  page.chooseHost(); page.selectHost('removed-instance');
+  assert.equal(page.hostId.value, 'history-instance');
+  assert.equal(page.hostPickerOpen.value, true);
+  assert.equal(f.back(), true);
+  assert.equal(page.hostPickerOpen.value, false);
+  assert.equal(f.back(), false);
+  page.chooseHost(); page.selectHost('');
+  assert.equal(page.hostId.value, '');
+  assert.equal(page.hostPickerOpen.value, false);
+});
+
+test('实例面板按可视高度限制长列表，并在离页时关闭', () => {
+  const f = fixture(), page = f.scope.subject;
+  f.scope.connection.computers = Array.from({ length: 40 }, (_, i) => ({ id: 'synthetic-' + i }));
+  page.chooseHost(); assert.equal(page.hostPickerHeight.value, 380);
+  f.scope.uni.getWindowInfo = () => ({ windowHeight: 240 }); f.resize();
+  assert.equal(page.hostPickerHeight.value, 80);
+  f.hide(); assert.equal(page.hostPickerOpen.value, false);
 });
