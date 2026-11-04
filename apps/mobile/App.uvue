@@ -50,7 +50,6 @@ button::after { border: none; }
 .chat-workspace.workspace-wide .search-field,
 .chat-workspace.workspace-wide .thread-selected,
 .chat-workspace.workspace-wide .list-new-button,
-.chat-workspace.workspace-wide .process-toggle,
 .chat-workspace.workspace-wide .composer-panel .primary-action { border-radius: 8px; }
 .chat-workspace.workspace-wide .composer-panel { border-radius: 13px; }
 .chat-workspace.workspace-wide .message-user { border-radius: 13px 13px 4px 13px; }
@@ -92,6 +91,8 @@ button::after { border: none; }
 .chat-workspace.workspace-wide #conversation-page :is(.thread-title, .message-text, .inline-text, .code-text, .message-input, .empty-title) { color: var(--workspace-ink); }
 .chat-workspace.workspace-wide #conversation-page :is(.meta-host, .meta-project, .history-note, .process-label, .execution-label, .execution-summary, .composer-caption, .connection-note, .empty-detail) { color: var(--workspace-muted); }
 .chat-workspace.workspace-wide #conversation-page :is(.conversation-header, .process-toggle) { border-bottom-color: var(--workspace-line); }
+/* 执行过程保留直线底边，并对齐正文两端。 */
+.chat-workspace.workspace-wide #conversation-page .process-toggle { align-self: stretch; }
 .chat-workspace.workspace-wide #conversation-page :is(.composer-panel, .jump-latest, .table-cell) { border-color: var(--workspace-line); }
 .chat-workspace.workspace-wide #conversation-page :is(.jump-latest, .menu-panel) { background-color: #ffffff; }
 .chat-workspace.workspace-wide #conversation-page :is(.message-user, .button-secondary, .draft-file) { background-color: var(--detail-tint); }
