@@ -5,17 +5,16 @@
       <!-- 按文字和图标的整体宽度居中，避免按钮默认布局和字符箭头基线造成偏移。 -->
       <view class="history-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
         <view class="history-filter-content"><text class="history-filter-label" :class="hostId.length > 0 ? 'history-filter-label-active' : ''">{{ selectedHostLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
-        <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选电脑" @click="chooseHost"></button>
+        <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选实例" @click="chooseHost"></button>
       </view>
-      <view class="history-filter" :class="state.length > 0 ? 'history-filter-active' : ''">
+      <view class="history-filter history-state-filter" :class="state.length > 0 ? 'history-filter-active' : ''">
         <view class="history-filter-content"><text class="history-filter-label" :class="state.length > 0 ? 'history-filter-label-active' : ''">{{ selectedStateLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
         <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选执行状态" @click="chooseState"></button>
       </view>
-      <view class="history-filter history-refresh" :class="loading ? 'history-refresh-loading' : ''"><text class="history-filter-label history-refresh-label" :class="loading ? 'history-filter-label-disabled' : ''">{{ loading ? '读取中…' : '刷新' }}</text><button class="action-hitbox" hover-class="history-filter-pressed" aria-label="刷新执行记录" :disabled="loading" @click="reload"></button></view>
     </view>
     <text v-if="error.length > 0" class="history-error">{{ error }}</text>
-    <scroll-view direction="vertical" class="history-scroll" :show-scrollbar="false" @scrolltolower="loadMore">
-      <view v-if="rows.length == 0 && !loading" class="history-empty"><text>{{ !connection.connected ? '正在等待连接' : cursors.length == 0 ? '电脑暂未在线' : error.length > 0 ? '记录读取失败' : '暂无执行记录' }}</text><text class="history-empty-note">{{ !connection.connected ? '连接恢复后会自动读取；尚未配对时请返回首页连接电脑。' : cursors.length == 0 ? '请确认所选电脑在线，上线后将自动读取。' : error.length > 0 ? '请稍后点击刷新重试。' : '记录保存在原守护进程，可切换筛选条件查看。' }}</text></view>
+    <scroll-view direction="vertical" class="history-scroll" :show-scrollbar="false" :refresher-enabled="true" :refresher-triggered="refreshing" refresher-background="#ffffff" @refresherrefresh="refreshHistory" @scrolltolower="loadMore">
+      <view v-if="rows.length == 0 && !loading" class="history-empty"><text>{{ !connection.connected ? '正在等待连接' : cursors.length == 0 ? '实例暂未在线' : error.length > 0 ? '记录读取失败' : '暂无执行记录' }}</text><text class="history-empty-note">{{ !connection.connected ? '连接恢复后会自动读取；尚未配对时请返回首页连接实例。' : cursors.length == 0 ? '请确认所选实例在线，上线后将自动读取。' : error.length > 0 ? '请稍后下拉刷新重试。' : '记录保存在原守护进程，可切换筛选条件查看。' }}</text></view>
       <view v-for="row in rows" :key="row.hostId + ':' + row.task.id" class="history-task">
         <view class="history-task-heading"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><submission-task-status class="history-state" :state="row.task.state" /></view>
         <template v-if="row.task.threadId.length > 0"><button v-if="row.task.method != 'thread.delete'" class="history-chat-title" hover-class="action-pressed" @click="openTask(row.hostId, row.task)">{{ chatTitle(row.hostId, row.task) }}</button><text v-else class="history-chat-title history-chat-unavailable">{{ chatTitle(row.hostId, row.task) }}</text></template>
@@ -46,6 +45,7 @@ const chatTitles = ref<HistoryChatTitle[]>([])
 type HistoryCursor = { hostId: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
 const cursors = ref<HistoryCursor[]>([])
+const refreshing = ref(false)
 let request = 0
 const pageVisible = ref(false)
 const onlineHosts = computed((): string => connection.computers.filter((computer: Computer): boolean => computer.online).map((computer: Computer): string => computer.id).sort().join(','))
@@ -53,10 +53,10 @@ const onlineHosts = computed((): string => connection.computers.filter((computer
 watch((): string => connection.connected.toString() + ':' + connection.cacheNamespace + ':' + onlineHosts.value, () => { if (pageVisible.value) reload() })
 const stateValues = ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped']
 const stateLabels = ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过']
-const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全部电脑' : hostName(hostId.value))
+const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全部实例' : hostName(hostId.value))
 const selectedStateLabel = computed((): string => stateLabels[stateValues.indexOf(state.value)] ?? '全部状态')
 const hasMore = computed((): boolean => cursors.value.some((cursor: HistoryCursor): boolean => cursor.more))
-function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
+function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原实例' }
 // 标题按电脑和聊天编号共同匹配，避免多实例同编号串到其他聊天。
 function chatTitle(id: string, task: SubmissionTask): string {
   const title = chatTitles.value.find((item: HistoryChatTitle): boolean => item.hostId == id && item.threadId == task.threadId)?.title ?? ''
@@ -99,7 +99,7 @@ function completionLabel(task: SubmissionTask): string {
   const duration = task.startedAt > 0 ? ' · 耗时 ' + Math.max(0, Math.round((task.completedAt - task.startedAt) / 1000)) + ' 秒' : ''
   return label + ' ' + dateLabel(task.completedAt) + duration
 }
-// 每实例独立游标，全部电脑仅合并显示，不能把一个实例游标传给另一实例。
+// 每实例独立游标，全部实例仅合并显示，不能把一个实例游标传给另一实例。
 async function loadMore() {
   if (loading.value || !connection.connected) return
   const revision = request, namespace = connection.cacheNamespace
@@ -120,15 +120,21 @@ async function loadMore() {
     rows.value = rows.value.sort((a: HistoryRow, b: HistoryRow): number => submissionHistoryOrder(a.task, b.task))
     for (const cursor of cursors.value) await loadChatTitles(cursor.hostId, revision, namespace)
   } catch (reason) { if (revision == request) error.value = (reason as Error).message }
-  finally { if (revision == request) loading.value = false }
+  finally { if (revision == request) { loading.value = false; refreshing.value = false } }
+}
+// 下拉刷新保留筛选条件并重置分页，重复手势不重复请求；结束状态由当前请求统一收起。
+function refreshHistory() {
+  if (refreshing.value) return
+  refreshing.value = true
+  reload()
 }
 function reload() {
   request++; loading.value = false; error.value = ''; rows.value = [] as HistoryRow[]; chatTitles.value = [] as HistoryChatTitle[]
   cursors.value = connection.computers.filter((computer: Computer): boolean => computer.online && (hostId.value.length == 0 || computer.id == hostId.value)).map((computer: Computer): HistoryCursor => ({ hostId: computer.id, before: 0, more: true } as HistoryCursor))
-  if (!connection.connected) { bridge.resume(); return }
+  if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
   loadMore()
 }
-function chooseHost() { const computers = connection.computers; uni.showActionSheet({ itemList: ['全部电脑'].concat(computers.map((computer: Computer): string => computer.label)), success: (answer) => { hostId.value = answer.tapIndex == 0 ? '' : computers[answer.tapIndex - 1].id; reload() } }) }
+function chooseHost() { const computers = connection.computers; uni.showActionSheet({ itemList: ['全部实例'].concat(computers.map((computer: Computer): string => computer.label)), success: (answer) => { hostId.value = answer.tapIndex == 0 ? '' : computers[answer.tapIndex - 1].id; reload() } }) }
 function chooseState() { uni.showActionSheet({ itemList: stateLabels, success: (answer) => { state.value = stateValues[answer.tapIndex]; reload() } }) }
 function openTask(id: string, task: SubmissionTask) {
   if (task.threadId.length == 0 || task.method == 'thread.delete') return
@@ -142,8 +148,8 @@ function skip(row: HistoryRow) { uni.showModal({ title: '跳过待核对任务',
 function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
 onLoad((options: OnLoadOptions) => { hostId.value = options['hostId'] ?? '' })
 onShow(() => { pageVisible.value = true; reload() })
-onHide(() => { pageVisible.value = false; request++; loading.value = false })
-onUnload(() => { pageVisible.value = false; request++ })
+onHide(() => { pageVisible.value = false; request++; loading.value = false; refreshing.value = false })
+onUnload(() => { pageVisible.value = false; request++; refreshing.value = false })
 </script>
 
 <style>
@@ -160,10 +166,8 @@ onUnload(() => { pageVisible.value = false; request++ })
 .history-filter-label { flex-shrink: 1; min-width: 0; height: 20px; font-size: 13px; line-height: 20px; text-align: center; color: #596479; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-filter-chevron { width: 14px; height: 20px; margin-left: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
 .history-filter-active { background-color: #eeefff; border-color: #c9cdf5; }
-.history-filter-label-active, .history-refresh-label { color: #4546bd; }
-.history-refresh { flex: none; width: 80px; margin-right: 0; background-color: #eeefff; border-color: #eeefff; }
-.history-refresh-loading { background-color: #f1f2f7; }
-.history-filter-label-disabled { color: #8590a4; }
+.history-filter-label-active { color: #4546bd; }
+.history-state-filter { margin-right: 0; }
 .history-filter-pressed { background-color: rgba(69, 70, 189, 0.08); }
 .history-scroll { flex: 1; min-height: 0; }
 .history-task { margin: 8px 16px; padding: 14px; border-radius: 14px; background-color: #f5f6fc; }
