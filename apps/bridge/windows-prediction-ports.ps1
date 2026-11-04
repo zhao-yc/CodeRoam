@@ -3,7 +3,8 @@ $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $listeners=@(Get-NetTCPConnection -State Listen)
 $result=@(foreach($process in Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'") {
-  if($process.CommandLine -match '--type=' -or $process.ExecutablePath -notmatch '\\WindowsApps\\OpenAI\.Codex_(26\.1027\.3384\.0)_x64__2p2nqsd0c76g0\\app\\ChatGPT\.exe$'){continue}
+  # 只核对官方包身份和主进程，不按版本号阻止读取；兼容性由实际页面结构判断。
+  if($process.CommandLine -match '--type=' -or $process.ExecutablePath -notmatch '\\WindowsApps\\OpenAI\.Codex_[^\\]+__2p2nqsd0c76g0\\app\\ChatGPT\.exe$'){continue}
   if($process.CommandLine -notmatch '--remote-debugging-port[= ](\d+)'){continue}
   $port=[int]$Matches[1]
   $bindings=@($listeners | Where-Object {$_.LocalPort -eq $port})

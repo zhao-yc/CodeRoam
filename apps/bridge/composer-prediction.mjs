@@ -8,10 +8,11 @@ const execFileAsync=promisify(execFile);
 const REFRESH_MS=15000,MAX_IDENTITY_AGE_MS=60000;
 const identity=endpoint=>JSON.stringify([endpoint.port,endpoint.pid]);
 
-/** 只扫描已开启且归属于已验证桌面版本的回环端口。 */
+/** 只扫描已开启且归属于官方桌面主进程的回环端口，不限制桌面版本。 */
 export async function discoverPredictionPorts(){
   if(process.platform!=='win32')return [];
-  const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./windows-prediction-ports.ps1',import.meta.url))],{windowsHide:true,timeout:8000,maxBuffer:32768});
+  // 后台身份枚举包含 PowerShell 启动及网络查询，慢机器上允许超过原来的八秒上限。
+  const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./windows-prediction-ports.ps1',import.meta.url))],{windowsHide:true,timeout:12000,maxBuffer:32768});
   const ports=JSON.parse(stdout.replace(/^\uFEFF/,''));
   return Array.isArray(ports)?ports.filter(p=>Number.isInteger(p.port)&&p.port>0&&p.port<=65535).slice(0,4):[];
 }
