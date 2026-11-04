@@ -50,7 +50,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import SubmissionTaskStatus from '../../components/submission-task-status/submission-task-status.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
-import { bridge, connection, Computer, computerIcon, ThreadSummary } from '../../services/bridge.uts'
+import { bridge, connection, Computer, computerIcon as resolveComputerIcon, ThreadSummary } from '../../services/bridge.uts'
 import { SubmissionTask, submissionStageDetail, submissionInstance } from '../../services/submission-task-state.uts'
 import { readSubmissionTasks, controlSubmissionTask } from '../../services/submission-tasks.uts'
 import { submissionHistoryOrder } from '../../services/submission-task-presentation.uts'
@@ -66,16 +66,16 @@ const hostPickerHeight = computed((): number => Math.max(60, Math.min((connectio
 let request = 0
 const pageVisible = ref(false)
 const onlineHosts = computed((): string => connection.computers.filter((computer: Computer): boolean => computer.online).map((computer: Computer): string => computer.id).sort().join(','))
-// 浏览器刷新时连接晚于页面恢复，连接和在线电脑变化后自动重新读取。
-watch((): string => connection.connected.toString() + ':' + connection.cacheNamespace + ':' + onlineHosts.value, () => { if (pageVisible.value) reload() })
 const stateValues = ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped']
 const stateLabels = ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过']
+// 原生模板通过本地方法调用导入函数，避免 UTS 将其解析为函数对象。
+function computerIcon(computer: Computer | null): string { return resolveComputerIcon(computer) }
+function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原实例' }
 const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全部实例' : hostName(hostId.value))
 // 与选择列表共用实例图标映射，连接设置更新图标时筛选框同步更新。
 const selectedHostIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == hostId.value) ?? null))
 const selectedStateLabel = computed((): string => stateLabels[stateValues.indexOf(state.value)] ?? '全部状态')
 const hasMore = computed((): boolean => cursors.value.some((cursor: HistoryCursor): boolean => cursor.more))
-function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原实例' }
 // 标题按电脑和聊天编号共同匹配，避免多实例同编号串到其他聊天。
 function chatTitle(id: string, task: SubmissionTask): string {
   const title = chatTitles.value.find((item: HistoryChatTitle): boolean => item.hostId == id && item.threadId == task.threadId)?.title ?? ''
@@ -93,7 +93,7 @@ async function loadChatTitles(id: string, revision: number, namespace: string) {
         if (revision != request || namespace != connection.cacheNamespace) return
         // 旧服务若忽略归档参数，不能把普通列表误当作归档继续翻页。
         if (archived && result.getBoolean('archived') != true) break
-        const threads = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'] ?? [])) ?? [] as ThreadSummary[]
+        const threads = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'] ?? [] as ThreadSummary[])) ?? [] as ThreadSummary[]
         threads.forEach((thread: ThreadSummary) => {
           if (thread.title.trim().length == 0) return
           const previous = chatTitles.value.find((item: HistoryChatTitle): boolean => item.hostId == id && item.threadId == thread.id)
@@ -131,7 +131,7 @@ async function loadMore() {
       if (state.value.length > 0) params['state'] = state.value
       const result = await readSubmissionTasks(cursor.hostId, params)
       if (revision != request || namespace != connection.cacheNamespace) return
-      const tasks = JSON.parse<SubmissionTask[]>(JSON.stringify(result['tasks'] ?? [])) ?? [] as SubmissionTask[]
+      const tasks = JSON.parse<SubmissionTask[]>(JSON.stringify(result['tasks'] ?? [] as SubmissionTask[])) ?? [] as SubmissionTask[]
       tasks.forEach((task: SubmissionTask) => { if (!rows.value.some((row: HistoryRow): boolean => row.hostId == cursor.hostId && row.task.id == task.id)) rows.value.push({ hostId: cursor.hostId, task } as HistoryRow) })
       const next = result.getNumber('nextCursor') ?? 0
       cursor.before = next; cursor.more = next > 0
@@ -141,6 +141,12 @@ async function loadMore() {
   } catch (reason) { if (revision == request) error.value = (reason as Error).message }
   finally { if (revision == request) { loading.value = false; refreshing.value = false } }
 }
+function reload() {
+  request++; loading.value = false; error.value = ''; rows.value = [] as HistoryRow[]; chatTitles.value = [] as HistoryChatTitle[]
+  cursors.value = connection.computers.filter((computer: Computer): boolean => computer.online && (hostId.value.length == 0 || computer.id == hostId.value)).map((computer: Computer): HistoryCursor => ({ hostId: computer.id, before: 0, more: true } as HistoryCursor))
+  if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
+  loadMore()
+}
 // 下拉刷新保留筛选条件并重置分页，重复手势不重复请求；结束状态由当前请求统一收起。
 async function refreshHistory() {
   if (refreshing.value) return
@@ -149,12 +155,6 @@ async function refreshHistory() {
   await nextTick()
   if (!refreshing.value) return
   reload()
-}
-function reload() {
-  request++; loading.value = false; error.value = ''; rows.value = [] as HistoryRow[]; chatTitles.value = [] as HistoryChatTitle[]
-  cursors.value = connection.computers.filter((computer: Computer): boolean => computer.online && (hostId.value.length == 0 || computer.id == hostId.value)).map((computer: Computer): HistoryCursor => ({ hostId: computer.id, before: 0, more: true } as HistoryCursor))
-  if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
-  loadMore()
 }
 // 使用自定义列表展示实例配置的图标，原生文字菜单无法显示图标和选中标记。
 function chooseHost() { uni.hideKeyboard(); hostPickerWindowHeight.value = uni.getWindowInfo().windowHeight; hostPickerOpen.value = true }
@@ -178,6 +178,8 @@ function retry(row: HistoryRow) { if (working.value.length > 0 || row.task.state
 function skip(row: HistoryRow) { uni.showModal({ title: '跳过待核对任务', content: '请先在电脑核对。确认后不会重发原任务，并继续该实例队列。', confirmText: '已核对，继续', success: (answer) => { if (answer.confirm) control(row, 'skip', true) } }) }
 // 与设置页一致，返回前收起键盘；直接进入记录页时仍能返回聊天列表。
 function goBack() { if (hostPickerOpen.value) { closeHostPicker(); return }; uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }
+// 浏览器刷新时连接晚于页面恢复，连接和在线电脑变化后自动重新读取。
+watch((): string => connection.connected.toString() + ':' + connection.cacheNamespace + ':' + onlineHosts.value, () => { if (pageVisible.value) reload() })
 onLoad((options: OnLoadOptions) => { hostId.value = options['hostId'] ?? '' })
 onShow(() => { pageVisible.value = true; reload() })
 onResize(() => { if (hostPickerOpen.value) hostPickerWindowHeight.value = uni.getWindowInfo().windowHeight })

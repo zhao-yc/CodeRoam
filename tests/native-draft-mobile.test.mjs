@@ -435,7 +435,7 @@ test('原生权限组件确认后只 emit select，不本地修改权限、不�
   let selecting = f.choose('full-access'); f.modals.shift().success({ confirm: false }); await selecting;
   assert.equal(f.emitted.some(event => event[0] === 'select'), false);
   selecting = f.choose('full-access'); f.modals.shift().success({ confirm: true }); await selecting;
-  assert.deepEqual(plain(f.emitted.find(event => event[0] === 'select')), ['select', 'full-access', true]);
+  assert.deepEqual(plain(f.emitted.find(event => event[0] === 'select')), ['select', 'full-access', true, 'permission-1']);
   assert.equal(f.mode.value, 'default'); assert.equal(f.calls.length, 0);
   const absent = permissionFixture({ draftId: '', nativeState: null, nativeStatus: '' }); await absent.load();
   assert.equal(absent.calls.length, 0);

@@ -129,6 +129,7 @@ export function validateRequest(message) {
     if (!['turn.send', 'turn.steer'].includes(message.method) || (message.params.queueAction !== undefined && message.params.queueAction !== 'enqueue')) throw new BridgeError('BAD_PARAMS', '插件只能随发送、追加指令或入队提交');
     validatePluginIds(message.params.pluginIds);
   }
+  if (message.params.choices !== undefined && !['turn.send', 'turn.steer'].includes(message.method)) throw new BridgeError('BAD_SETTINGS', '消息选项只能随发送或追加提交');
   if (['turn.send', 'turn.steer'].includes(message.method)) validateTurnInput(message.params);
   if (message.method === 'turn.retry') validateTurnRetry(message.params);
   if (message.method === 'threads.list') {
@@ -196,7 +197,7 @@ export function validateRequest(message) {
   // 排队沿用发送白名单；旧中转也能转发，由支持队列的电脑服务校验并执行。
   if (message.params.queueAction !== undefined || message.params.queueId !== undefined) {
     const p = message.params, enqueue = p.queueAction === 'enqueue';
-    if (message.method !== 'turn.send' || !['enqueue','steer','cancel','edit'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds','threadMentionIds'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
+    if (message.method !== 'turn.send' || !['enqueue','steer','cancel','edit'].includes(p.queueAction) || Object.keys(p).some(key => !(enqueue ? ['threadId','queueAction','text','images','attachments','pluginIds','threadMentionIds','choices'] : ['threadId','queueAction','queueId','expectedTurnId']).includes(key))) throw new BridgeError('BAD_PARAMS', '排队操作参数无效');
     if (!enqueue) requireString(p.queueId, '排队消息编号', 80);
     if (p.queueAction === 'steer') requireString(p.expectedTurnId, '当前任务编号', 200);
     if (enqueue && p.attachments?.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(id))) throw new BridgeError('BAD_ATTACHMENTS', '排队附件编号无效');
@@ -278,8 +279,12 @@ export function validatePluginIds(ids) {
 
 /** 手机只提交消息内容和目录编号，原生输入及恢复上下文均由电脑构造。 */
 export function validateTurnInput(params) {
-  const allowed = ['threadId','text','images','attachments','expectedTurnId','planMode','resetPlanAfterSend','planId','planAction','queueAction','queueId','pluginIds','threadMentionIds'];
+  const allowed = ['threadId','text','images','attachments','expectedTurnId','planMode','resetPlanAfterSend','planId','planAction','queueAction','queueId','pluginIds','threadMentionIds','choices'];
   if (Object.keys(params).some(key => !allowed.includes(key))) throw new BridgeError('BAD_PARAMS', '发送参数包含不允许的字段');
+  if (params.choices !== undefined) {
+    if (params.planAction !== undefined || params.queueAction !== undefined && params.queueAction !== 'enqueue') throw new BridgeError('BAD_SETTINGS', '此操作不能携带消息选项');
+    validateMessageChoices(params.choices);
+  }
   validateThreadMentionIds(params.threadMentionIds);
   return validatePluginIds(params.pluginIds);
 }
@@ -306,4 +311,17 @@ export function errorPayload(error) {
 export function requestFingerprint(method, params) {
   const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
   return tokenHash(JSON.stringify({ method, params: stable(params) }));
+}
+
+/** 消息仅携带明确选择；权限绑定选择时的版本和完整访问确认。 */
+export function validateMessageChoices(choices) {
+  const keys = ['model', 'effort', 'serviceTier', 'mode', 'permissionMode', 'permissionRevision', 'confirmedFullAccess'];
+  if (!isObject(choices) || !Object.keys(choices).length || Object.keys(choices).some(key => !keys.includes(key)) ||
+      Object.entries(choices).some(([key, value]) => key === 'confirmedFullAccess' ? typeof value !== 'boolean' : typeof value !== 'string' || value.length > 200) ||
+      ['model', 'effort'].some(key => choices[key] !== undefined && !choices[key].trim()) ||
+      choices.mode !== undefined && !['default', 'plan'].includes(choices.mode) ||
+      choices.permissionMode !== undefined && (!['default', 'auto-review', 'read-only', 'full-access'].includes(choices.permissionMode) || !/^[a-f0-9]{64}$/.test(choices.permissionRevision ?? '')) ||
+      choices.permissionMode === undefined && (choices.permissionRevision !== undefined || choices.confirmedFullAccess !== undefined) ||
+      choices.permissionMode === 'full-access' && choices.confirmedFullAccess !== true) throw new BridgeError('BAD_SETTINGS', '消息选项无效或尚未确认权限');
+  return choices;
 }

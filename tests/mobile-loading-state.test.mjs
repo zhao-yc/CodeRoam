@@ -16,6 +16,7 @@ test('会话加载期间不误报升级，收到当前会话后恢复真实模�
     settingsBusy: { value: false }, settings: { value: null }, models: { value: [] },
     shortModelLabel: label => label, effortLabel: label => label
   });
+  context.composerSettings = { get value() { return context.settings.value; } };
   vm.runInContext(stripTypeScriptTypes(source.slice(start, end)) + ';globalThis.state={executionSettingsUnavailable,modelLabel};', context);
   const state = context.state;
   assert.equal(state.executionSettingsUnavailable.value, false);

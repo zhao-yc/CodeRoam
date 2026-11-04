@@ -1,3 +1,4 @@
+import { sendWithChoices } from './message-choices.mjs';
 import { firstMessagePermissions, readPermissions, updatePermissions } from './permissions.mjs';
 import { EventEmitter } from 'node:events';
 import { predictionTurnId } from './prediction-turn.mjs';
@@ -399,8 +400,9 @@ export class DesktopAdapter extends EventEmitter {
     return {instance,generation:instance.generation,entry,ownerId:owner.clientId,hostId:owner.hostId,cwd,permissions};
   }
 
-  async operate(method,params,commandId,deviceId,checkpoint=()=>{},firstMessageGuard) {
+  async operate(method,params,commandId,deviceId,checkpoint=()=>{},firstMessageGuard,beforeSend) {
     if(method==='turn.send'||method==='turn.steer')validateTurnInput(params);
+    if(['turn.send','turn.steer'].includes(method)&&params.choices!==undefined)return sendWithChoices(this,method,params,commandId,deviceId,checkpoint,firstMessageGuard);
     if(method==='turn.retry')return this.retryTurn(params,commandId,deviceId);
     // 正文由最新桌面计划提供，手机只能选择计划编号。
     if(method==='turn.send'&&params.planAction!==undefined) {
@@ -500,6 +502,7 @@ export class DesktopAdapter extends EventEmitter {
       if(mentions?.additionalContext) payload.turnStart.request.additionalContext=mentions.additionalContext;
     }
     selection?.check(); mentions?.check();
+    beforeSend?.();
     const response=await this.client.request(ipcMethod,payload,version,{targetClientId:entry.owner.clientId,timeoutMs:15000});
     if(response.resultType!=='success') throw new BridgeError('OWNER_UNAVAILABLE','桌面聊天所有者已不可用');
     if(method==='thread.settings.update') {

@@ -26,7 +26,7 @@ function fixture({ initialProps = {}, mode = 'default', request: read } = {}){
 }
 test('完整访问取消不写入，确认后携带权限版本和确认标记',async()=>{const f=fixture();await f.load();await f.choose('full-access');assert.equal(f.calls.length,1);f.answer({confirm:true});await f.choose('full-access');assert.equal(f.calls[1].method,'thread.permissions.update');assert.equal(f.calls[1].params.confirmedFullAccess,true);assert.equal(f.calls[1].params.expectedRevision,'a'.repeat(64));assert.deepEqual(f.events,[['busy',true],['busy',false],['applied','pc','thread']]);});
 test('确认期间切换电脑和只读历史均不写入',async()=>{const f=fixture();await f.load();const deferred=f.defer(),pending=f.choose('full-access');f.connection.hostId='other';deferred.resolve({confirm:true});await pending;assert.equal(f.calls.length,1);f.connection.hostId='pc';f.connection.snapshot.readOnly=true;await f.choose('read-only');assert.equal(f.calls.length,1);});
-test('新建只修改当前草稿选择，不调用权限写接口',async()=>{const f=fixture();f.props.threadId='';f.props.projectId='project';await f.load();await f.choose('read-only');assert.equal(f.calls[0].method,'thread.create.permissions');assert.equal(f.calls.length,1);assert.deepEqual(f.events,[['select','read-only',false]]);});
+test('新建只修改当前草稿选择，不调用权限写接口',async()=>{const f=fixture();f.props.threadId='';f.props.projectId='project';await f.load();await f.choose('read-only');assert.equal(f.calls[0].method,'thread.create.permissions');assert.equal(f.calls.length,1);assert.deepEqual(f.events,[['select','read-only',false,'a'.repeat(64)]]);});
 
 const newProps = { threadId: '', projectId: 'project' };
 /** 释放模拟桥接 Promise 链，观察组件最终读取状态。 */

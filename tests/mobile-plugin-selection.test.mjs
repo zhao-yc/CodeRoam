@@ -1,3 +1,4 @@
+import { componentContext } from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -73,7 +74,7 @@ function draftFixture() {
   // 此处模拟已展开并连接的原生草稿，只替换新建编排导入的状态 API。
   const native = { hostId: 'computer-a', projectId: 'project', draftId: 'example-native-draft', watching: true, snapshot: { status: 'ready', revision: 1, hasDesktopText: false, settings: {}, permissions: { mode: 'default' } } };
   const bridge = { async openThread(threadId) { calls.push({ method: 'thread.watch', params: { threadId } }); } };
-  const c = vm.createContext({ reactive: value => value, connection, bridge, uni: { removeStorageSync() {} },
+  const c = componentContext({ reactive: value => value, connection, bridge, uni: { removeStorageSync() {} },
     nativeDraftState: () => native,
     assertNativeDraftReady(state) { if (!state.watching || state.snapshot.status !== 'ready') throw Error('原生草稿未就绪'); },
     async readNativeDraft(state) { calls.push({ method: 'thread.draft.read', params: { draftId: state.draftId } }); return state.snapshot; },

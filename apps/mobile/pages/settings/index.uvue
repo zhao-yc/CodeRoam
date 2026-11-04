@@ -44,6 +44,8 @@ onHide(() => { pageVisible.value = false })
 const noticeDurationLabel = computed((): string => taskNoticeDurationLabel(taskNotifications.durationMs))
 const fileChangesLabel = computed((): string => fileChangePreferences.expanded ? '展开' : '收起')
 
+// 提示函数先于选择回调声明，兼容原生编译。
+function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 // 保留原存储及实时生效语义，页面拆分不迁移或重置用户偏好。
 function chooseFileChangesDisplay() {
   uni.hideKeyboard()
@@ -61,7 +63,6 @@ function chooseNoticeDuration() {
     try { setTaskNoticeDuration(options[result.tapIndex]); notify('通知时长已设为' + noticeDurationLabel.value) } catch (error) { notify((error as Error).message) }
   }, fail: (_) => {} })
 }
-function notify(message: string) { uni.showToast({ title: message, icon: 'none' }) }
 // 设置页只管理偏好与导航，不改变电脑目标或聊天订阅。
 function openConnection() { uni.navigateTo({ url: '/pages/connection/index' }) }
 function goBack() { uni.hideKeyboard(); if (getCurrentPages().length > 1) uni.navigateBack(); else uni.reLaunch({ url: '/pages/index/index' }) }

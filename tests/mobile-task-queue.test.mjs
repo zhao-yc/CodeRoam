@@ -30,8 +30,8 @@ function fixture() {
     },
     async requestTaskUpload(hostId, method, params) { calls.push({ hostId, method, params: plain(params) }); return json(method === 'attachment.chunk' ? { nextChunk: params.index + 1, received: 3 } : { nextChunk: 0, complete: method === 'attachment.finish' }); },
   };
-  const context = vm.createContext({ reactive: value => value, watch() {}, bridge, connection, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value) }, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', copyThreadMentions: items => items.map(item => ({ ...item })), setTimeout, clearTimeout, setInterval });
-  vm.runInContext("for (const suffix of ['String','Number','Boolean']) Object.defineProperty(Object.prototype,'get'+suffix,{value:function(key){return this[key]??null;},configurable:true});\n" + stripTypeScriptTypes(code, { mode: 'transform' }) + '\nglobalThis.subject={submissionTasks,submissionVisible,acceptSubmissionSnapshot,submitTask,submitNewConversationTask,awaitSubmissionResult,checkPendingSubmission,acknowledgePendingSubmission,refreshSubmissionTasks};', context);
+  const context = vm.createContext({ reactive: value => value, settleSubmission: (hostId,id,success) => calls.push({method:'消费草稿',hostId,id,success}), watch() {}, bridge, connection, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value) }, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', copyThreadMentions: items => items.map(item => ({ ...item })), setTimeout, clearTimeout, setInterval });
+  vm.runInContext("for (const suffix of ['String','Number','Boolean']) Object.defineProperty(Object.prototype,'get'+suffix,{value:function(key){return this[key]??null;},configurable:true});\n" + stripTypeScriptTypes(code, { mode: 'transform' }) + '\nglobalThis.subject={submissionTasks,submissionVisible,acceptSubmissionSnapshot,submitTask,submitTaskCommand,submitNewConversationTask,awaitSubmissionResult,checkPendingSubmission,acknowledgePendingSubmission,refreshSubmissionTasks};', context);
   context.subject.submissionTasks.instances.push({ hostId: 'pc-a', generation: 'generation-a', supported: true, loading: false, error: '', snapshot: null, clockOffset: 0 });
   context.subject.submissionTasks.namespace = connection.cacheNamespace;
   const draft = { hostId: 'pc-a', cacheNamespace: 'pair-a', projectId: 'project-a', choices: { model: 'model-a', effort: null }, text: '合成首条消息', images: [], files: [{ id: 'synthetic-upload-0001', name: 'example.txt', size: 3, source: 'synthetic', data: '', status: 'local', progress: 0, error: '' }], plugins: [], threadMentions: [], threadMentionRevision: 0 };
@@ -143,4 +143,18 @@ test('权限入队释放操作锁但不冒充生效；旧任务完成不能解�
   assert.equal(f.busy.value, false);
   writes[1].resolve(json({ ...permissions, mode: 'auto-review' })); await second;
   assert.equal(f.state.value.mode, 'auto-review'); assert.equal(emitted.filter(event => event[0] === 'applied').length, 1);
+});
+
+test('汇总选项任务仅在正文成功后消费草稿，明确失败和未知结果保留输入', async () => {
+  for (const state of ['succeeded','failed','unknown']) {
+    const f=fixture(),id='synthetic-bundled-'+state;
+    const result=f.submitTaskCommand('pc-a','turn.send',json({threadId:'thread',text:'合成正文',choices:{effort:'high'}}),id);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.calls.some(call=>call.method==='消费草稿'),false);
+    Object.assign(f.tasks.get(id),{kind:'command',method:'turn.send',threadId:'thread',state,error:state==='succeeded'?'':'合成失败',result:{}});
+    if(state==='succeeded')await result;else await assert.rejects(result);
+    const settled=f.calls.filter(call=>call.method==='消费草稿');
+    if(state==='unknown'){assert.equal(settled.length,0);assert.equal(f.calls.some(call=>call.method==='清理手机保护'),false);}
+    else assert.equal(settled.at(-1).success,state==='succeeded');
+  }
 });

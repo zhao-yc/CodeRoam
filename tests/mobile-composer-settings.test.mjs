@@ -13,7 +13,7 @@ function fixture() {
   const files = new Map(), calls = [], pending = [];
   const context = componentContext({
     predictionFocus: { value: false }, inputFocused: { value: false }, pageVisible: { value: true }, composerBlurTimer: 0, nextTick: run => Promise.resolve().then(run), composerMenu: { value: '' }, menuHeight: { value: 200 }, keyboardInset: { value: 0 },
-    models: { value: [] }, settings: { value: { model: 'model-a', effort: 'high', mode: 'default', serviceTier: '' } }, settingsBusy: { value: false }, settingChoice: { value: '' }, retryingFileIds: { value: [] }, settingsLoading: { value: false }, settingsError: { value: '' }, busy: { value: false }, settingsRequest: 0, settingsSnapshotRevision: 0,
+    models: { value: [{ id: 'model-a', defaultEffort: 'high', efforts: ['low', 'high', 'max'], speeds: [{ id: '' }] }] }, settings: { value: { model: 'model-a', effort: 'high', mode: 'default', serviceTier: '' } }, settingsBusy: { value: false }, settingChoice: { value: '' }, retryingFileIds: { value: [] }, settingsLoading: { value: false }, settingsError: { value: '' }, busy: { value: false }, settingsRequest: 0, settingsSnapshotRevision: 0,
     canWrite: { get value() { return !context.busy.value; } }, readOnly: { value: false }, imageBusy: { value: false }, modelSupportsImages: { value: true },
     connection: { connected: true, hostId: 'pc', activeThreadId: 'thread', snapshot: { supportsPlanReset: true, supportsExecutionSettings: true, supportsAttachments: true }, pendingCommandId: '' },
     pageHostId: { value: 'pc' }, pageThreadId: { value: 'thread' }, actionsVisible: { value: true }, planEnabled: { value: false }, planResetRequired: { value: false }, choosePlan() {}, consumePlan() {}, confirmDefaultMode() {},
@@ -45,12 +45,9 @@ test('菜单打开后任务启动也不能切换计划模式，任务结束后�
       assert.equal(f.context.settings.value.mode, mode === 'plan' ? 'default' : 'plan');
       Object.assign(f.context.connection.snapshot, { activeTurnId: '', status: 'idle' });
       vm.runInContext("selectSetting('mode', selectedMode)", f.context);
-      assert.equal(f.calls.length, 1);
-      assert.equal(f.calls[0].method, 'thread.settings.update');
-      assert.equal(f.calls[0].params.changes.mode, mode);
-      f.pending.shift().resolve({ settings: { ...f.context.settings.value, mode }, models: [] });
-      await tick();
-      assert.equal(f.context.settings.value.mode, mode);
+      assert.equal(f.calls.length, 0);
+      assert.equal(f.context.readMessageChoices('pc', 'thread').mode, mode);
+
     }
   }
 });
@@ -74,13 +71,15 @@ test('任务运行中选择模型或推理强度即同步电脑，无需发送�
   }
 });
 
-test('设置在成功前保持原值，失败保留原因，未知结果不会自动重试', async () => {
-  const f = fixture(); vm.runInContext("selectSetting('mode', 'plan')", f.context);
-  assert.equal(f.context.settings.value.mode, 'default'); assert.equal(f.context.settingsBusy.value, true); assert.equal(f.calls[0].write, true);
+test('运行中设置在确认前保留原值，失败保留原因且不自动重试', async () => {
+  const f = fixture(); f.context.connection.snapshot.status = 'active';
+  vm.runInContext("selectSetting('effort', 'low')", f.context);
+  assert.equal(f.context.settings.value.effort, 'high'); assert.equal(f.context.settingsBusy.value, true);
   f.pending.shift().reject(new Error('设置结果需要核对')); await tick();
-  assert.equal(f.context.settings.value.mode, 'default'); assert.equal(f.context.settingsError.value, '设置结果需要核对'); assert.equal(f.context.busy.value, false); assert.equal(f.calls.length, 1);
-  vm.runInContext("selectSetting('mode', 'plan')", f.context); f.pending.shift().resolve({ settings: { model: 'model-a', effort: 'high', mode: 'plan', serviceTier: '' }, models: [] }); await tick();
-  assert.equal(f.context.settings.value.mode, 'plan'); assert.ok(f.calls.includes('刷新'));
+  assert.equal(f.context.settings.value.effort, 'high'); assert.equal(f.context.settingsError.value, '设置结果需要核对'); assert.equal(f.calls.length, 1);
+  vm.runInContext("selectSetting('effort', 'low')", f.context);
+  f.pending.shift().resolve({ settings: { model: 'model-a', effort: 'low', mode: 'default', serviceTier: '' }, models: [] }); await tick();
+  assert.equal(f.context.settings.value.effort, 'low');
 });
 
 test('切换电脑后的迟到设置响应不污染当前页面', async () => {

@@ -5,7 +5,9 @@ import { submissionStageDetail } from './submission-task-state.uts'
 export function submissionHistoryOrder(a: SubmissionTask, b: SubmissionTask): number {
   const aTime = a.completedAt > 0 ? a.completedAt : 0
   const bTime = b.completedAt > 0 ? b.completedAt : 0
-  return bTime - aTime || b.position - a.position
+  // 显式判断排序差值，兼容 UTS 的布尔条件约束。
+  const completedOrder = bTime - aTime
+  return completedOrder != 0 ? completedOrder : b.position - a.position
 }
 
 // 首页只展示一条进度说明；失败原因另占一行，完整步骤留在执行记录。

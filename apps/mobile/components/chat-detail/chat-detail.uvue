@@ -115,7 +115,7 @@
         @syncinput="syncComposerText" @submit="applyComposerEnter" @acceptprediction="acceptPrediction(false)" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
         @retryfile="retryFile" @interact="dismissGoal" @layout="updateComposerGeometry"
         @removeimage="removeImage" @previewimage="previewImage" @removefile="removeFile" @removeplugin="removePlugin" @removemention="removeThreadMention">
-        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :thread-id="pageThreadId" :disabled="!canWrite || settingsBusy" @busy="onPermissionBusy" @visibility="onPermissionVisibility" @applied="onPermissionApplied" /></template>
+        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :thread-id="pageThreadId" :defer-changes="!settingsRunning" :selected-mode="settingsRunning ? '' : messageChoices.permissionMode ?? ''" :disabled="!canWrite || settingsBusy" @select="selectDraftPermission" @busy="onPermissionBusy" @visibility="onPermissionVisibility" @applied="onPermissionApplied" /></template>
         <template #feedback>
           <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
           <text v-if="composerExpanded && executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
@@ -195,6 +195,8 @@ import LoadingSkeleton from '../../components/loading-skeleton/loading-skeleton.
 import GoalCard from '../../components/goal-card/goal-card.uvue'
 import { ThreadGoal } from '../../services/goals.uts'
 import ComposerOptions from '../../components/composer-options/composer-options.uvue'
+import { readMessageChoices, messageChoicesParams, saveMessageChoices, hasMessageChoices, messageChoicesRevision, chooseMessageSetting, settingsWithMessageChoices, consumeRealtimeChoice, MessageChoices } from '../../services/message-choices.uts'
+import { submissionHasMessageChoices } from '../../services/composer.uts'
 import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel, mergeSettingsSnapshot, mergeSettingsRead, resolveSettingsEffort } from '../../services/execution-settings.uts'
 import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '../../services/files.uts'
 import type { WorkspaceTarget } from '../../services/workspace-layout.uts'
@@ -274,8 +276,11 @@ const planEditing = ref(false)
 const pendingPlan = computed((): PendingPlan | null => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.readOnly != true ? connection.snapshot?.pendingPlan ?? null : null)
 // 切换会话或计划时清空旧反馈。
 watch((): string => pageHostId.value + ':' + pageThreadId.value + ':' + (pendingPlan.value?.id ?? ''), () => { planFeedback.value = ''; hiddenPlanId.value = ''; planEditing.value = false })
-const planEnabled = computed((): boolean => settings.value?.mode == 'plan')
-const composerSettings = computed((): ExecutionSettings | null => settings.value == null ? null : { model: settings.value!.model, effort: settings.value!.effort, serviceTier: settings.value!.serviceTier, mode: planEnabled.value ? 'plan' : 'default' } as ExecutionSettings)
+// 运行中显示电脑确认值；空闲显示本条消息的本地选择，状态变化不触发写入。
+const settingsRunning = computed((): boolean => connection.snapshot?.threadId == pageThreadId.value && ((connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active'))
+const messageChoices = computed((): MessageChoices => readMessageChoices(pageHostId.value, pageThreadId.value))
+const composerSettings = computed((): ExecutionSettings | null => settingsRunning.value ? settings.value : settingsWithMessageChoices(settings.value, messageChoices.value))
+const planEnabled = computed((): boolean => composerSettings.value?.mode == 'plan')
 // 只有当前会话已同步后才能判断能力，初次加载或切换会话时不显示升级提示。
 const executionSettingsUnavailable = computed((): boolean => connection.snapshot != null && connection.snapshot?.threadId == pageThreadId.value && connection.snapshot?.supportsExecutionSettings != true)
 const modelLabel = computed((): string => {
@@ -284,26 +289,16 @@ const modelLabel = computed((): string => {
   if (connection.snapshot?.threadId != pageThreadId.value) return '正在加载…'
   if (connection.snapshot?.readOnly == true) return '历史浏览'
   if (settings.value == null) return '跟随电脑端'
-  const model = models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)
-  return shortModelLabel(model?.label ?? settings.value!.model) + ' ' + effortLabel(settings.value!.effort)
+  const selected = composerSettings.value ?? settings.value!
+  const model = models.value.find((item: ModelOption): boolean => item.id == selected.model)
+  return shortModelLabel(model?.label ?? selected.model) + ' ' + effortLabel(selected.effort)
 })
-const modelSupportsImages = computed((): boolean => models.value.find((item: ModelOption): boolean => item.id == settings.value?.model)?.supportsImages != false)
+const modelSupportsImages = computed((): boolean => models.value.find((item: ModelOption): boolean => item.id == composerSettings.value?.model)?.supportsImages != false)
 const busy = ref(false)
 const goalBusy = ref(false)
-// 入队即释放页面操作锁；模型/桌面结果继续由应用级任务跟随。
+// 删除和归档的页面归属在监听安装前固定。
 const removalSubmissionId = ref('')
 const removalReturnStarted = ref(false)
-if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.accepted.revision, () => {
-  const accepted = submissionTasks.accepted
-  if (accepted.hostId != pageHostId.value || accepted.threadId != pageThreadId.value) return
-  settleSubmission(accepted.hostId, accepted.taskId, true)
-  busy.value = false; goalBusy.value = false; pendingAction.value = ''
-  // 只响应本详情发起的删除或归档；迟到入队回执不能关闭重新打开的聊天。
-  if (accepted.taskId != removalSubmissionId.value || (accepted.method != 'thread.delete' && accepted.method != 'thread.archive')) return
-  removalSubmissionId.value = ''
-  if (removalReturnStarted.value || !pageVisible.value || !isCurrentPage()) return
-  removalReturnStarted.value = true; hideArchiveLoading(); emit('close')
-})
 const goalExpanded = ref(false)
 const goalOpenRequest = ref(0)
 const goalCloseRequest = ref(0)
@@ -1230,20 +1225,33 @@ function openComposerMenu(section: string) {
   if ((settings.value == null || models.value.length == 0 || settingsError.value.length > 0) && connection.snapshot?.supportsExecutionSettings == true) { settingsRetryCount = 0; loadSettings() }
 }
 
-// 选中即同步电脑输入框设置，无需发送消息；失败和未知结果均保留最后确认值。
+// 空闲选择只属于待发消息；运行中的选择沿用原生实时更新和回读。
 function selectSetting(key: string, value: string): boolean {
   if (!canWrite.value || settings.value == null || settingsBusy.value) return false
   // 运行中的轮次不能切换计划模式；回调执行时再次读取快照，防止菜单打开后任务才启动。
   if (key == 'mode' && ((connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active')) return false
+  const choiceHostId = pageHostId.value, choiceThreadId = pageThreadId.value, choiceRevision = messageChoicesRevision(choiceHostId, choiceThreadId)
+  const running = (connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active'
+  if (!running) {
+    const selected = settingsWithMessageChoices(settings.value, readMessageChoices(choiceHostId, choiceThreadId))
+    if (selected == null || !chooseMessageSetting(choiceHostId, choiceThreadId, key, value, selected, models.value)) return false
+    settingsError.value = ''; closeComposerMenu()
+    if (pageVisible.value) focusComposerInput()
+    return true
+  }
   const changes: UTSJSONObject = {}
   changes[key] = value
-  if (typeof supportsSubmissionTasks == 'function' && supportsSubmissionTasks(pageHostId.value)) {
+  if (
+      // #ifdef WEB
+      typeof supportsSubmissionTasks == 'function' &&
+      // #endif
+      supportsSubmissionTasks(pageHostId.value)) {
     const hostId = pageHostId.value, threadId = pageThreadId.value, namespace = connection.cacheNamespace, id = newSubmissionId()
     const request = ++settingsRequest
     settingsBusy.value = true; busy.value = true; settingChoice.value = key + ':' + value; settingsError.value = ''; pendingSetting.value = ''
     submitTask(hostId, id, 'command', { method: 'thread.settings.update', params: { threadId, changes } }).then((_: UTSJSONObject) => {
       if (request == settingsRequest && isCurrentPage()) { settingsBusy.value = false; busy.value = false; closeComposerMenu(); pendingSetting.value = '待执行：' + (key == 'effort' ? '思考强度 ' + effortLabel(value) : key == 'model' ? '模型 ' + value : key == 'mode' ? value == 'plan' ? '计划模式' : '默认模式' : '速度 ' + value) }
-      awaitSubmissionResult(hostId, id, namespace).then((_: UTSJSONObject) => { if (request == settingsRequest && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { settingsError.value = ''; pendingSetting.value = ''; settingChoice.value = ''; loadSettings() } }, (reason: Error) => { if (request == settingsRequest && isCurrentPage()) { pendingSetting.value = ''; settingChoice.value = ''; settingsError.value = reason.message } })
+      awaitSubmissionResult(hostId, id, namespace).then((_: UTSJSONObject) => { if (request == settingsRequest && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { settingsError.value = ''; pendingSetting.value = ''; settingChoice.value = ''; consumeRealtimeChoice(choiceHostId, choiceThreadId, key, choiceRevision); loadSettings() } }, (reason: Error) => { if (request == settingsRequest && isCurrentPage()) { pendingSetting.value = ''; settingChoice.value = ''; settingsError.value = reason.message } })
     }, (reason: Error) => { if (request == settingsRequest && isCurrentPage()) { settingsBusy.value = false; busy.value = false; settingChoice.value = ''; settingsError.value = reason.message } })
     return true
   }
@@ -1256,6 +1264,7 @@ function selectSetting(key: string, value: string): boolean {
     const response = JSON.parse<SettingsResponse>(JSON.stringify(result))
     if (response == null || response.settings == null) { settingsError.value = '请刷新并核对电脑端设置'; return }
     if (snapshotRevision == settingsSnapshotRevision) settings.value = response.settings
+    consumeRealtimeChoice(choiceHostId, choiceThreadId, key, choiceRevision)
     models.value = response.models
     closeComposerMenu()
     // 模型、强度、速度或计划模式确认后恢复编辑，隐藏页面或失败响应不争抢输入焦点。
@@ -1272,9 +1281,19 @@ function selectSetting(key: string, value: string): boolean {
 }
 // 权限写入期间沿用详情页操作锁，防止首条消息抢在设置确认之前发送。
 // 原生组件事件显式声明布尔类型，避免模板把载荷推断为 Any。
-function onPermissionBusy(value: boolean) { busy.value = value }
+let permissionChoiceRevision = -1
+function onPermissionBusy(value: boolean) { if (value) permissionChoiceRevision = messageChoicesRevision(pageHostId.value, pageThreadId.value); busy.value = value }
+// 空闲权限先保存在本条消息，版本与确认标记随消息交给电脑核对。
+function selectDraftPermission(mode: string, confirmed: boolean, revision: string) {
+  if (!canWrite.value || settingsRunning.value || mode == 'full-access' && !confirmed) return
+  const choices = { ...messageChoices.value } as MessageChoices
+  choices.permissionMode = mode; choices.permissionRevision = revision; choices.confirmedFullAccess = mode == 'full-access' && confirmed
+  saveMessageChoices(pageHostId.value, pageThreadId.value, choices)
+  if (pageVisible.value) focusComposerInput()
+}
 // 权限已确认写入且当前页面仍可编辑时，才将光标交回同一聊天。
 function onPermissionApplied(hostId: string, threadId: string) {
+  consumeRealtimeChoice(hostId, threadId, 'permissionMode', permissionChoiceRevision)
   if (pageVisible.value && isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && canWrite.value) focusComposerInput()
 }
 function togglePlan() { selectSetting('mode', planEnabled.value ? 'default' : 'plan') }
@@ -1518,9 +1537,13 @@ function send() {
   const method = steer ? 'turn.steer' : 'turn.send'
   const queue = messageSendingPreferences.behavior == 'queue' && connection.snapshot?.supportsMessageQueue == true
   if (!steer && !queue && running) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
+  const choices = { ...readMessageChoices(hostId, threadId) } as MessageChoices
+  if (hasMessageChoices(choices) && connection.snapshot?.supportsMessageChoices != true) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后发送所选设置，草稿已保留'; return }
+  if (steer && choices.mode != null) { busy.value = false; pendingAction.value = ''; operationError.value = '此消息包含计划模式选择，请改为排队发送'; return }
   const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id) }
   if (draftMentions.value.length > 0) params['threadMentionIds'] = draftMentions.value.map((mention: SelectedThreadMention): string => mention.id)
   if (draftPlugins.value.length > 0) params['pluginIds'] = draftPlugins.value.map((plugin: SelectedPlugin): string => plugin.id)
+  if (hasMessageChoices(choices)) params['choices'] = messageChoicesParams(choices)
   if (queue) params['queueAction'] = 'enqueue'
   if (steer) params['expectedTurnId'] = activeTurnId.value
   const request = bridge.request(method, params, true)
@@ -1659,6 +1682,19 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
   }
   if (generation.length > 0) pageGeneration = generation
 })
+// 入队即释放页面操作锁；模型/桌面结果继续由应用级任务跟随。
+if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.accepted.revision, () => {
+  const accepted = submissionTasks.accepted
+  if (accepted.hostId != pageHostId.value || accepted.threadId != pageThreadId.value) return
+  if (!submissionHasMessageChoices(accepted.hostId, accepted.taskId)) settleSubmission(accepted.hostId, accepted.taskId, true)
+  busy.value = false; goalBusy.value = false; pendingAction.value = ''
+  // 只响应本详情发起的删除或归档；迟到入队回执不能关闭重新打开的聊天。
+  if (accepted.taskId != removalSubmissionId.value || (accepted.method != 'thread.delete' && accepted.method != 'thread.archive')) return
+  removalSubmissionId.value = ''
+  if (removalReturnStarted.value || !pageVisible.value || !isCurrentPage()) return
+  removalReturnStarted.value = true; hideArchiveLoading(); emit('close')
+})
+// 入队监听结束
 </script>
 
 <style scoped>

@@ -15,10 +15,10 @@ function fixture() {
   const pending = [], ticks = [], calls = [], ref = value => ({ value });
   const context = componentContext({
     busy: ref(false), settingChoice: ref(''), alive: true, props: { expanded: true },
-    connection: { hostId: 'computer', activeThreadId: 'thread', snapshot: {} },
+    connection: { hostId: 'computer', activeThreadId: 'thread', snapshot: { activeTurnId: 'active', status: 'active' } },
     pageHostId: ref('computer'), pageThreadId: ref('thread'), projectId: ref('project'), pageVisible: ref(true),
-    settings: ref({ model: 'example', effort: 'medium', mode: 'default' }), models: ref([]), settingsBusy: ref(false),
-    settingsLoading: ref(false), settingsError: ref(''), error: ref(''), settingsRequest: 0, settingsSnapshotRevision: 0,
+    settings: ref({ model: 'example', effort: 'medium', serviceTier: '', mode: 'default' }), models: ref([{ id: 'example', defaultEffort: 'medium', efforts: ['medium', 'high'], speeds: [{ id: '' }, { id: 'fast' }] }]), settingsBusy: ref(false),
+    permissionChoiceRevision: -1, settingsLoading: ref(false), settingsError: ref(''), error: ref(''), settingsRequest: 0, settingsSnapshotRevision: 0,
     canWrite: ref(true), readOnly: ref(false), predictionFocus: ref(false), inputFocused: ref(false), focused: ref(false),
     planEnabled: { get value() { return context.settings.value?.mode === 'plan'; } },
     composerBlurTimer: 0, clearTimeout() {}, nextTick: run => ticks.push(run),
@@ -78,32 +78,20 @@ test('已有聊天权限成功事件只聚焦当前可见且可编辑的聊天',
 // 通过实际菜单与关闭按钮执行切换，防止某个入口遗漏聚焦或提前抢焦点。
 {
   const label = '已有聊天';
-  test(label + '计划模式开启和关闭确认后聚焦，菜单与关闭按钮行为一致', async () => {
+  test(label + '空闲计划模式选择立即恢复输入焦点，菜单与关闭按钮均不写入电脑', () => {
     for (const [initial, entry] of [['default', '菜单'], ['plan', '菜单'], ['plan', '关闭按钮']]) {
       const f = fixture(), target = initial === 'plan' ? 'default' : 'plan';
-      f.context.settings.value.mode = initial;
+      f.context.connection.snapshot = {status:'idle'}; f.context.settings.value.mode = initial;
       if (entry === '菜单') f.action('plan'); else f.toggle();
-      f.flush(); assert.equal(f.focused(), false); assert.equal(f.pending.length, 1);
-      const changes = f.calls[0].params.changes;
-      assert.deepEqual({ ...changes }, { mode: target });
-      f.pending.shift().resolve({ ...response, settings: { ...response.settings, mode: target } });
-      await settle(); f.flush(); assert.equal(f.focused(), true); assert.ok(f.calls.includes('关闭菜单'));
-      assert.equal(f.calls.some(call => ['turn.send', 'turn.steer', 'thread.draft.send'].includes(call.method)), false);
+      f.flush(); assert.equal(f.focused(), true); assert.equal(f.pending.length, 0);
+      assert.equal(f.context.readMessageChoices('computer','thread').mode,target);
     }
   });
-  test(label + '计划模式失败、隐藏、换目标或不可切换时不聚焦', async () => {
-    for (const change of ['失败', '隐藏', '电脑', '聊天', '禁用', '运行中']) {
-      const f = fixture();
-      if (change === '禁用') { f.context.canWrite.value = false; f.context.busy.value = true; }
-      if (change === '运行中') { f.context.connection.snapshot.activeTurnId = 'running'; }
-      f.action('plan'); f.flush(); assert.equal(f.focused(), false);
-      if (['禁用', '运行中'].includes(change)) { assert.equal(f.pending.length, 0); continue; }
-      if (change === '隐藏') { f.context.pageVisible.value = false; f.context.props.expanded = false; }
-      if (change === '电脑') f.context.connection.hostId = 'other';
-      if (change === '聊天') { f.context.connection.activeThreadId = 'other'; f.context.projectId.value = 'other'; }
-      if (change === '失败') f.pending.shift().reject(new Error('模式切换失败'));
-      else f.pending.shift().resolve({ ...response, settings: { ...response.settings, mode: 'plan' } });
-      await settle(); f.flush(); assert.equal(f.focused(), false, change);
+  test(label + '运行中或禁用时计划模式不提交、不聚焦', () => {
+    for (const change of ['禁用','运行中']) {
+      const f=fixture(); if(change==='禁用'){f.context.canWrite.value=false;f.context.busy.value=true;}
+      f.action('plan');f.flush();assert.equal(f.focused(),false);assert.equal(f.pending.length,0);
     }
   });
+
 }

@@ -53,7 +53,7 @@ export class MessageQueue {
       const waitingForInput = snapshot.approvals?.length || snapshot.pendingPlan || snapshot.questionGroups?.some(group => group.state === 'pending' && group.kind === 'native');
       if (!hasBacklog && snapshot.status === 'idle' && !snapshot.activeTurnId && !waitingForInput) {
         try {
-          const result = await this.adapter.operate('turn.send', { threadId, text, images, attachments, ...(pluginIds.length ? { pluginIds } : {}), ...(threadMentionIds.length ? { threadMentionIds } : {}) }, commandId, deviceId);
+          const result = await this.adapter.operate('turn.send', { threadId, text, images, attachments, ...(params.choices ? { choices: structuredClone(params.choices) } : {}), ...(pluginIds.length ? { pluginIds } : {}), ...(threadMentionIds.length ? { threadMentionIds } : {}) }, commandId, deviceId);
           this.release(threadId);
           return { ...result, queued: false };
         } catch (error) {
@@ -71,7 +71,7 @@ export class MessageQueue {
       } catch (error) { this.release(threadId); throw error; }
       const plugins = selection?.plugins.map(({id,displayName}) => ({id,displayName}));
       const id = randomUUID();
-      this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments, ...(plugins?.length ? {pluginIds: plugins.map(plugin => plugin.id), plugins} : {}), ...(mentions?.mentions.length ? {threadMentionIds,threadMentions:mentions.mentions} : {}) }));
+      this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'queued')").run(id, threadId, deviceId, commandId, JSON.stringify({ threadId, text, images, attachments, ...(params.choices ? { choices: structuredClone(params.choices) } : {}), ...(plugins?.length ? {pluginIds: plugins.map(plugin => plugin.id), plugins} : {}), ...(mentions?.mentions.length ? {threadMentionIds,threadMentions:mentions.mentions} : {}) }));
       this.changed(threadId);
       return { ok: true, queued: true, queueId: id };
     }
@@ -99,7 +99,7 @@ export class MessageQueue {
       return { id, name: metadata.name, size: metadata.size };
     });
     // 只返回原上传编号和显示信息，不允许手机获得服务器文件路径。
-    const draft = { text: payload.text, images: payload.images, attachments, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({ id, displayName }) => ({ id, displayName })) } : {}), ...(payload.threadMentions?.length ? { threadMentions: payload.threadMentions.map(({ id, title }) => ({ id, title })) } : {}) };
+    const draft = { text: payload.text, images: payload.images, attachments, ...(payload.choices ? { choices: payload.choices } : {}), ...(payload.plugins?.length ? { plugins: payload.plugins.map(({ id, displayName }) => ({ id, displayName })) } : {}), ...(payload.threadMentions?.length ? { threadMentions: payload.threadMentions.map(({ id, title }) => ({ id, title })) } : {}) };
     this.db.prepare("UPDATE message_queue SET state='editing',error='' WHERE id=?").run(row.id);
     this.changed(row.thread_id);
     return { ok: true, edited: true, queueId: row.id, draft };

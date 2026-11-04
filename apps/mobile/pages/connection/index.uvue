@@ -13,7 +13,7 @@
           <view v-for="(computer, index) in connection.computers" :key="computer.id" :class="['computer-option action-frame', index > 0 ? 'computer-separated' : '']">
             <app-icon :name="iconForComputer(computer)" :size="23" /><text class="option-name">{{ computer.label }}</text>
             <view v-if="sorting" class="sort-actions"><button class="sort-button button-secondary" :disabled="index == 0" :aria-label="'上移' + computer.label" @click="moveComputer(computer.id, -1)">上移</button><button class="sort-button button-secondary" :disabled="index == connection.computers.length - 1" :aria-label="'下移' + computer.label" @click="moveComputer(computer.id, 1)">下移</button></view>
-            <template v-else><view :class="['dot', connection.connected && computer.online ? 'online' : 'offline']"></view><text class="state">{{ computerConnectionLabel(computer) }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看并编辑' + computer.label" @click="editComputer(computer.id)"></button></template>
+            <template v-else><view :class="['dot', connection.connected && computer.online ? 'online' : 'offline']"></view><text class="state">{{ localComputerConnectionLabel(computer) }}</text><app-icon name="chevron-right" :size="18" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="'查看并编辑' + computer.label" @click="editComputer(computer.id)"></button></template>
           </view>
         </view>
         </view>
@@ -27,7 +27,7 @@
       </view>
     </scroll-view>
     <task-notice :active="pageVisible" header-id="connection-header" />
-    <connection-editor v-if="editingComputer != null" :key="editingComputer!.id" :computer="editingComputer!" :anchor-left="0" :anchor-top="0" :release-at="1" :direct-edit="true" @dismiss="closeEditor" @busy="editorBusy = $event" />
+    <connection-editor v-if="editingComputer != null" :key="editingComputer!.id" :computer="editingComputer!" :anchor-left="0" :anchor-top="0" :release-at="1" :direct-edit="true" @dismiss="closeEditor" @busy="onEditorBusy" />
   </view>
 </template>
 
@@ -47,6 +47,8 @@ const sorting = ref(false)
 const confirming = ref(false)
 const editingComputer = ref<Computer | null>(null)
 const editorBusy = ref(false)
+// 原生事件载荷明确使用布尔类型。
+function onEditorBusy(value: boolean) { editorBusy.value = value }
 const hasPendingCommands = computed((): boolean => bridge.hasPendingCommands())
 const reconnecting = ref(false)
 const reconnect = useManualReconnect((pending: boolean) => { reconnecting.value = pending })
@@ -113,6 +115,8 @@ function forgetConfiguration() {
 }
 // 原生返回键优先关闭资料面板，保存期间等待结果。
 onBackPress((): boolean => { if (editingComputer.value == null) return false; closeEditor(); return true })
+// 模板通过本地方法调用导入函数，兼容原生模板编译。
+function localComputerConnectionLabel(computer: Computer): string { return computerConnectionLabel(computer) }
 </script>
 
 <style>

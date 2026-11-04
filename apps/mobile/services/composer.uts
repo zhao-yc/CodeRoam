@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { messageChoicesRevision, settleMessageChoices, saveMessageChoices, MessageChoices } from './message-choices.uts'
 import type { SelectedPlugin } from './plugins.uts'
 import type { SelectedThreadMention } from './thread-mentions.uts'
 
@@ -9,7 +10,7 @@ type FileDraft = { hostId: string, threadId: string, files: DraftFile[] }
 type ImageDraft = { hostId: string, threadId: string, images: DraftImage[] }
 type PluginDraft = { hostId: string, threadId: string, plugins: SelectedPlugin[], revision: number }
 type MentionDraft = { hostId: string, threadId: string, mentions: SelectedThreadMention[], revision: number }
-export type Submission = { hostId: string, threadId: string, commandId: string, text: string, draftRevision: number, imageIds?: string[], fileIds?: string[], pluginRevision?: number, threadMentionRevision?: number }
+export type Submission = { hostId: string, threadId: string, commandId: string, text: string, messageChoicesRevision?: number, draftRevision: number, imageIds?: string[], fileIds?: string[], pluginRevision?: number, threadMentionRevision?: number }
 type ComposerMemory = { drafts: Draft[], submissions: Submission[], nextRevision: number }
 // 草稿只保存在应用运行期内存，按电脑和会话隔离，不写入浏览器持久存储。
 const memory = reactive<ComposerMemory>({ drafts: [] as Draft[], submissions: [] as Submission[], nextRevision: 0 })
@@ -39,6 +40,7 @@ export function saveDraftThreadMentions(hostId: string, threadId: string, mentio
 
 // 仅在原桌面确认永久删除后清理同一电脑的草稿、附件和发送记录。
 export function clearDeletedDrafts(hostId: string, threadIds: string[]) {
+  for (const threadId of threadIds) saveMessageChoices(hostId, threadId, {} as MessageChoices)
   for (let index = mentionDrafts.length - 1; index >= 0; index--) if (mentionDrafts[index].hostId == hostId && threadIds.indexOf(mentionDrafts[index].threadId) >= 0) mentionDrafts.splice(index, 1)
   for (let index = memory.drafts.length - 1; index >= 0; index--) if (memory.drafts[index].hostId == hostId && threadIds.indexOf(memory.drafts[index].threadId) >= 0) memory.drafts.splice(index, 1)
   for (let index = memory.submissions.length - 1; index >= 0; index--) if (memory.submissions[index].hostId == hostId && threadIds.indexOf(memory.submissions[index].threadId) >= 0) memory.submissions.splice(index, 1)
@@ -96,7 +98,7 @@ export function saveDraft(hostId: string, threadId: string, text: string) {
 
 export function rememberSubmission(hostId: string, threadId: string, commandId: string, text: string) {
   const draft = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == threadId)
-  memory.submissions.push({ hostId, threadId, commandId, text, draftRevision: draft?.revision ?? -1, imageIds: readDraftImages(hostId, threadId).map((image: DraftImage): string => image.id), fileIds: readDraftFiles(hostId, threadId).map((file: DraftFile): string => file.id), pluginRevision: pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1 } as Submission)
+  memory.submissions.push({ hostId, threadId, commandId, text, messageChoicesRevision: messageChoicesRevision(hostId, threadId), draftRevision: draft?.revision ?? -1, imageIds: readDraftImages(hostId, threadId).map((image: DraftImage): string => image.id), fileIds: readDraftFiles(hostId, threadId).map((file: DraftFile): string => file.id), pluginRevision: pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1 } as Submission)
   memory.submissions[memory.submissions.length - 1].threadMentionRevision = mentionDrafts.find((entry: MentionDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1
 }
 
@@ -105,6 +107,7 @@ export function settleSubmission(hostId: string, commandId: string, success: boo
   const index = memory.submissions.findIndex((entry: Submission): boolean => entry.hostId == hostId && entry.commandId == commandId)
   if (index < 0) return
   const submitted = memory.submissions[index]
+  if (success) settleMessageChoices(hostId, submitted.threadId, submitted.messageChoicesRevision ?? -1)
   if (success && mentionDrafts.find((entry: MentionDraft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)?.revision == submitted.threadMentionRevision) saveDraftThreadMentions(hostId, submitted.threadId, [] as SelectedThreadMention[])
   const current = memory.drafts.find((entry: Draft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)
   if (success && current?.revision == submitted.draftRevision && current?.text.trim() == submitted.text) saveDraft(hostId, submitted.threadId, '')
@@ -114,4 +117,9 @@ export function settleSubmission(hostId: string, commandId: string, success: boo
   // 发送期间重新选择过插件时，旧回执不能清掉下一条消息的选择。
   if (success && pluginDrafts.find((entry: PluginDraft): boolean => entry.hostId == hostId && entry.threadId == submitted.threadId)?.revision == submitted.pluginRevision) saveDraftPlugins(hostId, submitted.threadId, [] as SelectedPlugin[])
   memory.submissions.splice(index, 1)
+}
+
+// 汇总选项的发送须等待设置及正文成功，单纯任务入队不能清空草稿。
+export function submissionHasMessageChoices(hostId: string, commandId: string): boolean {
+  return (memory.submissions.find((entry: Submission): boolean => entry.hostId == hostId && entry.commandId == commandId)?.messageChoicesRevision ?? -1) >= 0
 }

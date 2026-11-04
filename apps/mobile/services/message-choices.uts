@@ -1,0 +1,76 @@
+import { reactive } from 'vue'
+import { ExecutionSettings, ModelOption } from './execution-settings.uts'
+
+export type MessageChoices = { model?: string, effort?: string, serviceTier?: string, mode?: string, permissionMode?: string, permissionRevision?: string, confirmedFullAccess?: boolean }
+type ChoiceDraft = { hostId: string, threadId: string, revision: number, choices: MessageChoices }
+const drafts = reactive<ChoiceDraft[]>([])
+let revision = 0
+
+// 选择与正文一样按运行期、电脑和聊天隔离，不修改全局设置。
+export function readMessageChoices(hostId: string, threadId: string): MessageChoices {
+  return drafts.find((entry: ChoiceDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.choices ?? {} as MessageChoices
+}
+// 读取草稿代次，避免迟到回执消费后续选择。
+export function messageChoicesRevision(hostId: string, threadId: string): number {
+  return drafts.find((entry: ChoiceDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)?.revision ?? -1
+}
+// 仅把实际发送选项计为待提交内容。
+export function hasMessageChoices(choices: MessageChoices): boolean {
+  return choices.model != null || choices.effort != null || choices.serviceTier != null || choices.mode != null || choices.permissionMode != null
+}
+// 替换指定聊天的选择并推进代次，不影响其他草稿。
+export function saveMessageChoices(hostId: string, threadId: string, choices: MessageChoices) {
+  const index = drafts.findIndex((entry: ChoiceDraft): boolean => entry.hostId == hostId && entry.threadId == threadId)
+  if (index >= 0) drafts.splice(index, 1)
+  revision++
+  if (hasMessageChoices(choices)) drafts.push({ hostId, threadId, revision, choices: { ...choices } as MessageChoices } as ChoiceDraft)
+}
+// 桌面快照只更新确认值，手机明确选择单独覆盖显示。
+export function settingsWithMessageChoices(settings: ExecutionSettings | null, choices: MessageChoices): ExecutionSettings | null {
+  if (settings == null) return null
+  return { model: choices.model ?? settings.model, effort: choices.effort ?? settings.effort, serviceTier: choices.serviceTier ?? settings.serviceTier, mode: choices.mode ?? settings.mode } as ExecutionSettings
+}
+// 按当前模型目录校验本地选择，同时修正模型相关档位。
+export function chooseMessageSetting(hostId: string, threadId: string, key: string, value: string, settings: ExecutionSettings, models: ModelOption[]): boolean {
+  const choices = { ...readMessageChoices(hostId, threadId) } as MessageChoices
+  const model = models.find((item: ModelOption): boolean => item.id == (key == 'model' ? value : settings.model))
+  if (model == null) return false
+  if (key == 'model') {
+    if (!model.efforts.includes(model.defaultEffort)) return false
+    choices.model = value; choices.effort = model.defaultEffort
+    choices.serviceTier = model.speeds.some(option => option.id == settings.serviceTier) ? settings.serviceTier : ''
+  } else if (key == 'effort' && model.efforts.includes(value)) { choices.model = model.id; choices.effort = value }
+  else if (key == 'serviceTier' && model.speeds.some(option => option.id == value)) { choices.model = model.id; choices.serviceTier = value }
+  else if (key == 'mode' && (value == 'plan' || value == 'default')) choices.mode = value
+  else return false
+  saveMessageChoices(hostId, threadId, choices)
+  return true
+}
+// 实时选择确认成功后，只消费同一草稿版本的同类旧选择。
+export function consumeRealtimeChoice(hostId: string, threadId: string, key: string, expectedRevision: number) {
+  if (messageChoicesRevision(hostId, threadId) != expectedRevision) return
+  const old = readMessageChoices(hostId, threadId), choices = {} as MessageChoices
+  if (key != 'model') choices.model = old.model
+  if (key != 'model' && key != 'effort') choices.effort = old.effort
+  if (key != 'model' && key != 'serviceTier') choices.serviceTier = old.serviceTier
+  choices.mode = old.mode
+  if (key != 'permissionMode') { choices.permissionMode = old.permissionMode; choices.permissionRevision = old.permissionRevision; choices.confirmedFullAccess = old.confirmedFullAccess }
+  saveMessageChoices(hostId, threadId, choices)
+}
+// 发送确认只消费原提交代次。
+export function settleMessageChoices(hostId: string, threadId: string, expectedRevision: number) {
+  if (messageChoicesRevision(hostId, threadId) == expectedRevision) saveMessageChoices(hostId, threadId, {} as MessageChoices)
+}
+
+// UTS 可选字段可能序列化成 null，协议只提交用户明确选择的字段。
+export function messageChoicesParams(choices: MessageChoices): UTSJSONObject {
+  const result: UTSJSONObject = {}
+  if (choices.model != null) result['model'] = choices.model
+  if (choices.effort != null) result['effort'] = choices.effort
+  if (choices.serviceTier != null) result['serviceTier'] = choices.serviceTier
+  if (choices.mode != null) result['mode'] = choices.mode
+  if (choices.permissionMode != null) result['permissionMode'] = choices.permissionMode
+  if (choices.permissionRevision != null) result['permissionRevision'] = choices.permissionRevision
+  if (choices.confirmedFullAccess != null) result['confirmedFullAccess'] = choices.confirmedFullAccess
+  return result
+}

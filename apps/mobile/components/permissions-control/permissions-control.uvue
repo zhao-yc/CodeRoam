@@ -22,8 +22,8 @@ import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionState, permissionLabel } from '../../services/permissions.uts'
 import { submissionTasks } from '../../services/submission-task-state.uts'
-const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
-const emit = defineEmits<{ select: [mode: string, confirmed: boolean], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
+const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, deferChanges?: boolean, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', deferChanges: false, disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
+const emit = defineEmits<{ select: [mode: string, confirmed: boolean, revision: string], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
 const manualRetry = ref(false), pendingMode = ref('')
 const pendingPermissionCommand = ref(''), pendingQueued = ref(false)
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
@@ -41,9 +41,9 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
   pendingQueued.value = true; busy.value = false; opened.value = false; emit('busy', false)
 })
 const triggerId = computed((): string => 'permissions-' + (props.threadId.length > 0 ? props.threadId : (props.draftId ?? '').length > 0 ? props.draftId! : 'new'))
-const mode = computed((): string => isNative.value ? props.nativeState?.mode ?? 'unknown' : props.threadId.length > 0 ? connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
+const mode = computed((): string => isNative.value ? props.nativeState?.mode ?? 'unknown' : props.threadId.length > 0 ? props.deferChanges && props.selectedMode.length > 0 ? props.selectedMode : connection.snapshot?.permissionSettings?.mode ?? 'unknown' : props.selectedMode.length > 0 ? props.selectedMode : state.value?.mode ?? 'unknown')
 const label = computed((): string => loading.value ? '正在读取电脑权限…' : permissionLabel(mode.value))
-const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0)
+const activeTurn = computed((): boolean => (connection.snapshot?.activeTurnId ?? '').length > 0 || connection.snapshot?.status == 'active')
 // 权限图标统一使用随包线性 PNG，不依赖系统字体或表情渲染。
 function permissionIcon(value: string): string { if (value == 'auto-review') return 'shield-check'; if (value == 'read-only') return 'lock'; if (value == 'full-access') return 'alert-triangle'; return 'hand-stop' }
 // 所有异步响应绑定电脑、项目或会话；切换目标后立即作废。
@@ -89,13 +89,20 @@ async function choose(value: string) {
     const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完整访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此聊天启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
     if (!confirmed || !current(key, id) || props.disabled || props.nativeBusy || !available.value || state.value?.revision != revision) return
   }
-  if (isNative.value || props.threadId.length == 0) { emit('select', value, value == 'full-access'); closeMenu(); return }
+  if (isNative.value || props.threadId.length == 0 || props.deferChanges) { emit('select', value, value == 'full-access', revision); closeMenu(); return }
   let applied = false
   pendingMode.value = value; pendingQueued.value = false; busy.value = true; emit('busy', true); error.value = ''
   let commandId = ''
   try {
     const operation = bridge.request('thread.permissions.update', { threadId: props.threadId, mode: value, expectedRevision: revision, confirmedFullAccess: value == 'full-access' }, true)
-    commandId = typeof bridge.pendingCommand == 'function' ? bridge.pendingCommand(connection.hostId, props.threadId) : ''
+    commandId =
+      // #ifdef WEB
+      typeof bridge.pendingCommand == 'function' ?
+      // #endif
+      bridge.pendingCommand(connection.hostId, props.threadId)
+      // #ifdef WEB
+      : ''
+      // #endif
     pendingPermissionCommand.value = commandId
     const result = await operation
     if (current(key, id) && pendingPermissionCommand.value == commandId) { state.value = JSON.parse<PermissionState>(JSON.stringify(result)); opened.value = false; applied = true }

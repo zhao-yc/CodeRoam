@@ -403,7 +403,11 @@ async function send() {
   busy.value = true; pendingNewAction.value = 'send'; emit('busy', true); closeMenus(); error.value = ''
   const updateProgress = (message: string): void => { progress.value = message }
   try {
-    if (typeof supportsSubmissionTasks == 'function' && supportsSubmissionTasks(target.hostId)) {
+    if (
+      // #ifdef WEB
+      typeof supportsSubmissionTasks == 'function' &&
+      // #endif
+      supportsSubmissionTasks(target.hostId)) {
       await submitNewConversationTask(target, mode, updateProgress)
       if (alive && props.expanded && draft.value == target && revision == connection.configurationRevision) { busy.value = false; emit('busy', false); uni.hideKeyboard(); emit('queued') }
     } else if (mode == 'desktopIpc') {

@@ -1,3 +1,4 @@
+import { componentContext } from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,9 +7,9 @@ import {stripTypeScriptTypes} from 'node:module';
 
 /** 直接执行实际 UTS 草稿模块，每个用例使用独立应用内存，避免跨用例状态串联。 */
 function composerFixture(){
-  const context=vm.createContext({reactive:value=>value});
+  const context=componentContext({reactive:value=>value});
   let source=fs.readFileSync(new URL('../apps/mobile/services/composer.uts',import.meta.url),'utf8')
-    .replace(/^import .* from 'vue'\r?\n/m,'').replace(/\bexport /g,'');
+    .replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
   source=stripTypeScriptTypes(source,{mode:'transform'});
   vm.runInContext(source+'\nglobalThis.subject={readDraft,saveDraft,readDraftImages,saveDraftImages,rememberSubmission,settleSubmission,clearDeletedDrafts,readDraftFiles,saveDraftFiles};',context);
   return context.subject;

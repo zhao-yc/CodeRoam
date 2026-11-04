@@ -91,7 +91,7 @@ export function prepareImage(source: string): Promise<string> {
       let height = Math.max(1, Math.round(info.height * ratio))
       const qualities = [90, 80, 70]
       // 每次使用原始路径压缩；同尺寸尝试完整质量阶梯后，再缩小下一档。
-      const compress = (attempt: number, qualityIndex: number): void => {
+      function compress(attempt: number, qualityIndex: number): void {
         if (attempt >= 5) { reject(new Error('图片仍然过大，请裁剪后重试')); return }
         uni.compressImage({ src: source, quality: qualities[qualityIndex], compressedWidth: width, compressedHeight: height, success: (compressed) => {
           uni.getFileSystemManager().readFile({ filePath: compressed.tempFilePath, encoding: 'base64', success: (result) => {

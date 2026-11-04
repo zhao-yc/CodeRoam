@@ -1,10 +1,11 @@
 import { reactive } from 'vue'
+import { MessageChoices, hasMessageChoices, readMessageChoices, saveMessageChoices } from './message-choices.uts'
 import type { SelectedThreadMention } from './thread-mentions.uts'
 import { readDraft, readDraftImages, readDraftFiles, saveDraft, saveDraftImages, saveDraftFiles, DraftImage, DraftFile } from './composer.uts'
 
 export type QueueEditPlugin = { id: string, displayName: string }
 type QueueEditAttachment = { id: string, name: string, size: number }
-export type QueueEditDraft = { text: string, images: string[], attachments: QueueEditAttachment[], plugins?: QueueEditPlugin[], threadMentions?: SelectedThreadMention[] }
+export type QueueEditDraft = { choices?: MessageChoices, text: string, images: string[], attachments: QueueEditAttachment[], plugins?: QueueEditPlugin[], threadMentions?: SelectedThreadMention[] }
 type QueueEditScope = { hostId: string, threadId: string }
 type QueueEditState = { scopes: QueueEditScope[] }
 const editing = reactive<QueueEditState>({ scopes: [] as QueueEditScope[] })
@@ -19,7 +20,7 @@ export function beginQueueEdit(hostId: string, threadId: string, hasExtraDraft: 
 export function finishQueueEdit(hostId: string, threadId: string) { editing.scopes = editing.scopes.filter((scope: QueueEditScope): boolean => scope.hostId != hostId || scope.threadId != threadId) }
 
 function requireEmptyDraft(hostId: string, threadId: string, hasExtraDraft: boolean) {
-  if (readDraft(hostId, threadId).length > 0 || readDraftImages(hostId, threadId).length > 0 || readDraftFiles(hostId, threadId).length > 0 || hasExtraDraft) throw new Error('输入框已有草稿，请先发送或清空后再编辑排队消息')
+  if (hasMessageChoices(readMessageChoices(hostId, threadId)) || readDraft(hostId, threadId).length > 0 || readDraftImages(hostId, threadId).length > 0 || readDraftFiles(hostId, threadId).length > 0 || hasExtraDraft) throw new Error('输入框已有草稿，请先发送或清空后再编辑排队消息')
 }
 
 // 先完整校验再恢复；附件复用原上传编号，不回填电脑路径，也不重复上传。
@@ -41,6 +42,11 @@ export function restoreQueuedDraft(hostId: string, threadId: string, queueId: st
     if (file.id.length == 0 || file.name.length == 0 || file.size <= 0) throw new Error('撤回附件无效，原撤回记录仍保留')
     return { id: file.id, name: file.name, size: file.size, source: '', data: '', status: 'ready', progress: 100, error: '' } as DraftFile
   })
+  if (draft.choices != null) {
+    const value = draft.choices!
+    if (value.permissionMode != null && (value.permissionRevision?.length != 64 || value.permissionMode == 'full-access' && value.confirmedFullAccess != true)) throw new Error('撤回消息的权限选项无效，原记录仍保留')
+  }
+  saveMessageChoices(hostId, threadId, draft.choices ?? {} as MessageChoices)
   saveDraft(hostId, threadId, draft.text)
   saveDraftImages(hostId, threadId, images)
   saveDraftFiles(hostId, threadId, files)

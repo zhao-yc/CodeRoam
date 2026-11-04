@@ -8,13 +8,13 @@ function fixture(){
   const ref=value=>({value}),c={ref,computed:read=>({get value(){return read();}}),watch:(read,callback)=>watches.push({read,callback}),onPaneHide(){},onUnmounted(){},
     submissionTasks:{accepted:{revision:0}},pageHostId:ref('synthetic-host'),pageThreadId:ref('synthetic-thread'),pageVisible:ref(true),busy:ref(false),goalBusy:ref(false),pendingAction:ref(''),canWrite:ref(true),activeTurnId:ref(''),approvalCount:ref(0),operationError:ref(''),historyError:ref(''),historyPage:ref({messages:['合成历史']}),historyRequest:0,
     props:{target:{cacheNamespace:'synthetic-pair'}},connection:{cacheNamespace:'synthetic-pair',hostId:'synthetic-host',activeThreadId:'synthetic-thread',snapshot:{status:'idle'},threads:[{id:'synthetic-thread'},{id:'other-thread'}]},deletionTasks:{revision:0},
-    closeActions(){},settleSubmission(){},notify:message=>notices.push(message),emit:(...args)=>events.push(args),queueArchiveSuccessNotice:()=>notices.push('归档成功'),removeArchivedThread:(...args)=>removed.push(args),clearFileReportCache(){},
+    closeActions(){},submissionHasMessageChoices(){return false;},settleSubmission(){},notify:message=>notices.push(message),emit:(...args)=>events.push(args),queueArchiveSuccessNotice:()=>notices.push('归档成功'),removeArchivedThread:(...args)=>removed.push(args),clearFileReportCache(){},
     uni:{showModal:options=>modals.push(options),hideKeyboard(){},showLoading:options=>loading.push(options.title),hideLoading:()=>loading.push('关闭')},
     deletionTask:()=>deletion,deletedThread:()=>deleted,startDeletion(hostId,threadId){deletion={commandId:'synthetic-delete-command',hostId,threadId};calls.push({method:'thread.delete',...deletion});return true;},
   };
   c.isCurrentPage=()=>c.props.target.cacheNamespace===c.connection.cacheNamespace&&c.connection.hostId===c.pageHostId.value&&c.connection.activeThreadId===c.pageThreadId.value;
   c.bridge={pendingCommand:()=>calls.at(-1)?.commandId??'',clearCommand(){},request(method,params){const call={method,params,commandId:'synthetic-archive-command'};calls.push(call);return new Promise((resolve,reject)=>Object.assign(call,{resolve:result=>resolve(json(result)),reject}));}};
-  const accepted=source.slice(source.indexOf('// 入队即释放页面操作锁'),source.indexOf('const goalExpanded'));
+  const accepted=source.split(/\r?\n/).filter(line=>line.startsWith('const removalSubmissionId =')||line.startsWith('const removalReturnStarted =')).join('\n')+'\n'+source.slice(source.indexOf('// 入队即释放页面操作锁'),source.indexOf('// 入队监听结束'));
   const deletionMethods=source.slice(source.indexOf('// 永久删除必须完成两次独立确认'),source.indexOf('// 归档只在原生回执'));
   const archiveMethods=source.slice(source.indexOf('// 归档只在原生回执'),source.indexOf('// 首次打开沿用自动定位'));
   vm.runInNewContext(stripTypeScriptTypes(accepted+'\n'+deletionMethods+'\n'+archiveMethods,{mode:'transform'})+'\nglobalThis.subject={deleteFromMenu,answerDeleteFinal,archiveFromMenu,removalSubmissionId,removalReturnStarted};',c);

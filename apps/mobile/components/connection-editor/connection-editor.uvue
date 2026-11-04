@@ -46,7 +46,6 @@ const menuWidth = Math.min(230, windowInfo.windowWidth - 24)
 const menuLeft = computed((): number => Math.max(12, Math.min(props.anchorLeft, windowInfo.windowWidth - menuWidth - 12)))
 const menuTop = computed((): number => Math.max(12, Math.min(props.anchorTop, windowInfo.windowHeight - 124)))
 const sheetHeight = computed((): number => Math.max(180, Math.min(490, windowInfo.windowHeight - keyboardInset.value - 28)))
-const canSave = computed((): boolean => editorContextCurrent() && !saving.value && connection.connected && connection.supportsHostProfiles && displayName.value.trim().length > 0 && displayName.value.length <= 100 && !/[\u0000-\u001f\u007f]/.test(displayName.value) && (displayName.value.trim() != originalName.value || icon.value != originalIcon.value))
 const lastConnectedLabel = computed((): string => {
   const timestamp = props.computer.lastConnectedAt ?? 0
   if (timestamp <= 0) return '未提供'
@@ -62,6 +61,8 @@ let editTargetId = props.computer.id
 let editConfigurationRevision = connection.configurationRevision
 // 固定编辑目标与配对，旧请求的结果不能关闭或提示新的资料面板。
 function editorContextCurrent(): boolean { return alive && props.computer.id == editTargetId && connection.configurationRevision == editConfigurationRevision }
+// 在上下文校验函数声明之后建立计算属性，兼容原生编译顺序。
+const canSave = computed((): boolean => editorContextCurrent() && !saving.value && connection.connected && connection.supportsHostProfiles && displayName.value.trim().length > 0 && displayName.value.length <= 100 && !/[\u0000-\u001f\u007f]/.test(displayName.value) && (displayName.value.trim() != originalName.value || icon.value != originalIcon.value))
 // 打开时拍下原值与版本，远端推送更新信息时不覆盖正在输入的草稿。
 function beginEditing() { editTargetId = props.computer.id; editConfigurationRevision = connection.configurationRevision; displayName.value = props.computer.label; originalName.value = props.computer.label; icon.value = computerIcon(props.computer); originalIcon.value = icon.value; revision.value = props.computer.profileRevision ?? 0; editing.value = true }
 function chooseIcon(value: string) { if (!saving.value) icon.value = value }

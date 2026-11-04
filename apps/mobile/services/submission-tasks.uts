@@ -1,6 +1,6 @@
 import { watch } from 'vue'
 import { bridge, connection, Computer } from './bridge.uts'
-import { submissionTasks, submissionInstance, supportsSubmissionTasks, acceptSubmissionSnapshot, SubmissionTask, SubmissionSnapshot, InstanceSubmissionTasks, PendingSubmission } from './submission-task-state.uts'
+import { submissionTasks, submissionInstance, supportsSubmissionTasks, acceptSubmissionSnapshot, SubmissionTask, SubmissionSnapshot, InstanceSubmissionTasks, PendingSubmission, AcceptedSubmission } from './submission-task-state.uts'
 import { NewDraft, NewDraftChoices } from './new-conversation.uts'
 import { DraftImage, DraftFile, settleSubmission } from './composer.uts'
 import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
@@ -41,7 +41,7 @@ export async function refreshSubmissionTasks(hostId: string): Promise<void> {
 // 已接纳的新建任务也收口手机编号记录；后台完成后只读核对，不长期堆积本地元数据。
 async function cleanAcceptedMetadata(hostId: string, raw: UTSJSONObject) {
   const namespace = connection.cacheNamespace
-  const active = JSON.parse<SubmissionTask[]>(JSON.stringify(raw['tasks'] ?? [])) ?? [] as SubmissionTask[]
+  const active = JSON.parse<SubmissionTask[]>(JSON.stringify(raw['tasks'] ?? [] as SubmissionTask[])) ?? [] as SubmissionTask[]
   const records = pending.filter((record: PendingSubmission): boolean => record.hostId == hostId && record.accepted)
   for (const record of records) {
     if (cleaning.has(record.id)) continue
@@ -49,7 +49,9 @@ async function cleanAcceptedMetadata(hostId: string, raw: UTSJSONObject) {
     try {
       let task = active.find((item: SubmissionTask): boolean => item.id == record.id) ?? null
       if (task == null) task = findTask(await readSubmissionTasks(hostId, { taskId: record.id }), record.id)
-      if (connection.cacheNamespace == namespace && task != null && ['succeeded', 'failed', 'canceled', 'cancelled', 'skipped'].indexOf(task.state) >= 0) removePending(record.id)
+      if (connection.cacheNamespace == namespace && task != null && ['succeeded', 'failed', 'canceled', 'cancelled', 'skipped'].indexOf(task.state) >= 0) {
+        settleSubmission(hostId, record.id, task.state == 'succeeded'); bridge.clearCommand(record.id, hostId); removePending(record.id)
+      }
     } catch (_) { /* 只读暂时失败保留编号，下次恢复连接继续核对。 */ }
     finally { cleaning.delete(record.id) }
   }
@@ -58,7 +60,7 @@ async function cleanAcceptedMetadata(hostId: string, raw: UTSJSONObject) {
 function findTask(raw: UTSJSONObject, id: string): SubmissionTask | null {
   const direct = raw['task'] as UTSJSONObject | null
   if (direct != null) return JSON.parse<SubmissionTask>(JSON.stringify(direct))
-  return (JSON.parse<SubmissionTask[]>(JSON.stringify(raw['tasks'] ?? [])) ?? [] as SubmissionTask[]).find((task: SubmissionTask): boolean => task.id == id) ?? null
+  return (JSON.parse<SubmissionTask[]>(JSON.stringify(raw['tasks'] ?? [] as SubmissionTask[])) ?? [] as SubmissionTask[]).find((task: SubmissionTask): boolean => task.id == id) ?? null
 }
 
 // 只持久化原编号。回执丢失后查询原任务，不自动重发执行内容。
@@ -85,7 +87,7 @@ export async function submitTask(hostId: string, id: string, kind: string, paylo
     if (record != null) { record.accepted = true; savePending() }
     const task = findTask(result, id)
     const commandParams = payload['params'] as UTSJSONObject | null
-    submissionTasks.accepted = { revision: submissionTasks.accepted.revision + 1, hostId, taskId: id, threadId: task?.threadId ?? commandParams?.getString('threadId') ?? '', method: task?.method ?? payload.getString('method') ?? '' }
+    submissionTasks.accepted = { revision: submissionTasks.accepted.revision + 1, hostId, taskId: id, threadId: task?.threadId ?? commandParams?.getString('threadId') ?? '', method: task?.method ?? payload.getString('method') ?? '' } as AcceptedSubmission
     refreshSubmissionTasks(hostId)
   }
   return result
@@ -98,9 +100,17 @@ export async function submitTaskCommand(hostId: string, method: string, params: 
   if (guard != null) payload['firstMessageGuard'] = guard
   await submitTask(hostId, id, 'command', payload)
   // 页面离开后也消费已入队的原发送快照，防止返回旧输入时再次发送。
-  settleSubmission(hostId, id, true)
-  bridge.clearCommand(id, hostId)
-  return await awaitSubmissionResult(hostId, id, namespace)
+  const bundled = params['choices'] != null
+  if (!bundled) { settleSubmission(hostId, id, true); bridge.clearCommand(id, hostId) }
+  try {
+    const result = await awaitSubmissionResult(hostId, id, namespace)
+    if (bundled) { settleSubmission(hostId, id, true); bridge.clearCommand(id, hostId) }
+    return result
+  } catch (reason) {
+    // 未知结果保留原命令保护，核对成功前不能再次发送同一正文。
+    if (bundled && (reason as Error).name != 'OUTCOME_UNKNOWN') { settleSubmission(hostId, id, false); bridge.clearCommand(id, hostId) }
+    throw reason
+  }
 }
 
 export async function awaitSubmissionResult(hostId: string, id: string, namespace: string): Promise<UTSJSONObject> {
@@ -115,7 +125,7 @@ export async function awaitSubmissionResult(hostId: string, id: string, namespac
         if (task.historyExpired == true) { removePending(id); throw new Error('执行记录已过保留期，原任务不会重发，请在电脑核对') }
         if (task.state == 'succeeded') { removePending(id); return task.result ?? {} }
         if (['failed', 'cancelled', 'canceled', 'skipped'].indexOf(task.state) >= 0) { removePending(id); throw new Error(task.error.length > 0 ? task.error : '提交任务' + task.state) }
-        if (task.state == 'unknown' || task.state == 'waiting_resume') throw new Error(task.error.length > 0 ? task.error : '执行结果需要核对，请到提交任务中处理')
+        if (task.state == 'unknown' || task.state == 'waiting_resume') { const error = new Error(task.error.length > 0 ? task.error : '执行结果需要核对，请到提交任务中处理'); error.name = 'OUTCOME_UNKNOWN'; throw error }
       }
     }
     await new Promise<void>((resolve) => { setTimeout(() => { resolve() }, 1000) })
@@ -127,7 +137,7 @@ export async function awaitSubmissionResult(hostId: string, id: string, namespac
 export async function checkPendingSubmission(hostId: string, id: string): Promise<void> {
   const raw = await readSubmissionTasks(hostId, { taskId: id })
   if (findTask(raw, id) == null) throw new Error('尚未查到原任务，请在电脑核对后再清除手机提交保护')
-  removePending(id); bridge.clearCommand(id, hostId); await refreshSubmissionTasks(hostId)
+  settleSubmission(hostId, id, false); removePending(id); bridge.clearCommand(id, hostId); await refreshSubmissionTasks(hostId)
 }
 export function acknowledgePendingSubmission(hostId: string, id: string) { removePending(id); bridge.clearCommand(id, hostId) }
 

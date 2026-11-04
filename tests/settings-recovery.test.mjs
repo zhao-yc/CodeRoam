@@ -7,7 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 
 const page = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
 const helpers = fs.readFileSync('apps/mobile/services/execution-settings.uts', 'utf8').replace(/\bexport /g, '');
-const methods = page.slice(page.indexOf('function loadSettings()'), page.indexOf('// 选中即同步电脑输入框设置'));
+const methods = page.slice(page.indexOf('function loadSettings()'), page.indexOf('// 空闲选择只属于待发消息'));
 const watcherStart = page.indexOf('watch((): string => connection.hostId +');
 const watchers = page.slice(watcherStart, page.indexOf('// 占位预测使用独立测量值', watcherStart));
 const initial = { model: 'model-a', effort: 'high', serviceTier: '', mode: 'default' };

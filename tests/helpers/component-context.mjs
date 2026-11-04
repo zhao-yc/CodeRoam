@@ -1,3 +1,4 @@
+import { installMessageChoices } from './message-choices-context.mjs';
 import vm from 'node:vm';
 
 /** 为 UTS 组件脚本提供 Vue 宏和面板显隐，沿用各用例原有的计时器与页面模拟。 */
@@ -28,6 +29,7 @@ export function componentScope(scope) {
     }
     return watch(source, callback, options);
   };
+  installMessageChoices(scope);
   return scope;
 }
 export function componentContext(scope) { return vm.createContext(componentScope(scope)); }
