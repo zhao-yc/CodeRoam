@@ -55,20 +55,44 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   /** 缺少实例活动入口时，只读变化历史的生命周期，候选仍需实时核验。 */
-  async readActivityInventory() {
+  async readActivityInventory({rows}={}) {
+    if(this.activityInventoryReading)return this.activityInventoryReading;
+    const reading=this.readActivityInventoryRound(rows);this.activityInventoryReading=reading;
+    try{return await reading;}finally{if(this.activityInventoryReading===reading)this.activityInventoryReading=null;}
+  }
+  /** 活动补偿优先复用本实例所有者的内存状态，剩余目标一次读取索引行。 */
+  async readActivityInventoryRound(indexRows) {
     if(!this.index?.historyActivity||!this.index?.historyCacheSource)return {complete:false,threadIds:[]};
-    const rows=this.index.list({limit:50}),present=new Set(rows.map(row=>row.id)),threadIds=[];
+    const rows=(indexRows??this.index.list({limit:50})).slice(0,50),present=new Set(rows.map(row=>row.id)),threadIds=[],cold=[];
     for(const id of this.activityHistory.keys())if(!present.has(id))this.activityHistory.delete(id);
     for(const row of rows) {
-      await new Promise(resolve=>setImmediate(resolve));
-      if(this.stopped)return {complete:false,threadIds:[]};
-      try {
-        const source=this.index.historyCacheSource(row.id);let activity=this.activityHistory.get(row.id);
-        if(source&&activity?.source!==source){activity={source,...this.index.historyActivity(row.id)};this.activityHistory.set(row.id,activity);}
-        if(activity?.status==='active')threadIds.push(row.id);
-      }catch{/* 保存记录仅提供候选，缺失或失败仍是未知。 */}
+      const entry=this.conversations.get(row.id);let trusted=!!entry?.owner&&entry.state?.id===row.id;
+      if(trusted)try{this.client.assertCurrent?.();if(this.client.allowedClients instanceof Set&&!this.client.allowedClients.has(entry.owner.clientId))trusted=false;}catch{trusted=false;}
+      if(trusted) {
+        const state=entry.state,history=state.turnHistory?.history;
+        const turns=history?.entitiesByKey?(history.islands??[]).flatMap(island=>(island.entries??[]).map(item=>history.entitiesByKey[item.value]).filter(Boolean)):(Array.isArray(state.turns)?state.turns:[]);
+        const waiting=(state.threadRuntimeStatus?.activeFlags??[]).some(flag=>['waitingOnUserInput','waitingOnApproval'].includes(flag));
+        const pending=(state.requests??[]).some(item=>{const request=item.request??item;return item.completed!==true&&request.completed!==true&&['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/tool/requestUserInput'].includes(request.method);});
+        if(state.threadRuntimeStatus?.type==='active'||turns.some(turn=>turn.status==='inProgress')||waiting||pending)threadIds.push(row.id);
+        // 未知状态只是不提供活动候选；结果始终不完整，绝不据此确认空闲。
+      } else cold.push(row.id);
     }
-    return {complete:false,threadIds};
+    let view;
+    if(cold.length&&this.index.historySourceView) {
+      try{view=this.index.historySourceView(cold);}catch{return {complete:false,threadIds};}
+    }
+    try {
+      for(const id of cold) {
+        await new Promise(resolve=>setImmediate(resolve));
+        if(this.stopped)return {complete:false,threadIds:[]};
+        try {
+          const source=view?view.source(id):this.index.historyCacheSource(id);let activity=this.activityHistory.get(id);
+          if(source&&activity?.source!==source){activity={source,...(view?view.activity(id):this.index.historyActivity(id))};this.activityHistory.set(id,activity);}
+          if(source&&activity?.source===source&&activity.status==='active')threadIds.push(id);
+        }catch{/* 保存记录仅提供候选，缺失或失败仍是未知。 */}
+      }
+      return {complete:false,threadIds};
+    } finally {view?.close?.();}
   }
   /** 前台优先；纯内部条目有独立上限，满额后按有界节奏轮转。 */
   reserveEntry(deviceId) {
