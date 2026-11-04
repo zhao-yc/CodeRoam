@@ -1,22 +1,19 @@
-import { retainFileReportCacheHosts } from './file-report-cache.uts'
+import { clearFileReportCache, retainFileReportCacheHosts } from './file-report-cache.uts'
 import { watch } from 'vue'
 import { connection, Computer } from './bridge.uts'
-import { clearConversationCache, retainConversationCacheHosts, primeConversationCache } from './conversation-cache.uts'
 
 let installed = false
-// 应用级清理覆盖详情页未打开的情况；电脑离线仍保留缓存，授权移除才清理。
+// 文件差异仍按配对和授权清理，聊天正文统一由守护进程提供。
 export function startConversationCacheLifecycle() {
   if (installed) return
   installed = true
   watch((): string => connection.cacheNamespace, (next: string, previous: string) => {
-    if (previous.length > 0) clearConversationCache(previous)
-    primeConversationCache(next)
+    if (previous.length > 0 && previous != next) clearFileReportCache(previous)
   }, { flush: 'sync' })
   watch((): string => connection.connected.toString() + ':' + connection.cacheNamespace + ':' + connection.computers.map((computer: Computer): string => computer.id).join('|'), () => {
     if (!connection.connected || connection.cacheNamespace.length == 0) return
     // 授权全集由 welcome/hosts 提供，不依据截断的最近会话列表删除缓存。
     const namespace = connection.cacheNamespace
     retainFileReportCacheHosts(namespace, connection.computers.map((computer: Computer): string => computer.id))
-    retainConversationCacheHosts(namespace, connection.computers.map((computer: Computer): string => computer.id))
   })
 }

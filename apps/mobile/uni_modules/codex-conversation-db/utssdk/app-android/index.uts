@@ -23,3 +23,15 @@ export const writeConversationCacheRows: WriteConversationCacheRows = function (
     })
   })
 }
+
+// 旧正文清理由原生串行队列执行，成功后再移除应用层旧 Storage。
+export function purgeConversationCacheBodies(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const context = UTSAndroid.getAppContext()
+    if (context == null) { reject(new Error('无法打开本地聊天缓存')); return }
+    CodexConversationSQLite.purgeBodies(context, (_purged: boolean, succeeded: boolean) => {
+      if (succeeded) resolve()
+      else reject(new Error('无法清理旧聊天正文'))
+    })
+  })
+}

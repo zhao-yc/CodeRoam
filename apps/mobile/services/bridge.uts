@@ -1,7 +1,6 @@
 import { reactive } from 'vue'
 // 能力标志随完整及增量快照传递；旧连接不提供聊天引用入口。
 import { applyNativeDraftSnapshot } from './native-draft.uts'
-import { peekConversationCache } from './conversation-cache.uts'
 import type { QueuedMessage } from './message-queue.uts'
 import type { ThreadGoal } from './goals.uts'
 import type { PermissionState } from './permissions.uts'
@@ -45,8 +44,8 @@ export function threadIndicator(state: string, hasUnreadTurn: boolean | null = n
 
 type TextAppend = { id: string, text: string, status: string }
 export type ConversationMessageUpdate = { order: string[], upserts: ChatMessage[], appends: TextAppend[] }
-export type ConversationCacheTarget = { threadId: string, revision: string }
 type ConversationContentBase = { revision: string, messages: ChatMessage[] }
+type ConversationPreviewRequest = { id: string, hostId: string, threadId: string, generation: string, requestRevision: number, connectionGeneration: number, base: ConversationContentBase | null }
 
 // 只接受桥接生成的正文版本，旧历史保存时间不能作为增量基线。
 export function hasConversationContentRevision(revision: string): boolean { return /^content:[a-f0-9]{64}$/.test(revision) }
@@ -83,15 +82,15 @@ type ConnectionConfig = { relayUrl: string, token: string, hostId: string, cache
 type SessionTicket = { ticket: string }
 type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string }
 export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string, namespace?: string }
-type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, supportsConversationCache: boolean, contentRevision: string, subscriptionRevision: number, subscribedHostId: string, subscribedThreadId: string, configurationRevision: number, connectionAttempt: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
+type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, supportsConversationCache: boolean, supportsConversationPreview: boolean, contentRevision: string, subscriptionRevision: number, subscribedHostId: string, subscribedThreadId: string, configurationRevision: number, connectionAttempt: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, preview: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
 export type ThreadListUpdate = { hostId: string, threads: ThreadSummary[], revision: number }
 type LiveThreadListsState = { updates: ThreadListUpdate[] }
 export const liveThreadLists = reactive<LiveThreadListsState>({ updates: [] as ThreadListUpdate[] })
 
 export const connection = reactive<ConnectionState>({
-  cacheNamespace: '', supportsHostProfiles: false, supportsConversationCache: false, contentRevision: '', configurationRevision: 0, connectionAttempt: 0, desktopNavigationError: '', status: '尚未配置', connected: false, configured: false, error: '', conversationError: '', hostId: '',
-  computers: [] as Computer[], threads: [] as ThreadSummary[], threadsLoading: false, threadsLoadedHostId: '', snapshot: null as Conversation | null,
+  cacheNamespace: '', supportsHostProfiles: false, supportsConversationCache: false, supportsConversationPreview: false, contentRevision: '', configurationRevision: 0, connectionAttempt: 0, desktopNavigationError: '', status: '尚未配置', connected: false, configured: false, error: '', conversationError: '', hostId: '',
+  computers: [] as Computer[], threads: [] as ThreadSummary[], threadsLoading: false, threadsLoadedHostId: '', snapshot: null as Conversation | null, preview: null as Conversation | null,
   subscriptionRevision: 0, subscribedHostId: '', subscribedThreadId: '', activeThreadId: '', epoch: '', sequence: 0, pendingCommandId: '', pendingCommands: [] as PendingCommand[]
 })
 
@@ -102,7 +101,7 @@ class MobileBridge {
   pending = new Map<string, PendingReply>()
   foreground = true
   backgroundNotificationsEnabled = false
-  cacheEventHandler: ((event: UTSJSONObject) => void) | null = null
+  activePreview: ConversationPreviewRequest | null = null
 
   // 仅 Web 通知服务就绪并获得授权后允许后台保持传输；原生默认仍随前后台断开。
   shouldMaintainConnection(): boolean { return this.foreground || this.backgroundNotificationsEnabled }
@@ -168,7 +167,7 @@ class MobileBridge {
     connection.error = ''; connection.desktopNavigationError = ''
     connection.threads = [] as ThreadSummary[]
     connection.threadsLoadedHostId = ''
-    connection.snapshot = null; connection.contentRevision = ''
+    connection.snapshot = null; connection.preview = null; connection.contentRevision = ''
     connection.activeThreadId = ''
     connection.conversationError = ''
     this.clearLegacyCommands(parsed.hostId)
@@ -191,7 +190,7 @@ class MobileBridge {
     connection.computers = [] as Computer[]
     connection.threads = [] as ThreadSummary[]
     connection.threadsLoadedHostId = ''
-    connection.snapshot = null; connection.contentRevision = ''
+    connection.snapshot = null; connection.preview = null; connection.contentRevision = ''
     connection.activeThreadId = ''
     connection.epoch = ''
     connection.sequence = 0
@@ -234,7 +233,7 @@ class MobileBridge {
             try { uni.setStorageSync('codex-mobile-connection', JSON.stringify({ relayUrl: config.relayUrl, token: config.token, hostId: config.hostId, cacheNamespace: '' })) } catch (_) {}
             connection.cacheNamespace = ''; connection.computers = [] as Computer[]
             connection.threads = [] as ThreadSummary[]; liveThreadLists.updates = [] as ThreadListUpdate[]
-            connection.snapshot = null; connection.contentRevision = ''; connection.activeThreadId = ''
+            connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.activeThreadId = ''
             connection.status = '需要重新配对'; connection.error = '连接配置已失效，请从电脑重新导入'; return
           }
           failed('获取连接票据失败（HTTP ' + response.statusCode.toString() + '）'); return
@@ -363,8 +362,13 @@ class MobileBridge {
 
   receive(envelope: UTSJSONObject) {
     const type = envelope.getString('type') ?? ''
-    if (type == 'thread.cache.event') {
-      if (connection.supportsConversationCache && this.cacheEventHandler != null) this.cacheEventHandler!(envelope)
+    if (type == 'thread.removed') {
+      const hostId = envelope.getString('hostId') ?? ''
+      const source = connection.computers.find((computer: Computer): boolean => computer.id == hostId)
+      if (!connection.connected || source == null || !source.online || ((source.instanceGeneration ?? '').length > 0 && source.instanceGeneration != envelope.getString('generation'))) return
+      this.invalidateRemovedConversation(hostId, envelope.getString('threadId') ?? '')
+    } else if (type == 'thread.preview') {
+      this.receiveConversationPreview(envelope)
     } else if (type == 'thread.draft.changed') {
       const hostId = envelope.getString('hostId') ?? ''
       if (hostId != connection.hostId) return
@@ -387,6 +391,7 @@ class MobileBridge {
       const capabilities = envelope['capabilities'] as UTSJSONObject | null
       connection.supportsHostProfiles = capabilities?.getBoolean('hostProfiles') == true
       connection.supportsConversationCache = capabilities?.getBoolean('conversationCache') == true
+      connection.supportsConversationPreview = capabilities?.getBoolean('conversationPreview') == true
       connection.computers = JSON.parse<Computer[]>(JSON.stringify(envelope['hosts'])) ?? []
       liveThreadLists.updates = [] as ThreadListUpdate[]
       this.connecting = false; connection.connectionAttempt = 0; this.attempts = 0; connection.connected = true; connection.status = '已连接'; connection.error = ''
@@ -403,7 +408,7 @@ class MobileBridge {
       const replaced = previousGeneration.length > 0 && currentGeneration.length > 0 && previousGeneration != currentGeneration
       if (!online || replaced) this.clearConversationSubscription()
       // 实例换代立即废弃旧快照；只恢复只读订阅，不重放导航和写操作。
-      if (replaced) { this.openingRevision++; connection.snapshot = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0; connection.desktopNavigationError = ''; this.syncingThread = '' }
+      if (replaced || !connection.computers.some((computer: Computer): boolean => computer.id == connection.hostId)) { this.openingRevision++; connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0; connection.desktopNavigationError = ''; this.syncingThread = '' }
       if ((!wasOnline || replaced) && online) { liveThreadLists.updates = liveThreadLists.updates.filter((item: ThreadListUpdate): boolean => item.hostId != connection.hostId); if (connection.activeThreadId.length > 0) this.watch(connection.activeThreadId) }
     } else if (type == 'response') {
       const id = envelope.getString('requestId') ?? ''
@@ -418,7 +423,7 @@ class MobileBridge {
           liveThreadLists.updates = liveThreadLists.updates.filter((update: ThreadListUpdate): boolean => update.hostId != entry.hostId)
           if (connection.hostId == entry.hostId) {
             this.clearConversationSubscription()
-            connection.threads = [] as ThreadSummary[]; connection.snapshot = null; connection.contentRevision = ''
+            connection.threads = [] as ThreadSummary[]; connection.snapshot = null; connection.preview = null; connection.contentRevision = ''
           }
         }
         if (entry.write && !((entry.method == 'thread.delete' || entry.method == 'turn.retry' || (entry.method ?? '').startsWith('thread.draft.')) && error.getBoolean('outcomeUnknown') == true)) this.clearCommand(id, entry.hostId)
@@ -437,7 +442,7 @@ class MobileBridge {
     } else if (type == 'event') {
       if (envelope.getString('hostId') != connection.hostId || envelope.getString('threadId') != connection.activeThreadId) return
       const source = connection.computers.find((computer: Computer): boolean => computer.id == connection.hostId)
-      if ((source?.instanceGeneration ?? '').length > 0 && source?.instanceGeneration != envelope.getString('generation')) return
+      if (source == null || !source.online || !connection.connected || ((source.instanceGeneration ?? '').length > 0 && source.instanceGeneration != envelope.getString('generation'))) return
       const epoch = envelope.getString('epoch') ?? ''
       const sequence = envelope.getNumber('seq') ?? 0
       const contentRevision = envelope.getString('contentRevision') ?? ''
@@ -446,7 +451,7 @@ class MobileBridge {
       if (raw != null) {
         const snapshot = JSON.parse<Conversation>(JSON.stringify(raw))
         if (snapshot == null || snapshot.threadId != connection.activeThreadId) return
-        connection.contentRevision = contentRevision; connection.snapshot = snapshot; connection.epoch = epoch; connection.sequence = sequence
+        connection.contentRevision = contentRevision; connection.snapshot = snapshot; connection.preview = null; connection.epoch = epoch; connection.sequence = sequence
       }
       else if (envelope.getString('kind') == 'delta') {
         if (epoch != connection.epoch || envelope.getNumber('baseSeq') != connection.sequence || connection.snapshot == null) { this.recoverConversation(); return }
@@ -459,8 +464,7 @@ class MobileBridge {
         connection.sequence = sequence
       } else return
       // 新中转下回执确认订阅，提前到达的正文事件不能开启写能力。
-      if (!connection.supportsConversationCache) this.confirmConversationRead()
-      else { this.conversationUpdateRevision++; connection.conversationError = '' }
+      this.conversationUpdateRevision++; connection.conversationError = ''
     }
   }
 
@@ -493,25 +497,6 @@ class MobileBridge {
   readThreadMentions(hostId: string, params: UTSJSONObject): Promise<UTSJSONObject> {
     if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
     return this.requestForComputer(hostId, 'threads.mentions', params, false)
-  }
-
-  // 静默预加载只读指定电脑，不改变当前电脑、聊天、订阅或已读状态。
-  prefetchConversation(hostId: string, threadId: string): Promise<UTSJSONObject> {
-    if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
-    return this.requestForComputer(hostId, 'thread.history', { threadId, view: 'prefetch' }, false)
-  }
-
-  // 后台正文使用独立的只读订阅，不修改当前执行电脑。
-  watchConversationCache(hostId: string, subscriptionId: string, threads: ConversationCacheTarget[], verify: string[]): Promise<UTSJSONObject> {
-    if (!connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或已取消授权')) })
-    const params: UTSJSONObject = { subscriptionId, threads }
-    if (verify.length > 0) params['verify'] = verify
-    return this.requestForComputer(hostId, 'threads.cache.watch', params, false)
-  }
-
-  unwatchConversationCache(hostId: string, subscriptionId: string) {
-    if (!connection.connected || !connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return
-    this.requestForComputer(hostId, 'threads.cache.unwatch', { subscriptionId }, false).then((_: UTSJSONObject) => {}, (_: Error) => {})
   }
 
   // 应用级任务先持久化原编号，再发送一次删除；请求参数仍只有 threadId。
@@ -606,7 +591,7 @@ class MobileBridge {
     const previous = connection.activeThreadId
     if (previous.length > 0 && connection.connected) this.request('thread.unwatch', { threadId: previous }).then((_: UTSJSONObject) => {}, (_: Error) => {})
     this.openingRevision++; connection.desktopNavigationError = ''
-    connection.snapshot = null; connection.contentRevision = ''; connection.activeThreadId = ''; connection.conversationError = ''; connection.epoch = ''; connection.sequence = 0
+    connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.activeThreadId = ''; connection.conversationError = ''; connection.epoch = ''; connection.sequence = 0
     this.syncingThread = ''; this.listingRevision++; this.listingHost = ''
     connection.hostId = id; connection.threads = [] as ThreadSummary[]; connection.threadsLoadedHostId = ''; connection.error = ''
     this.clearLegacyCommands(id)
@@ -619,27 +604,31 @@ class MobileBridge {
     const pendingId = this.pendingCommand(connection.hostId, threadId)
     const hostId = connection.hostId; const revision = ++this.openingRevision
     const previous = connection.activeThreadId
-    if (previous != threadId || connection.supportsConversationCache) this.clearConversationSubscription()
+    this.clearConversationSubscription()
     const subscriptionRequest = ++this.subscriptionRequestRevision
     if (previous.length > 0 && previous != threadId) this.request('thread.unwatch', { threadId: previous }).then((_: UTSJSONObject) => {}, (_: Error) => {})
     connection.activeThreadId = threadId
     this.syncPendingCommand()
-    if (previous != threadId) { connection.snapshot = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0 }
+    // 主动打开始终从电脑建立正文，不复用上次页面的内容。
+    connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0
     connection.desktopNavigationError = ''; connection.conversationError = ''; this.syncingThread = threadId
     // 提交中的会话仍可读取，请求结束前不自动切换电脑或重放导航。
     const params: UTSJSONObject = { threadId }
     if (pendingId.length == 0) params['activate'] = true
     const base = this.conversationContentBase(hostId, threadId)
     if (base != null) params['contentRevision'] = base.revision
+    const preview = this.beginConversationPreview(hostId, threadId, params, base)
     const opened = this.request('thread.watch', params).then(async (result: UTSJSONObject): Promise<UTSJSONObject> => {
       if (revision != this.openingRevision || subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) throw new Error('聊天已切换，已忽略旧的电脑导航响应')
       if (pendingId.length == 0 && result['desktopActivated'] != true) throw new Error('请更新电脑连接服务后使用同步切换聊天')
-      if (this.applySnapshot(result, hostId, threadId, base) === false) {
+      this.finishConversationPreview(preview)
+      if (this.applySnapshot(result, hostId, threadId, preview?.base ?? base) === false) {
         this.syncingThread = ''; await this.watch(threadId, true)
       }
       return result
     })
     return opened.then((result: UTSJSONObject): UTSJSONObject => { if (revision == this.openingRevision && subscriptionRequest == this.subscriptionRequestRevision && connection.hostId == hostId) this.syncingThread = ''; return result }, (reason: Error): UTSJSONObject => {
+      this.finishConversationPreview(preview)
       if (revision == this.openingRevision && subscriptionRequest == this.subscriptionRequestRevision && connection.hostId == hostId && connection.activeThreadId == threadId) { this.syncingThread = ''; connection.desktopNavigationError = reason.message; this.watch(threadId) }
       throw reason
     })
@@ -650,7 +639,7 @@ class MobileBridge {
     this.clearConversationSubscription()
     const previous = connection.activeThreadId
     if (previous.length > 0 && previous != threadId && connection.connected) this.request('thread.unwatch', { threadId: previous }).then((_: UTSJSONObject) => {}, (_: Error) => {})
-    connection.activeThreadId = threadId; connection.snapshot = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0
+    connection.activeThreadId = threadId; connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0
     this.syncPendingCommand()
     this.syncingThread = ''
     return this.activate(threadId)
@@ -663,26 +652,62 @@ class MobileBridge {
     const base = this.conversationContentBase(hostId, threadId)
     const params: UTSJSONObject = { threadId, activate: true }
     if (base != null) params['contentRevision'] = base.revision
+    const preview = this.beginConversationPreview(hostId, threadId, params, base)
     return this.request('thread.watch', params).then(async (result: UTSJSONObject): Promise<UTSJSONObject> => {
       // 保持既有继续接口的结算方式；过期回执不应用，也不能确认图片订阅。
       if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return result
       const snapshot = result['snapshot'] as UTSJSONObject | null
       if (snapshot == null || snapshot['readOnly'] == true) throw new Error('电脑连接服务尚未完成加载，请稍后重试或更新电脑连接服务')
-      if (this.applySnapshot(result, hostId, threadId, base) === false) { await this.watch(threadId, true) }
+      this.finishConversationPreview(preview)
+      if (this.applySnapshot(result, hostId, threadId, preview?.base ?? base) === false) { await this.watch(threadId, true) }
       return result
-    })
+    }).finally(() => { this.finishConversationPreview(preview) })
   }
 
-  cancelOpen(threadId: string) { if (connection.activeThreadId == threadId) { this.clearConversationSubscription(); this.openingRevision++; this.syncingThread = ''; connection.activeThreadId = ''; connection.conversationError = ''; this.syncPendingCommand(); connection.snapshot = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0; this.request('thread.unwatch', { threadId }).then((_: UTSJSONObject) => {}, (_: Error) => {}) } }
+  cancelOpen(threadId: string) { if (connection.activeThreadId == threadId) { this.clearConversationSubscription(); this.openingRevision++; this.syncingThread = ''; connection.activeThreadId = ''; connection.conversationError = ''; this.syncPendingCommand(); connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0; this.request('thread.unwatch', { threadId }).then((_: UTSJSONObject) => {}, (_: Error) => {}) } }
 
-  // 捕获请求发送时的基线，之后发生的推送或缓存替换不能改变它。
+  // 只有当前页面的完整实时正文可以续接，重新打开不读取手机磁盘或跨聊天副本。
   conversationContentBase(hostId: string, threadId: string): ConversationContentBase | null {
     if (!connection.supportsConversationCache) return null
     const live = connection.snapshot
     if (hostId == connection.hostId && live?.threadId == threadId && hasConversationContentRevision(connection.contentRevision)) return { revision: connection.contentRevision, messages: live!.messages }
-    const cached = peekConversationCache(connection.cacheNamespace, hostId, threadId)
-    const revision = cached?.contentRevision ?? ''
-    return cached != null && hasConversationContentRevision(revision) ? { revision, messages: cached.messages } : null
+    return null
+  }
+
+  // 首屏与实时确认属于同一次请求，预览只在请求发送前登记的身份范围内生效。
+  beginConversationPreview(hostId: string, threadId: string, params: UTSJSONObject, base: ConversationContentBase | null): ConversationPreviewRequest | null {
+    this.activePreview = null
+    if (!connection.supportsConversationPreview || base != null) return null
+    const preview = {
+      id: 'preview-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2),
+      hostId, threadId,
+      generation: connection.computers.find((computer: Computer): boolean => computer.id == hostId)?.instanceGeneration ?? '',
+      requestRevision: this.subscriptionRequestRevision, connectionGeneration: this.generation,
+      base: null
+    } as ConversationPreviewRequest
+    params['previewId'] = preview.id
+    this.activePreview = preview
+    return preview
+  }
+
+  finishConversationPreview(preview: ConversationPreviewRequest | null) {
+    if (this.activePreview === preview) this.activePreview = null
+  }
+
+  // 来自守护进程的首屏只含展示数据，实时操作和订阅游标由最终回执确认。
+  receiveConversationPreview(event: UTSJSONObject) {
+    const preview = this.activePreview
+    if (preview == null || !connection.connected || preview.connectionGeneration != this.generation || preview.requestRevision != this.subscriptionRequestRevision || event.getString('previewId') != preview.id || event.getString('hostId') != preview.hostId || event.getString('threadId') != preview.threadId || connection.hostId != preview.hostId || connection.activeThreadId != preview.threadId) return
+    const computer = connection.computers.find((item: Computer): boolean => item.id == preview.hostId)
+    if (computer == null || !computer.online || (computer.instanceGeneration ?? '') != preview.generation || (preview.generation.length > 0 && event.getString('generation') != preview.generation)) return
+    const revision = event.getString('contentRevision') ?? ''
+    const source = JSON.parse<Conversation>(JSON.stringify(event['snapshot']))
+    if (!hasConversationContentRevision(revision) || source == null || source.threadId != preview.threadId || typeof source.title != 'string' || typeof source.cwd != 'string' || !Array.isArray(source.messages) || !Array.isArray(source.turns)) return
+    if (source.messages.some((message: ChatMessage): boolean => message == null || typeof message.id != 'string' || typeof message.text != 'string' || typeof message.role != 'string' || typeof message.turnId != 'string' || typeof message.status != 'string')) return
+    if (new Set(source.messages.map((message: ChatMessage): string => message.id)).size != source.messages.length) return
+    preview.base = { revision, messages: source.messages } as ConversationContentBase
+    if (connection.snapshot != null) return
+    connection.preview = { threadId: source.threadId, title: source.title, cwd: source.cwd, messages: source.messages, turns: source.turns, latestTurn: source.latestTurn, readOnly: true, status: 'unknown', activeTurnId: '', approvals: [] as Approval[], questionGroups: [] as QuestionGroup[], updatedAt: 0 } as Conversation
   }
 
   // 订阅和主动加载共用游标、电脑及会话归属检查，忽略迟到的旧响应。
@@ -707,6 +732,7 @@ class MobileBridge {
     if (epoch != connection.epoch || seq >= connection.sequence || connection.snapshot?.threadId != threadId) {
       connection.contentRevision = contentRevision
       connection.snapshot = snapshot
+      connection.preview = null
       connection.epoch = epoch; connection.sequence = seq
     }
     this.confirmConversationRead()
@@ -715,7 +741,7 @@ class MobileBridge {
     return true
   }
 
-  // 当前会话的新内容或有效订阅回执证明读取已恢复；写操作结果仍需单独核对。
+  // 当前请求的有效实时回执确认订阅，首屏和提前到达的事件保持操作锁。
   confirmConversationRead() {
     this.conversationUpdateRevision++
     connection.subscribedHostId = connection.hostId
@@ -723,15 +749,15 @@ class MobileBridge {
     connection.conversationError = ''
   }
 
-  // Socket 已连接不代表聊天已订阅；缓存和旧快照不能恢复这个瞬时状态。
-  clearConversationSubscription() { this.subscriptionRequestRevision++; connection.subscribedHostId = ''; connection.subscribedThreadId = '' }
+  // 连接就绪后仍需确认当前聊天的实时订阅。
+  clearConversationSubscription() { this.subscriptionRequestRevision++; this.activePreview = null; connection.subscribedHostId = ''; connection.subscribedThreadId = '' }
 
-  // 电脑确认移除后撤销实时和在途订阅，旧详情不能再把正文写回缓存。
+  // 电脑确认移除后清除当前页面正文，并废弃实时和在途订阅。
   invalidateRemovedConversation(hostId: string, threadId: string) {
     if (connection.hostId != hostId || connection.activeThreadId != threadId) return
     this.openingRevision++; this.syncingThread = ''
     this.clearConversationSubscription()
-    connection.activeThreadId = ''; connection.snapshot = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0
+    connection.activeThreadId = ''; connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0
     connection.conversationError = '聊天已在电脑端归档或删除'
     connection.desktopNavigationError = ''
     this.syncPendingCommand()
@@ -742,8 +768,8 @@ class MobileBridge {
   recoverConversation() {
     const threadId = connection.activeThreadId
     if (threadId.length == 0 || this.syncingThread == threadId) return
-    if (connection.supportsConversationCache) this.clearConversationSubscription()
-    this.watch(threadId, connection.supportsConversationCache)
+    this.clearConversationSubscription()
+    this.watch(threadId, true)
   }
 
   async watch(threadId: string, forceFull: boolean = false): Promise<void> {
@@ -756,16 +782,20 @@ class MobileBridge {
     if (previous.length > 0 && previous != threadId && connection.connected) this.request('thread.unwatch', { threadId: previous }).then((_: UTSJSONObject) => {}, (_: Error) => {})
     connection.activeThreadId = threadId
     this.syncPendingCommand()
-    if (previous != threadId) { connection.snapshot = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0 }
+    if (previous != threadId) { connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0 }
     // 会话读取错误不污染列表页的连接与列表错误。
     connection.conversationError = ''
     const updateRevision = this.conversationUpdateRevision
     const base = forceFull ? null : this.conversationContentBase(hostId, threadId)
     const params: UTSJSONObject = { threadId, epoch: connection.epoch, afterSeq: connection.sequence }
     if (base != null) params['contentRevision'] = base.revision
+    // 缺帧修复必须取得完整窗口，不再次依赖可能丢失的首屏事件。
+    const preview = forceFull ? null : this.beginConversationPreview(hostId, threadId, params, base)
+    if (forceFull) this.activePreview = null
     let result: UTSJSONObject
     try { result = await this.request('thread.watch', params) }
     catch (reason) {
+      this.finishConversationPreview(preview)
       if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return
       if (this.syncingThread == threadId) this.syncingThread = ''
       // 等待回执期间已收到当前内容时，迟到的超时不能重新显示旧读取错误。
@@ -775,7 +805,8 @@ class MobileBridge {
     // 不同电脑可能出现同号会话，旧响应不能覆盖当前订阅或解除新同步锁。
     if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return
     if (this.syncingThread == threadId) this.syncingThread = ''
-    if (this.applySnapshot(result, hostId, threadId, base) === false) {
+    this.finishConversationPreview(preview)
+    if (this.applySnapshot(result, hostId, threadId, preview?.base ?? base) === false) {
       if (!forceFull) await this.watch(threadId, true)
       else connection.conversationError = '聊天正文同步失败，请重试'
     }

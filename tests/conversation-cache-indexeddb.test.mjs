@@ -20,9 +20,9 @@ function fixture() {
     },
     transaction: (names, mode) => {
       calls.push(['开启事务', names, mode]);
-      const marker = {}, entries = {}, cursor = {}, selected = [];
+      const marker = {}, entries = {}, cursor = {}, fullCursor = {}, selected = [];
       const transaction = {
-        marker, entries, cursor, selected,
+        marker, entries, cursor, fullCursor, selected,
         objectStore: name => ({
           get: key => {
             if (name === 'revisions') { calls.push(['读取版本', key]); return marker; }
@@ -31,6 +31,7 @@ function fixture() {
           getAll: range => { calls.push(['读取范围', range]); return entries; },
           put: value => { calls.push(['写入', name, value]); },
           delete: key => { calls.push(['删除', name, key]); },
+          openCursor: () => { calls.push(['扫描全部记录', name]); return fullCursor; },
           index: index => ({
             getAll: key => { calls.push(['读取索引', index, key]); return entries; },
             openCursor: key => { calls.push(['扫描索引', index, key]); return cursor; },
@@ -46,7 +47,7 @@ function fixture() {
     const request = { result: db }; opens.push(request); return request;
   } };
   const context = vm.createContext({ window: { indexedDB }, IDBKeyRange: { bound: (...args) => args } });
-  vm.runInContext(source + ';globalThis.subject={readConversationCacheRows,writeConversationCacheRows};', context);
+  vm.runInContext(source + ';globalThis.subject={readConversationCacheRows,writeConversationCacheRows,purgeConversationCacheBodies};', context);
   return { db, calls, opens, transactions, ...context.subject };
 }
 
@@ -55,7 +56,7 @@ const recorded = calls => JSON.parse(JSON.stringify(calls));
 test('按命名空间在一个只读事务内恢复行和版本，提交前不返回结果', async () => {
   const f = fixture(); let complete = false;
   const promise = f.readConversationCacheRows('配对一').then(value => { complete = true; return value; });
-  f.opens[0].onupgradeneeded(); f.opens[0].onsuccess(); await tick();
+  f.opens[0].onupgradeneeded({ oldVersion: 0 }); f.opens[0].onsuccess(); await tick();
   const transaction = f.transactions[0];
   transaction.marker.result = { revision: '持久版本' };
   transaction.entries.result = [{ namespace: '配对一', key: '会话', value: '合成正文' }];
@@ -154,4 +155,48 @@ test('连接被占用时释放迟到的连接，后续可以重新打开', async
   assert.equal(f.opens.length, 2); f.opens[1].onsuccess(); await tick();
   f.transactions[0].entries.result = []; f.transactions[0].oncomplete();
   assert.deepEqual(JSON.parse(await retry), { revision: '', rows: [] });
+});
+
+test('已有数据库升级只变更版本，不重新创建列表表结构', async () => {
+  const f = fixture();
+  const reading = f.readConversationCacheRows('thread-list-v1:配对一');
+  assert.deepEqual(f.calls[0], ['打开数据库', 'codex-mobile-conversation-cache', 2]);
+  f.opens[0].onupgradeneeded({ oldVersion: 1 }); f.opens[0].onsuccess(); await tick();
+  assert.equal(f.calls.some(call => call[0] === '建表'), false);
+  f.transactions[0].entries.result = []; f.transactions[0].oncomplete();
+  assert.deepEqual(JSON.parse(await reading), { revision: '', rows: [] });
+});
+
+test('升级清理只删除旧正文行，列表摘要与其他记录保留，提交后才确认完成', async () => {
+  const f = fixture(); let complete = false;
+  const promise = f.purgeConversationCacheBodies().then(() => { complete = true; });
+  f.opens[0].onsuccess(); await tick();
+  const transaction = f.transactions[0];
+  assert.deepEqual(recorded(f.calls).slice(1), [['开启事务', 'rows', 'readwrite'], ['扫描全部记录', 'rows']]);
+  const removed = [];
+  const candidates = [
+    { namespace: '配对一', key: 'h:合成聊天' },
+    { namespace: '旧配对', key: 'm:合成消息' },
+    { namespace: 'thread-list-v1:配对一', key: 'thread:合成聊天' },
+    { namespace: 'thread-list-v1:配对二', key: 'h:保留记录' },
+    { namespace: '其他命名空间', key: 'setting:保留记录' },
+  ];
+  for (const row of candidates) {
+    transaction.fullCursor.result = { value: row, delete: () => removed.push(row), continue: () => {} };
+    transaction.fullCursor.onsuccess();
+  }
+  transaction.fullCursor.result = null; transaction.fullCursor.onsuccess();
+  assert.equal(complete, false);
+  assert.deepEqual(removed, candidates.slice(0, 2));
+  transaction.oncomplete(); await promise;
+  assert.equal(complete, true);
+});
+
+test('旧正文清理事务失败时拒绝确认，下一次可以重新执行', async () => {
+  const f = fixture();
+  const first = f.purgeConversationCacheBodies();
+  f.opens[0].onsuccess(); await tick();
+  f.transactions[0].onabort(); await assert.rejects(first, /无法清理旧聊天正文/);
+  const retry = f.purgeConversationCacheBodies(); await tick();
+  f.transactions[1].oncomplete(); await retry;
 });

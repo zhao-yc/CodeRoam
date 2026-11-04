@@ -41,6 +41,26 @@ public final class CodexConversationSQLite {
         }
     }
 
+    /** 历史正文按已知记录类型清理，共用数据库的列表摘要保持完整。 */
+    static func purgeBodies(completion: @escaping (Bool) -> Void) {
+        queue.async {
+            let succeeded: Bool
+            do {
+                let db = try database()
+                try execute(db, "BEGIN IMMEDIATE")
+                var committed = false
+                defer { if !committed { _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil) } }
+                try execute(db, "DELETE FROM cache_rows WHERE substr(namespace, 1, 15) <> 'thread-list-v1:' AND substr(row_key, 1, 2) IN ('h:', 'm:')")
+                try execute(db, "COMMIT")
+                committed = true
+                succeeded = true
+            } catch {
+                succeeded = false
+            }
+            DispatchQueue.main.async { completion(succeeded) }
+        }
+    }
+
     /** 在私有 Application Support 下建立持久目录，并排除系统备份。 */
     private static func database() throws -> OpaquePointer {
         if let connection = connection { return connection }

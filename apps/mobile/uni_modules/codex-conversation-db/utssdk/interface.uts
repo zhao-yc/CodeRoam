@@ -3,3 +3,6 @@ export type ReadConversationCacheRows = (namespace: string, selector?: string) =
 
 // 仅在当前版本匹配时原子应用变更，版本冲突返回 false，存储失败拒绝 Promise。
 export type WriteConversationCacheRows = (namespace: string, expectedRevision: string, nextRevision: string, changes: string) => Promise<boolean>
+
+// 清理已停用的聊天正文行，保留列表摘要及同库中的其他记录。
+export type PurgeConversationCacheBodies = () => Promise<void>

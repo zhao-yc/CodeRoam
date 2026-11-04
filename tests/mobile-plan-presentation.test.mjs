@@ -5,17 +5,16 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import { normalizeConversation } from '../apps/bridge/conversation.mjs';
-import { conversationMemoryDatabase } from './helpers/conversation-cache-fixture.mjs';
 
 /** 执行实际 UTS 解析与页面选择方法，避免预览裁切影响详情原文。 */
 function presentation() {
   const storage = new Map();
-  const context = componentContext({...conversationMemoryDatabase().adapter,reactive:value=>value,setTimeout:()=>1,clearTimeout:()=>{},uni:{getStorageSync:key=>storage.get(key),setStorageSync:(key,value)=>storage.set(key,value)}});
-  for (const file of ['annotations', 'markdown', 'plan-presentation', 'message-attachments', 'message-presentations', 'executions', 'history', 'conversation-cache-rows', 'conversation-cache']) {
+  const context = componentContext({reactive:value=>value,setTimeout:()=>1,clearTimeout:()=>{},uni:{getStorageSync:key=>storage.get(key),setStorageSync:(key,value)=>storage.set(key,value)}});
+  for (const file of ['annotations', 'markdown', 'plan-presentation', 'message-attachments', 'message-presentations', 'executions', 'history']) {
     const source = fs.readFileSync('apps/mobile/services/' + file + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
     vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }), context);
   }
-  vm.runInContext('globalThis.api = { planPresentation, executionTimeline, reportTimeline, presentConversationMessages, mergeHistoryMessages, saveConversationCache, readConversationCache }', context);
+  vm.runInContext('globalThis.api = { planPresentation, executionTimeline, reportTimeline, presentConversationMessages, mergeHistoryMessages }', context);
   return context.api;
 }
 
@@ -38,7 +37,7 @@ test('摘要先清除完整文件引用再裁切，保留代码和转义的引�
   assert.equal(f.planPresentation('引用前 :codex-file-citation{path="示例.xlsx"').excerpt, '引用前 :codex-file-citation{path="示例.xlsx"');
 });
 
-test('新旧桥接的执行确认在快照、分页和缓存中简化，保留同步正文', () => {
+test('新旧桥接的执行确认在实时快照和分页中简化，保留同步正文', () => {
   const f = presentation();
   const body = '# 合成方案\n\n' + '测试步骤'.repeat(2600);
   const prefix = 'PLEASE IMPLEMENT THIS PLAN:\n';
@@ -49,14 +48,9 @@ test('新旧桥接的执行确认在快照、分页和缓存中简化，保留�
   assert.equal(live.messages[0].kind, 'planImplementationRequest');
   assert.equal(live.messages[0].text, body.slice(-10000));
   const old = {id:'old',role:'user',kind:'userMessage',text:'PLEASE IMPLEMENT THIS PLAN:\r\n# 历史方案',turnId:'old-turn',status:'completed'};
-  assert.ok(f.saveConversationCache('scope', 'host', live, {messages:[old],turns:[]}));
-  const cache = f.readConversationCache('scope', 'host', 'thread');
   const expectShort = messages => assert.deepEqual(Array.from(f.presentConversationMessages(messages), item=>item.text), Array.from(messages, ()=>'是的，执行此计划'));
   expectShort(live.messages);
   expectShort(f.mergeHistoryMessages([old], live.messages));
-  expectShort(f.mergeHistoryMessages(cache.olderMessages, cache.messages));
-  assert.equal(cache.olderMessages[0].text, old.text);
-  assert.equal(cache.messages[0].text, live.messages[0].text);
 });
 
 test('普通消息、修改意见、代码和携带图片的记录保持原文', () => {

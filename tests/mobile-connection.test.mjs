@@ -119,7 +119,7 @@ test('未收到 welcome 且没有 close 回调时握手超时仍可恢复，错�
 /** 使用可回放响应的 Socket，验证发送边界和切换电脑后的响应归属。 */
 function connectedFixture(){
   const f=mobileFixture(),sent=[];
-  f.connection.connected=true;f.connection.hostId='pc';f.connection.activeThreadId='thread';
+  f.connection.connected=true;f.connection.hostId='pc';f.connection.activeThreadId='thread';f.connection.computers=[{id:'pc',online:true}];
   f.bridge.socket={send(options){sent.push(JSON.parse(options.data));},close(){}};
   return {...f,sent};
 }
@@ -164,21 +164,21 @@ test('主动打开应用快照后发起新读取，旧成功结算不能清除�
   assert.equal(f.bridge.syncingThread,'thread');assert.equal(f.sent.filter(request=>request.method==='thread.watch').length,2);f.bridge.disconnect();
 });
 
-test('有效实时事件也能确认图片订阅，取消、电脑离线及实例换代立即撤销',()=>{
+test('提前实时事件只更新正文，图片订阅仍等回执，取消、离线和换代立即撤销',()=>{
   const f=connectedFixture();f.connection.computers=[{id:'pc',online:true,instanceGeneration:'g1'}];
   f.bridge.receive(utsObject({type:'event',hostId:'pc',threadId:'thread',generation:'g1',epoch:'current',seq:1,snapshot:{threadId:'thread',messages:[]}}));
-  assert.equal(f.connection.subscribedThreadId,'thread');
+  assert.equal(f.connection.subscribedThreadId,'');
   f.bridge.receive(utsObject({type:'hosts',hosts:[{id:'pc',online:false,instanceGeneration:'g1'}]}));assert.equal(f.connection.subscribedThreadId,'');
   f.connection.computers=[{id:'pc',online:true,instanceGeneration:'g1'}];f.bridge.confirmConversationRead();
   f.bridge.receive(utsObject({type:'hosts',hosts:[{id:'pc',online:true,instanceGeneration:'g2'}]}));assert.equal(f.connection.subscribedThreadId,'');
   f.bridge.confirmConversationRead();f.bridge.cancelOpen('thread');assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.subscribedHostId,'');
 });
 
-test('新版详情从请求时的缓存重建正文，提前实时帧只更新内容且不被旧回执覆盖',async()=>{
+test('当前页面重连从请求时的完整基线续接，提前实时帧不被旧回执覆盖',async()=>{
   const f=connectedFixture(),first='content:'+'a'.repeat(64),next='content:'+'b'.repeat(64);
   const messages=[{id:'m',text:'旧',role:'assistant',turnId:'turn',status:'running'}];
   Object.assign(f.connection,{supportsConversationCache:true,computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',messages},contentRevision:first,epoch:'live',sequence:1});
-  const opening=f.bridge.openThread('thread');assert.equal(f.sent[0].params.contentRevision,first);
+  const opening=f.bridge.watch('thread');assert.equal(f.sent[0].params.contentRevision,first);
   f.bridge.receive(utsObject({type:'event',hostId:'pc',threadId:'thread',epoch:'live',seq:3,contentRevision:next,snapshot:{threadId:'thread',messages:[{...messages[0],text:'较新正文'}]}}));
   assert.equal(f.connection.subscribedThreadId,'');
   respond(f,f.sent[0],{snapshot:{threadId:'thread',title:'较早状态'},desktopActivated:true,epoch:'live',seq:2,contentBaseRevision:first,contentRevision:next,contentUpdate:{order:['m'],upserts:[],appends:[{id:'m',text:'分片',status:'running'}]}});
@@ -193,6 +193,86 @@ test('新版详情遇到错误基线只补一次完整订阅，不重复桌面�
   await Promise.resolve();assert.equal(f.sent.length,2);assert.equal(f.sent[1].params.activate,undefined);assert.equal(f.sent[1].params.contentRevision,undefined);assert.equal(f.connection.subscribedThreadId,'');
   respond(f,f.sent[1],{snapshot:{threadId:'thread',messages:[]},epoch:'live',seq:2,contentRevision:next});await opening;
   assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(f.connection.contentRevision,next);
+});
+
+/** 合成守护进程首屏，不含可执行的审批和图片原件。 */
+function previewSnapshot(threadId='thread',text='当前正文'){
+  return {threadId,title:'合成聊天',cwd:'/synthetic/project',messages:[{id:'m',text,role:'assistant',turnId:'turn',status:'completed'}],turns:[]};
+}
+
+function sendPreview(f,request,snapshot=previewSnapshot(),extra={}){
+  const revision='content:'+'a'.repeat(64);
+  f.bridge.receive(utsObject({type:'thread.preview',hostId:'pc',threadId:request.params.threadId,previewId:request.params.previewId,contentRevision:revision,snapshot,...extra}));
+  return revision;
+}
+
+test('每次主动打开重新获取正文，守护进程首屏不解除实时操作锁，同版确认只回元数据',async()=>{
+  const f=connectedFixture();
+  Object.assign(f.connection,{supportsConversationCache:true,supportsConversationPreview:true,snapshot:previewSnapshot('thread','上次页面'),contentRevision:'content:'+'b'.repeat(64),subscribedHostId:'pc',subscribedThreadId:'thread'});
+  const opening=f.bridge.openThread('thread'),request=f.sent[0];
+  assert.equal(request.params.contentRevision,undefined);
+  assert.equal(typeof request.params.previewId,'string');
+  assert.equal(f.connection.snapshot,null);assert.equal(f.connection.preview,null);
+  const revision=sendPreview(f,request,{...previewSnapshot(),readOnly:false,status:'active',activeTurnId:'unsafe',approvals:[{id:'unsafe'}],supportsImages:true});
+  assert.equal(f.connection.preview.messages[0].text,'当前正文');
+  assert.equal(f.connection.preview.readOnly,true);assert.equal(f.connection.preview.activeTurnId,'');
+  assert.equal(f.connection.preview.approvals.length,0);assert.equal(f.connection.preview.supportsImages,undefined);
+  assert.equal(f.connection.subscribedThreadId,'');assert.equal(f.connection.snapshot,null);
+  const {messages,...metadata}=previewSnapshot();
+  respond(f,request,{snapshot:{...metadata,readOnly:false,status:'idle',activeTurnId:'',approvals:[],questionGroups:[]},contentBaseRevision:revision,contentRevision:revision,epoch:'current',seq:1,desktopActivated:true});
+  await opening;
+  assert.equal(f.connection.preview,null);assert.equal(f.connection.snapshot.messages[0].text,'当前正文');
+  assert.equal(f.connection.subscribedThreadId,'thread');
+  f.bridge.cancelOpen('thread');
+  assert.equal(f.connection.snapshot,null);assert.equal(f.connection.preview,null);
+});
+
+test('首屏属于当前请求、电脑及实例，旧首屏和撤权后的帧不能恢复正文',async()=>{
+  const f=connectedFixture();f.connection.supportsConversationPreview=true;f.connection.supportsConversationCache=true;
+  f.connection.computers=[{id:'pc',online:true,instanceGeneration:'one'}];
+  const first=f.bridge.openThread('A'),old=assert.rejects(first,/已切换/);
+  const a=f.sent.find(request=>request.method==='thread.watch');
+  const next=f.bridge.openThread('B'),b=f.sent.filter(request=>request.method==='thread.watch').at(-1);
+  sendPreview(f,a,previewSnapshot('A'),{generation:'one'});
+  sendPreview(f,b,previewSnapshot('B'),{generation:'other'});
+  assert.equal(f.connection.preview,null);
+  const revision=sendPreview(f,b,previewSnapshot('B'),{generation:'one'});
+  assert.equal(f.connection.preview.threadId,'B');
+  respond(f,a,{snapshot:previewSnapshot('A'),desktopActivated:true});await old;
+  assert.equal(f.bridge.activePreview.id,b.params.previewId);
+  respond(f,b,{snapshot:previewSnapshot('B'),contentRevision:revision,epoch:'now',seq:2,desktopActivated:true});await next;
+  f.bridge.receive(utsObject({type:'hosts',hosts:[]}));
+  assert.equal(f.connection.snapshot,null);assert.equal(f.connection.preview,null);
+  sendPreview(f,b,previewSnapshot('B'),{generation:'one'});
+  assert.equal(f.connection.preview,null);assert.equal(f.connection.subscribedThreadId,'');
+});
+
+test('首屏丢失后只补一次完整正文，重连沿用当前画面并以差量续接',async()=>{
+  const f=connectedFixture();f.connection.supportsConversationPreview=true;f.connection.supportsConversationCache=true;
+  const opening=f.bridge.openThread('thread'),first=f.sent[0],revision='content:'+'a'.repeat(64);
+  respond(f,first,{snapshot:{threadId:'thread',title:'合成聊天',cwd:'',turns:[]},contentBaseRevision:revision,contentRevision:revision,epoch:'one',seq:1,desktopActivated:true});
+  await Promise.resolve();
+  const repair=f.sent.filter(request=>request.method==='thread.watch').at(-1);
+  assert.notEqual(repair.requestId,first.requestId);assert.equal(repair.params.activate,undefined);
+  assert.equal(repair.params.previewId,undefined);
+  respond(f,repair,{snapshot:previewSnapshot(),contentRevision:revision,epoch:'one',seq:1});await opening;
+  f.bridge.disconnect();assert.equal(f.connection.snapshot.messages[0].text,'当前正文');assert.equal(f.connection.subscribedThreadId,'');
+  f.connection.connected=true;f.bridge.socket={send:options=>f.sent.push(JSON.parse(options.data)),close(){}};
+  const resumed=f.bridge.watch('thread'),request=f.sent.at(-1);
+  assert.equal(request.params.contentRevision,revision);assert.equal(request.params.previewId,undefined);assert.equal(request.params.activate,undefined);
+  respond(f,request,{snapshot:{...previewSnapshot(),messages:undefined},contentBaseRevision:revision,contentRevision:revision,epoch:'one',seq:1});await resumed;
+  assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(f.connection.snapshot.messages[0].text,'当前正文');
+});
+
+test('首屏确认之后的迟到预览不能覆盖实时正文，明确删除事件关闭当前内容',async()=>{
+  const f=connectedFixture();f.connection.supportsConversationPreview=true;f.connection.supportsConversationCache=true;
+  const opening=f.bridge.openThread('thread'),request=f.sent[0];
+  sendPreview(f,request);
+  respond(f,request,{snapshot:previewSnapshot('thread','实时正文'),epoch:'one',seq:1,desktopActivated:true});await opening;
+  sendPreview(f,request,previewSnapshot('thread','迟到正文'));
+  assert.equal(f.connection.snapshot.messages[0].text,'实时正文');assert.equal(f.connection.preview,null);
+  f.bridge.receive(utsObject({type:'thread.removed',hostId:'pc',threadId:'thread'}));
+  assert.equal(f.connection.snapshot,null);assert.equal(f.connection.preview,null);assert.equal(f.connection.activeThreadId,'');
 });
 
 test('电脑确认移除活跃会话时撤销订阅，迟到回执和事件无法恢复旧正文',async()=>{

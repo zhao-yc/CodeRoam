@@ -1,7 +1,7 @@
 <script lang="uts">
 import { bridge } from './services/bridge.uts'
-import { startConversationPrefetch, resumeConversationPrefetch, backgroundConversationPrefetch } from './services/conversation-prefetch.uts'
 import { startConversationCacheLifecycle } from './services/conversation-cache-lifecycle.uts'
+import { retireConversationCacheBodies } from './services/retired-conversation-cache.uts'
 import { startThreadListCache } from './services/thread-list.uts'
 import { startTaskNotifications, resetTaskNotifications } from './services/task-notifications.uts'
 import { startDeletionTasks, resumeDeletionTasks, backgroundDeletionTasks } from './services/delete-tasks.uts'
@@ -10,14 +10,14 @@ import { startTaskBrowserNotifications } from './services/task-browser-notificat
 // #endif
 export default {
   onLaunch() {
-    startConversationCacheLifecycle(); startThreadListCache(); startTaskNotifications(); startDeletionTasks(); startConversationPrefetch()
+    retireConversationCacheBodies(); startConversationCacheLifecycle(); startThreadListCache(); startTaskNotifications(); startDeletionTasks()
     // #ifdef WEB
     startTaskBrowserNotifications()
     // #endif
     bridge.restore()
   },
-  onShow() { resumeDeletionTasks(); bridge.resume(); resumeConversationPrefetch() },
-  onHide() { backgroundConversationPrefetch(); backgroundDeletionTasks(); if (!bridge.backgroundNotificationsEnabled) resetTaskNotifications(); bridge.background() }
+  onShow() { retireConversationCacheBodies(); resumeDeletionTasks(); bridge.resume() },
+  onHide() { backgroundDeletionTasks(); if (!bridge.backgroundNotificationsEnabled) resetTaskNotifications(); bridge.background() }
 }
 </script>
 

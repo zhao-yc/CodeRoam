@@ -56,7 +56,7 @@ test('列表跳转携带完整标题和项目名，中文和查询分隔符不�
 test('旧会话或其他电脑的快照不能覆盖列表项目名',()=>{
   const detail=fs.readFileSync(new URL('../apps/mobile/components/chat-detail/chat-detail.uvue',import.meta.url),'utf8');
   const declaration=detail.match(/^const projectName = computed\(.*$/m)[0];
-  const page={cacheOnly:false,cachedDetail:{value:null},computed:read=>({get value(){return read();}}),conversationProjectName:context.projectName,listProjectName:{value:'列表项目'},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},connection:{hostId:'other',snapshot:{threadId:'thread',cwd:'/workspace/其他项目'}}};
+  const page={cacheOnly:false,previewConversation:{value:null},computed:read=>({get value(){return read();}}),conversationProjectName:context.projectName,listProjectName:{value:'列表项目'},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},connection:{hostId:'other',snapshot:{threadId:'thread',cwd:'/workspace/其他项目'}}};
   const reading=componentContext(page);
   vm.runInContext(stripTypeScriptTypes(declaration,{mode:'transform'})+';globalThis.project=projectName;',reading);
   assert.equal(reading.project.value,'列表项目');

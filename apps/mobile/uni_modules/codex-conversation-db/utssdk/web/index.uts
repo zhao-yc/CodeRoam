@@ -18,17 +18,20 @@ function openDatabase(): Promise<IDBDatabase> {
   const pending = opening
   if (pending != null) return pending
   opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = window.indexedDB.open(DATABASE_NAME, 1)
+    // 升版使旧页面释放连接，旧版正文写入器不能再打开版本 1 恢复正文。
+    const request = window.indexedDB.open(DATABASE_NAME, 2)
     let blocked = false
     request.onblocked = () => {
       blocked = true
       reject(new Error('聊天缓存数据库正被其他页面占用'))
     }
     request.onerror = () => { reject(new Error('无法打开聊天缓存数据库')) }
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
       const db = request.result
-      db.createObjectStore(ROWS, { keyPath: [NAMESPACE, 'key'] }).createIndex(NAMESPACE, NAMESPACE)
-      db.createObjectStore(REVISIONS, { keyPath: NAMESPACE })
+      if (event.oldVersion == 0) {
+        db.createObjectStore(ROWS, { keyPath: [NAMESPACE, 'key'] }).createIndex(NAMESPACE, NAMESPACE)
+        db.createObjectStore(REVISIONS, { keyPath: NAMESPACE })
+      }
     }
     request.onsuccess = () => {
       const db = request.result
@@ -41,6 +44,24 @@ function openDatabase(): Promise<IDBDatabase> {
     }
   }).finally(() => { opening = null })
   return opening!
+}
+
+// 仅删除旧正文的 h:/m: 记录，列表摘要和未来的其他命名空间均保留。
+export async function purgeConversationCacheBodies(): Promise<void> {
+  const db = await openDatabase()
+  return new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(ROWS, 'readwrite')
+    const request = transaction.objectStore(ROWS).openCursor()
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (cursor == null) return
+      const row = cursor.value as StoredRow
+      if (!row.namespace.startsWith('thread-list-v1:') && (row.key.startsWith('h:') || row.key.startsWith('m:'))) cursor.delete()
+      cursor.continue()
+    }
+    transaction.onabort = () => { reject(new Error('无法清理旧聊天正文')) }
+    transaction.oncomplete = () => { resolve() }
+  })
 }
 
 // 版本和数据在同一个只读事务内读取，避免读到提交前后的混合内容。

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { MAX_MESSAGE_BYTES, WRITE_METHODS, validateRequest, validateDraftId, validDraftRevision, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
+import { MAX_MESSAGE_BYTES, WRITE_METHODS, validateRequest, validateDraftId, validDraftRevision, validConversationPreviewEvent, matchesToken, errorPayload, BridgeError } from '../../packages/protocol/contracts.mjs';
 import { HostProfiles } from './host-profiles.mjs';
 import { HostInstances } from './host-instances.mjs';
 import { ConversationCacheRoutes } from './conversation-cache-routes.mjs';
@@ -113,6 +113,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       client.diagnosticId = randomUUID();
       client.alive = true;
       client.watches = new Set();
+      client.previewWatches = new Map();
       client.listWatches = new Set();
       client.cacheWatches = new Map();
       client.draftWatches = new Map();
@@ -138,7 +139,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
       notifyHosts();
     } else if (identity.role === 'mobile') {
       mobiles.add(socket);
-      send(socket, { v: 1, type: 'welcome', role: 'mobile', deviceId: identity.id, hosts: hostList(identity), capabilities: { hostProfiles: true, hostInstances: true, conversationCache: true } });
+      send(socket, { v: 1, type: 'welcome', role: 'mobile', deviceId: identity.id, hosts: hostList(identity), capabilities: { hostProfiles: true, hostInstances: true, conversationCache: true, conversationPreview: true } });
     } else { socket.close(1008, '设备角色不受支持'); return; }
     socket.on('error', () => {});
     socket.on('message', data => {
@@ -225,6 +226,27 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
               send(mobile, { v: 1, type: 'thread.draft.changed', deviceId: message.deviceId, hostId, ...(message.generation ? { generation: message.generation } : {}), snapshot: message.snapshot });
             }
           }
+        } else if (message.type === 'thread.removed') {
+          const hostId = message.hostId ?? identity.hostId;
+          if (message.v !== 1 || typeof message.threadId !== 'string' || !message.threadId.length || message.threadId.length > 200 || !hostSource(socket, hostId, message.generation)) return;
+          const key = `${hostId}:${message.threadId}`;
+          for (const mobile of mobiles) {
+            if (!instances.authorized(mobile.identity.hostIds, hostId) || !mobile.watches.has(key)) continue;
+            mobile.watches.delete(key); mobile.previewWatches.delete(key);
+            send(mobile, { v: 1, type: 'thread.removed', threadId: message.threadId, hostId, ...(message.generation ? { generation: message.generation } : {}) });
+          }
+        } else if (message.type === 'thread.preview') {
+          const entry = pending.get(message.transportId);
+          const hostId = message.hostId ?? identity.hostId;
+          if (!validConversationPreviewEvent(message) || !sameThreadWatch(entry, socket, hostId, message) || !hostSource(socket, hostId, message.generation) ||
+              entry.previewId !== message.previewId || entry.previewSent || entry.mobile.identity.id !== message.deviceId ||
+              !instances.authorized(entry.mobile.identity.hostIds, hostId) || !entry.mobile.watches.has(`${hostId}:${entry.threadId}`) ||
+              entry.mobile.previewWatches.get(`${hostId}:${entry.threadId}`) !== message.transportId) return;
+          // 一次请求只接收一份只读首帧，记录该版本以省略后续重复广播。
+          entry.previewSent = true;
+          entry.contentRevision = message.contentRevision;
+          send(entry.mobile, { v: 1, type: 'thread.preview', previewId: message.previewId, threadId: message.threadId, hostId,
+            ...(message.generation ? { generation: message.generation } : {}), snapshot: message.snapshot, contentRevision: message.contentRevision });
         } else if (message.type === 'thread.cache.event') {
           cacheRoutes.forward(socket, message.hostId ?? identity.hostId, message);
         } else if (message.type === 'threads.event' && Array.isArray(message.threads)) {
@@ -292,8 +314,8 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
         const key = `${message.hostId}:${message.params.threadId}`;
         if (message.method === 'threads.watch') socket.listWatches.add(message.hostId);
         if (message.method === 'threads.unwatch') socket.listWatches.delete(message.hostId);
-        if (message.method === 'thread.watch') socket.watches.add(key);
-        if (message.method === 'thread.unwatch') socket.watches.delete(key);
+        if (message.method === 'thread.watch') { socket.watches.add(key); socket.previewWatches.set(key, transportId); }
+        if (message.method === 'thread.unwatch') { socket.watches.delete(key); socket.previewWatches.delete(key); }
         // 同一配对可同时打开多个标签页。显式退出与断线一样，只有最后一个观看者才释放电脑订阅。
         const sharedWatch=message.method==='thread.unwatch'&&[...mobiles].some(other=>other!==socket&&other.identity.id===identity.id&&other.watches.has(key));
         const sharedList=message.method==='threads.unwatch'&&[...mobiles].some(other=>other!==socket&&other.identity.id===identity.id&&other.listWatches.has(message.hostId));
@@ -305,7 +327,7 @@ export function createRelay({ identities, requestTimeoutMs = 15000, heartbeatMs 
           if (entry) { recordEnd('request.timeout', entry, { errorCode: 'REQUEST_TIMEOUT', outcomeUnknown: WRITE_METHODS.has(message.method) }); fail(socket, message.requestId, new BridgeError(WRITE_METHODS.has(message.method) ? 'OUTCOME_UNKNOWN' : 'REQUEST_TIMEOUT', WRITE_METHODS.has(message.method) ? '请求已发出，执行结果需要核对，请勿重复发送' : '电脑响应超时', WRITE_METHODS.has(message.method))); }
         }, message.method === 'thread.delete' ? Math.max(60000, requestTimeoutMs) : message.method === 'thread.goal.update' ? Math.max(30000, requestTimeoutMs) : requestTimeoutMs);
         const contentRevision = message.method === 'thread.watch' ? message.params.contentRevision : undefined;
-        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, cacheRoute, contentRevision, timer, diagnostic });
+        pending.set(transportId, { host, hostId: message.hostId, generation, mobile: socket, requestId: message.requestId, method: message.method, threadId: message.params.threadId, draftId: message.params.draftId, projectId: message.params.projectId, draftSequence, cacheRoute, contentRevision, previewId: message.params.previewId, timer, diagnostic });
         const params = cacheRoute ? { ...message.params, subscriptionId: cacheRoute.upstreamId } : message.params;
         const delivered = send(host, { ...message, params, deviceId: identity.id, transportId, ...(generation ? { generation } : {}) });
         diagnostics?.record('request.forwarded', diagnostic, { ...counts(socket, host), connection: socket.diagnosticId, delivered, bufferedBytes: host.bufferedAmount });

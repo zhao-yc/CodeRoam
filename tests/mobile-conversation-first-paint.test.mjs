@@ -16,8 +16,8 @@ function fixture() {
   const entries = Array.from({ length: 80 }, (_, index) => ({ id: 'm' + index, text: '长段落加粗文字与行内代码\n'.repeat(45) }));
   const context = vm.createContext({
     timeline: { value: entries }, ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
-    props: { paneWidth: 430, paneHeight: 900 }, pageVisible: { value: true }, cacheFilling: { value: false },
-    isReadingPage: () => true, touchingTimeline: false, cacheInitialPositioning: false, readingCorrectionPending: false,
+    props: { paneWidth: 430, paneHeight: 900 }, pageVisible: { value: true },
+    isReadingPage: () => true, touchingTimeline: false, readingCorrectionPending: false,
     beforeMarkdownLayout: () => layouts.push('记录锚点'), afterMarkdownLayout: () => layouts.push('恢复锚点'),
     setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
     nextTick: callback => callback(), checkShortHistory() {}, closeActions() {}, pauseFollowing() {},
@@ -47,9 +47,9 @@ test('长消息首帧只挂载靠底部的内容，后台分批前插并保持�
   assert.equal(f.localTimelineHasMore(), false);
 });
 
-test('Web 首条消息在视口内经历两次帧回调才开放补齐，退出后作废旧回调', () => {
+test('Web 首条消息在视口内经历两次帧回调才补挂载，退出后作废旧回调', () => {
   const f = fixture();
-  let rowTop = 901, sequence = 0, reads = 0;
+  let rowTop = 901, sequence = 0;
   const frames = new Map();
   f.context.window = {
     requestAnimationFrame: callback => { frames.set(++sequence, callback); return sequence; },
@@ -57,7 +57,6 @@ test('Web 首条消息在视口内经历两次帧回调才开放补齐，退出�
   };
   f.context.uni = { getElementById: id => ({ getBoundingClientRect: () => id == 'conversation-timeline'
     ? { top: 0, bottom: 900, height: 900 } : { top: rowTop, bottom: rowTop + 100, height: 100 } }) };
-  f.context.scheduleCacheFill = () => { reads++; };
   const nextFrame = () => {
     const [id, callback] = frames.entries().next().value;
     frames.delete(id);
@@ -74,27 +73,22 @@ test('Web 首条消息在视口内经历两次帧回调才开放补齐，退出�
   rowTop = 50;
   nextFrame();
   assert.equal(f.timers.length, 0);
-  assert.equal(reads, 0);
   nextFrame();
   assert.equal(f.timers[0].delay, 150);
-  assert.equal(reads, 1);
 });
 
-test('Web 无正文时直接开放完整缓存读取', () => {
+test('Web 无正文时无需等待首条消息绘制', () => {
   const f = fixture();
   f.context.timeline.value = [];
   f.context.window = { requestAnimationFrame: () => assert.fail('空预览不等待动画帧') };
   assert.equal(f.timelinePaintReady(), true);
 });
 
-test('冷预览补齐时保留首批边界，消息通知可立即定位到未挂载的目标', () => {
+test('首批窗口补挂载时保留消息边界，通知可立即定位到未挂载的目标', () => {
   const f = fixture();
-  f.context.cacheFilling.value = true;
-  f.context.timeline.value = f.entries.slice(-1);
   f.scheduleTimelineFill();
   assert.equal(f.localTimelineHasMore(), true);
-  assert.equal(f.timers.length, 0);
-  f.context.timeline.value = f.entries;
+  assert.equal(f.timers.length, 1);
   assert.deepEqual(Array.from(f.visibleTimeline.value, entry => entry.id), ['m79']);
   f.jumpTo('message-m13');
   assert.equal(f.visibleTimeline.value[0].id, 'm13');

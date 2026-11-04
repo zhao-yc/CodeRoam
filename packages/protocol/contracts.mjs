@@ -38,6 +38,18 @@ export const validConversationCacheRevision = value => typeof value === 'string'
 const validCacheSubscriptionId = value => typeof value === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(value);
 const isObject = value => value != null && typeof value === 'object' && !Array.isArray(value);
 
+/** 首帧仅属于一条在途详情请求，不能携带实时权限或交互目标。 */
+export function validConversationPreviewEvent(message) {
+  const snapshot = message?.snapshot;
+  return message?.v === PROTOCOL_VERSION && message.type === 'thread.preview' &&
+    validCacheSubscriptionId(message.transportId) && validCacheSubscriptionId(message.previewId) &&
+    typeof message.deviceId === 'string' && typeof message.threadId === 'string' && message.threadId.length > 0 && message.threadId.length <= 200 &&
+    validConversationCacheRevision(message.contentRevision) && isObject(snapshot) && snapshot.threadId === message.threadId &&
+    typeof snapshot.title === 'string' && typeof snapshot.cwd === 'string' && Array.isArray(snapshot.messages) && Array.isArray(snapshot.turns) &&
+    snapshot.readOnly === true && snapshot.status === 'unknown' && snapshot.activeTurnId === '' && snapshot.updatedAt === 0 &&
+    Array.isArray(snapshot.approvals) && snapshot.approvals.length === 0 && Array.isArray(snapshot.questionGroups) && snapshot.questionGroups.length === 0;
+}
+
 /** 缓存通道仅接收一个指定会话的展示窗口、增量或移除通知。 */
 export function validConversationCacheEvent(message) {
   if (message?.v !== PROTOCOL_VERSION || message.type !== 'thread.cache.event' || !validCacheSubscriptionId(message.subscriptionId) || typeof message.deviceId !== 'string' || typeof message.threadId !== 'string' || !message.threadId.length || message.threadId.length > 200) return false;
@@ -141,6 +153,7 @@ export function validateRequest(message) {
   if(message.params.resetPlanAfterSend===true&&!['default','plan'].includes(message.params.planMode))throw new BridgeError('BAD_PARAMS','请明确本次消息的执行模式');
   if(message.params.resetPlanAfterSend!==undefined&&(!['turn.send','turn.steer'].includes(message.method)||typeof message.params.resetPlanAfterSend!=='boolean'))throw new BridgeError('BAD_PARAMS','一次性计划标记只能用于发送消息');
   if(message.params.activate!==undefined&&(message.method!=='thread.watch'||typeof message.params.activate!=='boolean'))throw new BridgeError('BAD_PARAMS','仅聊天订阅可使用布尔值加载标记');
+  if(message.params.previewId!==undefined&&(message.method!=='thread.watch'||!validCacheSubscriptionId(message.params.previewId)))throw new BridgeError('BAD_PARAMS','仅聊天订阅可携带有效的首帧编号');
   if(message.params.contentRevision!==undefined&&(message.method!=='thread.watch'||!validConversationCacheRevision(message.params.contentRevision)))throw new BridgeError('BAD_PARAMS','仅聊天订阅可携带有效的正文版本');
   if(message.params.page!==undefined&&(message.method!=='thread.history'||message.params.page!==true))throw new BridgeError('BAD_PARAMS','历史分页标记无效');
   if(message.params.before!==undefined&&(message.method!=='thread.history'||typeof message.params.before!=='string'||message.params.before.length>2000))throw new BridgeError('BAD_PARAMS','历史游标无效');

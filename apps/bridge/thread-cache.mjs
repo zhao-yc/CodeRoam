@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { setImmediate as nextTick } from 'node:timers/promises';
 import { BridgeError, MAX_CONVERSATION_CACHE_THREADS } from '../../packages/protocol/contracts.mjs';
-import { conversationContentRevision, conversationProjection } from './conversation-prefetch.mjs';
+import { conversationContentRevision, conversationProjection, existingConversationSnapshot } from './conversation-prefetch.mjs';
 import { conversationUpdate } from './updates.mjs';
 
 export const CACHE_WATCHER = Symbol('缓存只读跟随');
@@ -12,11 +12,12 @@ const MAX_SUBSCRIPTIONS = 128;
 
 /** 每个桌面实例独立保留有限的展示正文，订阅身份和实时权限只在内存中存在。 */
 export class ThreadCacheFeed {
-  constructor({ adapter, db, send, blocked }) {
+  constructor({ adapter, db, send, blocked, removed = () => {} }) {
     this.adapter = adapter;
     this.db = db;
     this.send = send;
     this.blocked = blocked;
+    this.removed = removed;
     this.subscriptions = new Map();
     this.targets = new Set();
     this.recent = new Set();
@@ -105,6 +106,34 @@ export class ThreadCacheFeed {
     if (row?.previous_revision === revision) return JSON.parse(row.previous_snapshot);
   }
 
+  /** 打开详情先核验索引和 IPC 身份，已有持久窗口只在来源版本相同时直接使用。 */
+  async preview(threadId) {
+    if (this.closed || this.blocked(threadId) || !this.adapter.index?.historyCacheSource) return undefined;
+    const source = this.adapter.index.historyCacheSource(threadId);
+    let snapshot;
+    if (this.liveEntry(threadId)) snapshot = existingConversationSnapshot(this.adapter, threadId);
+    else {
+      const row = this.row(threadId);
+      if (source && row?.saved_source === source) {
+        try {
+          const saved = JSON.parse(row.snapshot);
+          if (saved?.threadId === threadId && Array.isArray(saved.messages) && Array.isArray(saved.turns)) snapshot = saved;
+        } catch { /* 损坏的展示副本按原历史来源重新读取。 */ }
+      }
+      snapshot ??= await this.readSaved(threadId, source);
+    }
+    if (this.closed || this.blocked(threadId)) return undefined;
+    // 等待历史期间可能已删除或加载到桌面，返回前再核验并优先采用当前所有者。
+    this.adapter.index.historyCacheSource(threadId);
+    if (this.liveEntry(threadId)) snapshot = existingConversationSnapshot(this.adapter, threadId);
+    if (snapshot?.threadId !== threadId) return undefined;
+    const projection = conversationProjection(snapshot);
+    return {
+      snapshot: { ...projection, readOnly: true, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], updatedAt: 0 },
+      contentRevision: conversationContentRevision(projection),
+    };
+  }
+
   /** 每条会话只持久化最新和上一版，单次更新同时替换版本及正文。 */
   save(source, savedSource) {
     if (this.closed || !this.db || this.blocked(source.threadId)) return;
@@ -159,6 +188,7 @@ export class ThreadCacheFeed {
     this.targets.delete(threadId);
     this.nextProbe.delete(threadId);
     this.stopFollowing(threadId);
+    this.removed(threadId);
     for (const { deviceId, subscriptionId, versions, verify } of this.subscriptions.values()) {
       if (!versions.has(threadId) && !verify.has(threadId)) continue;
       if (this.send({ v: 1, type: 'thread.cache.event', deviceId, subscriptionId, threadId, revision: '', removed: true }) !== false) {
@@ -171,6 +201,10 @@ export class ThreadCacheFeed {
   /** 只用成功的索引查询确认移除，待核对的手机缓存不占后台正文跟随额度。 */
   checkMembership() {
     const ids = new Set(this.db.prepare('SELECT thread_id FROM conversation_cache').all().map(row => row.thread_id));
+    // 正在查看的详情即使超出最近窗口，也需要收到明确的归档或删除结果。
+    for (const [id, entry] of this.adapter.conversations ?? []) {
+      if ([...entry.watchers ?? []].some(watcher => watcher !== 'list-status' && watcher !== CACHE_WATCHER)) ids.add(id);
+    }
     for (const { versions, verify } of this.subscriptions.values()) {
       for (const id of versions.keys()) ids.add(id);
       for (const id of verify) ids.add(id);

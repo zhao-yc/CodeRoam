@@ -1,10 +1,3 @@
-import fs from 'node:fs';
-
-/** 保留与应用相同的加载顺序，Node 只剥离 UTS 类型和模块声明。 */
-export const conversationCacheSource = ['conversation-cache-rows', 'conversation-cache'].map(name =>
-  fs.readFileSync(new URL(`../../apps/mobile/services/${name}.uts`, import.meta.url), 'utf8')
-    .replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '')).join('\n');
-
 /** 用独立的配对命名空间模拟 CAS 原子提交，允许用例暂停请求或模拟配额错误。 */
 export function conversationMemoryDatabase() {
   const namespaces = new Map();

@@ -9,6 +9,62 @@ const revision = 'content:' + '1'.repeat(64);
 const watching = (subscriptionId = randomUUID(), threadId = 'synthetic-chat') => ({ subscriptionId, threads: [{ threadId, revision: '' }] });
 const envelope = (method, params, hostId = 'computer') => ({ v: 1, type: 'request', requestId: randomUUID(), method, params, hostId });
 
+test('单次详情首帧只定向当前在途请求，拒绝旧请求、错误实例及撤权后的正文', async t => {
+  const f = await fixture(t), sibling = await f.connect('phone'), outsider = await f.connect('outsider'), other = await f.connect('other');
+  assert.equal(f.phone.welcome.capabilities.conversationPreview, true);
+  const child = 'computer~' + randomUUID(), generation = randomUUID(), threadId = 'synthetic-preview-chat';
+  f.host.send({ type: 'host.instances', instances: [{ id: child, generation, label: '合成实例', online: true }] });
+  await f.phone.next(message => message.type === 'hosts' && message.hosts.some(row => row.id === child && row.online));
+  const open = async () => {
+    const request = envelope('thread.watch', { threadId, previewId: randomUUID() }, child);
+    f.phone.send(request);
+    return f.host.next(message => message.requestId === request.requestId);
+  };
+  const old = await open(), current = await open();
+  const publish = (request, extra = {}, sender = f.host) => sender.send({
+    v: 1, type: 'thread.preview', transportId: request.transportId, deviceId: request.deviceId,
+    hostId: request.hostId, generation: request.generation, previewId: request.params.previewId, threadId, contentRevision: revision,
+    snapshot: { threadId, title: '合成首帧', cwd: '', messages: [], turns: [], readOnly: true, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], updatedAt: 0 },
+    ...extra,
+  });
+  publish(old);
+  publish(current, { deviceId: 'outsider' });
+  publish(current, { generation: randomUUID() });
+  publish(current, { hostId: 'other' }, other);
+  publish(current);
+  const frame = await f.phone.next(message => message.type === 'thread.preview');
+  assert.equal(frame.previewId, current.params.previewId);
+  assert.equal(frame.hostId, child);
+  assert.equal(frame.generation, generation);
+  assert.equal(frame.transportId, undefined);
+  assert.equal(frame.deviceId, undefined);
+  publish(current);
+  f.reply(current); await f.response(f.phone, current);
+  f.reply(old); await f.response(f.phone, old);
+  const revoked = await open();
+  f.identities.find(identity => identity.id === 'phone').hostIds = [];
+  publish(revoked);
+  const ping = envelope('ping', {}); f.phone.send(ping); await f.response(f.phone, ping);
+  assert.equal(f.phone.all.filter(message => message.type === 'thread.preview').length, 1);
+  assert.equal(sibling.all.some(message => message.type === 'thread.preview'), false);
+  assert.equal(outsider.all.some(message => message.type === 'thread.preview'), false);
+});
+
+test('明确移除只通知仍在观看的授权详情，并立即阻断迟到首帧', async t => {
+  const f = await fixture(t), sibling = await f.connect('phone'), threadId = 'synthetic-preview-chat';
+  const request = envelope('thread.watch', { threadId, previewId: randomUUID() });
+  f.phone.send(request);
+  const opened = await f.host.next(message => message.requestId === request.requestId);
+  f.host.send({ v: 1, type: 'thread.removed', threadId });
+  const removed = await f.phone.next(message => message.type === 'thread.removed');
+  assert.equal(removed.hostId, 'computer');
+  f.host.send({ v: 1, type: 'thread.preview', transportId: opened.transportId, deviceId: opened.deviceId, previewId: opened.params.previewId, threadId,
+    contentRevision: revision, snapshot: { threadId, title: '合成首帧', cwd: '', messages: [], turns: [], readOnly: true, status: 'unknown', activeTurnId: '', approvals: [], questionGroups: [], updatedAt: 0 } });
+  f.reply(opened); await f.response(f.phone, opened);
+  assert.equal(f.phone.all.some(message => message.type === 'thread.preview'), false);
+  assert.equal(sibling.all.some(message => message.type === 'thread.removed'), false);
+});
+
 test('缓存订阅校验会话数量、唯一编号、版本和字段白名单', () => {
   const valid = watching();
   assert.doesNotThrow(() => validateRequest(envelope('threads.cache.watch', valid)));

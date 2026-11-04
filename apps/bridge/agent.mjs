@@ -55,7 +55,9 @@ export class BridgeAgent extends EventEmitter {
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)}):null;
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event));
-    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id)});
+    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id),removed:id=>{
+      if(this.published.delete(id))this.send({v:1,type:'thread.removed',threadId:id});
+    }});
     adapter.on('conversation',snapshot=>{
       this.captureCache(snapshot);
       if(hasDetailWatcher(adapter,snapshot.threadId))this.publish(snapshot,{dedupe:true});
@@ -105,12 +107,13 @@ export class BridgeAgent extends EventEmitter {
     if(broadcast)this.send(excludeTransportId?{...event,excludeTransportId}:event);return event;
   }
   /** 详情操作状态始终来自实时 watch，正文能用已知版本恢复时省略重复传输。 */
-  watchResult(source, message) {
+  watchResult(source, message, preview) {
     const snapshot=this.messageQueue?.decorate(source)??source;
     const projection=conversationProjection(snapshot), contentRevision=conversationContentRevision(projection);
-    const requested=message.method==='thread.watch'?message.params.contentRevision:undefined;
+    const requested=message.method==='thread.watch'?(message.params.contentRevision??preview?.contentRevision):undefined;
     let baseline;
     if(requested===contentRevision) baseline=projection;
+    else if(preview&&preview.contentRevision===requested) baseline=preview.snapshot;
     else if(requested) {
       try { baseline=this.threadCache.baseline(snapshot.threadId,requested); } catch { /* 损坏的基线按首次同步处理。 */ }
     }
@@ -245,9 +248,21 @@ export class BridgeAgent extends EventEmitter {
           const id=message.params.threadId;
           const readSavedHistory=this.adapter.index?.historyCacheSource?threadId=>this.threadCache.readSaved(threadId):undefined;
           this.threadCache.remember(id);
-          const snapshot=await this.adapter.watch(id,message.deviceId,{activate:message.params.activate===true,readSavedHistory});
+          // 首帧读取与桌面导航并行，预览失败不会中断原有实时订阅。
+          let finished=false,preview;
+          if(message.method==='thread.watch'&&message.params.previewId&&message.params.contentRevision===undefined) {
+            this.threadCache.preview(id).then(current=>{
+              if(finished||!current||this.deletingIds.has(id))return;
+              const sent=this.send({v:1,type:'thread.preview',transportId:message.transportId,deviceId:message.deviceId,previewId:message.params.previewId,threadId:id,...current});
+              if(sent!==false)preview=current;
+            }).catch(()=>{});
+          }
+          let snapshot;
+          try { snapshot=await this.adapter.watch(id,message.deviceId,{activate:message.params.activate===true,readSavedHistory}); }
+          // 已有实时快照时直接结束读取；晚到的历史预览不能拖慢或覆盖实时回执。
+          finally { finished=true; }
           this.threadCache.schedule();
-          const result=this.watchResult(snapshot,message);
+          const result=this.watchResult(snapshot,message,preview);
           this.captureCache(snapshot);
           return result;
         }

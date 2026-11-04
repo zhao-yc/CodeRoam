@@ -31,27 +31,6 @@ function archiveBlocked(hostId: string, threadId: string): boolean { return arch
 
 function threadExcluded(hostId: string, threadId: string): boolean { return deletedThreadKeys.has(threadScopeKey(hostId, threadId)) || archiveBlocked(hostId, threadId) }
 
-// 详情只读权限与最近列表窗口分开，滚出窗口后已打开的详情仍可阅读。
-export function isCachedThreadScopeAllowed(namespace: string, hostId: string, threadId: string, instanceGeneration: string = ''): boolean {
-  if (!connection.configured || namespace.length == 0 || namespace != cacheScope || namespace != connection.cacheNamespace || threadExcluded(hostId, threadId)) return false
-  const computer = connection.computers.find((item: Computer): boolean => item.id == hostId)
-  if (hasAuthoritativeHosts && computer == null) return false
-  const generation = computer?.instanceGeneration ?? ''
-  return generation.length == 0 || instanceGeneration == generation
-}
-
-export function cachedThreadGeneration(hostId: string): string {
-  return connection.computers.find((item: Computer): boolean => item.id == hostId)?.instanceGeneration ?? threadList.cachedHosts.find((host: CachedThreadListHost): boolean => host.hostId == hostId)?.instanceGeneration ?? ''
-}
-
-// 只有当前配对实际展示过的行，才可从本地正文打开详情。
-export function canReadCachedThread(namespace: string, hostId: string, threadId: string): boolean {
-  if (!isCachedThreadScopeAllowed(namespace, hostId, threadId, cachedThreadGeneration(hostId))) return false
-  const live = threadList.computers.find((entry: ComputerThreads): boolean => entry.hostId == hostId)
-  if (live?.loaded == true) return live!.threads.some((thread: ThreadSummary): boolean => thread.id == threadId)
-  return threadList.cachedHosts.some((host: CachedThreadListHost): boolean => host.hostId == hostId && host.threads.some((thread: CachedThreadListRow): boolean => thread.id == threadId))
-}
-
 // 缓存读与握手并行；实时空列表、权限清单及本地移除同样优先于晚到的磁盘结果。
 export function startThreadListCache() {
   watch((): string => connection.cacheNamespace, (namespace: string) => {

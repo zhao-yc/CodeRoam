@@ -71,9 +71,15 @@ test('任一步取消、切换目标或离开页面后旧确认均不发请求',
 
 test('返回并打开其他电脑聊天后，成功只清理原目标且不导航', async () => {
   const f = fixture(), call = f.begin(); f.c.pageVisible.value = false; f.life.hide(); f.life.unload();
-  f.c.connection.hostId = 'other'; f.c.connection.activeThreadId = 'root'; f.c.pageHostId.value = 'other'; f.tick(); call.resolve(receipt()); await flush();
+  f.c.connection.hostId = 'other'; f.c.connection.activeThreadId = 'root'; f.c.pageHostId.value = 'other';
+  const currentSnapshot = { threadId: 'root', messages: [{ id: 'same-id', text: '另一台电脑的正文' }] };
+  const currentPreview = { threadId: 'root', readOnly: true, messages: [{ id: 'same-id', text: '另一台电脑的预览' }] };
+  f.c.connection.snapshot = currentSnapshot; f.c.connection.preview = currentPreview;
+  f.tick(); call.resolve(receipt()); await flush();
   assert.equal(f.c.returned, 0); assert.equal(f.c.connection.activeThreadId, 'root'); assert.equal(f.c.historyPage.value.messages[0], '合成历史');
-  assert.equal(f.removed[0][0], 'pc'); assert.deepEqual(Array.from(f.removed[0][1]), ['root', 'child']); assert.equal(f.drafts[0][0], 'pc'); assert.equal(f.caches[0][0], 'synthetic-pair');
+  assert.equal(f.removed[0][0], 'pc'); assert.deepEqual(Array.from(f.removed[0][1]), ['root', 'child']); assert.equal(f.drafts[0][0], 'pc'); assert.deepEqual(Array.from(f.drafts[0][1]), ['root', 'child']);
+  assert.equal(f.removed.length, 1); assert.equal(f.drafts.length, 1); assert.equal(f.caches.length, 0);
+  assert.equal(f.c.connection.snapshot, currentSnapshot); assert.equal(f.c.connection.preview, currentPreview);
   assert.equal(f.acceptReceipt({ namespace: 'synthetic-pair', hostId: 'pc', threadId: 'root' }, receipt()), false); assert.equal(f.removed.length, 1);
 });
 

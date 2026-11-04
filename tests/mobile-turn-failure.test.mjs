@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
-import {conversationCacheSource,conversationMemoryDatabase} from './helpers/conversation-cache-fixture.mjs';
 
 const uts = name => fs.readFileSync(`apps/mobile/services/${name}.uts`, 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '');
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -43,13 +42,12 @@ test('重试只提交目标轮次，回执前后禁止重复，明确拒绝后�
   const rejected=pageFixture();rejected.retryTurn('failed');rejected.reject();await new Promise(setImmediate);assert.equal(rejected.canRetryTurn('failed'),true);
 });
 
-test('失败原因及最新轮次经过历史合并和缓存恢复，缓存不恢复重试能力', () => {
-  const c=componentContext({...conversationMemoryDatabase().adapter,reactive:value=>value,setTimeout:()=>1,clearTimeout:()=>{},uni:{getStorageSync:()=>''}});
-  vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+conversationCacheSource)+';globalThis.f={conversationWithHistory,saveConversationCache,readConversationCache,cachedConversationSnapshot}',c);
+test('失败原因及最新轮次经过历史合并，守护进程只读预览不能启用重试', () => {
+  const c=componentContext({});
+  vm.runInContext(stripTypeScriptTypes(uts('history')+'\n'+uts('turn-failure'))+';globalThis.f={conversationWithHistory,retryTarget}',c);
   const s={...state(),title:'合成会话',cwd:'/example/project',updatedAt:1};
-  assert.equal(c.f.saveConversationCache('pair','pc',s,null),true);
-  const saved=c.f.cachedConversationSnapshot(c.f.readConversationCache('pair','pc','thread'));
-  assert.deepEqual(plain(saved.turns),s.turns);assert.deepEqual(plain(saved.latestTurn),s.latestTurn);assert.equal(saved.supportsTurnRetry,undefined);assert.equal(saved.readOnly,true);
+  const preview={...s,readOnly:true};
+  assert.equal(c.f.retryTarget(preview),'');
   const merged=c.f.conversationWithHistory(s,{messages:[],turns:[{turnId:'older',status:'failed',errorMessage:'Earlier failure'}]});
   assert.equal(merged.supportsTurnRetry,true);assert.equal(merged.turns[0].errorMessage,'Earlier failure');assert.equal(merged.latestTurn.turnId,'failed');
 });

@@ -78,7 +78,6 @@
 import { computed, ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { bridge, connection, Computer, computerIcon, taskState, conversationTaskState, threadIndicator } from '../../services/bridge.uts'
 import { threadList, ComputerThread, ComputerThreads, visibleComputerThreads, computerThreadsLoading, refreshComputerThreads, listDisplayComputers } from '../../services/thread-list.uts'
-import { readConversationCache } from '../../services/conversation-cache.uts'
 import { consumeArchiveSuccessNotice, consumeDeleteSuccessNotice } from '../../services/page-notices.uts'
 import DeletionTaskList from '../../components/deletion-tasks/deletion-tasks.uvue'
 import { DeleteTask, deletionTask as findDeletionTask, deletionLabel as formatDeletionLabel } from '../../services/delete-tasks.uts'

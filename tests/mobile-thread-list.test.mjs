@@ -16,7 +16,7 @@ function fixture(count=2){
   retainThreadListCacheHosts:(namespace,hostIds)=>writes.push({action:'retain',namespace,hostIds}),
   clearThreadListCache:namespace=>writes.push({action:'clear',namespace})});
  const source=fs.readFileSync('apps/mobile/services/thread-list.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
- vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={threadList,syncThreadComputers,refreshComputerThreads,visibleComputerThreads,computerThreadsLoading,disconnectThreadLists,removeDeletedThreads,removeArchivedThread,startThreadListCache,listDisplayComputers,canReadCachedThread,isCachedThreadScopeAllowed};',context);
+ vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={threadList,syncThreadComputers,refreshComputerThreads,visibleComputerThreads,computerThreadsLoading,disconnectThreadLists,removeDeletedThreads,removeArchivedThread,startThreadListCache,listDisplayComputers};',context);
  return {...context.subject,connection,requests,liveThreadLists,restores,writes,push:()=>watchers.forEach(callback=>callback())};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
@@ -85,7 +85,6 @@ test('完全断网先恢复可筛选的离线列表，不把副本放入实时�
  assert.equal(f.threadList.cachedReady,true);assert.equal(f.computerThreadsLoading(''),false);
  assert.deepEqual(plain(f.listDisplayComputers().map(item=>[item.id,item.online])),[['pc0',false],['pc1',false]]);
  assert.deepEqual(plain(f.visibleComputerThreads('pc0','缓存').map(item=>[item.key,item.online,item.cached,item.status??null])),[['pc0:same',false,true,null]]);
- assert.equal(f.canReadCachedThread('pair-a','pc0','same'),true);assert.equal(f.canReadCachedThread('pair-b','pc0','same'),false);
  assert.equal(f.connection.computers.length,0);assert.equal(f.threadList.computers.length,0);assert.equal(f.requests.length,0);
 });
 
@@ -96,21 +95,17 @@ test('实时空列表、实例换代与撤权优先于迟到的磁盘数据',asy
  f.restores[0].resolve([cachedHost('pc0',[row('old','旧窗口',1)]),cachedHost('pc1',[row('old','旧实例',2)],'old'),cachedHost('pc2',[row('old','已撤权',3)])]);await settle();
  assert.deepEqual(plain(f.visibleComputerThreads('','')),[]);
  assert.deepEqual(plain(f.writes.filter(item=>item.action==='removeHost').map(item=>item.hostId)),['pc1','pc2']);
- assert.equal(f.isCachedThreadScopeAllowed('pair-a','pc1','old','old'),false);
- assert.equal(f.isCachedThreadScopeAllowed('pair-a','pc2','old'),false);
  f.requests[1].resolve({threads:[row('new','新实例',4)]});await settle();
  assert.equal(f.visibleComputerThreads('','')[0].title,'新实例');
  f.connection.cacheNamespace='pair-b';f.push();assert.ok(f.writes.some(item=>item.action==='clear'&&item.namespace==='pair-a'));
- assert.equal(f.canReadCachedThread('pair-a','pc1','new'),false);
 });
 
-test('归档旧推送不会恢复条目，确认移出后可接收取消归档，窗口裁剪不撤销正在阅读的详情',async()=>{
+test('归档旧推送不会恢复条目，确认移出后可接收取消归档，窗口裁剪按实时列表展示',async()=>{
  const f=fixture(1);f.connection.cacheNamespace='pair-a';f.startThreadListCache();f.refreshComputerThreads();
  f.requests[0].resolve({threads:[row('a','归档聊天',1)]});await settle();f.removeArchivedThread('pc0','a');
- assert.equal(f.isCachedThreadScopeAllowed('pair-a','pc0','a'),false);
  assert.ok(f.writes.some(item=>item.action==='removeRows'&&item.ids[0]==='a'));
  const push=(revision,threads)=>{f.liveThreadLists.updates=[{hostId:'pc0',revision,threads}];f.push();};
  push(1,[row('a','迟到推送',1)]);assert.equal(f.visibleComputerThreads('','').length,0);
- push(2,[]);push(3,[row('a','取消归档',2)]);assert.equal(f.canReadCachedThread('pair-a','pc0','a'),true);
- push(4,[]);assert.equal(f.canReadCachedThread('pair-a','pc0','a'),false);assert.equal(f.isCachedThreadScopeAllowed('pair-a','pc0','a'),true);
+ push(2,[]);push(3,[row('a','取消归档',2)]);assert.equal(f.visibleComputerThreads('','').length,1);
+ push(4,[]);assert.equal(f.visibleComputerThreads('','').length,0);
 });

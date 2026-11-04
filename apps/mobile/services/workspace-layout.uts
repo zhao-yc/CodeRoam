@@ -1,4 +1,4 @@
-export type WorkspaceTarget = { hostId: string, threadId: string, title: string, projectName: string, cacheNamespace: string, cacheOnly?: boolean, cacheGeneration?: string }
+export type WorkspaceTarget = { hostId: string, threadId: string, title: string, projectName: string, cacheNamespace: string }
 
 // 使用逻辑像素决定布局，避免设备识别误伤分屏窗口和桌面浏览器。
 export function workspaceIsWide(width: number): boolean { return width >= 900 }
@@ -6,8 +6,8 @@ export function workspaceDetailWidth(width: number): number { return workspaceIs
 
 // 身份包含配对和电脑，同名聊天编号不能复用其他目标的面板或异步结果。
 export function workspaceTargetKey(target: WorkspaceTarget | null): string {
-  return target == null ? '' : JSON.stringify([target.cacheNamespace, target.hostId, target.threadId, (target.cacheOnly == true).toString()])
+  return target == null ? '' : JSON.stringify([target.cacheNamespace, target.hostId, target.threadId])
 }
-export function workspaceTarget(hostId: string, threadId: string, title: string, projectName: string, cacheNamespace: string, cacheOnly: boolean = false): WorkspaceTarget {
-  return { hostId, threadId, title, projectName, cacheNamespace, cacheOnly } as WorkspaceTarget
+export function workspaceTarget(hostId: string, threadId: string, title: string, projectName: string, cacheNamespace: string): WorkspaceTarget {
+  return { hostId, threadId, title, projectName, cacheNamespace } as WorkspaceTarget
 }

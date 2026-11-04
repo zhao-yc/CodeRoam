@@ -19,59 +19,15 @@ test('切换前卸载旧面板，下一帧后才打开目标；离开工作区�
   const pending=f.selectConversation(f.target('new'),true);assert.equal(f.detailMounted.value,false);assert.equal(f.calls.some(row=>row[0]==='open'),false);
   f.unmount();await f.flush();assert.equal(await pending,false);assert.equal(f.calls.some(row=>row[0]==='open'),false);
 });
-test('离线冷启动等待持久缓存恢复，之后打开不向电脑发送订阅请求',async()=>{
-  let hydrated;
-  const loading=new Promise(resolve=>{hydrated=resolve;});
-  const f=workspaceFixture({connection:{connected:false},prime:()=>loading});
-  const opened=f.selectConversation(f.target('saved'),true);
-  assert.equal(f.selected.value,null);
-  assert.deepEqual(f.calls,[]);
-  f.setCached(true);hydrated();
-  assert.equal(await opened,true);
-  assert.equal(f.selected.value.threadId,'saved');
-  assert.equal(f.calls.some(([kind])=>kind==='open'||kind==='toast'),false);
+test('离线列表只展示摘要，点击聊天提示连接电脑且不读取本地正文',async()=>{
+  for(const windowWidth of [430,1366]) {
+    const f=workspaceFixture({props:{windowWidth},connection:{connected:false,computers:[]},cached:true,cachedAllowed:true});
+    await f.openThread({hostId:'other',id:'saved',key:'other:saved',title:'合成聊天',cwd:'项目',online:false,cached:true});
+    assert.deepEqual(f.calls,[['toast','请连接电脑后查看聊天']]);
+    assert.equal(f.selected.value,null);
+  }
 });
 
-test('完全断网的列表可打开本地正文，恢复在线后只由显式操作连接实时聊天',async()=>{
-  const f=workspaceFixture({connection:{connected:false,computers:[]},cached:true,cachedAllowed:true});
-  await f.openThread({hostId:'other',id:'saved',key:'other:saved',title:'合成聊天',cwd:'项目',online:false,cached:true});
-  assert.equal(f.selected.value.cacheOnly,true);
-  assert.equal(f.selected.value.cacheGeneration,'generation');
-  assert.equal(f.connection.hostId,'host');
-  assert.ok(f.calls.every(([kind])=>kind==='recent'||kind==='cache'));
-  await f.openNewConversation();f.closeNewConversation();
-  assert.equal(f.mode.value,'conversation');
-  assert.equal(f.calls.some(([kind])=>['select','open','watch','cancel'].includes(kind)),false);
-  Object.assign(f.connection,{connected:true,computers:[{id:'other',online:true}]});
-  f.watchers.forEach(watcher=>watcher.callback(watcher.read()));
-  assert.equal(f.selected.value.cacheOnly,true);
-  await f.connectCachedConversation();
-  assert.equal(f.selected.value.cacheOnly,false);
-  assert.deepEqual(f.calls.filter(([kind])=>kind==='select'||kind==='open'),[['select','other'],['open','saved']]);
-});
-
-test('窄屏只读路由只带编号，等待索引恢复并在撤权时关闭详情',async()=>{
-  const list=workspaceFixture({props:{windowWidth:430},connection:{connected:false,computers:[]},cached:true,cachedAllowed:true});
-  await list.openThread({hostId:'other',id:'saved',key:'other:saved',title:'合成聊天',cwd:'项目',online:false,cached:true});
-  assert.deepEqual(list.calls.filter(([kind])=>kind!=='cache'),[['navigate','/pages/conversation/index?threadId=saved&hostId=other&cacheOnly=1'],['recent','other:saved']]);
-  const detail=workspaceFixture({props:{windowWidth:430,detailRoute:true,initialTarget:{hostId:'other',threadId:'saved',cacheNamespace:'pair',cacheOnly:true}},connection:{connected:false,computers:[]},cached:true,cachedReady:false});
-  assert.deepEqual(detail.calls,[]);
-  detail.listState.cachedReady=true;detail.setCachedAllowed(true);detail.listState.cachedRevision++;
-  detail.watchers[0].callback(detail.watchers[0].read());await new Promise(setImmediate);
-  assert.equal(detail.selected.value?.threadId,'saved');
-  detail.setCachedAllowed(false);detail.listState.cachedRevision++;
-  const scopeWatch=detail.watchers.at(-1);scopeWatch.callback(scopeWatch.read());
-  assert.equal(detail.selected.value,null);assert.equal(detail.detailMounted.value,false);
-  assert.ok(detail.calls.some(([kind])=>kind==='back'));
-  assert.equal(detail.calls.some(([kind])=>['select','open','watch','cancel'].includes(kind)),false);
-});
-
-test('无正文或路由编号未列入本地索引时拒绝离线详情',async()=>{
-  const f=workspaceFixture({connection:{connected:false,computers:[]},cachedAllowed:true,cachedThread:'listed'});
-  assert.equal(await f.selectConversation({...f.target('unlisted'),cacheOnly:true},false),false);
-  assert.equal(await f.selectConversation({...f.target('listed'),cacheOnly:true},false),false);
-  assert.deepEqual(f.calls,[['toast','这台电脑不在当前授权范围内'],['toast','此聊天暂无本地缓存，请恢复连接后查看']]);
-});
 test('新聊天在右侧，取消恢复原聊天，提交期间阻止切换并保留当前编辑区',async()=>{
   const f=workspaceFixture();await f.selectConversation(f.target(),true);await f.openNewConversation();assert.equal(f.mode.value,'new');assert.equal(f.newReady.value,true);assert.equal(f.detailMounted.value,true);
   f.creating.value=true;assert.equal(await f.selectConversation(f.target('another'),true),false);f.closeNewConversation();assert.equal(f.mode.value,'new');

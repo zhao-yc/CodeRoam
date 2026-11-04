@@ -10,7 +10,7 @@ const message=(id,text=id)=>({id,text,role:'assistant',turnId:'turn',phase:'comm
 /** 使用真实页面的布局链，控制 DOM 更新时机，覆盖手势与异步回调的竞态。 */
 function fixture(){
  const ticks=[],watches=[],unloads=[],rects=new Map([['message-a',{top:-20,bottom:80}],['message-b',{top:100,bottom:600}]]);
- const state={bottom:600,scrollTop:undefined},connection={hostId:'pc',activeThreadId:'thread',connected:true,snapshot:{threadId:'thread',messages:[message('a'),message('b')],turns:[],approvals:[],questionGroups:[],activeTurnId:'turn'}};
+ const state={bottom:600,scrollTop:undefined},connection={hostId:'pc',activeThreadId:'thread',connected:true,computers:[{id:'pc',online:true,instanceGeneration:'one'}],snapshot:{threadId:'thread',messages:[message('a'),message('b')],turns:[],approvals:[],questionGroups:[],activeTurnId:'turn'}};
  const c=componentContext({setTimeout,clearTimeout,connection,bridge:{cancelOpen(){}},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),nextTick:fn=>ticks.push(fn),onLoad(){},onShow(){},onHide(){},onResize(){},onBackPress(){},onUnload:fn=>unloads.push(fn),readDraft:()=>'',uni:{getWindowInfo:()=>({windowWidth:390}),getElementById:id=>{const rect=id==='conversation-timeline'?{top:0,bottom:500,height:500}:id==='timeline-bottom'||id==='timeline-message-end'?{top:state.bottom,bottom:state.bottom}:rects.get(id);return rect?{getBoundingClientRect:()=>rect,...(id==='conversation-timeline'?{scrollTop:state.scrollTop}:{})}:null;}}});
  for(const name of ['history','turn-failure','annotations','message-attachments','message-presentations','executions'])vm.runInContext(stripTypeScriptTypes(uts(name),{mode:'transform'}),c);
  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
@@ -64,7 +64,7 @@ test('新手势、离页及较新的布局回调取消旧补偿，不抢占用�
  const h=fixture();h.p.beforeMarkdownLayout();h.p.afterMarkdownLayout();h.rects.set('message-a',{top:30,bottom:130});h.p.afterMarkdownLayout();h.flush();assert.equal(h.p.historyScrollTop.value,50);
 });
 
-test('缓存中已显示的过程在实时轮次完成后保持展开，已有手动收起选择不被覆盖',()=>{
+test('预览中已显示的过程在实时轮次完成后保持展开，已有手动收起选择不被覆盖',()=>{
  const f=fixture();f.connection.snapshot.messages=[message('a'),{...message('final'),phase:'final_answer'}];
  f.update(()=>{f.connection.snapshot={...f.connection.snapshot,activeTurnId:'',turns:[{turnId:'turn',status:'completed'}]};});f.flush();assert.deepEqual(Array.from(f.p.expandedReportIds.value),['process:turn:final']);
  f.p.expandedReportIds.value=[];f.update(()=>{f.connection.snapshot={...f.connection.snapshot,updatedAt:2};});f.flush();assert.deepEqual(Array.from(f.p.expandedReportIds.value),[]);

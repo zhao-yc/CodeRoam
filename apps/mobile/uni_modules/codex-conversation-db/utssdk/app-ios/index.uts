@@ -19,3 +19,13 @@ export const writeConversationCacheRows: WriteConversationCacheRows = function (
     })
   })
 }
+
+// 旧正文清理完成后再结算 Promise，列表摘要保持可用。
+export function purgeConversationCacheBodies(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    CodexConversationSQLite.purgeBodies(completion = (succeeded: boolean) => {
+      if (succeeded) resolve()
+      else reject(new Error('无法清理旧聊天正文'))
+    })
+  })
+}

@@ -86,6 +86,21 @@ object CodexConversationSQLite {
         execute(false, completion) { writeRows(database(context), namespace, expected, next, changes) }
     }
 
+    /** 升级只清理历史正文行，独立命名空间的列表摘要及其他记录不参与。 */
+    fun purgeBodies(context: Context, completion: (Boolean, Boolean) -> Unit) {
+        execute(false, completion) {
+            val db = database(context)
+            db.beginTransactionNonExclusive()
+            try {
+                db.delete("cache_rows", "substr(namespace, 1, 15) <> ? AND substr(row_key, 1, 2) IN (?, ?)", arrayOf("thread-list-v1:", "h:", "m:"))
+                db.setTransactionSuccessful()
+                true
+            } finally {
+                db.endTransaction()
+            }
+        }
+    }
+
     private fun writeRows(db: SQLiteDatabase, namespace: String, expected: String, next: String, changes: String): Boolean {
         require(namespace.isNotEmpty() && next.isNotEmpty() && next != expected)
         val mutation = JSONObject(changes)
