@@ -1538,7 +1538,7 @@ function send() {
   const queue = messageSendingPreferences.behavior == 'queue' && connection.snapshot?.supportsMessageQueue == true
   if (!steer && !queue && running) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后使用默认排队'; return }
   const choices = { ...readMessageChoices(hostId, threadId) } as MessageChoices
-  if (hasMessageChoices(choices) && connection.snapshot?.supportsMessageChoices != true) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后发送所选设置，草稿已保留'; return }
+  if (hasMessageChoices(choices) && connection.snapshot?.supportsDirectMessageChoices != true) { busy.value = false; pendingAction.value = ''; operationError.value = '请更新电脑连接服务后发送所选设置，草稿已保留'; return }
   if (steer && choices.mode != null) { busy.value = false; pendingAction.value = ''; operationError.value = '此消息包含计划模式选择，请改为排队发送'; return }
   const params: UTSJSONObject = { threadId, text, images: draftImages.value.map((image: DraftImage): string => image.src), attachments: draftFiles.value.map((file: DraftFile): string => file.id) }
   if (draftMentions.value.length > 0) params['threadMentionIds'] = draftMentions.value.map((mention: SelectedThreadMention): string => mention.id)

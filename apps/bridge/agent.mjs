@@ -290,7 +290,7 @@ export class BridgeAgent extends EventEmitter {
       const guard=message.firstMessageGuard;
       if(guard!==undefined){
         // 首条消息保护只适用于已核验的普通单实例，不能绕过计划或排队入口。
-        if(message.method!=='turn.send'||Object.keys(message.params).some(key=>!['threadId','text','images','attachments','pluginIds','threadMentionIds'].includes(key))||
+        if(message.method!=='turn.send'||Object.keys(message.params).some(key=>!['threadId','text','images','attachments','pluginIds','threadMentionIds','choices'].includes(key))||
             guard==null||typeof guard!=='object'||Array.isArray(guard)||Object.keys(guard).length!==2||
             typeof guard.permissionRevision!=='string'||!/^[a-f0-9]{64}$/.test(guard.permissionRevision)||typeof guard.confirmedFullAccess!=='boolean'){
           throw new BridgeError('BAD_PARAMS','首条消息保护参数无效');
@@ -317,13 +317,13 @@ export class BridgeAgent extends EventEmitter {
         if(message.method==='projects.list'){
           const projects=this.newThreads.projects();
           const instance=this.adapter.client?.instance;
-          // 页面草稿不兼容时，已完成实例绑定的连接仍可经原桌面 IPC 新建聊天。
-          const supportsNativeNewDraft=!usesWindowsIpcWithoutPage(instance)&&await this.nativeDrafts.controller.capabilities();
-          if(supportsNativeNewDraft)return {...projects,supportsNativeNewDraft:true,newConversationMode:'nativeDraft'};
+          // 优先使用原生 IPC 首轮请求，避免为新消息逐项修改桌面草稿。
           if(supportsDesktopIpcNewConversation(this.adapter)){
             const supportsNewChatMentions=this.adapter.threadMentions.savedContextAvailable?.()===true;
-            return {...projects,supportsNativeNewDraft:false,newConversationMode:'desktopIpc',...(supportsNewChatMentions?{supportsNewChatMentions:true}:{})};
+            return {...projects,supportsNativeNewDraft:false,supportsDirectMessageChoices:true,newConversationMode:'desktopIpc',...(supportsNewChatMentions?{supportsNewChatMentions:true}:{})};
           }
+          const supportsNativeNewDraft=!usesWindowsIpcWithoutPage(instance)&&await this.nativeDrafts.controller.capabilities();
+          if(supportsNativeNewDraft)return {...projects,supportsNativeNewDraft:true,supportsDirectMessageChoices:false,newConversationMode:'nativeDraft'};
           return {...projects,supportsNativeNewDraft:false,newConversationUnavailableReason:'电脑实例连接尚未就绪，请重新连接后读取项目'};
         }
         if(message.method.startsWith('thread.draft.')) {

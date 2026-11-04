@@ -75,6 +75,7 @@ const composerInstanceId = 'composer-' + Date.now().toString(36) + '-' + Math.ra
 const projectId = ref(''), projects = ref<NewProject[]>([])
 const newConversationMode = ref('')
 const supportsDirectMentions = ref(false)
+const supportsDirectChoices = ref(false)
 const pendingNewAction = ref('')
 const reloading = ref(false)
 const projectsLoading = ref(false), settingsLoading = ref(false)
@@ -246,6 +247,7 @@ async function loadProjects() {
     if (advertisedMode == 'desktopIpc' && generation.length > 0) mode = 'desktopIpc'
     else if (advertisedMode == 'nativeDraft' || advertisedMode == null && result.getBoolean('supportsNativeNewDraft') == true) mode = 'nativeDraft'
     if (newConversationMode.value != mode) { projectSettings.value = null; settingsRequest++; settingsLoading.value = false }
+    supportsDirectChoices.value = result.getBoolean('supportsDirectMessageChoices') == true
     supportsDirectMentions.value = mode == 'desktopIpc' && result.getBoolean('supportsNewChatMentions') == true
     newConversationMode.value = mode
     if (mode != 'nativeDraft') closeNativeDraft(hostId, projectId.value)
@@ -400,14 +402,19 @@ function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) { if (!props
 async function send() {
   if (!canSend.value) return
   const target = draft.value, mode = newConversationMode.value, revision = connection.configurationRevision
+  // 旧连接不能静默拆成设置调用，先保留手机输入并要求更新。
+  const choices = target.choices
+  const selectedChoices = choices != null && (choices.model != null || choices.effort != null || choices.serviceTier != null || choices.mode != null || choices.permissionMode != null && choices.permissionMode != 'desktop-default')
+  const taskReady =
+    // #ifdef WEB
+    typeof supportsSubmissionTasks == 'function' &&
+    // #endif
+    supportsSubmissionTasks(target.hostId)
+  if (selectedChoices && (!supportsDirectChoices.value || !taskReady)) { error.value = '请更新电脑连接服务后随消息提交所选设置，草稿已保留'; return }
   busy.value = true; pendingNewAction.value = 'send'; emit('busy', true); closeMenus(); error.value = ''
   const updateProgress = (message: string): void => { progress.value = message }
   try {
-    if (
-      // #ifdef WEB
-      typeof supportsSubmissionTasks == 'function' &&
-      // #endif
-      supportsSubmissionTasks(target.hostId)) {
+    if (taskReady) {
       await submitNewConversationTask(target, mode, updateProgress)
       if (alive && props.expanded && draft.value == target && revision == connection.configurationRevision) { busy.value = false; emit('busy', false); uni.hideKeyboard(); emit('queued') }
     } else if (mode == 'desktopIpc') {

@@ -1,4 +1,5 @@
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
+import { supportsDesktopIpcNewConversation } from './windows-ipc-mode.mjs';
 
 /** 只保留用户显式选择，不能把发送时的电脑默认值当成手机已经确认过的权限。 */
 function settingChanges(settings, choices) {
@@ -31,8 +32,8 @@ export async function runNewConversationTask(agent, task, context) {
   const project = await agent.newThreads.project(input.projectId);
   if (!project || project.id !== input.projectId) throw new BridgeError('PROJECT_NOT_FOUND', '项目已不存在，请重新选择电脑端项目');
   const command = (method, params, commandId, guard) => agent.runTaskCommand(method, params, task.deviceId, commandId, guard);
-  if (input.mode === 'nativeDraft') return runNative(agent, task, context, command, choices, images, attachments);
-  if (input.mode !== 'desktopIpc') throw new BridgeError('BAD_TASK', '不支持此新聊天创建方式');
+  if (input.mode === 'nativeDraft' && !supportsDesktopIpcNewConversation(agent.adapter)) return runNative(agent, task, context, command, choices, images, attachments);
+  if (!['desktopIpc', 'nativeDraft'].includes(input.mode)) throw new BridgeError('BAD_TASK', '不支持此新聊天创建方式');
 
   const created = await context.step('创建聊天', commandId => command('thread.create', { projectId: input.projectId, title: task.title || '新聊天' }, commandId));
   const threadId = created?.threadId;
@@ -46,27 +47,24 @@ export async function runNewConversationTask(agent, task, context) {
   release = await agent.retainTaskThread(threadId, task.deviceId, task.id);
   await agent.adapter.watch(threadId, task.deviceId, { fresh: true, history: false });
 
-  const settings = await agent.adapter.readSettings(threadId, task.deviceId), changes = settingChanges(settings.settings, choices);
-  if (Object.keys(changes).length) await context.step('应用执行设置', commandId => command('thread.settings.update', { threadId, changes }, commandId));
-  let permissions = await agent.adapter.readPermissions(threadId, task.deviceId);
+  // 首轮的设置和权限随发送请求进入原桌面，不提前修改空聊天。
+  const permissions = await agent.adapter.readPermissions(threadId, task.deviceId);
   const selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? '';
-  if (selected && permissions.mode !== selected) {
-    await context.step('应用权限', commandId => command('thread.permissions.update', { threadId, mode: selected, expectedRevision: permissions.revision, confirmedFullAccess: choices.confirmedFullAccess === true }, commandId));
-    permissions = await agent.adapter.readPermissions(threadId, task.deviceId);
-  }
-  assertPermissions(permissions, choices);
+  if (!selected) assertPermissions(permissions, choices);
   context.update({ stage: '正在绑定附件' });
   context.retainScope?.(threadId);
   await agent.adapter.attachments.bindScope(task.deviceId, 'task:' + task.id, threadId, attachments);
-
-  // 最后一次只读核对在附件落盘之后，首条 guard 再由桌面适配器验证。
   await agent.adapter.watch(threadId, task.deviceId, { fresh: true, history: false });
-  assertSettings(await agent.adapter.readSettings(threadId, task.deviceId), choices, images);
-  permissions = await agent.adapter.readPermissions(threadId, task.deviceId); assertPermissions(permissions, choices);
-  const params = { threadId, text: input.text ?? '', images, attachments };
+  const current = await agent.adapter.readSettings(threadId, task.deviceId);
+  const messageChoices = {};
+  for (const key of ['model', 'effort', 'serviceTier', 'mode']) if (choices[key] != null) messageChoices[key] = choices[key];
+  const imageModel = choices.model ?? current.settings.model;
+  if (images.length && current.models?.find(model => model.id === imageModel)?.supportsImages !== true) throw new BridgeError('IMAGES_UNSUPPORTED', '当前模型不支持图片，请切换模型');
+  Object.assign(messageChoices, { permissionMode: selected || permissions.mode, permissionRevision: permissions.revision, confirmedFullAccess: selected === 'full-access' && choices.confirmedFullAccess === true });
+  const params = { threadId, text: input.text ?? '', images, attachments, choices: messageChoices };
   if (input.pluginIds?.length) params.pluginIds = input.pluginIds;
   if (input.threadMentionIds?.length) params.threadMentionIds = input.threadMentionIds;
-  const guard = { permissionRevision: permissions.revision, confirmedFullAccess: choices.permissionMode === 'full-access' && choices.confirmedFullAccess === true };
+  const guard = { permissionRevision: permissions.revision, confirmedFullAccess: messageChoices.confirmedFullAccess };
   const sent = await context.step('发送首条消息', commandId => command('turn.send', params, commandId, guard));
   if (sent?.ok !== true) throw new BridgeError('OUTCOME_UNKNOWN', '首条消息回执尚未确认，请核对电脑端', true);
   return { ok: true, threadId };
@@ -89,10 +87,8 @@ async function runNative(agent, task, context, command, choices, images, attachm
   assertReady();
   const changes = settingChanges(snapshot.settings, choices), selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? '';
   if (selected && snapshot.permissions.mode !== selected) changes.permissionMode = selected;
-  if (Object.keys(changes).length) {
-    await context.step('应用草稿设置和权限', commandId => command('thread.draft.update', { draftId, expectedRevision: snapshot.revision, changes, confirmedFullAccess: choices.confirmedFullAccess === true }, commandId));
-    snapshot = await agent.nativeDrafts.read({ draftId }, task.deviceId); assertReady();
-  }
+  // 老原生草稿只有逐项 setter，不能静默退回先改设置再发送。
+  if (Object.keys(changes).length) throw new BridgeError('MESSAGE_CHOICES_UNSUPPORTED', '此电脑原生草稿不能直接携带所选设置，请更新连接服务，原输入已保留');
   assertSettings(snapshot, choices, images); assertPermissions(snapshot.permissions, choices);
   context.update({ stage: '正在绑定草稿附件' });
   context.retainScope?.('draft:' + draftId);

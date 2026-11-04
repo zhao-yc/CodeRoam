@@ -44,7 +44,7 @@ export function validateTaskRequest(method, params, requestId) {
       const guard = payload.firstMessageGuard;
       if (payload.method !== 'turn.send' || !keys(guard,['permissionRevision','confirmedFullAccess']) || Object.keys(guard).length !== 2 ||
           !/^[a-f0-9]{64}$/.test(guard.permissionRevision ?? '') || typeof guard.confirmedFullAccess !== 'boolean' ||
-          Object.keys(payload.params).some(key => !['threadId','text','images','attachments','pluginIds','threadMentionIds'].includes(key))) fail('任务首条消息保护参数无效');
+          Object.keys(payload.params).some(key => !['threadId','text','images','attachments','pluginIds','threadMentionIds','choices'].includes(key))) fail('任务首条消息保护参数无效');
     }
     // 普通旧入口由适配层校验图片；持久化前即限制体积和内容，防止无效正文占据数据库。
     if (payload.params.images !== undefined) validateImages(payload.params.images);

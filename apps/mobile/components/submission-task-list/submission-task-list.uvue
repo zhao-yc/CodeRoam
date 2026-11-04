@@ -60,7 +60,6 @@ const summaryState = computed((): string => submissionFloatingState(rows.value.m
 const summaryLabel = computed((): string => submissionFloatingLabel(summaryState.value, rows.value.length))
 // 浮窗只控制展示；收起、切换电脑和离开页面都不取消已入队的任务。
 function closePanel() { opened.value = false; expanded.value = false }
-function openPanel() { if (hasCurrent.value) opened.value = true; else openHistory() }
 watch((): string => props.hostId + ':' + submissionTasks.namespace + ':' + props.active + ':' + props.obscured, () => { closePanel(); error.value = '' })
 // 成功五秒后由既有任务时钟移出，自动恢复为常驻历史入口。
 watch((): boolean => hasCurrent.value, (current: boolean) => { if (!current) closePanel() })
@@ -70,6 +69,7 @@ function canResume(hostId: string, task: SubmissionTask): boolean { const snapsh
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
 function taskTitle(task: SubmissionTask): string { return task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }
 function openHistory() { closePanel(); uni.navigateTo({ url: '/pages/task-history/index' + (props.hostId.length > 0 ? '?hostId=' + encodeURIComponent(props.hostId) : '') }) }
+function openPanel() { if (hasCurrent.value) opened.value = true; else openHistory() }
 function openInstanceHistory(hostId: string) { closePanel(); uni.navigateTo({ url: '/pages/task-history/index?hostId=' + encodeURIComponent(hostId) }) }
 // 首页错误只占一行，用户点击仍能读取完整原因。
 function showError(task: SubmissionTask) { uni.showModal({ title: '执行失败详情', content: task.error, showCancel: false, confirmText: '知道了' }) }

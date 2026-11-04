@@ -28,7 +28,7 @@ function snapshot(projectId = 'project-a', draftId = 'draft-a') {
 }
 
 /** 实际执行状态层、新建编排和正式聊天本地草稿，仅替换传输与系统 API。 */
-function fixture({ component = false, storage = new Map() } = {}) {
+function fixture({ component = false, storage = new Map(), taskQueue = false } = {}) {
   const calls = [], hooks = new Map(), backend = new Map(), pending = new Map(), watches = [], emitted = [], unmounts = [];
   const connection = { hostId: 'pc-a', cacheNamespace: 'example-pairing', configurationRevision: 1, connected: true, configured: true, computers: [
     { id: 'pc-a', online: true, instanceGeneration: directGeneration },
@@ -49,7 +49,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
       if (write) pending.set(scope, commandId);
       const run = async () => {
         if (hooks.has(method)) return hooks.get(method)(params, hostId);
-        if (method === 'projects.list') return { supportsNativeNewDraft: true, projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a' };
+        if (method === 'projects.list') return { supportsDirectMessageChoices:true, supportsNativeNewDraft: true, projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a' };
         if (method === 'thread.create.settings') { const { settings, models } = snapshot(params.projectId); return { settings, models }; }
         if (method === 'thread.permissions.read') return snapshot().permissions;
         if (method === 'thread.draft.open') {
@@ -96,7 +96,7 @@ function fixture({ component = false, storage = new Map() } = {}) {
     selectComputer(id) { connection.hostId = id; },
   };
   const props = { expanded: false };
-  const context = vm.createContext({ bridge, connection, reactive: value => value, ref: value => ({ value }),
+  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, submitNewConversationTask: async (draft, mode) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), text: draft.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
     computed: run => ({ get value() { return run(); } }),
     watch: (get, run, options) => { watches.push({ get, run }); if (options?.immediate) run(get()); },
     nextTick: run => Promise.resolve().then(run), onMounted() {}, onUnmounted: run => unmounts.push(run),
@@ -451,7 +451,7 @@ test('完整访问弹窗期间切电脑或权限版本变化取消旧确认，�
   assert.deepEqual(existing.calls.map(call => call.method), ['thread.permissions.read', 'thread.permissions.update']); assert.equal(existing.calls[1].write, true);
 });
 
-test('展开与本地选择不打开电脑草稿，显式发送才打开并落实设置', async () => {
+test('展开与本地选择不写 PC，旧任务入口不会拆成逐项设置', async () => {
   const f = fixture({ component: true }); f.loadProjects(); await tick(); assert.equal(f.calls.length, 0);
   f.props.expanded = true; f.loadProjects(); await tick(); await tick();
   assert.equal(f.projectId.value, 'project-a');
@@ -462,9 +462,7 @@ test('展开与本地选择不打开电脑草稿，显式发送才打开并落�
   assert.equal(f.focused.value, true); assert.equal(f.canSend.value, true);
   assert.equal(f.calls.some(call => call.method.startsWith('thread.draft.')), false);
   await f.send();
-  assert.deepEqual(f.calls.filter(call => call.write).map(call => call.method), ['thread.draft.open', 'thread.draft.update', 'thread.draft.send']);
-  assert.deepEqual(f.calls.find(call => call.method === 'thread.draft.update').params.changes, { model: 'model-b', effort: 'high', mode: 'plan', permissionMode: 'read-only' });
-  assert.ok(f.emitted.some(event => event[0] === 'created'));
+  assert.deepEqual(f.calls.filter(call => call.write), []);assert.match(f.error.value,/更新电脑连接服务/);assert.equal(f.draft.value.choices.model,'model-b');assert.equal(f.draft.value.text,'首条合成消息');
   const legacy = fixture({ component: true }); legacy.props.expanded = true; legacy.hooks.set('projects.list', () => ({ supportsThreadCreation: true, projects: [] }));
   legacy.loadProjects(); await tick(); assert.equal(legacy.calls.some(call => call.method === 'thread.draft.open'), false);
 });
@@ -480,17 +478,17 @@ test('重新展开和连接恢复仅刷新项目，保留本地选择且不打�
   assert.equal(f.calls.some(call=>call.method.startsWith('thread.draft.')),false);
 });
 
-test('电脑实际权限与手机选择不同，保留首条输入和设置，不调用原生发送', async () => {
+test('旧提交能力保留权限选择和首条输入，不调用原生发送', async () => {
   const f=fixture({component:true}); f.props.expanded=true; await f.loadProjects(); await tick();
   f.draft.value.text='保留合成草稿'; f.selectPermission('read-only',false);
   f.hooks.set('thread.draft.update',()=>({}));
   await f.send();
-  assert.match(f.error.value,/权限与手机选择不同/);
+  assert.match(f.error.value,/更新电脑连接服务/);
   assert.equal(f.draft.value.text,'保留合成草稿'); assert.equal(f.draft.value.choices.permissionMode,'read-only');
   assert.equal(f.calls.some(call=>call.method==='thread.draft.send'),false);
 });
 
-test('电脑默认完整访问时也需要手机确认，确认后复用同一草稿发送', async () => {
+test('电脑默认完整访问仍需手机确认，旧入口确认后也不能拆分设置', async () => {
   const f=fixture({component:true}); f.props.expanded=true; await f.loadProjects(); await tick();
   const value={...snapshot(),hostId:'pc-a'}; value.permissions.mode='full-access'; f.backend.set('pc-a:draft-a',value);
   f.draft.value.text='合成草稿'; await f.send();
@@ -498,7 +496,7 @@ test('电脑默认完整访问时也需要手机确认，确认后复用同一�
   assert.equal(f.calls.some(call=>call.method==='thread.draft.send'),false);
   f.selectPermission('full-access',true); await f.send();
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,1);
-  assert.equal(f.calls.filter(call=>call.method==='thread.draft.send').length,1);
+  assert.equal(f.calls.filter(call=>call.method==='thread.draft.send').length,0);assert.match(f.error.value,/更新电脑连接服务/);
 });
 
 test('缺少新建能力声明时提示重新读取，保留本地输入且不创建会话',async()=>{
@@ -687,4 +685,17 @@ test('后台项目刷新不抢输入焦点，明确重选当前项目则恢复�
   f.loadProjects();await tick();await tick();assert.equal(f.focused.value,false);
   f.chooseProject('project-a');await tick();await tick();assert.equal(f.focused.value,true);
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,opened);
+});
+
+test('新版新聊天把所有选择交给一条消息任务，不进入逐项设置路径', async () => {
+  const f=fixture({component:true,taskQueue:true});f.props.expanded=true;f.loadProjects();await tick();await tick();
+  f.draft.value.text='合成汇总正文';f.selectSetting('model','model-b');f.selectPermission('read-only',false);f.composerAction('plan');
+  await f.send();
+  assert.deepEqual(f.calls.filter(c=>c.write).map(c=>c.method),['tasks.submit']);
+  const sent=f.calls.find(c=>c.method==='tasks.submit');assert.equal(sent.params.choices.model,'model-b');assert.equal(sent.params.choices.mode,'plan');assert.equal(sent.params.choices.permissionMode,'read-only');
+});
+test('旧连接只声明汇总但不声明原生一次发送时保留新聊天选择和正文',async()=>{
+  const f=fixture({component:true,taskQueue:true});f.props.expanded=true;f.hooks.set('projects.list',()=>({supportsNativeNewDraft:true,supportsDirectMessageChoices:false,selectedProjectId:'project-a',projects:[{id:'project-a',cwd:'/example'}]}));await f.loadProjects();await tick();await f.loadSettings();
+  f.draft.value.text='保留合成消息';f.draft.value.choices={effort:'high'};await f.send();
+  assert.equal(f.calls.some(c=>c.write),false);assert.equal(f.draft.value.text,'保留合成消息');assert.equal(f.draft.value.choices.effort,'high');assert.match(f.error.value,/更新电脑连接服务/);
 });

@@ -37,7 +37,7 @@ test('独占 IPC 单实例在存活且就绪时声明直接新聊天',async cont
   const instance={directIpc:true,alive:true,ready:true,generation};
   const client=setup(context,instance);
   const expected={projects,supportsThreadCreation:true,supportsNativeNewDraft:false};
-  assert.deepEqual(await client.read(),{...expected,newConversationMode:'desktopIpc'});
+  assert.deepEqual(await client.read(),{...expected,supportsDirectMessageChoices:true,newConversationMode:'desktopIpc'});
   instance.ready=false;
   assert.deepEqual(await client.read(),{...expected,newConversationUnavailableReason:'电脑实例连接尚未就绪，请重新连接后读取项目'});
   instance.ready=true;
@@ -46,27 +46,28 @@ test('独占 IPC 单实例在存活且就绪时声明直接新聊天',async cont
   assert.equal(client.probes,0);
 });
 
-test('多个已绑定实例优先原生页面，草稿页面失效时使用原 IPC 创建',async context=>{
+test('多个已绑定实例直接使用原 IPC 创建，避免逐项修改原生草稿',async context=>{
   const instance={platform:'win32',directIpc:false,alive:true,ready:true,generation,port:9222};
   const bindings={allowedClients:new Set(['example-desktop'])};
   const withPage=setup(context,{...instance},true,bindings);
   const withoutPage=setup(context,{...instance},false,bindings);
-  assert.deepEqual(await withPage.read(),{projects,supportsThreadCreation:true,supportsNativeNewDraft:true,newConversationMode:'nativeDraft'});
-  assert.deepEqual(await withoutPage.read(),{projects,supportsThreadCreation:true,supportsNativeNewDraft:false,newConversationMode:'desktopIpc'});
-  assert.equal(withPage.probes,1);
-  assert.equal(withoutPage.probes,1);
+  assert.deepEqual(await withPage.read(),{projects,supportsThreadCreation:true,supportsNativeNewDraft:false,supportsDirectMessageChoices:true,newConversationMode:'desktopIpc'});
+  assert.deepEqual(await withoutPage.read(),{projects,supportsThreadCreation:true,supportsNativeNewDraft:false,supportsDirectMessageChoices:true,newConversationMode:'desktopIpc'});
+  assert.equal(withPage.probes,0);
+  assert.equal(withoutPage.probes,0);
 });
 
 test('IPC 新聊天能力需要真实当前绑定，拒绝空客户端集合与缺失代次',()=>{
   const instance={platform:'win32',alive:true,ready:true,generation,port:9222};
   const bound=()=>({client:{instance:{...instance},assertCurrent(){},allowedClients:new Set(['example-desktop'])}});
   assert.equal(supportsDesktopIpcNewConversation(bound()),true);
+  const mac=bound();mac.client.instance.platform='darwin';assert.equal(supportsDesktopIpcNewConversation(mac),true);mac.client.allowedClients.clear();assert.equal(supportsDesktopIpcNewConversation(mac),false);
   const router=bound(); router.client.instance.routerManaged=true; delete router.client.instance.port;
   assert.equal(supportsDesktopIpcNewConversation(router),true);
   const direct=bound(); direct.client.instance.directIpc=true; direct.client.allowedClients.clear(); delete direct.client.instance.platform;
   assert.equal(supportsDesktopIpcNewConversation(direct),true);
   for(const mutate of [
-    row=>{row.client.instance.platform='darwin';},
+    row=>{row.client.instance.platform='linux';},
     row=>{row.client.instance.ready=false;},
     row=>{row.client.instance.alive=false;},
     row=>{delete row.client.instance.generation;},

@@ -40,7 +40,10 @@ class Desktop extends EventEmitter {
       this.publish();return {resultType:'success',result:{applied:true}};
     }
     if(method==='thread-follower-start-turn'||method==='thread-follower-steer-turn') {
-      this.sentSettings??=[];this.sentSettings.push(structuredClone(this.state.latestThreadSettings));
+      if(this.rejectSettings)throw new BridgeError('SEND_REJECTED','合成原生发送拒绝');
+      const request=params.turnStart?.request??params, next={...this.state.latestThreadSettings};
+      for(const key of ['model','effort','serviceTier','permissions','approvalPolicy','approvalsReviewer','collaborationMode'])if(Object.hasOwn(request,key))next[key]=request[key];
+      this.sentSettings??=[];this.sentSettings.push(structuredClone(next));
       if(this.unknownSend)throw new BridgeError('OUTCOME_UNKNOWN','合成发送结果未知',true);
     }
     return {resultType:'success',result:{ok:true}};
@@ -62,19 +65,19 @@ test('消息选项白名单拒绝非法字段、缺少权限版本和未确认�
   for(const choices of [{model:'model-a',effort:'high',serviceTier:''},{mode:'plan'},{permissionMode:'full-access',permissionRevision:'a'.repeat(64),confirmedFullAccess:true}])assert.doesNotThrow(()=>validateRequest(request(choices)));
 });
 
-test('空闲消息先应用并回读模型强度速度模式，仅创建一条发送任务',async t=>{
+test('空闲消息直接在唯一原生发送请求携带模型强度速度模式，不提前修改设置',async t=>{
   const f=fixture(t),id=randomUUID(),result=await f.send({choices:{model:'model-b',effort:'medium',serviceTier:'',mode:'plan'}},id);
   assert.equal(result.error,undefined);assert.equal(f.client.sentSettings.length,1);
   assert.equal(f.client.sentSettings[0].model,'model-b');assert.equal(f.client.sentSettings[0].effort,'medium');assert.equal(f.client.sentSettings[0].collaborationMode.mode,'plan');
-  assert.equal(f.client.calls.filter(call=>call.method==='thread-follower-update-thread-settings').length,1);
+  assert.equal(f.client.calls.filter(call=>call.method==='thread-follower-update-thread-settings').length,0);
   assert.equal(f.agent.taskQueue.list('phone',{view:'history'}).tasks.filter(task=>task.method==='thread.settings.update').length,0);
   await f.send({choices:{model:'model-b',effort:'medium',serviceTier:'',mode:'plan'}},id);assert.equal(f.client.sentSettings.length,1);
 });
 
-test('执行设置失败时不投递正文，消息任务保留明确失败',async t=>{
+test('原生发送明确失败时不改变 PC 设置，消息任务保留明确失败',async t=>{
   const f=fixture(t);f.client.rejectSettings=true;
   const result=await f.send({choices:{effort:'low'}});
-  assert.equal(result.error.code,'SETTINGS_CHANGED');assert.equal(f.client.sentSettings,undefined);
+  assert.equal(result.error.code,'SEND_REJECTED');assert.equal(f.client.sentSettings,undefined);assert.equal(f.client.state.latestReasoningEffort,'high');assert.equal(f.client.calls.some(c=>c.method==='thread-follower-update-thread-settings'),false);
 });
 
 test('权限冲突在任何设置写入前拒绝，完整访问确认不跨版本复用',async t=>{
@@ -82,18 +85,18 @@ test('权限冲突在任何设置写入前拒绝，完整访问确认不跨版�
   assert.equal(result.error.code,'PERMISSIONS_CHANGED');assert.equal(f.client.calls.some(call=>call.method==='thread-follower-update-thread-settings'),false);assert.equal(f.client.sentSettings,undefined);
 });
 
-test('执行设置和权限随同一消息应用，正文使用确认后的选项',async t=>{
+test('执行设置和权限放入同一原生发送请求，发送前 PC 设置保持原值',async t=>{
   const f=fixture(t);await f.adapter.watch('thread','phone');const permissions=await f.adapter.readPermissions('thread','phone');
   const result=await f.send({choices:{effort:'low',permissionMode:'read-only',permissionRevision:permissions.revision}});
   assert.equal(result.error,undefined);assert.equal(f.client.sentSettings[0].effort,'low');assert.equal(f.client.sentSettings[0].permissions,':read-only');
 });
 
-test('设置成功但正文结果未知时只核对原请求，不重复应用或发送',async t=>{
+test('原生请求结果未知时只核对原请求，不重发正文或补写设置',async t=>{
   const f=fixture(t),id=randomUUID();f.client.unknownSend=true;
   const params={choices:{effort:'low'}};
   assert.equal((await f.send(params,id)).error.outcomeUnknown,true);
   await f.send(params,id);await f.agent.readTaskCommandStatus('phone',id,'thread');
-  assert.equal(f.client.sentSettings.length,1);assert.equal(f.client.calls.filter(call=>call.method==='thread-follower-update-thread-settings').length,1);
+  assert.equal(f.client.sentSettings.length,1);assert.equal(f.client.calls.filter(call=>call.method==='thread-follower-update-thread-settings').length,0);
 });
 
 test('运行中消息选项入队后保持各自快照，撤回编辑完整恢复',async t=>{
@@ -119,10 +122,11 @@ test('排队实际发送时才应用原选项，运行中即时设置仍可单�
   assert.equal(f.client.sentSettings[0].effort,'low');
 });
 
-test('运行中追加前应用允许的选项，计划模式选择保留给新一轮',async t=>{
+test('运行中追加只直接携带速度，其他待发设置保留给排队新一轮',async t=>{
   const f=fixture(t);f.client.running();
-  const result=await f.send({expectedTurnId:'active',choices:{effort:'low'}},randomUUID(),'turn.steer');
-  assert.equal(result.error,undefined);assert.equal(f.client.sentSettings[0].effort,'low');
+  const result=await f.send({expectedTurnId:'active',choices:{serviceTier:'priority'}},randomUUID(),'turn.steer');
+  assert.equal(result.error,undefined);assert.equal(f.client.sentSettings[0].serviceTier,'priority');
+  await assert.rejects(f.adapter.operate('turn.steer',{threadId:'thread',text:'合成消息',expectedTurnId:'active',choices:{effort:'low'}},randomUUID(),'phone'),{code:'CHOICES_REQUIRE_QUEUE'});
   const blocked=await f.send({expectedTurnId:'active',choices:{mode:'plan'}},randomUUID(),'turn.steer');
   assert.equal(blocked.error.code,'BAD_SETTINGS');assert.equal(f.client.sentSettings.length,1);
 });
@@ -158,8 +162,13 @@ test('手机增量重建保留汇总设置能力，显式撤销能力也会生�
  const source=fs.readFileSync('apps/mobile/services/bridge.uts','utf8');
  const assignment=source.split(/\r?\n/).find(line=>line.includes('connection.snapshot = { threadId: update.threadId'));
  for(const supported of [true,false]){
-  const c=vm.createContext({connection:{},update:{threadId:'thread',supportsMessageChoices:supported},ordered:[]});
+  const c=vm.createContext({connection:{},update:{threadId:'thread',supportsMessageChoices:supported,supportsDirectMessageChoices:supported},ordered:[]});
   vm.runInContext(stripTypeScriptTypes(assignment,{mode:'transform'}),c);
-  assert.equal(c.connection.snapshot.supportsMessageChoices,supported);
+  assert.equal(c.connection.snapshot.supportsMessageChoices,supported);assert.equal(c.connection.snapshot.supportsDirectMessageChoices,supported);
  }
+});
+
+test('附件准备期间桌面并发修改设置，发送前拒绝且没有设置写入',async t=>{
+  const f=fixture(t);f.adapter.attachments.materialize=()=>{f.adapter.subscribed('thread','phone').state.latestCollaborationMode.settings.reasoning_effort='low';return []};
+  const result=await f.send({choices:{effort:'low'}});assert.equal(result.error.code,'SETTINGS_CHANGED');assert.equal(f.client.sentSettings,undefined);assert.equal(f.client.calls.some(c=>c.method==='thread-follower-update-thread-settings'),false);
 });

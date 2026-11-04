@@ -78,7 +78,7 @@ test('空闲模式选择随消息提交，桌面读取和快照不能覆盖本�
  const f=page();f.selectSetting('mode','default');assert.equal(f.calls.length,0);assert.equal(f.planEnabled.value,false);
  f.desktop('plan');assert.equal(f.planEnabled.value,false);
  f.loadSettings();f.pending.shift().resolve({settings:setting('plan'),models:[{id:'model'}]});await tick();assert.equal(f.planEnabled.value,false);
- f.context.connection.snapshot.supportsMessageChoices=true;f.send();assert.equal(f.calls.at(-1).params.choices.mode,'default');assert.equal(f.calls.at(-1).method,'turn.send');
+ f.context.connection.snapshot.supportsMessageChoices=true;f.context.connection.snapshot.supportsDirectMessageChoices=true;f.send();assert.equal(f.calls.at(-1).params.choices.mode,'default');assert.equal(f.calls.at(-1).method,'turn.send');
  f.pending.shift().resolve({ok:true});await tick();
 });
 
@@ -93,7 +93,7 @@ test('空闲连续选择汇总到单条消息，旧连接服务拒绝降级并�
  assert.equal(f.calls.length,0);assert.equal(f.planEnabled.value,true);
  f.send();assert.equal(f.calls.length,0);assert.match(f.context.operationError.value,/更新电脑连接服务/);
  assert.equal(f.context.readMessageChoices('pc','thread').effort,'low');
- f.context.connection.snapshot.supportsMessageChoices=true;f.send();
+ f.context.connection.snapshot.supportsMessageChoices=true;f.context.connection.snapshot.supportsDirectMessageChoices=true;f.send();
  assert.equal(f.calls.length,1);assert.equal(f.calls[0].method,'turn.send');assert.equal(f.calls[0].params.choices.effort,'low');assert.equal(f.calls[0].params.choices.mode,'plan');
  f.pending.shift().resolve({queued:true});await tick();
 });

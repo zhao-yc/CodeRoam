@@ -1,5 +1,5 @@
 import { sendWithChoices } from './message-choices.mjs';
-import { firstMessagePermissions, readPermissions, updatePermissions } from './permissions.mjs';
+import { firstMessagePermissions, permissionState, readPermissions, updatePermissions } from './permissions.mjs';
 import { EventEmitter } from 'node:events';
 import { predictionTurnId } from './prediction-turn.mjs';
 import { randomUUID } from 'node:crypto';
@@ -392,7 +392,7 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   /** 发送首条消息前以当前绑定和最新快照核对空会话，并返回本次明确使用的权限。 */
-  firstMessageContext(threadId,deviceId,guard,expected=null) {
+  firstMessageContext(threadId,deviceId,guard,expected=null,selectedPermissions=null) {
     const instance=this.client.instance;
     if(!supportsDesktopIpcNewConversation(this))throw new BridgeError('INSTANCE_CHANGED','桌面连接已变化，请重新连接');
     const entry=this.subscribed(threadId,deviceId), owner=entry.owner;
@@ -406,11 +406,12 @@ export class DesktopAdapter extends EventEmitter {
         (history?.entitiesByKey&&Object.keys(history.entitiesByKey).length)){
       throw new BridgeError('FIRST_MESSAGE_CHANGED','电脑未确认原聊天为空，请核对后重试');
     }
-    const permissions=firstMessagePermissions(entry.state,guard);
+    if(selectedPermissions&&permissionState(entry.state).revision!==guard.permissionRevision)throw new BridgeError('PERMISSIONS_CHANGED','电脑权限已变化，请重新选择后发送');
+    const permissions=selectedPermissions??firstMessagePermissions(entry.state,guard);
     return {instance,generation:instance.generation,entry,ownerId:owner.clientId,hostId:owner.hostId,cwd,permissions};
   }
 
-  async operate(method,params,commandId,deviceId,checkpoint=()=>{},firstMessageGuard,beforeSend) {
+  async operate(method,params,commandId,deviceId,checkpoint=()=>{},firstMessageGuard,beforeSend,messageOptions) {
     if(method==='turn.send'||method==='turn.steer')validateTurnInput(params);
     if(['turn.send','turn.steer'].includes(method)&&params.choices!==undefined)return sendWithChoices(this,method,params,commandId,deviceId,checkpoint,firstMessageGuard);
     if(method==='turn.retry')return this.retryTurn(params,commandId,deviceId);
@@ -428,7 +429,7 @@ export class DesktopAdapter extends EventEmitter {
     if(method==='thread.goal.update')return updateGoal(this,params,commandId,deviceId);
     // 问答在回传前读取所有者最新快照，避免使用手机停留期间的旧问题。
     await this.watch(params.threadId,deviceId,{fresh:firstMessageGuard!==undefined||method==='question.reply'||(method==='turn.send'&&params.resetPlanAfterSend===true),history:false});
-    const firstMessage=firstMessageGuard===undefined?null:this.firstMessageContext(params.threadId,deviceId,firstMessageGuard);
+    const firstMessage=firstMessageGuard===undefined?null:this.firstMessageContext(params.threadId,deviceId,firstMessageGuard,null,messageOptions?.permissions===undefined?null:Object.fromEntries(['permissions','approvalPolicy','approvalsReviewer'].map(key=>[key,messageOptions[key]])));
     if(method==='turn.send'&&params.resetPlanAfterSend===true) {
       const current=normalizeConversation(this.conversations.get(params.threadId).state);
       if(current.activeTurnId||current.status==='active')throw new BridgeError('TURN_ACTIVE','任务正在运行，请使用追加指令');
@@ -507,9 +508,14 @@ export class DesktopAdapter extends EventEmitter {
     } else throw new BridgeError('METHOD_NOT_ALLOWED','不支持的桌面操作');
     if(firstMessage){
       // 初始快照强制刷新，插件解析和附件落盘后再次核对当前订阅收到的最新状态。
-      const current=this.firstMessageContext(params.threadId,deviceId,firstMessageGuard,firstMessage);
+      const current=this.firstMessageContext(params.threadId,deviceId,firstMessageGuard,firstMessage,firstMessage.permissions);
       Object.assign(payload.turnStart.request,current.permissions);
       if(mentions?.additionalContext) payload.turnStart.request.additionalContext=mentions.additionalContext;
+    }
+    // 仅内部校验后的选项可进入原生请求，手机不能直接提供底层沙箱字段。
+    if(messageOptions) {
+      if(method==='turn.send')Object.assign(payload.turnStart.request,messageOptions);
+      else if(method==='turn.steer'&&Object.hasOwn(messageOptions,'serviceTier'))payload.serviceTier=messageOptions.serviceTier;
     }
     selection?.check(); mentions?.check();
     beforeSend?.();

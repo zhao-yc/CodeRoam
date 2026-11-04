@@ -22,6 +22,15 @@ export function permissionState(state) {
   return { mode, revision };
 }
 
+/** 发送选项只映射内置权限档案，沙箱和审批仍由原生发送接口落实。 */
+export function permissionRequest(mode, reviewer, confirmedFullAccess = false) {
+  const preset = presets.find(item => item.id === mode);
+  if (!preset) throw new BridgeError('PERMISSION_NOT_ALLOWED', '不支持所选权限');
+  if (mode === 'full-access' && confirmedFullAccess !== true) throw new BridgeError('PERMISSION_CONFIRMATION_REQUIRED', '请先确认电脑完整访问权限');
+  if (mode === 'auto-review' && !['auto_review', 'guardian_subagent'].includes(reviewer)) throw new BridgeError('PERMISSIONS_UNAVAILABLE', '无法确认电脑审查方式');
+  return { permissions: preset.profile, approvalPolicy: preset.policy, approvalsReviewer: mode === 'auto-review' ? reviewer : 'user' };
+}
+
 /** 首条消息只使用已核对的内置档案，避免发送时继承桌面随后变更的权限。 */
 export function firstMessagePermissions(state,guard) {
   const current=permissionState(state);
