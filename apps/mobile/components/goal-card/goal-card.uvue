@@ -13,7 +13,7 @@
       <template v-else-if="goal != null">
         <scroll-view direction="vertical" class="goal-body" :style="{ maxHeight: contentHeight + 'px' }"><text class="goal-objective" selectable>{{ goal.objective }}</text></scroll-view>
         <text class="goal-usage">{{ usageLabel }}</text>
-        <view class="goal-actions"><button class="goal-action" :disabled="disabled || busy" @click="edit">编辑</button><view v-if="goal.status == 'active'" class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'pause'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">暂停</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="operate('pause')" :aria-label="(busy && pendingAction == 'pause') ? '正在处理' : '暂停'"></button></view><view v-else-if="canResume" class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'resume'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">继续</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="operate('resume')" :aria-label="(busy && pendingAction == 'resume') ? '正在处理' : '继续'"></button></view><view class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'clear'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">清除</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="clear" :aria-label="(busy && pendingAction == 'clear') ? '正在处理' : '清除'"></button></view></view>
+        <view class="goal-actions"><button class="goal-action" :disabled="disabled || busy" @click="edit">编辑</button><view v-if="goal.status == 'active'" class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'pause'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 14px;">暂停</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="operate('pause')" :aria-label="(busy && pendingAction == 'pause') ? '正在处理' : '暂停'"></button></view><view v-else-if="canResume" class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'resume'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 14px;">继续</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="operate('resume')" :aria-label="(busy && pendingAction == 'resume') ? '正在处理' : '继续'"></button></view><view class="goal-action inline-progress-button"><action-progress :busy="busy && pendingAction == 'clear'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 14px;">清除</text><button class="inline-progress-hitbox" :disabled="disabled || busy" @click="clear" :aria-label="(busy && pendingAction == 'clear') ? '正在处理' : '清除'"></button></view></view>
         <text v-if="unavailableReason.length > 0" class="goal-note">{{ unavailableReason }}</text>
         <text v-else-if="busy" class="goal-note">正在同步电脑端目标…</text>
       </template>
@@ -68,42 +68,42 @@ watch((): boolean => props.busy, (value: boolean, previous: boolean) => { if (!v
 
 <style>
 .goal-widget { flex-shrink: 0; margin-bottom: 5px; }
-.goal-panel { background-color: #eef0e9; border-radius: 16px; margin-bottom: 5px; padding: 8px 12px; }
+.goal-panel { background-color: #f6f7fb; border-radius: 16px; margin-bottom: 5px; padding: 8px 12px; }
 .goal-heading { flex-direction: row; align-items: center; }
-.goal-title { font-size: 14px; font-weight: bold; color: #202c28; }
-.goal-state { font-size: 11px; color: #7b827a; margin-left: 8px; flex: 1; }
-.goal-close { width: 36px; height: 32px; padding: 0; margin: 0 0 0 auto; background-color: transparent; color: #7b827a; font-size: 22px; line-height: 30px; border-width: 0; align-items: center; justify-content: center; }
+.goal-title { font-size: 14px; font-weight: bold; color: #1a2135; }
+.goal-state { font-size: 11px; color: #596479; margin-left: 8px; flex: 1; }
+.goal-close { width: 36px; height: 32px; padding: 0; margin: 0 0 0 auto; background-color: transparent; color: #596479; font-size: 22px; line-height: 30px; border-width: 0; align-items: center; justify-content: center; }
 .goal-body { flex-shrink: 1; }
-.goal-objective { font-size: 14px; line-height: 22px; color: #39473f; }
-.goal-usage { font-size: 10px; color: #7b827a; line-height: 18px; margin-top: 4px; }
+.goal-objective { font-size: 14px; line-height: 22px; color: #1a2135; }
+.goal-usage { font-size: 10px; color: #596479; line-height: 18px; margin-top: 4px; }
 .goal-actions { flex-direction: row; align-items: center; margin-top: 2px; }
-.goal-action { min-width: 58px; height: 42px; margin: 0 8px 0 0; padding: 0 12px; border-width: 0; background-color: transparent; color: #285c49; font-size: 14px; line-height: 42px; }
-.goal-primary { background-color: #285c49; color: #ffffff; border-radius: 12px; min-width: 110px; }
+.goal-action { min-width: 58px; height: 42px; margin: 0 8px 0 0; padding: 0 12px; border-width: 0; background-color: transparent; color: #4546bd; font-size: 14px; line-height: 42px; }
+.goal-primary { background-color: #4546bd; color: #ffffff; border-radius: 12px; min-width: 110px; }
 /* 编辑态采用独立输入区与整行操作区，窄屏和键盘弹起时仍保留可用空间。 */
-.goal-panel-editor { background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 24px; padding: 16px; }
+.goal-panel-editor { background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 24px; padding: 16px; }
 .goal-panel-editor .goal-heading { margin-bottom: 16px; }
-.goal-title-icon { width: 34px; height: 34px; border-radius: 11px; background-color: #edf2e9; align-items: center; justify-content: center; margin-right: 10px; flex-shrink: 0; }
+.goal-title-icon { width: 34px; height: 34px; border-radius: 11px; background-color: #f6f7fb; align-items: center; justify-content: center; margin-right: 10px; flex-shrink: 0; }
 .goal-panel-editor .goal-title { font-size: 18px; }
 .goal-panel-editor .goal-close { width: 36px; height: 36px; }
-.goal-editor-field { border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 16px; background-color: #f5f7f2; padding: 12px 14px 10px; }
+.goal-editor-field { border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 16px; background-color: #f6f7fb; padding: 12px 14px 10px; }
 .goal-editor-actions { flex-direction: row; align-items: center; margin-top: 16px; }
-.goal-cancel { flex: 1; min-width: 0; height: 46px; margin: 0 10px 0 0; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e2e8e1; border-radius: 13px; background-color: #ffffff; color: #263c31; line-height: 44px; font-size: 15px; align-items: center; justify-content: center; }
-.goal-save { position: relative; flex: 1.8; min-width: 0; height: 46px; padding: 0 12px; background-color: #285c49; border-radius: 13px; flex-direction: row; align-items: center; justify-content: center; }
+.goal-cancel { flex: 1; min-width: 0; height: 46px; margin: 0 10px 0 0; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 13px; background-color: #ffffff; color: #1a2135; line-height: 44px; font-size: 15px; align-items: center; justify-content: center; }
+.goal-save { position: relative; flex: 1.8; min-width: 0; height: 46px; padding: 0 12px; background-color: #4546bd; border-radius: 13px; flex-direction: row; align-items: center; justify-content: center; }
 .goal-save-label { color: #ffffff; font-size: 15px; line-height: 24px; }
 .goal-save-arrow { color: #ffffff; font-size: 18px; line-height: 24px; margin-left: 8px; }
-.goal-save-disabled { background-color: #e5eae1; color: #8a968c; }
-.goal-save-disabled .goal-save-label { color: #8a968c; }
-.goal-save-disabled .goal-save-arrow { color: #8a968c; }
-.goal-summary { position: relative; flex-direction: row; align-items: center; height: 36px; max-height: 36px; overflow: hidden; padding: 0 10px; border-radius: 18px; background-color: #f0f1eb; }
-.goal-symbol { font-size: 19px; color: #285c49; margin-right: 5px; flex-shrink: 0; }
-.goal-summary-label { flex: 1; flex-shrink: 1; min-width: 0; height: 20px; line-height: 20px; overflow: hidden; lines: 1; text-overflow: ellipsis; font-size: 12px; color: #39473f; }
+.goal-save-disabled { background-color: #e5e8f1; color: #737d91; }
+.goal-save-disabled .goal-save-label { color: #737d91; }
+.goal-save-disabled .goal-save-arrow { color: #737d91; }
+.goal-summary { position: relative; flex-direction: row; align-items: center; height: 36px; max-height: 36px; overflow: hidden; padding: 0 10px; border-radius: 18px; background-color: #f6f7fb; }
+.goal-symbol { font-size: 19px; color: #4546bd; margin-right: 5px; flex-shrink: 0; }
+.goal-summary-label { flex: 1; flex-shrink: 1; min-width: 0; height: 20px; line-height: 20px; overflow: hidden; lines: 1; text-overflow: ellipsis; font-size: 12px; color: #1a2135; }
 /* #ifdef WEB */
 .goal-summary-label { white-space: nowrap; }
 /* #endif */
-.goal-summary-state { font-size: 10px; color: #7b827a; margin-left: 8px; flex-shrink: 0; }
+.goal-summary-state { font-size: 10px; color: #596479; margin-left: 8px; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; }
-.goal-editor { width: 100%; font-size: 15px; line-height: 26px; padding: 0; color: #263c31; }
-.goal-placeholder { color: #7c8780; }
-.goal-counter { font-size: 11px; line-height: 20px; text-align: right; color: #7c8780; margin-top: 8px; }
-.goal-note { font-size: 11px; line-height: 17px; color: #7b827a; margin-top: 2px; }
+.goal-editor { width: 100%; font-size: 15px; line-height: 26px; padding: 0; color: #1a2135; }
+.goal-placeholder { color: #596479; }
+.goal-counter { font-size: 11px; line-height: 20px; text-align: right; color: #596479; margin-top: 8px; }
+.goal-note { font-size: 11px; line-height: 17px; color: #596479; margin-top: 2px; }
 </style>

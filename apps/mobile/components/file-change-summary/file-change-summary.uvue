@@ -9,7 +9,7 @@
       <view class="changes-footer action-frame"><text class="footer-text">{{ report!.fileCount > 3 ? '查看另外 ' + (report!.fileCount - 3) + ' 个文件' : '查看代码差异' }}</text><app-icon name="chevron-right" :size="16" tone="muted" /><button class="action-hitbox" aria-label="查看全部修改文件与代码差异" hover-class="action-pressed" @click="open('')"></button></view>
     </template>
   </view>
-  <view v-else-if="error.length > 0 || manualRetry" class="changes-error"><text class="error-text">{{ error }}</text><view class="retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重试文件汇总</text><button class="inline-progress-hitbox" :disabled="!connected || loading || (manualRetry)" @click="load(true)" :aria-label="(manualRetry) ? '正在重试文件汇总' : '重试文件汇总'"></button></view></view>
+  <view v-else-if="error.length > 0 || manualRetry" class="changes-error"><text class="error-text">{{ error }}</text><view class="retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">重试文件汇总</text><button class="inline-progress-hitbox" :disabled="!connected || loading || (manualRetry)" @click="load(true)" :aria-label="(manualRetry) ? '正在重试文件汇总' : '重试文件汇总'"></button></view></view>
 </template>
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
@@ -64,22 +64,22 @@ watch((): boolean => fileChangePreferences.expanded, (value: boolean) => { setEx
 onUnmounted(() => { alive = false; requestVersion++ })
 </script>
 <style>
-.changes-card { margin-top: 14px; border-radius: 16px; border-width: 1px; border-color: #dadfd6; overflow: hidden; background-color: #edf0e9; }
-.changes-heading { min-height: 44px; flex-direction: row; align-items: center; padding: 9px 13px; gap: 7px; background-color: #f0f2ed; }
-.changes-title { font-size: 14px; font-weight: bold; color: #202c28; }
+.changes-card { margin-top: 14px; border-radius: 16px; border-width: 1px; border-color: #e5e8f1; overflow: hidden; background-color: #f6f7fb; }
+.changes-heading { min-height: 44px; flex-direction: row; align-items: center; padding: 9px 13px; gap: 7px; background-color: #f6f7fb; }
+.changes-title { font-size: 14px; font-weight: bold; color: #1a2135; }
 .heading-space { flex: 1; }
 .added { color: #348744; font-size: 13px; flex-shrink: 0; }
 .deleted { color: #c14e56; font-size: 13px; flex-shrink: 0; }
-.changes-row { min-height: 44px; padding: 10px 13px; flex-direction: row; align-items: center; gap: 7px; border-top-width: 1px; border-top-color: #dadfd6; }
-.file-path { flex: 1; min-width: 0; font-size: 13px; color: #34433c; lines: 1; text-overflow: ellipsis; }
-.changes-footer { min-height: 40px; padding: 8px 13px; flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #dadfd6; }
-.footer-text { flex: 1; font-size: 13px; color: #737d74; }
+.changes-row { min-height: 44px; padding: 10px 13px; flex-direction: row; align-items: center; gap: 7px; border-top-width: 1px; border-top-color: #e5e8f1; }
+.file-path { flex: 1; min-width: 0; font-size: 13px; color: #1a2135; lines: 1; text-overflow: ellipsis; }
+.changes-footer { min-height: 40px; padding: 8px 13px; flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #e5e8f1; }
+.footer-text { flex: 1; font-size: 13px; color: #596479; }
 .action-frame { position: relative; overflow: hidden; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(40, 92, 73, 0.08); }
+.action-pressed { background-color: rgba(69, 70, 189, 0.08); }
 .changes-error { margin-top: 12px; flex-direction: row; align-items: center; gap: 8px; }
-.error-text { flex: 1; color: #7b827a; font-size: 12px; }
-.retry { font-size: 12px; color: #285c49; padding: 6px; background-color: transparent; }
+.error-text { flex: 1; color: #596479; font-size: 12px; }
+.retry { font-size: 12px; color: #4546bd; padding: 6px; background-color: transparent; }
 /* #ifdef WEB */
 .action-hitbox::after, .retry::after { border: none; }
 .file-path { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }

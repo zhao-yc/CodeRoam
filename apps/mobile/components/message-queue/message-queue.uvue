@@ -9,9 +9,9 @@
       <text v-for="plugin in message.plugins ?? []" :key="plugin.id" class="queue-caption">插件 · {{ plugin.displayName }}</text>
       <text v-if="message.error.length > 0" class="queue-error">{{ message.error }}</text>
       <view class="queue-actions">
-        <view v-if="editable && (message.state == 'queued' || message.state == 'editing')" class="queue-edit inline-progress-button"><action-progress :busy="pendingAction == 'queue:edit:' + message.id" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">编辑</text><button class="inline-progress-hitbox" :disabled="disabled || (pendingAction == 'queue:edit:' + message.id)" @click="edit(message.id)" :aria-label="(pendingAction == 'queue:edit:' + message.id) ? '正在撤回排队消息' : '编辑'"></button></view>
-        <view v-if="message.state == 'queued'" class="queue-steer inline-progress-button"><action-progress :busy="pendingAction == 'queue:steer:' + message.id" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">追加到当前任务</text><button class="inline-progress-hitbox" :disabled="disabled || !running || (pendingAction == 'queue:steer:' + message.id)" @click="steer(message.id)" :aria-label="(pendingAction == 'queue:steer:' + message.id) ? '正在追加消息' : '追加到当前任务'"></button></view>
-        <view class="queue-cancel inline-progress-button"><action-progress :busy="pendingAction == 'queue:cancel:' + message.id" /><text class="inline-progress-caption" style="color: #69766b; font-size: 12px;">{{ message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队' }}</text><button class="inline-progress-hitbox" :disabled="disabled || message.state == 'sending' || (pendingAction == 'queue:cancel:' + message.id)" @click="cancel(message.id)" :aria-label="(pendingAction == 'queue:cancel:' + message.id) ? '正在取消排队' : (message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队')"></button></view>
+        <view v-if="editable && (message.state == 'queued' || message.state == 'editing')" class="queue-edit inline-progress-button"><action-progress :busy="pendingAction == 'queue:edit:' + message.id" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">编辑</text><button class="inline-progress-hitbox" :disabled="disabled || (pendingAction == 'queue:edit:' + message.id)" @click="edit(message.id)" :aria-label="(pendingAction == 'queue:edit:' + message.id) ? '正在撤回排队消息' : '编辑'"></button></view>
+        <view v-if="message.state == 'queued'" class="queue-steer inline-progress-button"><action-progress :busy="pendingAction == 'queue:steer:' + message.id" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">追加到当前任务</text><button class="inline-progress-hitbox" :disabled="disabled || !running || (pendingAction == 'queue:steer:' + message.id)" @click="steer(message.id)" :aria-label="(pendingAction == 'queue:steer:' + message.id) ? '正在追加消息' : '追加到当前任务'"></button></view>
+        <view class="queue-cancel inline-progress-button"><action-progress :busy="pendingAction == 'queue:cancel:' + message.id" /><text class="inline-progress-caption" style="color: #596479; font-size: 12px;">{{ message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队' }}</text><button class="inline-progress-hitbox" :disabled="disabled || message.state == 'sending' || (pendingAction == 'queue:cancel:' + message.id)" @click="cancel(message.id)" :aria-label="(pendingAction == 'queue:cancel:' + message.id) ? '正在取消排队' : (message.state == 'unknown' || message.state == 'dispatched' ? '移除记录' : '取消排队')"></button></view>
       </view>
     </view>
   </view>
@@ -32,18 +32,18 @@ function cancel(id: string) { if (!props.disabled) emit('cancel', id) }
 function edit(id: string) { if (!props.disabled && props.editable) emit('edit', id) }
 </script>
 <style>
-.queue-panel { margin-top: 14px; border-radius: 16px; border-width: 1px; border-color: #dce2d8; background-color: #f1f4ee; padding: 12px; }
-.queue-heading { color: #56665b; font-size: 13px; font-weight: bold; }
-.queue-row { margin-top: 10px; padding-top: 10px; border-top-width: 1px; border-top-color: #dce2d8; }
-.queue-state { color: #69766b; font-size: 12px; margin-bottom: 6px; }
-.queue-text { color: #26392d; font-size: 15px; line-height: 22px; }
-.queue-caption { color: #69766b; font-size: 12px; margin-top: 6px; }
+.queue-panel { margin-top: 14px; border-radius: 16px; border-width: 1px; border-color: #e5e8f1; background-color: #f6f7fb; padding: 12px; }
+.queue-heading { color: #596479; font-size: 13px; font-weight: bold; }
+.queue-row { margin-top: 10px; padding-top: 10px; border-top-width: 1px; border-top-color: #e5e8f1; }
+.queue-state { color: #596479; font-size: 12px; margin-bottom: 6px; }
+.queue-text { color: #1a2135; font-size: 15px; line-height: 22px; }
+.queue-caption { color: #596479; font-size: 12px; margin-top: 6px; }
 .queue-error { color: #a13830; font-size: 12px; line-height: 18px; margin-top: 6px; }
 .queue-actions { flex-direction: row; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .queue-steer, .queue-cancel, .queue-edit { margin: 0; padding: 4px 10px; min-height: 36px; font-size: 12px; line-height: 28px; border-radius: 10px; }
-.queue-steer { color: #285c49; background-color: #e0e9df; }
-.queue-cancel { color: #69766b; background-color: #e9ede5; }
-.queue-edit { color: #285c49; background-color: #e0e9df; }
+.queue-steer { color: #4546bd; background-color: #e7e9fd; }
+.queue-cancel { color: #596479; background-color: #f6f7fb; }
+.queue-edit { color: #4546bd; background-color: #e7e9fd; }
 /* #ifdef WEB */
 .queue-steer::after, .queue-cancel::after, .queue-edit::after { border: none; }
 /* #endif */

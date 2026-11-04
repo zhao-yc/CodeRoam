@@ -17,7 +17,7 @@
         <text v-if="!filesEnabled || !settingsEnabled" class="option-note">{{ note }}</text>
       </template>
       <template v-else-if="loading && !manualRetry"><text class="option-note">正在读取电脑端设置…</text></template>
-      <template v-else-if="error.length > 0 || manualRetry"><text class="option-error">{{ error }}</text><view class="retry-option inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #285c49; font-size: 14px;">重新读取</text><button class="inline-progress-hitbox" @click="retrySettings" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新读取' : '重新读取'"></button></view></template>
+      <template v-else-if="error.length > 0 || manualRetry"><text class="option-error">{{ error }}</text><view class="retry-option inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 14px;">重新读取</text><button class="inline-progress-hitbox" @click="retrySettings" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新读取' : '重新读取'"></button></view></template>
       <template v-else-if="section == 'models'">
         <view v-for="model in models" :key="model.id" class="option-row model-row"><text class="model-label">{{ model.label }}</text><loading v-if="pendingChoice == 'model:' + model.id" class="option-spinner" /><app-icon v-else-if="model.id == settings?.model" name="check" :size="20" /><button class="option-hitbox" :disabled="busy" :aria-label="(pendingChoice == 'model:' + model.id) ? '正在同步模型' : '选择模型 ' + model.label" @click="emit('select', 'model', model.id)"></button></view>
       </template>
@@ -58,27 +58,27 @@ function labelForEffort(effort: string): string { return effortLabel(effort) }
 </script>
 
 <style>
-.options-panel { border-radius: 22px; padding: 8px 10px; background-color: #f8f8f3; border-width: 1px; border-style: solid; border-color: #e3e5dc; overflow: hidden; }
+.options-panel { border-radius: 22px; padding: 8px 10px; background-color: #ffffff; border-width: 1px; border-style: solid; border-color: #e5e8f1; overflow: hidden; }
 .options-heading { flex-direction: row; align-items: center; height: 38px; padding-left: 12px; }
-.options-title { flex: 1; color: #7b827a; font-size: 13px; }
+.options-title { flex: 1; color: #596479; font-size: 13px; }
 .options-scroll { flex-shrink: 1; }
 .back-action, .close-action { position: relative; width: 34px; height: 34px; align-items: center; justify-content: center; }
 .option-row { position: relative; min-height: 46px; flex-direction: row; align-items: center; padding: 8px 14px; }
 /* 禁用态作用于整行，原生按钮负责阻止触发，图标和文字一起变灰。 */
 .option-disabled { opacity: 0.4; }
 .option-hitbox { position: absolute; left: 0; right: 0; top: 0; bottom: 0; padding: 0; margin: 0; border-radius: 12px; background-color: transparent; }
-.option-label { flex: 1; margin-left: 14px; font-size: 16px; color: #202c28; }
-.option-spinner { width: 16px; height: 16px; border-color: #285c49; }
-.option-separator { height: 1px; background-color: #e3e5dc; margin: 8px 14px; }
-.model-label { flex: 1; min-width: 0; lines: 1; text-overflow: ellipsis; font-size: 16px; color: #202c28; margin-right: 8px; }
+.option-label { flex: 1; margin-left: 14px; font-size: 16px; color: #1a2135; }
+.option-spinner { width: 16px; height: 16px; border-color: #4546bd; }
+.option-separator { height: 1px; background-color: #e5e8f1; margin: 8px 14px; }
+.model-label { flex: 1; min-width: 0; lines: 1; text-overflow: ellipsis; font-size: 16px; color: #1a2135; margin-right: 8px; }
 .model-row { min-height: 48px; }
 .option-copy { flex: 1; min-width: 0; }
 .speed-row { min-height: 62px; }
-.speed-label { font-size: 16px; color: #202c28; line-height: 24px; }
-.option-detail { font-size: 12px; color: #7b827a; line-height: 20px; lines: 2; text-overflow: ellipsis; }
-.option-note { padding: 10px 14px; font-size: 12px; line-height: 20px; color: #7b827a; }
+.speed-label { font-size: 16px; color: #1a2135; line-height: 24px; }
+.option-detail { font-size: 12px; color: #596479; line-height: 20px; lines: 2; text-overflow: ellipsis; }
+.option-note { padding: 10px 14px; font-size: 12px; line-height: 20px; color: #596479; }
 .option-error { padding: 12px 14px; font-size: 13px; line-height: 21px; color: #9b493a; }
-.retry-option { font-size: 14px; color: #285c49; background-color: #e8eee6; margin: 4px 14px 10px; }
+.retry-option { font-size: 14px; color: #4546bd; background-color: #e7e9fd; margin: 4px 14px 10px; }
 /* #ifdef WEB */
 .option-hitbox::after { border: 0; }
 /* Web 默认禁用底色会遮住底层图标和文字，灰态由整行统一表达。 */

@@ -38,17 +38,17 @@ onUnmounted(() => { document.removeEventListener('keydown', onDialogKeydown, tru
 <style>
 .delete-confirmation-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 120; background-color: rgba(0, 0, 0, 0.4); align-items: center; justify-content: center; }
 .delete-confirmation-dialog { width: 300px; max-width: 88%; border-radius: 12px; background-color: #ffffff; overflow: hidden; }
-.delete-confirmation-title { margin-top: 24px; padding: 0 20px; color: #202c28; font-size: 18px; line-height: 26px; font-weight: bold; text-align: center; }
-.delete-confirmation-content { padding: 16px 22px 24px; color: #59615d; font-size: 15px; line-height: 24px; text-align: center; }
-.delete-confirmation-actions { flex-direction: row; border-top-width: 1px; border-top-style: solid; border-top-color: #eceeeb; }
-.delete-confirmation-button { flex: 1; height: 50px; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: #ffffff; color: #202c28; font-size: 17px; line-height: 50px; text-align: center; align-items: center; justify-content: center; }
+.delete-confirmation-title { margin-top: 24px; padding: 0 20px; color: #1a2135; font-size: 18px; line-height: 26px; font-weight: bold; text-align: center; }
+.delete-confirmation-content { padding: 16px 22px 24px; color: #596479; font-size: 15px; line-height: 24px; text-align: center; }
+.delete-confirmation-actions { flex-direction: row; border-top-width: 1px; border-top-style: solid; border-top-color: #f6f7fb; }
+.delete-confirmation-button { flex: 1; height: 50px; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: #ffffff; color: #1a2135; font-size: 17px; line-height: 50px; text-align: center; align-items: center; justify-content: center; }
 .delete-confirmation-destructive { color: #bb3f44; }
-.delete-confirmation-cancel { border-left-width: 1px; border-left-style: solid; border-left-color: #eceeeb; }
-.delete-confirmation-pressed { background-color: #f1f3ef; }
+.delete-confirmation-cancel { border-left-width: 1px; border-left-style: solid; border-left-color: #f6f7fb; }
+.delete-confirmation-pressed { background-color: #f6f7fb; }
 /* #ifdef WEB */
 .delete-confirmation-content { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .delete-confirmation-button::after { border: none; }
 .delete-confirmation-button:focus { outline: none; }
-.delete-confirmation-button:focus-visible { outline: 2px solid #9db8a9; outline-offset: -2px; }
+.delete-confirmation-button:focus-visible { outline: 2px solid #a6a8e5; outline-offset: -2px; }
 /* #endif */
 </style>

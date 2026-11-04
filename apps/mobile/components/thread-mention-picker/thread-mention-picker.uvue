@@ -11,9 +11,9 @@
           <button class="mention-hitbox" role="checkbox" :aria-checked="isSelected(thread.id)" :aria-label="(isSelected(thread.id) ? '取消选择 ' : '引用聊天 ') + thread.title" @click="toggle(thread)"></button>
         </view>
         <text v-if="loading && manualAction.length == 0" class="mention-note">正在搜索聊天…</text>
-        <view v-else-if="error.length > 0 || manualAction == 'retry'"><text v-if="error.length > 0" class="mention-error">{{ error }}</text><view class="mention-retry inline-progress-button"><action-progress :busy="manualAction == 'retry'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualAction == 'retry'" :aria-label="(manualAction == 'retry') ? '正在重新读取' : '重新读取'"></button></view></view>
+        <view v-else-if="error.length > 0 || manualAction == 'retry'"><text v-if="error.length > 0" class="mention-error">{{ error }}</text><view class="mention-retry inline-progress-button"><action-progress :busy="manualAction == 'retry'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualAction == 'retry'" :aria-label="(manualAction == 'retry') ? '正在重新读取' : '重新读取'"></button></view></view>
         <text v-else-if="options.length == 0" class="mention-note">{{ query.trim().length > 0 ? '没有匹配的聊天' : '暂无可引用的聊天' }}</text>
-        <view v-else-if="hasMore || manualAction == 'more'" class="mention-retry inline-progress-button"><action-progress :busy="manualAction == 'more'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">加载更多</text><button class="inline-progress-hitbox" @click="loadMore" :disabled="manualAction == 'more'" :aria-label="(manualAction == 'more') ? '正在加载更多' : '加载更多'"></button></view>
+        <view v-else-if="hasMore || manualAction == 'more'" class="mention-retry inline-progress-button"><action-progress :busy="manualAction == 'more'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 13px;">加载更多</text><button class="inline-progress-hitbox" @click="loadMore" :disabled="manualAction == 'more'" :aria-label="(manualAction == 'more') ? '正在加载更多' : '加载更多'"></button></view>
       </scroll-view>
       <scroll-view v-if="selected.length > 0" direction="vertical" class="mention-selected-list" :style="{ height: Math.min(88, selected.length * 44) + 'px' }"><thread-mention-chips :mentions="selected" @remove="remove" /></scroll-view>
       <view class="mention-footer"><button class="mention-cancel" @click="close">取消</button><button class="mention-confirm" :disabled="loading || error.length > 0 || selected.length == 0" @click="confirm">确认引用 · {{ selected.length }}</button></view>
@@ -86,25 +86,25 @@ onUnmounted(() => { alive = false; revision++; clearTimeout(timer) })
 </script>
 <style>
 .mention-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 95; background-color: rgba(0,0,0,0.3); justify-content: flex-end; }
-.mention-sheet { width: 100%; border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #fbfcf9; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+.mention-sheet { width: 100%; border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #ffffff; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 .mention-heading { flex-direction: row; align-items: center; justify-content: space-between; }
-.mention-title { font-size: 19px; color: #26392d; font-weight: bold; }
-.mention-close { width: 44px; height: 44px; padding: 0; margin: 0; line-height: 42px; font-size: 24px; background-color: transparent; color: #657269; }
-.mention-hint { font-size: 12px; color: #74806e; margin-bottom: 12px; }
-.mention-search { height: 44px; padding: 0 12px; border-radius: 12px; background-color: #eef1e9; color: #26392d; margin-bottom: 8px; }
+.mention-title { font-size: 19px; color: #1a2135; font-weight: bold; }
+.mention-close { width: 44px; height: 44px; padding: 0; margin: 0; line-height: 42px; font-size: 24px; background-color: transparent; color: #596479; }
+.mention-hint { font-size: 12px; color: #596479; margin-bottom: 12px; }
+.mention-search { height: 44px; padding: 0 12px; border-radius: 12px; background-color: #f6f7fb; color: #1a2135; margin-bottom: 8px; }
 .mention-row { position: relative; min-height: 64px; flex-direction: row; align-items: center; padding: 10px; border-radius: 12px; }
-.mention-selected { background-color: #e9efe3; }
+.mention-selected { background-color: #e7e9fd; }
 .mention-copy { flex: 1; min-width: 0; }
-.mention-name { font-size: 15px; color: #26392d; line-height: 22px; lines: 1; overflow: hidden; text-overflow: ellipsis; }
-.mention-project { color: #74806e; font-size: 12px; line-height: 18px; margin-top: 3px; }
-.mention-check { width: 24px; margin-left: 8px; color: #285c49; }
+.mention-name { font-size: 15px; color: #1a2135; line-height: 22px; lines: 1; overflow: hidden; text-overflow: ellipsis; }
+.mention-project { color: #596479; font-size: 12px; line-height: 18px; margin-top: 3px; }
+.mention-check { width: 24px; margin-left: 8px; color: #4546bd; }
 .mention-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; padding: 0; margin: 0; border-radius: 12px; background-color: transparent; }
-.mention-note, .mention-error { text-align: center; font-size: 14px; line-height: 22px; padding: 20px 8px; color: #74806e; }
+.mention-note, .mention-error { text-align: center; font-size: 14px; line-height: 22px; padding: 20px 8px; color: #596479; }
 .mention-error { color: #a13830; }
 .mention-selected-list { flex-shrink: 0; }
 .mention-footer { flex-direction: row; gap: 12px; margin-top: 12px; }
-.mention-cancel, .mention-confirm, .mention-retry { margin: 0; padding: 0 16px; line-height: 44px; border-radius: 12px; color: #536050; background-color: #eef1e9; font-size: 14px; }
-.mention-confirm { flex: 1; color: #ffffff; background-color: #536b49; }
+.mention-cancel, .mention-confirm, .mention-retry { margin: 0; padding: 0 16px; line-height: 44px; border-radius: 12px; color: #596479; background-color: #f6f7fb; font-size: 14px; }
+.mention-confirm { flex: 1; color: #ffffff; background-color: #4546bd; }
 .mention-confirm[disabled] { opacity: 0.45; }
 /* #ifdef WEB */
 .mention-sheet { box-sizing: border-box; }

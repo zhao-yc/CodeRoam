@@ -7,13 +7,13 @@
     <view class="new-dock">
       <!-- 提示放在面板上方，连接、发送和错误状态均不挤动底部图标。 -->
       <view v-if="props.expanded && (operationBusy || editorError.length > 0 || connection.error.length > 0)" class="editor-feedback"><text v-if="operationBusy" class="editor-note">{{ busy ? progress : '正在同步电脑草稿…' }}</text><text v-else class="editor-error">{{ editorError.length > 0 ? editorError : connection.error }}</text></view>
-      <view v-if="props.expanded && (!operationBusy && editorError.length > 0 && !outcomeUnknown && !projectsLoading || reloading)" class="retry-button inline-progress-button"><action-progress :busy="reloading" /><text class="inline-progress-caption" style="font-size: 13px; color: #285c49;">重新读取</text><button class="inline-progress-hitbox" :disabled="reloading" :aria-label="reloading ? '正在重新读取' : '重新读取'" @click="runDraftRead"></button></view>
+      <view v-if="props.expanded && (!operationBusy && editorError.length > 0 && !outcomeUnknown && !projectsLoading || reloading)" class="retry-button inline-progress-button"><action-progress :busy="reloading" /><text class="inline-progress-caption" style="font-size: 13px; color: #4546bd;">重新读取</text><button class="inline-progress-hitbox" :disabled="reloading" :aria-label="reloading ? '正在重新读取' : '重新读取'" @click="runDraftRead"></button></view>
       <text v-if="props.expanded && existingDraft?.hasDesktopText == true" class="editor-note">电脑草稿已有内容，请先在电脑处理；手机输入会保留。</text>
       <text v-if="props.expanded && newConversationMode == 'nativeDraft' && draft.plugins.length > 0" class="editor-note">原生草稿暂不支持插件，请先移除插件后发送；已选插件会保留。</text>
       <text v-if="props.expanded && newConversationMode == 'desktopIpc' && !mentionsAvailable && draft.threadMentions.length > 0" class="editor-note">当前电脑连接方式暂不支持引用聊天，请先移除引用后发送。</text>
       <button v-if="props.expanded && newConversationMode == 'nativeDraft' && projectReady && !operationBusy && !outcomeUnknown && native.snapshot?.status != 'promoted' && native.draftId.length > 0 && native.error.length > 0" class="retry-button" @click="resetDraftBinding">下次发送时打开新草稿</button>
-      <view v-if="props.expanded && (!busy || pendingNewAction == 'check') && outcomeUnknown" class="retry-button inline-progress-button"><action-progress :busy="pendingNewAction == 'check'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">核对原操作结果</text><button class="inline-progress-hitbox" :disabled="operationBusy" @click="checkDraftOutcome" :aria-label="(pendingNewAction == 'check') ? '正在核对原操作结果' : '核对原操作结果'"></button></view>
-      <view v-if="props.expanded && (!busy || pendingNewAction == 'open') && hasCompletedConversation && !outcomeUnknown" class="retry-button inline-progress-button"><action-progress :busy="pendingNewAction == 'open'" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">打开电脑已发送的聊天</text><button class="inline-progress-hitbox" @click="openCompletedConversation" :disabled="operationBusy" :aria-label="(pendingNewAction == 'open') ? '正在打开聊天' : '打开电脑已发送的聊天'"></button></view>
+      <view v-if="props.expanded && (!busy || pendingNewAction == 'check') && outcomeUnknown" class="retry-button inline-progress-button"><action-progress :busy="pendingNewAction == 'check'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 13px;">核对原操作结果</text><button class="inline-progress-hitbox" :disabled="operationBusy" @click="checkDraftOutcome" :aria-label="(pendingNewAction == 'check') ? '正在核对原操作结果' : '核对原操作结果'"></button></view>
+      <view v-if="props.expanded && (!busy || pendingNewAction == 'open') && hasCompletedConversation && !outcomeUnknown" class="retry-button inline-progress-button"><action-progress :busy="pendingNewAction == 'open'" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 13px;">打开电脑已发送的聊天</text><button class="inline-progress-hitbox" @click="openCompletedConversation" :disabled="operationBusy" :aria-label="(pendingNewAction == 'open') ? '正在打开聊天' : '打开电脑已发送的聊天'"></button></view>
       <message-composer :instance-id="composerInstanceId" :reset-key="connection.hostId + ':' + projectId" :cursor="mentionCursor" :model-label="modelLabel" :layout-width="props.paneWidth"
         :active="props.expanded" :text="draft.text" :expanded="props.expanded" :input-height="visibleInputHeight" :focus="focused"
         :images="draft.images" :files="draft.files" :plugins="draft.plugins" :mentions="draft.threadMentions"
@@ -473,28 +473,28 @@ watch((): string => (native.value.snapshot?.status ?? '') + ':' + native.value.b
 .destination-folder { transform: translateY(0.5px); }
 .destination-chevron { width: 16px; height: 24px; flex-shrink: 0; align-items: center; justify-content: center; }
 /* 固定文字行高，轻微上移以补偿系统字体的基线留白。 */
-.destination-label { height: 24px; line-height: 24px; color: #657269; font-size: 16px; margin: 0 8px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; transform: translateY(-1px); }
+.destination-label { height: 24px; line-height: 24px; color: #596479; font-size: 16px; margin: 0 8px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; transform: translateY(-1px); }
 .new-dock { flex-shrink: 0; padding: 4px 16px 12px; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 .editor-feedback { flex-shrink: 0; padding: 4px 6px 8px; }
 .editor-note, .editor-error { font-size: 12px; line-height: 18px; }
-.editor-note { color: #7b827a; }
+.editor-note { color: #596479; }
 .editor-error { color: #8d4d2b; }
-.retry-button { height: 36px; line-height: 36px; font-size: 13px; color: #285c49; background-color: transparent; margin: 0; padding: 0 8px; }
+.retry-button { height: 36px; line-height: 36px; font-size: 13px; color: #4546bd; background-color: transparent; margin: 0; padding: 0 8px; }
 .retry-button { align-self: flex-start; }
-.new-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 40; background-color: rgba(32,44,40,0.12); justify-content: flex-end; padding: 12px; }
-.destination-sheet { border-radius: 22px; padding: 10px; background-color: #f8f8f3; }
+.new-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 40; background-color: rgba(26, 33, 53, 0.12); justify-content: flex-end; padding: 12px; }
+.destination-sheet { border-radius: 22px; padding: 10px; background-color: #ffffff; }
 .sheet-heading { flex-direction: row; align-items: center; padding-left: 12px; height: 40px; }
-.sheet-title { flex: 1; font-size: 15px; color: #202c28; }
+.sheet-title { flex: 1; font-size: 15px; color: #1a2135; }
 .sheet-close { width: 40px; height: 40px; align-items: center; justify-content: center; }
 .picker-scroll { flex-shrink: 1; }
 .picker-row { min-height: 52px; flex-direction: row; align-items: center; padding: 8px 12px; border-radius: 12px; }
-.picker-label { flex: 1; min-width: 0; color: #202c28; font-size: 15px; margin-left: 10px; lines: 1; text-overflow: ellipsis; }
-.picker-caption { color: #7b827a; font-size: 12px; margin: 0 8px; }
+.picker-label { flex: 1; min-width: 0; color: #1a2135; font-size: 15px; margin-left: 10px; lines: 1; text-overflow: ellipsis; }
+.picker-caption { color: #596479; font-size: 12px; margin: 0 8px; }
 .project-copy { flex: 1; min-width: 0; margin-right: 8px; }
-.project-path { color: #7b827a; font-size: 11px; margin: 4px 0 0 10px; lines: 1; text-overflow: ellipsis; }
-.picker-note { font-size: 13px; color: #7b827a; margin: 12px; line-height: 22px; }
-.connect-action { height: 44px; line-height: 44px; margin: 10px; color: #285c49; background-color: #e8eee6; font-size: 15px; }
+.project-path { color: #596479; font-size: 11px; margin: 4px 0 0 10px; lines: 1; text-overflow: ellipsis; }
+.picker-note { font-size: 13px; color: #596479; margin: 12px; line-height: 22px; }
+.connect-action { height: 44px; line-height: 44px; margin: 10px; color: #4546bd; background-color: #e7e9fd; font-size: 15px; }
 .new-options { align-self: flex-end; margin-bottom: 130px; }
 /* #ifdef WEB */
 .destination-label, .model-label, .file-name, .picker-label, .project-path { display: block; white-space: nowrap; overflow: hidden; }

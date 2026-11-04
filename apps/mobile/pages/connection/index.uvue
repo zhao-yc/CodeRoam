@@ -121,40 +121,40 @@ function selectComputer(id: string) {
 <style>
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
-.page { flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f8f8f3; }
+.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
+.page { flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #ffffff; }
 .header { height: 64px; padding: 8px 14px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .back { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
-.header-title { font-size: 17px; line-height: 26px; font-weight: bold; color: #202c28; margin-left: 8px; }
+.header-title { font-size: 17px; line-height: 26px; font-weight: bold; color: #1a2135; margin-left: 8px; }
 .content { flex: 1; height: 0; min-height: 0; }
 .body { padding: 22px 24px 30px; margin-bottom: var(--uni-safe-area-inset-bottom); }
-.page-title { color: #202c28; font-size: 28px; line-height: 38px; font-weight: bold; }
-.description { color: #7b827a; font-size: 14px; line-height: 23px; margin-top: 8px; }
-.section { padding: 24px 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.page-title { color: #1a2135; font-size: 28px; line-height: 38px; font-weight: bold; }
+.description { color: #596479; font-size: 14px; line-height: 23px; margin-top: 8px; }
+.section { padding: 24px 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
 .current-section { padding-top: 34px; }
-.section-title { color: #202c28; font-size: 16px; line-height: 24px; font-weight: bold; }
+.section-title { color: #1a2135; font-size: 16px; line-height: 24px; font-weight: bold; }
 .notification-setting { min-height: 52px; flex-direction: row; align-items: center; }
 .notification-copy { flex: 1; min-width: 0; margin-right: 12px; }
-.notification-description { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 6px; }
-.notification-value { color: #657269; font-size: 14px; line-height: 22px; margin-right: 10px; flex-shrink: 0; }
+.notification-description { color: #596479; font-size: 12px; line-height: 20px; margin-top: 6px; }
+.notification-value { color: #596479; font-size: 14px; line-height: 22px; margin-right: 10px; flex-shrink: 0; }
 .current-computer { flex-direction: row; align-items: center; margin-top: 18px; }
 .computer-content { flex: 1; min-width: 0; margin-left: 16px; }
 .computer-heading { flex-direction: row; align-items: center; }
-.computer-name { color: #202c28; font-size: 15px; line-height: 23px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
+.computer-name { color: #1a2135; font-size: 15px; line-height: 23px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
 .dot { width: 6px; height: 6px; border-radius: 3px; margin: 0 8px 0 14px; flex-shrink: 0; }
-.online { background-color: #285c49; }
-.offline { background-color: #94998f; }
-.state { color: #7b827a; font-size: 12px; line-height: 20px; flex-shrink: 1; }
-.computer-note { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 3px; }
-.reconnect-spinner { width: 16px; height: 16px; border-color: #285c49; }
+.online { background-color: #18765d; }
+.offline { background-color: #737d91; }
+.state { color: #596479; font-size: 12px; line-height: 20px; flex-shrink: 1; }
+.computer-note { color: #596479; font-size: 12px; line-height: 20px; margin-top: 3px; }
+.reconnect-spinner { width: 16px; height: 16px; border-color: #4546bd; }
 .retry { width: 44px; height: 44px; align-items: center; justify-content: center; }
 /* 原生 textarea 显式占满宽度，避免默认宽度与主按钮不齐。 */
-.config-input { width: 100%; height: 110px; margin-top: 14px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; padding: 14px; color: #202c28; font-size: 13px; line-height: 22px; background-color: transparent; }
-.privacy-note { color: #7b827a; font-size: 11px; line-height: 18px; margin-top: 8px; }
+.config-input { width: 100%; height: 110px; margin-top: 14px; border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 12px; padding: 14px; color: #1a2135; font-size: 13px; line-height: 22px; background-color: transparent; }
+.privacy-note { color: #596479; font-size: 11px; line-height: 18px; margin-top: 8px; }
 .connect-button { width: 100%; height: 46px; line-height: 46px; padding: 0 18px; margin: 14px 0 0; border-radius: 12px; font-size: 15px; }
-.hint { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 10px; }
-.computer-option { min-height: 58px; padding: 14px 0; flex-direction: row; align-items: center; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
-.option-name { flex: 1; min-width: 0; color: #202c28; font-size: 15px; line-height: 22px; margin-left: 16px; lines: 1; text-overflow: ellipsis; }
+.hint { color: #596479; font-size: 12px; line-height: 20px; margin-top: 10px; }
+.computer-option { min-height: 58px; padding: 14px 0; flex-direction: row; align-items: center; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
+.option-name { flex: 1; min-width: 0; color: #1a2135; font-size: 15px; line-height: 22px; margin-left: 16px; lines: 1; text-overflow: ellipsis; }
 .selected-mark { width: 28px; align-items: flex-end; margin-left: 14px; }
 .pending-note { color: #8d4d2b; font-size: 12px; line-height: 20px; margin-top: 18px; }
 .closing-note { margin-top: 22px; }

@@ -1,6 +1,6 @@
 <template>
   <view class="progress-space" aria-hidden="true">
-    <loading v-if="busy" class="progress-spinner" :style="{ borderColor: light ? '#ffffff' : '#285c49' }" />
+    <loading v-if="busy" class="progress-spinner" :style="{ borderColor: light ? '#ffffff' : '#4546bd' }" />
   </view>
 </template>
 

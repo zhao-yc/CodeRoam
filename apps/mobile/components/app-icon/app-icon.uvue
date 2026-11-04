@@ -1,5 +1,12 @@
-<template><image :src="'/static/icons/' + name + '-' + tone + '.png'" :style="{ width: size + 'px', height: size + 'px' }" mode="aspectFit" /></template>
+<template><image :class="{ 'app-icon-muted': tone == 'muted' }" :src="'/static/icons/' + name + '-' + tone + '.png'" :style="{ width: size + 'px', height: size + 'px' }" mode="aspectFit" /></template>
 <script setup lang="uts">
 // 图标使用随包提供的 PNG，原生与 Web 不依赖远程字体或 SVG 渲染能力。
 withDefaults(defineProps<{ name: string, size?: number, tone?: string }>(), { size: 22, tone: 'dark' })
 </script>
+
+<style scoped>
+/* #ifdef WEB */
+/* 保留原线稿和透明度，将次要图标统一为冷灰。 */
+.app-icon-muted:not(.workspace-empty-icon) { filter: brightness(0) invert(40%) sepia(13%) saturate(626%) hue-rotate(179deg) brightness(92%); }
+/* #endif */
+</style>

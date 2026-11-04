@@ -28,26 +28,26 @@ defineProps<{ items: MessageAnnotation[] }>()
 const emit = defineEmits<{ (event: 'close'): void }>()
 </script>
 <style>
-.annotation-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(20, 32, 26, 0.32); justify-content: flex-end; z-index: 60; }
-.annotation-sheet { height: 74%; background-color: #f8f8f3; border-top-left-radius: 22px; border-top-right-radius: 22px; overflow: hidden; }
-.annotation-grip { width: 36px; height: 4px; border-radius: 2px; background-color: #c7cbc1; align-self: center; margin-top: 10px; flex-shrink: 0; }
+.annotation-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(26, 33, 53, 0.32); justify-content: flex-end; z-index: 60; }
+.annotation-sheet { height: 74%; background-color: #ffffff; border-top-left-radius: 22px; border-top-right-radius: 22px; overflow: hidden; }
+.annotation-grip { width: 36px; height: 4px; border-radius: 2px; background-color: #c7cede; align-self: center; margin-top: 10px; flex-shrink: 0; }
 .annotation-header { flex-direction: row; align-items: center; padding: 14px 12px 18px 20px; flex-shrink: 0; }
 .annotation-heading { flex: 1; min-width: 0; }
-.annotation-title { font-size: 20px; line-height: 28px; color: #202c28; font-weight: bold; }
-.annotation-subtitle { margin-top: 3px; font-size: 13px; line-height: 20px; color: #7b827a; }
+.annotation-title { font-size: 20px; line-height: 28px; color: #1a2135; font-weight: bold; }
+.annotation-subtitle { margin-top: 3px; font-size: 13px; line-height: 20px; color: #596479; }
 .annotation-close { width: 44px; height: 44px; align-items: center; justify-content: center; flex-shrink: 0; }
 .action-frame { position: relative; overflow: hidden; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(40, 92, 73, 0.08); }
+.action-pressed { background-color: rgba(69, 70, 189, 0.08); }
 .annotation-scroll { flex: 1; height: 0; min-height: 0; }
 .annotation-item { margin: 0 20px 22px; }
-.annotation-number { font-size: 14px; line-height: 22px; font-weight: bold; color: #285c49; margin-bottom: 12px; }
-.annotation-label { color: #7b827a; font-size: 13px; line-height: 20px; margin-bottom: 7px; }
-.annotation-quote { background-color: #e9eee7; border-left-width: 3px; border-left-style: solid; border-left-color: #9bb4a6; padding: 12px 14px; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
-.annotation-text { font-size: 16px; line-height: 26px; color: #202c28; }
+.annotation-number { font-size: 14px; line-height: 22px; font-weight: bold; color: #4546bd; margin-bottom: 12px; }
+.annotation-label { color: #596479; font-size: 13px; line-height: 20px; margin-bottom: 7px; }
+.annotation-quote { background-color: #f6f7fb; border-left-width: 3px; border-left-style: solid; border-left-color: #a6a8e5; padding: 12px 14px; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
+.annotation-text { font-size: 16px; line-height: 26px; color: #1a2135; }
 .annotation-comment-label { margin-top: 16px; }
 .annotation-comment { padding-left: 2px; }
-.annotation-missing { color: #7b827a; font-size: 14px; line-height: 23px; }
+.annotation-missing { color: #596479; font-size: 14px; line-height: 23px; }
 .annotation-safe-area { height: 16px; flex-shrink: 0; }
 /* #ifdef WEB */
 .action-hitbox::after { border: none; }

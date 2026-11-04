@@ -4,7 +4,7 @@
     <view v-for="task in visibleTasks" :key="task.commandId" class="delete-task">
       <view class="task-copy"><text class="task-title">{{ title(task) }}</text><text class="task-description">{{ computerName(task.hostId) }} · {{ deletionLabel(task) }}{{ task.state == 'running' ? '，可以继续使用其他聊天' : '' }}</text><text v-if="task.error.length > 0" class="task-error">{{ task.error }}</text></view>
       <button v-if="task.state == 'failed'" class="task-button button-secondary" @click="dismissDeletion(task)">关闭</button>
-      <view v-else class="task-button button-secondary inline-progress-button"><action-progress :busy="task.checking" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对结果</text><button class="inline-progress-hitbox" :disabled="!canCheck(task) || task.checking || (task.checking)" @click="checkDeletion(task)" :aria-label="(task.checking) ? '正在核对删除结果' : '核对结果'"></button></view>
+      <view v-else class="task-button button-secondary inline-progress-button"><action-progress :busy="task.checking" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">核对结果</text><button class="inline-progress-hitbox" :disabled="!canCheck(task) || task.checking || (task.checking)" @click="checkDeletion(task)" :aria-label="(task.checking) ? '正在核对删除结果' : '核对结果'"></button></view>
     </view>
   </view>
 </template>
@@ -31,7 +31,7 @@ function canCheck(task: DeleteTask): boolean { return connection.connected && co
 .delete-tasks { margin: 8px 16px; border-radius: 12px; background-color: #fff2e7; padding: 0 12px; flex-shrink: 0; }
 .delete-task { flex-direction: row; align-items: center; padding: 10px 0; }
 .task-copy { flex: 1; min-width: 0; }
-.task-title { font-size: 14px; color: #202c28; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-title { font-size: 14px; color: #1a2135; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-description, .task-error { font-size: 12px; line-height: 18px; color: #90522f; }
 .task-button { margin: 0 0 0 10px; padding: 0 10px; font-size: 12px; height: 34px; line-height: 34px; flex-shrink: 0; }
 </style>

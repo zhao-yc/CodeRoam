@@ -37,12 +37,12 @@
       <view class="list-content">
         <view v-if="!connection.configured" class="empty"><text class="empty-title">在手机上继续你的聊天</text><text class="description">首次使用时连接电脑，已有聊天就会显示在这里。</text><button class="empty-action button-primary" @click="openConnection">连接电脑</button></view>
         <loading-skeleton v-else-if="showThreadLoading && manualListRefresh.length == 0" kind="list" :visible="pageVisible" />
-        <view v-else-if="manualListRefresh == 'reload' || (allVisibleThreads.length == 0 && (connection.error.length > 0 || listUnavailable))" class="empty"><text class="empty-title">{{ listUnavailable && !selectedComputerOnline ? '电脑离线' : '聊天加载失败' }}</text><text class="description">请检查连接后重试。</text><view class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'reload'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">重新加载</text><button class="inline-progress-hitbox" @click="reloadThreads" :disabled="manualListRefresh == 'reload'" :aria-label="(manualListRefresh == 'reload') ? '正在重新加载' : '重新加载'"></button></view></view>
+        <view v-else-if="manualListRefresh == 'reload' || (allVisibleThreads.length == 0 && (connection.error.length > 0 || listUnavailable))" class="empty"><text class="empty-title">{{ listUnavailable && !selectedComputerOnline ? '电脑离线' : '聊天加载失败' }}</text><text class="description">请检查连接后重试。</text><view class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'reload'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">重新加载</text><button class="inline-progress-hitbox" @click="reloadThreads" :disabled="manualListRefresh == 'reload'" :aria-label="(manualListRefresh == 'reload') ? '正在重新加载' : '重新加载'"></button></view></view>
         <view v-else-if="groups.length == 0 || manualListRefresh == 'sync'" class="empty">
           <text class="empty-title">{{ search.trim().length > 0 ? '没有找到相关聊天' : '暂无聊天' }}</text>
           <text class="description">{{ search.trim().length > 0 ? '试试其他标题或项目名称。' : selectedComputerOnline ? '电脑上的聊天会显示在这里。' : '电脑恢复连接后会自动同步。' }}</text>
           <button v-if="search.trim().length > 0" class="empty-action button-secondary" @click="search = ''">清除搜索</button>
-          <view v-else class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'sync'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">重新同步</text><button class="inline-progress-hitbox" @click="refreshThreads" :disabled="manualListRefresh == 'sync'" :aria-label="(manualListRefresh == 'sync') ? '正在重新同步' : '重新同步'"></button></view>
+          <view v-else class="empty-action button-secondary inline-progress-button"><action-progress :busy="manualListRefresh == 'sync'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">重新同步</text><button class="inline-progress-hitbox" @click="refreshThreads" :disabled="manualListRefresh == 'sync'" :aria-label="(manualListRefresh == 'sync') ? '正在重新同步' : '重新同步'"></button></view>
         </view>
         <view v-for="group in renderedGroups" :key="group.key" class="thread-group">
           <text class="group-title">{{ group.title }}</text>
@@ -64,7 +64,7 @@
     </view>
     </view>
     <view v-if="!liquidGlass && props.wide" class="list-new-button action-frame">
-      <composer-plus /><text class="list-new-button-label">新聊天</text>
+      <composer-plus light /><text class="list-new-button-label">新聊天</text>
       <button class="action-hitbox" hover-class="action-pressed" aria-label="新聊天" :disabled="creatingConversation" @click="openNewConversation"></button>
     </view>
     <view v-else-if="!liquidGlass" class="list-new-entry action-frame"><composer-plus /><text class="list-new-label">问问 Codex</text><button class="action-hitbox" hover-class="action-pressed" aria-label="开启新聊天" @click="openNewConversation"></button></view>
@@ -473,19 +473,19 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 /* 原生按钮只作为透明点击层，图片和文字保持同级，避免原生嵌套渲染缺失。 */
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
-.page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f8f8f3; }
+.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
+.page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; padding-top: var(--status-bar-height); background-color: #f6f7fb; }
 .header { height: 48px; padding: 2px 12px 2px 20px; flex-direction: row; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .header-button { width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 14px; }
 .header-glass-close, .header-glass-group { position: relative; height: 44px; width: 44px; flex-shrink: 0; }
 .header-glass-group { width: 88px; }
 .header-actions { flex-direction: row; flex-shrink: 0; }
 .header-search { flex: 1; min-width: 0; margin-right: 8px; }
-.page-title { flex: 1; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
+.page-title { flex: 1; color: #1a2135; font-size: 20px; line-height: 28px; font-weight: bold; }
 .list-title { flex: 1; flex-direction: row; align-items: center; }
 /* 让标题和展开箭头整体居中，两侧与按下背景保持相同留白。 */
 .list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding: 0 8px; border-radius: 12px; }
-.list-title-text { flex-shrink: 0; margin-right: 6px; color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; }
+.list-title-text { flex-shrink: 0; margin-right: 6px; color: #1a2135; font-size: 20px; line-height: 28px; font-weight: bold; }
 .list-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 2px; align-items: center; justify-content: center; }
 .list-menu-arrow { flex-shrink: 0; width: 18px; height: 18px; transform: rotate(0deg); transition-property: transform; transition-duration: 140ms; transition-timing-function: ease-in; }
 .list-menu-arrow-open { transform: rotate(180deg); transition-duration: 200ms; transition-timing-function: ease-out; }
@@ -500,55 +500,56 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .computer-tabs { height: 56px; padding: 4px 16px 8px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .computer-tab { position: relative; overflow: visible; height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
 .all-tab { margin-right: 6px; }
-.computer-tab-selected { background-color: #e8eee6; }
+.computer-tab-selected { background-color: #e7e9fd; }
+.computer-tab-selected .tab-label { color: #4546bd; }
 .computer-scroll { flex: 1; width: 0; min-width: 0; height: 44px; }
 /* 实例容器按标签总宽度展开，避免裁掉溢出内容；“全部”独立保留在滚动区域外。 */
 .computer-tab-content { flex-direction: row; align-self: flex-start; flex-shrink: 0; height: 44px; }
-.tab-label { color: #202c28; font-size: 14px; line-height: 22px; }
+.tab-label { color: #1a2135; font-size: 14px; line-height: 22px; }
 .computer-name { max-width: 120px; margin-left: 6px; lines: 1; text-overflow: ellipsis; }
 .computer-indicator { width: 16px; height: 16px; margin-right: 7px; flex-shrink: 0; align-items: center; justify-content: center; }
-.computer-spinner { width: 16px; height: 16px; border-color: #285c49; }
-.computer-unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #285c49; }
+.computer-spinner { width: 16px; height: 16px; border-color: #4546bd; }
+.computer-unread-dot { width: 8px; height: 8px; border-radius: 4px; background-color: #4546bd; }
 /* 三角形标记保留方形留白并允许边角完整显示，避免默认溢出隐藏和圆角裁切。 */
 .computer-sync-badge { position: absolute; right: 6px; top: 2px; width: 16px; height: 16px; align-items: center; justify-content: center; overflow: visible; }
 .computer-connection-content { flex-direction: row; align-items: center; transition-property: opacity; transition-duration: 800ms; transition-timing-function: ease-in-out; }
 .thread-computer-meta { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
-.thread-computer { max-width: 84px; margin-left: 6px; font-size: 13px; line-height: 20px; color: #7b827a; lines: 1; text-overflow: ellipsis; }
-.search-field { height: 44px; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 12px; flex-direction: row; align-items: center; }
-.search-input { flex: 1; min-width: 0; height: 44px; font-size: 15px; margin-left: 10px; color: #202c28; }
+.thread-computer { max-width: 84px; margin-left: 6px; font-size: 13px; line-height: 20px; color: #596479; lines: 1; text-overflow: ellipsis; }
+.search-field { height: 44px; padding: 0 12px; border-style: solid; border-width: 1px; border-color: #e5e8f1; background-color: #ffffff; border-radius: 12px; flex-direction: row; align-items: center; }
+.search-input { flex: 1; min-width: 0; height: 44px; font-size: 15px; margin-left: 10px; color: #1a2135; }
 .clear-search { width: 44px; height: 44px; align-items: center; justify-content: center; }
 .notice { margin: 8px 16px 0; padding: 12px; border-radius: 12px; background-color: #fff1e9; flex-shrink: 0; }
 .notice-text { font-size: 12px; line-height: 18px; color: #8d4d2b; }
 .thread-list { flex: 1; height: 0; min-height: 0; }
 .list-content { padding: 0 16px; }
 .thread-group { margin-top: 8px; }
-.group-title { font-size: 12px; line-height: 18px; color: #7b827a; margin-bottom: 6px; }
-.thread { padding: 9px 10px; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
-.thread-selected { background-color: #e8eee6; border-radius: 6px; border-bottom-color: #e8eee6; }
+.group-title { font-size: 12px; line-height: 18px; color: #596479; margin-bottom: 6px; }
+.thread { padding: 9px 10px; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
+.thread-selected { background-color: #e7e9fd; border-radius: 6px; border-bottom-color: #e7e9fd; }
 .thread-failure { margin-left: 8px; }
 .thread-heading { flex-direction: row; align-items: center; }
 .thread-deleting { font-size: 12px; color: #a14d32; margin-left: 8px; flex-shrink: 0; }
-.thread-title { flex: 1; min-width: 0; font-size: 16px; line-height: 24px; font-weight: bold; color: #202c28; lines: 1; text-overflow: ellipsis; }
-.thread-time { font-size: 12px; line-height: 18px; color: #7b827a; margin-left: 10px; flex-shrink: 0; }
+.thread-title { flex: 1; min-width: 0; font-size: 16px; line-height: 24px; font-weight: bold; color: #1a2135; lines: 1; text-overflow: ellipsis; }
+.thread-time { font-size: 12px; line-height: 18px; color: #596479; margin-left: 10px; flex-shrink: 0; }
 .thread-meta { flex-direction: row; align-items: center; margin-top: 4px; }
 .thread-meta-icon { flex-shrink: 0; }
-.thread-project { flex: 1; min-width: 0; font-size: 13px; line-height: 20px; color: #7b827a; margin-left: 6px; lines: 1; text-overflow: ellipsis; }
+.thread-project { flex: 1; min-width: 0; font-size: 13px; line-height: 20px; color: #596479; margin-left: 6px; lines: 1; text-overflow: ellipsis; }
 .thread-status { margin-left: 8px; flex-shrink: 0; }
 .list-bottom { height: 16px; }
 .list-bottom-glass { height: 70px; }
 .list-shell-glass { position: relative; }
 .list-new-glass { position: absolute; left: 16px; right: 16px; bottom: 12px; height: 46px; z-index: 1; }
 .empty { padding: 50px 0 28px; align-items: center; }
-.empty-title { color: #202c28; font-size: 18px; line-height: 28px; text-align: center; }
-.description { color: #7b827a; font-size: 14px; line-height: 23px; margin-top: 12px; text-align: center; }
+.empty-title { color: #1a2135; font-size: 18px; line-height: 28px; text-align: center; }
+.description { color: #596479; font-size: 14px; line-height: 23px; margin-top: 12px; text-align: center; }
 .empty-action { height: 44px; line-height: 44px; font-size: 14px; margin-top: 22px; padding: 0 22px; justify-content: center; }
 /* #ifdef WEB */
 .thread-title, .thread-project, .thread-computer, .computer-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
-.thread-question { margin-left: 8px; padding: 2px 7px; border-radius: 10px; background-color: #e4edfb; color: #285c49; font-size: 11px; line-height: 18px; flex-shrink: 0; }
-.list-new-entry { flex-shrink: 0; height: 46px; margin: 4px 16px 12px; padding: 0 14px; flex-direction: row; align-items: center; border-radius: 25px; background-color: #ffffff; border-width: 1px; border-style: solid; border-color: #e3e5dc; }
-.list-new-label { margin-left: 10px; font-size: 16px; color: #94998f; }
-.list-new-button { height: 46px; margin: 4px 16px 12px; padding: 0 14px; flex-direction: row; align-items: center; justify-content: center; border-radius: 14px; background-color: #e1ece4; }
-.list-new-button-label { margin-left: 8px; font-size: 16px; font-weight: bold; color: #202c28; }
+.thread-question { margin-left: 8px; padding: 2px 7px; border-radius: 10px; background-color: #e7e9fd; color: #4546bd; font-size: 11px; line-height: 18px; flex-shrink: 0; }
+.list-new-entry { flex-shrink: 0; height: 46px; margin: 4px 16px 12px; padding: 0 14px; flex-direction: row; align-items: center; border-radius: 25px; background-color: #ffffff; border-width: 1px; border-style: solid; border-color: #e5e8f1; }
+.list-new-label { margin-left: 10px; font-size: 16px; color: #737d91; }
+.list-new-button { height: 46px; margin: 4px 16px 12px; padding: 0 14px; flex-direction: row; align-items: center; justify-content: center; border-radius: 14px; background-color: #4546bd; }
+.list-new-button-label { margin-left: 8px; font-size: 16px; font-weight: bold; color: #ffffff; }
 .list-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 </style>

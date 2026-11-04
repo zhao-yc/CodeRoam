@@ -95,7 +95,7 @@ public final class CodexLiquidGlassView: UIView {
         let inset: CGFloat = title.isEmpty ? 0 : 16
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)
         if prominent {
-            configuration.baseBackgroundColor = UIColor(red: 40 / 255, green: 92 / 255, blue: 73 / 255, alpha: 1)
+            configuration.baseBackgroundColor = UIColor(red: 69 / 255, green: 70 / 255, blue: 189 / 255, alpha: 1)
             configuration.baseForegroundColor = .white
         } else {
             configuration.baseForegroundColor = .label

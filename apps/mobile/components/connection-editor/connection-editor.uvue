@@ -15,7 +15,7 @@
           <view class="last-connected"><app-icon name="clock" :size="17" tone="muted" /><text class="last-label">上次连接：{{ lastConnectedLabel }}</text></view>
           <text v-if="!connection.supportsHostProfiles" class="editor-error">请更新中转服务后再编辑连接。</text>
           <text v-if="error.length > 0" class="editor-error">{{ error }}</text>
-          <view class="save-button inline-progress-button" :class="canSave || saving ? 'save-enabled' : 'save-disabled'"><action-progress :busy="saving" light /><text class="inline-progress-caption" :style="{ color: canSave || saving ? '#ffffff' : '#94998f' }" style="font-size: 16px;">保存</text><button class="inline-progress-hitbox" :disabled="!canSave" @click="save" :aria-label="(saving) ? '正在保存' : '保存'"></button></view>
+          <view class="save-button inline-progress-button" :class="canSave || saving ? 'save-enabled' : 'save-disabled'"><action-progress :busy="saving" light /><text class="inline-progress-caption" :style="{ color: canSave || saving ? '#ffffff' : '#737d91' }" style="font-size: 16px;">保存</text><button class="inline-progress-hitbox" :disabled="!canSave" @click="save" :aria-label="(saving) ? '正在保存' : '保存'"></button></view>
         </view>
       </scroll-view>
       <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
@@ -79,35 +79,35 @@ onUnmounted(() => { alive = false; uni.hideKeyboard() })
 <style>
 .connection-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 60; justify-content: flex-end; }
 .connection-menu { position: absolute; background-color: #ffffff; border-radius: 24px; padding: 16px 20px 12px; box-shadow: 0 10px 32px rgba(0,0,0,0.12); }
-.menu-name { font-size: 14px; line-height: 22px; color: #94998f; lines: 1; text-overflow: ellipsis; }
+.menu-name { font-size: 14px; line-height: 22px; color: #737d91; lines: 1; text-overflow: ellipsis; }
 .menu-edit { flex-direction: row; align-items: center; height: 52px; margin-top: 5px; }
-.menu-label { color: #202c28; font-size: 17px; margin-left: 16px; }
+.menu-label { color: #1a2135; font-size: 17px; margin-left: 16px; }
 .connection-sheet { border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #ffffff; overflow: hidden; }
-.sheet-grip { width: 36px; height: 4px; margin-top: 8px; background-color: #e3e5dc; border-radius: 2px; align-self: center; flex-shrink: 0; }
+.sheet-grip { width: 36px; height: 4px; margin-top: 8px; background-color: #e5e8f1; border-radius: 2px; align-self: center; flex-shrink: 0; }
 .sheet-heading { flex-direction: row; align-items: center; padding: 10px 12px 14px 24px; flex-shrink: 0; }
-.sheet-title { color: #202c28; font-size: 22px; font-weight: bold; flex: 1; }
+.sheet-title { color: #1a2135; font-size: 22px; font-weight: bold; flex: 1; }
 .close-action { width: 44px; height: 44px; align-items: center; justify-content: center; }
 .sheet-scroll { flex: 1; height: 0; min-height: 0; }
 .sheet-body { padding: 8px 24px 20px; }
-.name-field { border-style: solid; border-width: 1px; border-color: #cdd1c8; border-radius: 4px; padding: 10px 15px 8px; }
-.field-label { font-size: 12px; color: #7b827a; line-height: 18px; }
-.name-input { width: 100%; height: 34px; font-size: 17px; color: #202c28; }
+.name-field { border-style: solid; border-width: 1px; border-color: #c7cede; border-radius: 4px; padding: 10px 15px 8px; }
+.field-label { font-size: 12px; color: #596479; line-height: 18px; }
+.name-input { width: 100%; height: 34px; font-size: 17px; color: #1a2135; }
 .icon-options { flex-direction: row; justify-content: space-between; margin: 20px 8px; }
 .icon-option { width: 56px; height: 56px; border-radius: 13px; justify-content: center; align-items: center; }
-.icon-selected { background-color: #e8eee6; }
-.connection-facts { border-style: solid; border-width: 1px; border-color: #e3e5dc; border-radius: 16px; padding: 0 22px; }
+.icon-selected { background-color: #e7e9fd; }
+.connection-facts { border-style: solid; border-width: 1px; border-color: #e5e8f1; border-radius: 16px; padding: 0 22px; }
 .fact-row { min-height: 54px; flex-direction: row; align-items: center; }
-.fact-label { color: #202c28; font-size: 15px; flex-shrink: 0; margin-right: 14px; }
-.fact-value { color: #7b827a; font-size: 14px; flex: 1; min-width: 0; text-align: right; lines: 2; text-overflow: ellipsis; }
-.fact-divider { height: 1px; background-color: #e3e5dc; }
+.fact-label { color: #1a2135; font-size: 15px; flex-shrink: 0; margin-right: 14px; }
+.fact-value { color: #596479; font-size: 14px; flex: 1; min-width: 0; text-align: right; lines: 2; text-overflow: ellipsis; }
+.fact-divider { height: 1px; background-color: #e5e8f1; }
 .last-connected { flex-direction: row; align-items: center; margin: 16px 6px; }
-.last-label { margin-left: 10px; color: #7b827a; font-size: 13px; }
+.last-label { margin-left: 10px; color: #596479; font-size: 13px; }
 .editor-error { font-size: 13px; line-height: 20px; color: #8d4d2b; margin-bottom: 12px; }
 .save-button { align-items: center; justify-content: center; text-align: center; height: 44px; line-height: 44px; width: 100%; border-radius: 24px; border-width: 0; font-size: 16px; margin: 0; padding: 0; }
-.save-enabled { background-color: #285c49; color: #ffffff; }
-.save-disabled { background-color: #f1f2ee; color: #94998f; }
+.save-enabled { background-color: #4546bd; color: #ffffff; }
+.save-disabled { background-color: #f6f7fb; color: #737d91; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(40,92,73,0.07); }
+.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 </style>

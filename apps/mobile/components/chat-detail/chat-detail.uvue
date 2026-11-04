@@ -17,12 +17,12 @@
       <view v-else class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
     <template v-if="!cacheOnly">
-    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><view v-if="(!autoConnectPending && !activating) || activationSource == 'continue'" class="continue-button button-secondary inline-progress-button"><action-progress :busy="activationSource == 'continue'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 13px;">重新连接</text><button class="inline-progress-hitbox" :disabled="!connection.connected || connection.pendingCommandId.length > 0 || (activationSource == 'continue')" @click="continueConversation(true)" :aria-label="(activationSource == 'continue') ? '正在连接聊天' : '重新连接'"></button></view></view>
-    <view v-if="!connection.connected && !showingCachedContent" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
+    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text><view v-if="(!autoConnectPending && !activating) || activationSource == 'continue'" class="continue-button button-secondary inline-progress-button"><action-progress :busy="activationSource == 'continue'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 13px;">重新连接</text><button class="inline-progress-hitbox" :disabled="!connection.connected || connection.pendingCommandId.length > 0 || (activationSource == 'continue')" @click="continueConversation(true)" :aria-label="(activationSource == 'continue') ? '正在连接聊天' : '重新连接'"></button></view></view>
+    <view v-if="!connection.connected && !showingCachedContent" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
     <view v-if="detailError.length > 0 && !showingCachedContent" class="notice"><text class="notice-text">{{ detailError }}</text></view>
-    <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><view class="check button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'check-retry'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对重试结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || busy || (pendingAction == 'check-retry')" @click="checkRetryOutcome" :aria-label="(pendingAction == 'check-retry') ? '正在核对重试结果' : '核对重试结果'"></button></view></view>
-    <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><view v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary inline-progress-button"><action-progress :busy="pageDeleteTask?.checking == true" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">核对删除结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome" :aria-label="(pageDeleteTask?.checking == true) ? '正在核对删除结果' : '核对删除结果'"></button></view></view>
-    <view v-if="connection.desktopNavigationError.length > 0 || activationSource == 'desktop'" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><view class="check button-secondary inline-progress-button"><action-progress :busy="activationSource == 'desktop'" /><text class="inline-progress-caption" style="color: #202c28; font-size: 12px;">重试打开聊天</text><button class="inline-progress-hitbox" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0 || (activationSource == 'desktop')" @click="retryDesktopOpen" :aria-label="(activationSource == 'desktop') ? '正在打开聊天' : '重试打开聊天'"></button></view></view>
+    <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><view class="check button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'check-retry'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">核对重试结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || busy || (pendingAction == 'check-retry')" @click="checkRetryOutcome" :aria-label="(pendingAction == 'check-retry') ? '正在核对重试结果' : '核对重试结果'"></button></view></view>
+    <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><view v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary inline-progress-button"><action-progress :busy="pageDeleteTask?.checking == true" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">核对删除结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome" :aria-label="(pageDeleteTask?.checking == true) ? '正在核对删除结果' : '核对删除结果'"></button></view></view>
+    <view v-if="connection.desktopNavigationError.length > 0 || activationSource == 'desktop'" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><view class="check button-secondary inline-progress-button"><action-progress :busy="activationSource == 'desktop'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">重试打开聊天</text><button class="inline-progress-hitbox" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0 || (activationSource == 'desktop')" @click="retryDesktopOpen" :aria-label="(activationSource == 'desktop') ? '正在打开聊天' : '重试打开聊天'"></button></view></view>
     </template>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch" @wheel="onTimelineWheel">
@@ -85,7 +85,7 @@
         <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
         <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="pendingAction == 'question:' + group.id" :disabled="!canWrite" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
         <view id="approvals-anchor"></view>
-        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><view class="approval-button button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'approval:decline:' + approval.id" /><text class="inline-progress-caption" style="color: #202c28; font-size: 14px;">拒绝</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')" :aria-label="(pendingAction == 'approval:decline:' + approval.id) ? '正在提交拒绝' : '拒绝'"></button></view><view class="approval-button button-primary inline-progress-button"><action-progress :busy="pendingAction == 'approval:accept:' + approval.id" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 14px;">本次允许</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')" :aria-label="(pendingAction == 'approval:accept:' + approval.id) ? '正在提交本次允许' : '本次允许'"></button></view></view></view>
+        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><view class="approval-button button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'approval:decline:' + approval.id" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">拒绝</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')" :aria-label="(pendingAction == 'approval:decline:' + approval.id) ? '正在提交拒绝' : '拒绝'"></button></view><view class="approval-button button-primary inline-progress-button"><action-progress :busy="pendingAction == 'approval:accept:' + approval.id" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 14px;">本次允许</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')" :aria-label="(pendingAction == 'approval:accept:' + approval.id) ? '正在提交本次允许' : '本次允许'"></button></view></view></view>
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
         <message-queue :messages="queuedMessages" :pending-action="pendingAction" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
@@ -1729,48 +1729,48 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* #endif */
 /* 松墨视觉：正文直接呈现，辅助记录和主操作统一使用松绿色系。 */
-.annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #cdd6cc; background-color: #f8faf6; flex-direction: row; align-items: center; align-self: flex-start; }
+.annotation-entry { min-height: 44px; padding: 0 12px; border-radius: 22px; border-width: 1px; border-style: solid; border-color: #c7cede; background-color: #ffffff; flex-direction: row; align-items: center; align-self: flex-start; }
 .annotation-before-text { margin-bottom: 12px; }
-.annotation-entry-label { font-size: 14px; line-height: 22px; color: #42564a; margin-left: 8px; margin-right: 8px; }
-.annotation-icon { width: 17px; height: 15px; border-width: 1.5px; border-style: solid; border-color: #7b8f81; border-radius: 4px; padding: 3px; }
-.annotation-icon-line { height: 1px; background-color: #7b8f81; margin-bottom: 2px; }
+.annotation-entry-label { font-size: 14px; line-height: 22px; color: #1a2135; margin-left: 8px; margin-right: 8px; }
+.annotation-icon { width: 17px; height: 15px; border-width: 1.5px; border-style: solid; border-color: #596479; border-radius: 4px; padding: 3px; }
+.annotation-icon-line { height: 1px; background-color: #596479; margin-bottom: 2px; }
 .annotation-icon-short { width: 5px; }
-.sheet-grip { width: 42px; height: 4px; border-radius: 2px; background-color: #c7cbc1; align-self: center; margin-top: 8px; flex-shrink: 0; }
-.sheet-caption { margin: 0 16px; padding: 8px 12px; color: #b8cec0; font-size: 12px; line-height: 18px; background-color: #202c28; border-top-left-radius: 12px; border-top-right-radius: 12px; flex-shrink: 0; }
-.sheet-note { color: #7b827a; font-size: 12px; line-height: 20px; margin: 6px 16px 0; flex-shrink: 0; }
+.sheet-grip { width: 42px; height: 4px; border-radius: 2px; background-color: #c7cede; align-self: center; margin-top: 8px; flex-shrink: 0; }
+.sheet-caption { margin: 0 16px; padding: 8px 12px; color: #b8b8ff; font-size: 12px; line-height: 18px; background-color: #1a2135; border-top-left-radius: 12px; border-top-right-radius: 12px; flex-shrink: 0; }
+.sheet-note { color: #596479; font-size: 12px; line-height: 20px; margin: 6px 16px 0; flex-shrink: 0; }
 /* 原生button仅接收文字；同级透明点击层保留禁用、键盘和无障碍行为。 */
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.action-pressed { background-color: rgba(40, 92, 73, 0.07); }
-.page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; background-color: #f8f8f3; }
+.action-pressed { background-color: rgba(69, 70, 189, 0.07); }
+.page { position: relative; min-width: 0; flex: 1; height: 100%; overflow: hidden; background-color: #ffffff; }
 .status-spacer { height: var(--status-bar-height); flex-shrink: 0; }
-.conversation-header { flex-direction: row; align-items: center; padding: 10px 8px; flex-shrink: 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e3e5dc; }
+.conversation-header { flex-direction: row; align-items: center; padding: 10px 8px; flex-shrink: 0; border-style: solid; border-width: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; }
 .icon-button { width: 44px; height: 44px; padding: 0; margin: 0; align-items: center; justify-content: center; border-radius: 14px; background-color: transparent; border-width: 0; }
 .glass-header-action { position: relative; flex-shrink: 0; }
 .round-button { background-color: transparent; }
 .thread-capsule { flex: 1; min-width: 0; min-height: 44px; margin: 0 2px; padding: 0 6px; justify-content: center; }
 .thread-heading { flex-direction: row; align-items: center; }
-.thread-title { color: #202c28; font-size: 17px; line-height: 25px; font-weight: bold; flex-shrink: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
+.thread-title { color: #1a2135; font-size: 17px; line-height: 25px; font-weight: bold; flex-shrink: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
 .title-status { margin-left: 10px; flex-shrink: 0; }
 .detail-cache-indicator { flex-shrink: 0; width: 22px; height: 22px; margin-left: 6px; align-items: center; justify-content: center; }
 .thread-meta { flex-direction: row; align-items: center; margin-top: 3px; }
 .meta-computer { flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 10px; }
 .meta-icon { flex-shrink: 0; }
-.meta-project { color: #7b827a; font-size: 11px; lines: 1; text-overflow: ellipsis; flex: 1; min-width: 0; margin-left: 5px; }
-.meta-host { color: #7b827a; font-size: 11px; lines: 1; text-overflow: ellipsis; max-width: 96px; margin-left: 5px; flex-shrink: 1; }
+.meta-project { color: #596479; font-size: 11px; lines: 1; text-overflow: ellipsis; flex: 1; min-width: 0; margin-left: 5px; }
+.meta-host { color: #596479; font-size: 11px; lines: 1; text-overflow: ellipsis; max-width: 96px; margin-left: 5px; flex-shrink: 1; }
 .connection-dot { width: 5px; height: 5px; border-radius: 3px; margin: 0 4px; flex-shrink: 0; }
-.online { background-color: #285c49; }
-.offline { background-color: #94998f; }
+.online { background-color: #18765d; }
+.offline { background-color: #737d91; }
 .connection-notice { flex-direction: row; align-items: center; padding: 4px 18px; flex-shrink: 0; }
-.connection-note { font-size: 12px; color: #7b827a; flex: 1; }
-.text-button { font-size: 12px; padding: 0 8px; margin: 0; height: 44px; line-height: 44px; background-color: transparent; color: #285c49; }
+.connection-note { font-size: 12px; color: #596479; flex: 1; }
+.text-button { font-size: 12px; padding: 0 8px; margin: 0; height: 44px; line-height: 44px; background-color: transparent; color: #4546bd; }
 .notice { padding: 8px 18px; background-color: #fff3e8; flex-shrink: 0; }
 .notice-text { color: #785338; font-size: 12px; line-height: 18px; flex: 1; }
 .continue-button { height: 36px; line-height: 36px; margin: 8px 0 0; padding: 0 14px; font-size: 13px; align-self: flex-start; }
 .pending-notice { flex-direction: row; align-items: center; }
 .check { font-size: 12px; height: 34px; line-height: 34px; margin: 0 0 0 8px; padding: 0 12px; }
 .history-controls { height: 52px; padding: 8px 16px; justify-content: center; flex-shrink: 0; }
-.history-note { font-size: 12px; line-height: 18px; color: #7b827a; text-align: center; }
+.history-note { font-size: 12px; line-height: 18px; color: #596479; text-align: center; }
 .timeline-region { flex: 1; min-height: 0; position: relative; }
 .timeline { flex: 1; min-height: 0; }
 .timeline-content { flex-shrink: 0; }
@@ -1778,75 +1778,75 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 .timeline, .timeline-content { overflow-anchor: none; }
 /* #endif */
 .empty { padding: 90px 26px; }
-.empty-title { color: #202c28; font-size: 20px; }
-.empty-detail { color: #7b827a; font-size: 14px; line-height: 22px; margin-top: 12px; }
+.empty-title { color: #1a2135; font-size: 20px; }
+.empty-detail { color: #596479; font-size: 14px; line-height: 22px; margin-top: 12px; }
 .retry-opening { align-self: flex-start; margin: 18px 0 0; padding: 0 18px; font-size: 14px; }
 /* 收紧阅读留白，现有操作按钮和底部安全区保留原尺寸。 */
 .message { margin: 0 16px; }
 .message-agent { padding: 8px 0 10px; }
-.message-user { margin: 12px 16px 8px 64px; padding: 8px 12px; border-radius: 12px; background-color: #e8eee6; align-self: flex-end; }
+.message-user { margin: 12px 16px 8px 64px; padding: 8px 12px; border-radius: 12px; background-color: #eff0fe; align-self: flex-end; }
 .message-files { gap: 8px; }
 .message-file { min-height: 32px; flex-direction: row; align-items: center; }
-.message-file-name { flex: 1; min-width: 0; margin-left: 8px; color: #42564a; font-size: 14px; line-height: 22px; lines: 1; text-overflow: ellipsis; }
+.message-file-name { flex: 1; min-width: 0; margin-left: 8px; color: #1a2135; font-size: 14px; line-height: 22px; lines: 1; text-overflow: ellipsis; }
 /* #ifdef WEB */
 .message-file-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
-.message-text { color: #202c28; font-size: 16px; line-height: 25px; }
+.message-text { color: #1a2135; font-size: 16px; line-height: 25px; }
 .message-execution { margin-bottom: 4px; }
-.process-toggle { flex-direction: row; align-items: center; min-height: 44px; align-self: flex-start; border-bottom: 1px solid #e0e5da; }
-.process-label { color: #7b827a; font-size: 14px; line-height: 22px; margin-right: 8px; flex-shrink: 1; }
+.process-toggle { flex-direction: row; align-items: center; min-height: 44px; align-self: flex-start; border-bottom: 1px solid #e5e8f1; }
+.process-label { color: #596479; font-size: 14px; line-height: 22px; margin-right: 8px; flex-shrink: 1; }
 .execution-toggle { flex-direction: row; align-items: center; height: 44px; align-self: flex-start; }
-.execution-summary { color: #7b827a; font-size: 14px; line-height: 22px; margin: 0 8px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
+.execution-summary { color: #596479; font-size: 14px; line-height: 22px; margin: 0 8px; flex-shrink: 1; lines: 1; text-overflow: ellipsis; }
 .execution-list { max-height: 240px; flex-shrink: 0; }
 .execution-row { flex-direction: row; align-items: center; height: 44px; }
-.execution-label { color: #7b827a; font-size: 14px; line-height: 22px; margin-left: 8px; flex: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
-.execution-text { color: #e8eee6; font-size: 13px; line-height: 22px; }
-.execution-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(20, 32, 26, 0.32); justify-content: flex-end; z-index: 40; }
-.execution-sheet { height: 78%; border-top-left-radius: 20px; border-top-right-radius: 20px; background-color: #f8f8f3; overflow: hidden; }
+.execution-label { color: #596479; font-size: 14px; line-height: 22px; margin-left: 8px; flex: 1; min-width: 0; lines: 1; text-overflow: ellipsis; }
+.execution-text { color: #e7e9fd; font-size: 13px; line-height: 22px; }
+.execution-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(26, 33, 53, 0.32); justify-content: flex-end; z-index: 40; }
+.execution-sheet { height: 78%; border-top-left-radius: 20px; border-top-right-radius: 20px; background-color: #ffffff; overflow: hidden; }
 .sheet-header { flex-direction: row; align-items: center; padding: 4px 8px 6px 16px; flex-shrink: 0; }
-.sheet-title { color: #202c28; font-size: 20px; line-height: 28px; font-weight: bold; flex: 1; }
-.sheet-output { flex: 1; height: 0; min-height: 0; margin: 0 16px; padding: 12px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; background-color: #202c28; }
+.sheet-title { color: #1a2135; font-size: 20px; line-height: 28px; font-weight: bold; flex: 1; }
+.sheet-output { flex: 1; height: 0; min-height: 0; margin: 0 16px; padding: 12px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; background-color: #1a2135; }
 .sheet-actions { padding: 8px 16px 10px; flex-shrink: 0; }
-.sheet-copy { height: 46px; margin: 0; border-radius: 12px; border-style: solid; border-width: 1px; border-color: #285c49; flex-direction: row; align-items: center; justify-content: center; }
-.sheet-copy-label { font-size: 14px; color: #202c28; margin-left: 10px; }
-.question-section { margin: 18px 12px 20px; border-width: 1px; border-style: solid; border-color: #d8dfd5; border-radius: 20px; background-color: #fffefa; overflow: hidden; }
-.question-entry { flex-direction: row; align-items: center; padding: 10px 16px; min-height: 56px; background-color: #f0f3ed; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #e3e8df; }
-.question-label { color: #657269; font-size: 16px; line-height: 24px; flex: 1; }
-.question-state { color: #657269; font-size: 12px; margin-right: 12px; }
-.question-collapse-label { color: #657269; font-size: 13px; line-height: 22px; }
-.question-pressed { background-color: rgba(40, 92, 73, 0.04); }
+.sheet-copy { height: 46px; margin: 0; border-radius: 12px; border-style: solid; border-width: 1px; border-color: #4546bd; flex-direction: row; align-items: center; justify-content: center; }
+.sheet-copy-label { font-size: 14px; color: #1a2135; margin-left: 10px; }
+.question-section { margin: 18px 12px 20px; border-width: 1px; border-style: solid; border-color: #e5e8f1; border-radius: 20px; background-color: #ffffff; overflow: hidden; }
+.question-entry { flex-direction: row; align-items: center; padding: 10px 16px; min-height: 56px; background-color: #f6f7fb; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #e5e8f1; }
+.question-label { color: #596479; font-size: 16px; line-height: 24px; flex: 1; }
+.question-state { color: #596479; font-size: 12px; margin-right: 12px; }
+.question-collapse-label { color: #596479; font-size: 13px; line-height: 22px; }
+.question-pressed { background-color: rgba(69, 70, 189, 0.04); }
 /* #ifdef WEB */
 /* 阴影只用于 Web，原生沿用白底与描边的操作区层次。 */
-.question-section { box-shadow: 0px 10px 26px rgba(32, 44, 40, 0.07); }
+.question-section { box-shadow: 0px 10px 26px rgba(26, 33, 53, 0.07); }
 /* #endif */
-.approval { margin: 10px 16px; padding: 12px; background-color: #e8eee6; border-radius: 14px; }
-.approval-title { color: #202c28; font-size: 16px; font-weight: bold; }
-.approval-detail { color: #444444; font-size: 13px; line-height: 21px; margin-top: 8px; }
-.approval-cwd { color: #888888; font-size: 11px; margin-top: 8px; }
+.approval { margin: 10px 16px; padding: 12px; background-color: #eff0fe; border-radius: 14px; }
+.approval-title { color: #1a2135; font-size: 16px; font-weight: bold; }
+.approval-detail { color: #1a2135; font-size: 13px; line-height: 21px; margin-top: 8px; }
+.approval-cwd { color: #596479; font-size: 11px; margin-top: 8px; }
 .approval-actions { flex-direction: row; margin-top: 10px; }
 .approval-button { flex: 1; height: 44px; line-height: 44px; padding: 0 12px; margin: 0 4px; font-size: 14px; }
-.approval-feedback { color: #777777; font-size: 13px; margin-top: 12px; }
+.approval-feedback { color: #596479; font-size: 13px; margin-top: 12px; }
 .working { flex-direction: row; align-items: center; padding: 6px 16px; }
-.working-text { color: #929292; font-size: 13px; margin-left: 6px; }
+.working-text { color: #596479; font-size: 13px; margin-left: 6px; }
 .bottom-space { height: 12px; }
 /* 浮钮独立定位，不能叠加会将原生position覆盖为relative的通用点击容器。 */
 /* 按聊天视口水平居中，44px 点击区域仍随输入区高度一起上移。 */
-.jump-latest { position: absolute; bottom: 8px; left: 50%; width: 44px; height: 44px; padding: 0; margin: 0; margin-left: -22px; border-radius: 22px; background-color: #f8f8f3; border-style: solid; border-width: 1px; border-color: #e3e5dc; align-items: center; justify-content: center; overflow: hidden; }
+.jump-latest { position: absolute; bottom: 8px; left: 50%; width: 44px; height: 44px; padding: 0; margin: 0; margin-left: -22px; border-radius: 22px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e5e8f1; align-items: center; justify-content: center; overflow: hidden; }
 .jump-latest-glass { background-color: transparent; border-width: 0; overflow: visible; }
 .composer-dock { position: relative; z-index: 10; flex-shrink: 0; padding: 12px 12px 8px; }
 .bottom-safe-area { height: var(--uni-safe-area-inset-bottom); flex-shrink: 0; }
 /* 图标由圆形容器居中，透明按钮保留原生点击与禁用行为，不再依赖文字基线。 */
 /* 图形与透明点击层分离，与权限、模型和发送操作共用中心轴。 */
-.image-processing { color: #7b827a; font-size: 12px; margin-bottom: 8px; }
+.image-processing { color: #596479; font-size: 12px; margin-bottom: 8px; }
 .menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background-color: rgba(0,0,0,0.12); z-index: 30; }
 .menu-top-space { height: 54px; }
-.menu-panel { width: 245px; align-self: flex-end; margin-right: 14px; padding: 10px 0; border-radius: 14px; background-color: #f8f8f3; }
-.menu-caption { color: #929292; font-size: 12px; padding: 8px 20px; }
+.menu-panel { width: 245px; align-self: flex-end; margin-right: 14px; padding: 10px 0; border-radius: 14px; background-color: #ffffff; }
+.menu-caption { color: #596479; font-size: 12px; padding: 8px 20px; }
 .menu-item { flex-direction: row; align-items: center; margin: 0; padding: 0 20px; height: 46px; background-color: transparent; border-radius: 0; }
 .archive-icon { position: relative; width: 17px; height: 14px; margin-left: 1px; margin-right: 1px; margin-top: 3px; border: 2px solid #bb3f44; border-radius: 3px; flex-shrink: 0; }
-.archive-lid { position: absolute; top: -5px; left: -3px; width: 19px; height: 5px; border: 2px solid #bb3f44; border-radius: 2px; background-color: #f8f8f3; }
+.archive-lid { position: absolute; top: -5px; left: -3px; width: 19px; height: 5px; border: 2px solid #bb3f44; border-radius: 2px; background-color: #ffffff; }
 .archive-slot { width: 7px; height: 2px; margin-top: 4px; align-self: center; background-color: #bb3f44; }
-.menu-label { color: #202c28; font-size: 14px; line-height: 20px; margin-left: 10px; flex: 1; }
+.menu-label { color: #1a2135; font-size: 14px; line-height: 20px; margin-left: 10px; flex: 1; }
 .archive-label { color: #bb3f44; }
 .delete-icon { position: relative; width: 19px; height: 22px; flex-shrink: 0; }
 .delete-handle { position: absolute; top: 1px; left: 6px; width: 7px; height: 4px; border-width: 2px; border-style: solid; border-color: #bb3f44; border-bottom-width: 0; border-top-left-radius: 3px; border-top-right-radius: 3px; }
@@ -1860,24 +1860,24 @@ watch((): string => props.paneWidth + ':' + props.paneHeight, () => { resizeConv
 .menu-item { justify-content: flex-start; }
 /* #endif */
 .composer-menu-open { z-index: 40; }
-.composer-dismiss { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 35; background-color: rgba(32, 44, 40, 0.08); }
+.composer-dismiss { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 35; background-color: rgba(26, 33, 53, 0.08); }
 .composer-options-anchor { position: absolute; right: 12px; padding-bottom: 8px; z-index: 41; }
 .plan-fallback { margin: 8px 16px 10px; }
-.plan-confirm { margin: 4px 16px 16px; border-width: 1px; border-style: solid; border-color: #d8dfd5; border-radius: 18px; background-color: #fffefa; overflow: hidden; flex-shrink: 0; }
-.plan-confirm-header { min-height: 44px; padding: 0 16px; flex-direction: row; align-items: center; background-color: #f0f3ed; }
-.plan-confirm-title { flex: 1; color: #202c28; font-size: 16px; line-height: 24px; font-weight: 600; }
+.plan-confirm { margin: 4px 16px 16px; border-width: 1px; border-style: solid; border-color: #e5e8f1; border-radius: 18px; background-color: #ffffff; overflow: hidden; flex-shrink: 0; }
+.plan-confirm-header { min-height: 44px; padding: 0 16px; flex-direction: row; align-items: center; background-color: #f6f7fb; }
+.plan-confirm-title { flex: 1; color: #1a2135; font-size: 16px; line-height: 24px; font-weight: 600; }
 .plan-confirm-body { padding: 12px 14px 4px; }
-.plan-confirm-note { color: #657269; font-size: 13px; line-height: 21px; }
+.plan-confirm-note { color: #596479; font-size: 13px; line-height: 21px; }
 .plan-confirm-actions { flex-direction: row; margin-top: 14px; gap: 8px; }
 .plan-action { flex: 1; min-width: 0; height: 48px; line-height: 48px; margin: 0; padding: 0 6px; }
 .plan-implement { flex: 1.1; }
-.plan-cancel { height: 44px; line-height: 44px; margin: 0 -8px 0 0; padding: 0 8px; font-size: 13px; color: #657269; background-color: transparent; }
-.plan-defer { height: 44px; line-height: 44px; margin: 2px 0 0; padding: 0; font-size: 13px; color: #7b827a; background-color: transparent; align-items: center; justify-content: center; text-align: center; }
-.plan-feedback { width: 100%; height: 96px; margin-top: 12px; padding: 12px; font-size: 16px; line-height: 24px; color: #202c28; background-color: #fdfdfb; border-width: 1px; border-style: solid; border-color: #d8dfd5; border-radius: 12px; }
+.plan-cancel { height: 44px; line-height: 44px; margin: 0 -8px 0 0; padding: 0 8px; font-size: 13px; color: #596479; background-color: transparent; }
+.plan-defer { height: 44px; line-height: 44px; margin: 2px 0 0; padding: 0; font-size: 13px; color: #596479; background-color: transparent; align-items: center; justify-content: center; text-align: center; }
+.plan-feedback { width: 100%; height: 96px; margin-top: 12px; padding: 12px; font-size: 16px; line-height: 24px; color: #1a2135; background-color: #ffffff; border-width: 1px; border-style: solid; border-color: #e5e8f1; border-radius: 12px; }
 .plan-send { height: 48px; line-height: 48px; margin: 14px 0 0; padding: 0 12px; }
-.plan-feedback-note { color: #7b827a; font-size: 12px; line-height: 20px; text-align: center; margin: 10px 0; }
+.plan-feedback-note { color: #596479; font-size: 12px; line-height: 20px; text-align: center; margin: 10px 0; }
 /* 计划入口紧跟权限图标，固定胶囊宽度，模型名称可继续收缩。 */
-.composer-caption { font-size: 11px; color: #7b827a; line-height: 16px; margin: 5px 2px 0; }
+.composer-caption { font-size: 11px; color: #596479; line-height: 16px; margin: 5px 2px 0; }
 /* #ifdef WEB */
 .settings-trigger-label, .file-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */

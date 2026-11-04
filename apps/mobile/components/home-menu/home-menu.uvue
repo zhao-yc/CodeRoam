@@ -30,7 +30,7 @@
         <view class="archive-heading"><view class="back-action"><app-icon name="back" :size="20" /><button class="menu-hitbox" :disabled="!visible" aria-label="返回列表菜单" @click="section = 'main'"></button></view><text class="archive-title">已归档任务</text><view class="back-action"><loading v-if="archiveRefreshing" class="archive-spinner" /><app-icon v-else name="refresh" :size="19" /><button class="menu-hitbox" :disabled="!visible || archiveRefreshing" :aria-label="archiveRefreshing ? '正在刷新归档列表' : '刷新归档列表'" @click="refreshFromButton"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: archiveHeight + 'px' }">
           <text v-if="entries.length == 0" class="menu-note">连接电脑后查看已归档任务</text>
-          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading && !entry.loadingMore && !archiveRefreshing" class="menu-note">正在读取…</text><view v-else-if="(entry.more || entry.loadingMore) && entry.archiveError.length == 0" class="load-more inline-progress-button"><action-progress :busy="entry.loadingMore" /><text class="inline-progress-caption" style="color: #285c49; font-size: 13px;">加载更多</text><button class="inline-progress-hitbox" :disabled="!visible || (entry.loadingMore)" @click="loadArchives(entry, true)" :aria-label="(entry.loadingMore) ? '正在加载更多' : '加载更多'"></button></view></view>
+          <view v-for="entry in entries" :key="entry.hostId" class="archive-computer"><text class="menu-caption">{{ entry.label }}</text><text v-if="entry.archiveError.length > 0" class="menu-note">{{ entry.archiveError }}</text><text v-else-if="entry.loaded && entry.threads.length == 0" class="menu-note">暂无已归档任务</text><view v-for="thread in entry.threads" :key="thread.id" class="archive-row"><app-icon name="archive" :size="18" tone="muted" /><view class="archive-copy"><text class="archive-name">{{ thread.title }}</text><text class="archive-project">{{ thread.cwd.length > 0 ? projectName(thread.cwd) : '未指定项目' }}</text></view></view><text v-if="entry.loading && !entry.loadingMore && !archiveRefreshing" class="menu-note">正在读取…</text><view v-else-if="(entry.more || entry.loadingMore) && entry.archiveError.length == 0" class="load-more inline-progress-button"><action-progress :busy="entry.loadingMore" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 13px;">加载更多</text><button class="inline-progress-hitbox" :disabled="!visible || (entry.loadingMore)" @click="loadArchives(entry, true)" :aria-label="(entry.loadingMore) ? '正在加载更多' : '加载更多'"></button></view></view>
         </scroll-view><text class="archive-footnote">归档列表仅供查看</text>
       </template>
     </view>
@@ -129,43 +129,43 @@ onUnmounted(() => { revision++ })
 </script>
 
 <style>
-.menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 50; padding-top: var(--status-bar-height); padding-left: 16px; background-color: rgba(32, 44, 40, 0); transition-property: background-color; transition-duration: 140ms; transition-timing-function: ease-in; }
-.menu-overlay-visible { background-color: rgba(32, 44, 40, 0.08); transition-duration: 200ms; transition-timing-function: ease-out; }
-.menu-panel { margin-top: 50px; border-radius: 20px; padding: 6px 6px; background-color: #fcfcf9; border-style: solid; border-width: 1px; border-color: #dedfd8; overflow: hidden; opacity: 0; transform: translateY(-8px); transition-property: opacity, transform; transition-duration: 140ms; transition-timing-function: ease-in; }
+.menu-overlay { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 50; padding-top: var(--status-bar-height); padding-left: 16px; background-color: rgba(26, 33, 53, 0); transition-property: background-color; transition-duration: 140ms; transition-timing-function: ease-in; }
+.menu-overlay-visible { background-color: rgba(26, 33, 53, 0.08); transition-duration: 200ms; transition-timing-function: ease-out; }
+.menu-panel { margin-top: 50px; border-radius: 20px; padding: 6px 6px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e5e8f1; overflow: hidden; opacity: 0; transform: translateY(-8px); transition-property: opacity, transform; transition-duration: 140ms; transition-timing-function: ease-in; }
 .menu-panel-visible { opacity: 1; transform: translateY(0px); transition-duration: 200ms; transition-timing-function: ease-out; }
 .menu-main-scroll { height: auto; flex-shrink: 1; }
 .menu-row { position: relative; min-height: 42px; flex-direction: row; align-items: center; padding-right: 10px; border-radius: 14px; }
 .check-slot { width: 26px; align-items: center; flex-shrink: 0; }
-.menu-label { margin-left: 10px; font-size: 15px; line-height: 24px; color: #202c28; }
+.menu-label { margin-left: 10px; font-size: 15px; line-height: 24px; color: #1a2135; }
 .menu-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; border-radius: 14px; }
-.menu-pressed { background-color: rgba(40, 92, 73, 0.07); }
-.menu-separator { height: 1px; background-color: #e3e5dc; margin: 6px 14px; }
-.menu-caption { color: #94998f; font-size: 12px; line-height: 20px; padding: 2px 32px; }
-.menu-note { color: #7b827a; font-size: 13px; line-height: 22px; padding: 1px 32px 4px; }
+.menu-pressed { background-color: rgba(69, 70, 189, 0.07); }
+.menu-separator { height: 1px; background-color: #e5e8f1; margin: 6px 14px; }
+.menu-caption { color: #737d91; font-size: 12px; line-height: 20px; padding: 2px 32px; }
+.menu-note { color: #596479; font-size: 13px; line-height: 22px; padding: 1px 32px 4px; }
 /* 每个实例独立分区，账号与额度保持在同一卡片内，进度条仅表达真实剩余百分比。 */
 .usage-list { padding: 0 14px 4px; }
-.usage-entry { margin-top: 6px; padding: 10px 12px; border-radius: 12px; border-width: 1px; border-style: solid; border-color: #e3e5dc; background-color: #f3f5ee; flex-shrink: 0; }
-.usage-computer { color: #39473f; font-size: 13px; font-weight: bold; line-height: 20px; lines: 1; text-overflow: ellipsis; }
-.usage-account { color: #7b827a; font-size: 12px; line-height: 18px; margin-top: 2px; max-height: 36px; overflow: hidden; lines: 2; text-overflow: ellipsis; }
-.usage-note { color: #7b827a; font-size: 12px; line-height: 20px; margin-top: 4px; }
+.usage-entry { margin-top: 6px; padding: 10px 12px; border-radius: 12px; border-width: 1px; border-style: solid; border-color: #e5e8f1; background-color: #f6f7fb; flex-shrink: 0; }
+.usage-computer { color: #1a2135; font-size: 13px; font-weight: bold; line-height: 20px; lines: 1; text-overflow: ellipsis; }
+.usage-account { color: #596479; font-size: 12px; line-height: 18px; margin-top: 2px; max-height: 36px; overflow: hidden; lines: 2; text-overflow: ellipsis; }
+.usage-note { color: #596479; font-size: 12px; line-height: 20px; margin-top: 4px; }
 .usage-window { margin-top: 6px; }
 .usage-summary { flex-direction: row; align-items: center; justify-content: space-between; }
-.usage-period { color: #59665f; font-size: 12px; line-height: 20px; }
-.usage-value { font-size: 14px; font-weight: bold; line-height: 20px; color: #285c49; }
-.usage-meter { height: 3px; margin-top: 3px; border-radius: 2px; background-color: #dfe5da; overflow: hidden; }
-.usage-meter-fill { height: 3px; border-radius: 2px; background-color: #527c62; }
+.usage-period { color: #596479; font-size: 12px; line-height: 20px; }
+.usage-value { font-size: 14px; font-weight: bold; line-height: 20px; color: #4546bd; }
+.usage-meter { height: 3px; margin-top: 3px; border-radius: 2px; background-color: #e5e8f1; overflow: hidden; }
+.usage-meter-fill { height: 3px; border-radius: 2px; background-color: #4546bd; }
 .archive-heading { flex-direction: row; align-items: center; padding: 0 8px 8px; }
 .back-action { position: relative; width: 36px; height: 36px; align-items: center; justify-content: center; }
-.archive-title { flex: 1; font-size: 17px; color: #202c28; font-weight: bold; padding-left: 8px; }
+.archive-title { flex: 1; font-size: 17px; color: #1a2135; font-weight: bold; padding-left: 8px; }
 .archive-row { flex-direction: row; padding: 10px 18px; align-items: center; }
 .archive-copy { flex: 1; min-width: 0; margin-left: 12px; }
-.archive-name { color: #202c28; font-size: 15px; line-height: 22px; lines: 2; text-overflow: ellipsis; }
-.archive-project { color: #7b827a; font-size: 12px; line-height: 18px; lines: 1; text-overflow: ellipsis; }
-.archive-footnote { color: #94998f; font-size: 12px; line-height: 20px; padding: 8px 18px 0; }
-.archive-spinner { width: 16px; height: 16px; border-color: #285c49; }
-.load-more { margin: 8px 18px; padding: 0; height: 36px; font-size: 13px; line-height: 36px; border-radius: 12px; color: #285c49; background-color: #e8eee6; }
+.archive-name { color: #1a2135; font-size: 15px; line-height: 22px; lines: 2; text-overflow: ellipsis; }
+.archive-project { color: #596479; font-size: 12px; line-height: 18px; lines: 1; text-overflow: ellipsis; }
+.archive-footnote { color: #737d91; font-size: 12px; line-height: 20px; padding: 8px 18px 0; }
+.archive-spinner { width: 16px; height: 16px; border-color: #4546bd; }
+.load-more { margin: 8px 18px; padding: 0; height: 36px; font-size: 13px; line-height: 36px; border-radius: 12px; color: #4546bd; background-color: #e7e9fd; }
 /* #ifdef WEB */
-.menu-panel { box-shadow: 0 12px 40px rgba(32, 44, 40, 0.14); }
+.menu-panel { box-shadow: 0 12px 40px rgba(26, 33, 53, 0.14); }
 .menu-hitbox::after { border: 0; }
 .usage-account { overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 @media (prefers-reduced-motion: reduce) {

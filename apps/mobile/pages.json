@@ -4,5 +4,5 @@
     { "path": "pages/conversation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "聊天" } },
     { "path": "pages/connection/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "电脑连接" } }
   ],
-  "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#f8f8f3", "backgroundColor": "#f8f8f3" }
+  "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#ffffff", "backgroundColor": "#ffffff" }
 }

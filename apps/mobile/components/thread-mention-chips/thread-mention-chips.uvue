@@ -15,9 +15,9 @@ function remove(id: string) { if (!props.disabled && !props.readonly) emit('remo
 </script>
 <style>
 .mention-chips { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
-.mention-chip { max-width: 100%; flex-direction: row; align-items: center; border-radius: 10px; background-color: #e8eee6; padding: 3px 8px; }
-.mention-name { flex-shrink: 1; color: #285c49; font-size: 12px; line-height: 24px; lines: 1; overflow: hidden; text-overflow: ellipsis; }
-.mention-remove { flex-shrink: 0; width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0 0 0 4px; color: #657269; background-color: transparent; }
+.mention-chip { max-width: 100%; flex-direction: row; align-items: center; border-radius: 10px; background-color: #e7e9fd; padding: 3px 8px; }
+.mention-name { flex-shrink: 1; color: #4546bd; font-size: 12px; line-height: 24px; lines: 1; overflow: hidden; text-overflow: ellipsis; }
+.mention-remove { flex-shrink: 0; width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0 0 0 4px; color: #596479; background-color: transparent; }
 /* #ifdef WEB */
 .mention-name { white-space: nowrap; }
 .mention-remove::after { border: none; }

@@ -6,7 +6,7 @@
       <input v-model="query" class="plugin-search" placeholder="搜索插件名称或简介" aria-label="搜索插件" :maxlength="100" />
       <scroll-view direction="vertical" class="plugin-list" :style="{ height: listHeight + 'px' }" :show-scrollbar="false">
         <view v-if="loading && !manualRetry" class="plugin-empty"><text class="plugin-note">正在读取电脑插件…</text></view>
-        <view v-else-if="error.length > 0 || manualRetry" class="plugin-empty"><text class="plugin-error">{{ error }}</text><view class="plugin-retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #536050; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新读取' : '重新读取'"></button></view></view>
+        <view v-else-if="error.length > 0 || manualRetry" class="plugin-empty"><text class="plugin-error">{{ error }}</text><view class="plugin-retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="color: #596479; font-size: 13px;">重新读取</text><button class="inline-progress-hitbox" @click="retry" :disabled="manualRetry" :aria-label="(manualRetry) ? '正在重新读取' : '重新读取'"></button></view></view>
         <template v-else>
           <view v-for="plugin in missing" :key="plugin.id" class="plugin-row plugin-unavailable action-frame"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text class="plugin-description">已不可用，请取消选择</text></view><app-icon name="check" :size="20" tone="muted" /><button class="action-hitbox" :aria-label="'取消不可用插件 ' + plugin.displayName" @click="toggle(plugin)"></button></view>
           <view v-for="plugin in filtered" :key="plugin.id" class="plugin-row action-frame" :class="{ 'plugin-row-selected': isSelected(plugin.id) }"><app-icon name="plugin" :size="22" tone="muted" /><view class="plugin-copy"><text class="plugin-name">{{ plugin.displayName }}</text><text v-if="plugin.description.length > 0" class="plugin-description">{{ plugin.description }}</text></view><view class="plugin-check"><app-icon v-if="isSelected(plugin.id)" name="check" :size="20" /></view><button class="action-hitbox" role="checkbox" :aria-checked="isSelected(plugin.id)" :aria-label="(isSelected(plugin.id) ? '取消选择 ' : '选择插件 ') + plugin.displayName" @click="toggleOption(plugin)"></button></view>
@@ -80,28 +80,28 @@ onUnmounted(() => { alive = false; revision++ })
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
 .plugin-overlay { position: fixed; top: 0; bottom: 0; left: 0; right: 0; z-index: 90; background-color: rgba(0, 0, 0, 0.3); justify-content: flex-end; }
-.plugin-sheet { width: 100%; border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #fbfcf9; padding: 18px 18px 24px; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.plugin-sheet { width: 100%; border-top-left-radius: 24px; border-top-right-radius: 24px; background-color: #ffffff; padding: 18px 18px 24px; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 .plugin-heading { flex-direction: row; align-items: center; justify-content: space-between; }
-.plugin-title { color: #26392d; font-size: 19px; font-weight: bold; }
+.plugin-title { color: #1a2135; font-size: 19px; font-weight: bold; }
 .plugin-close { width: 36px; height: 36px; align-items: center; justify-content: center; }
-.plugin-hint { color: #74806e; font-size: 12px; line-height: 20px; margin: 3px 0 14px; }
-.plugin-search { background-color: #eef1e9; border-radius: 12px; height: 44px; padding: 0 12px; font-size: 14px; color: #26392d; margin-bottom: 10px; }
+.plugin-hint { color: #596479; font-size: 12px; line-height: 20px; margin: 3px 0 14px; }
+.plugin-search { background-color: #f6f7fb; border-radius: 12px; height: 44px; padding: 0 12px; font-size: 14px; color: #1a2135; margin-bottom: 10px; }
 .plugin-list { width: 100%; }
 .plugin-row { flex-direction: row; align-items: center; gap: 12px; padding: 13px 10px; border-radius: 12px; min-height: 66px; margin-bottom: 3px; }
-.plugin-row-selected { background-color: #e9efe3; }
+.plugin-row-selected { background-color: #e7e9fd; }
 .plugin-copy { flex: 1; min-width: 0; }
-.plugin-name { font-size: 15px; color: #26392d; line-height: 22px; }
-.plugin-description { font-size: 12px; color: #74806e; line-height: 18px; margin-top: 3px; lines: 2; overflow: hidden; text-overflow: ellipsis; }
+.plugin-name { font-size: 15px; color: #1a2135; line-height: 22px; }
+.plugin-description { font-size: 12px; color: #596479; line-height: 18px; margin-top: 3px; lines: 2; overflow: hidden; text-overflow: ellipsis; }
 .plugin-check { width: 20px; height: 20px; flex-shrink: 0; }
 .plugin-unavailable { background-color: #f8eee8; }
 .plugin-empty { padding: 32px 12px; align-items: center; }
-.plugin-note, .plugin-error { font-size: 14px; line-height: 22px; text-align: center; color: #74806e; }
+.plugin-note, .plugin-error { font-size: 14px; line-height: 22px; text-align: center; color: #596479; }
 .plugin-error { color: #a13830; }
-.plugin-retry { font-size: 13px; line-height: 32px; padding: 0 16px; margin-top: 16px; border-radius: 10px; color: #536050; background-color: #eef1e9; }
+.plugin-retry { font-size: 13px; line-height: 32px; padding: 0 16px; margin-top: 16px; border-radius: 10px; color: #596479; background-color: #f6f7fb; }
 .plugin-footer { flex-direction: row; gap: 12px; padding-top: 14px; }
 .plugin-clear, .plugin-confirm { font-size: 14px; line-height: 44px; border-radius: 12px; margin: 0; padding: 0 16px; align-items: center; justify-content: center; }
-.plugin-clear { color: #69766b; background-color: #eef1e9; }
-.plugin-confirm { flex: 1; color: #fff; background-color: #536b49; }
+.plugin-clear { color: #596479; background-color: #f6f7fb; }
+.plugin-confirm { flex: 1; color: #fff; background-color: #4546bd; }
 .plugin-confirm[disabled], .plugin-clear[disabled] { opacity: 0.45; }
 /* #ifdef WEB */
 .plugin-sheet { box-sizing: border-box; }

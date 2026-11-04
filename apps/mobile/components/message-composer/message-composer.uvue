@@ -17,7 +17,7 @@
             </view>
             <view v-for="file in files" :key="file.id" class="draft-file">
               <app-icon name="file" :size="24" tone="muted" /><view class="file-copy"><text class="file-name">{{ file.name }}</text><text class="file-status">{{ fileStatus(file) }}</text></view>
-              <view v-if="retryFiles && (file.status == 'error' || file.status == 'paused' || retryingFileIds.indexOf(file.id) >= 0)" class="file-retry inline-progress-button"><action-progress :busy="retryingFileIds.indexOf(file.id) >= 0" /><text class="inline-progress-caption" style="color: #285c49; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!active || retryDisabled || (retryingFileIds.indexOf(file.id) >= 0)" @click="emit('retryfile', file.id)" :aria-label="(retryingFileIds.indexOf(file.id) >= 0) ? '正在重试上传' : '重试'"></button></view>
+              <view v-if="retryFiles && (file.status == 'error' || file.status == 'paused' || retryingFileIds.indexOf(file.id) >= 0)" class="file-retry inline-progress-button"><action-progress :busy="retryingFileIds.indexOf(file.id) >= 0" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!active || retryDisabled || (retryingFileIds.indexOf(file.id) >= 0)" @click="emit('retryfile', file.id)" :aria-label="(retryingFileIds.indexOf(file.id) >= 0) ? '正在重试上传' : '重试'"></button></view>
               <button class="file-remove" :disabled="filesDisabled" :aria-label="'移除附件 ' + file.name" @click="emit('removefile', file.id)">×</button>
             </view>
           </view>
@@ -153,7 +153,7 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 <style scoped>
 .action-frame { position: relative; overflow: hidden; flex-shrink: 0; }
 .action-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; border-radius: 0; background-color: transparent; font-size: 1px; line-height: 1px; }
-.composer-panel { position: relative; flex-shrink: 0; border-radius: 24px; padding: 6px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e3e5dc; transition-property: border-radius; transition-duration: 200ms; transition-timing-function: ease-out; }
+.composer-panel { position: relative; flex-shrink: 0; border-radius: 24px; padding: 6px 8px; background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #e5e8f1; transition-property: border-radius; transition-duration: 200ms; transition-timing-function: ease-out; }
 .composer-glass { background-color: transparent; border-color: transparent; }
 .composer-compact { border-radius: 30px; }
 .composer-entry { padding: 2px 3px; }
@@ -165,7 +165,7 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .composer-content-hidden { opacity: 0; }
 .composer-content-body, .composer-assets, .draft-editor { flex-shrink: 0; }
 .draft-editor { position: relative; min-width: 0; }
-.message-input { width: 100%; min-height: 24px; color: #202c28; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
+.message-input { width: 100%; min-height: 24px; color: #1a2135; font-size: 16px; line-height: 24px; background-color: transparent; padding: 0 2px; transition-property: height; transition-duration: 200ms; transition-timing-function: ease-out; }
 .draft-measure-box { position: absolute; left: 2px; right: 2px; top: 0; height: 0; overflow: hidden; opacity: 0; }
 .draft-placeholder-measure { flex-shrink: 0; font-size: 16px; line-height: 24px; }
 .composer-add { position: absolute; left: 0; bottom: 0; width: 44px; height: 44px; }
@@ -173,23 +173,23 @@ onUnmounted(() => { alive = false; layoutRevision++; clearTimeout(layoutTimer) }
 .add-action { align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0; padding: 0; background-color: transparent; }
 .composer-actions { position: absolute; left: 44px; right: 40px; bottom: 0; height: 44px; flex-direction: row; align-items: center; }
 .settings-trigger { flex: 1; min-width: 0; height: 44px; flex-direction: row; align-items: center; justify-content: flex-end; margin: 0 10px; border-radius: 10px; }
-.settings-trigger-label { flex-shrink: 1; min-width: 0; color: #171717; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
+.settings-trigger-label { flex-shrink: 1; min-width: 0; color: #1a2135; font-size: 13px; line-height: 20px; lines: 1; text-overflow: ellipsis; margin-right: 4px; }
 .primary-spinner { width: 18px; height: 18px; border-color: #ffffff; }
-.primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #285c49; align-items: center; justify-content: center; }
-.plan-chip { flex-shrink: 0; height: 28px; padding: 0 8px; margin-left: 4px; border-radius: 14px; flex-direction: row; align-items: center; background-color: #eeeeee; }
+.primary-action { width: 40px; height: 40px; border-radius: 20px; margin: 0; padding: 0; background-color: #4546bd; align-items: center; justify-content: center; }
+.plan-chip { flex-shrink: 0; height: 28px; padding: 0 8px; margin-left: 4px; border-radius: 14px; flex-direction: row; align-items: center; background-color: #f6f7fb; }
 .plan-close { margin-left: 8px; }
-.entry-placeholder { position: absolute; left: 45px; bottom: 10px; color: #94998f; font-size: 16px; line-height: 24px; }
+.entry-placeholder { position: absolute; left: 45px; bottom: 10px; color: #737d91; font-size: 16px; line-height: 24px; }
 .entry-hitbox { z-index: 2; border-radius: 25px; }
 .draft-images { flex-direction: row; margin-bottom: 10px; }
 .draft-image { width: 60px; height: 60px; margin-right: 10px; position: relative; }
 .draft-thumbnail { width: 60px; height: 60px; border-radius: 8px; }
-.remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; align-items: center; justify-content: center; background-color: #202c28; border-radius: 12px; }
-.draft-file { flex-direction: row; align-items: center; background-color: #e8eee6; border-radius: 10px; margin-bottom: 8px; padding: 8px; }
+.remove-image { position: absolute; right: 0; top: 0; width: 24px; height: 24px; align-items: center; justify-content: center; background-color: #1a2135; border-radius: 12px; }
+.draft-file { flex-direction: row; align-items: center; background-color: #eff0fe; border-radius: 10px; margin-bottom: 8px; padding: 8px; }
 .file-copy { flex: 1; min-width: 0; margin-left: 8px; }
-.file-name { font-size: 13px; color: #202c28; lines: 1; text-overflow: ellipsis; }
-.file-status { font-size: 11px; line-height: 16px; color: #7b827a; }
-.file-remove { width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0; color: #657269; background-color: transparent; }
-.file-retry { font-size: 12px; color: #285c49; background-color: transparent; padding: 0 8px; margin: 0; }
+.file-name { font-size: 13px; color: #1a2135; lines: 1; text-overflow: ellipsis; }
+.file-status { font-size: 11px; line-height: 16px; color: #596479; }
+.file-remove { width: 32px; height: 32px; line-height: 30px; font-size: 20px; padding: 0; margin: 0; color: #596479; background-color: transparent; }
+.file-retry { font-size: 12px; color: #4546bd; background-color: transparent; padding: 0 8px; margin: 0; }
 /* #ifdef WEB */
 .draft-placeholder-measure { display: block; white-space: pre-wrap; overflow-wrap: break-word; }
 /* #endif */
