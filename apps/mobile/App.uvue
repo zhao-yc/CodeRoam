@@ -25,7 +25,8 @@ export default {
 <style>
 .page { background-color: #ffffff; }
 .inline-progress-button { position: relative; min-height: 28px; flex-direction: row; align-items: center; justify-content: center; }
-.inline-progress-caption { flex-shrink: 1; text-align: center; }
+/* 右侧补齐加载组件的 16px 占位，让文字始终居中，切换加载状态时不跳动。 */
+.inline-progress-caption { flex-shrink: 1; margin-right: 16px; text-align: center; }
 .inline-progress-hitbox { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border-width: 0; background-color: transparent; }
 /* #ifdef WEB */
 .inline-progress-hitbox::after { border: 0; }

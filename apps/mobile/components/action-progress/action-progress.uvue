@@ -5,7 +5,7 @@
 </template>
 
 <script setup lang="uts">
-// 固定预留位置，让同一个按钮在等待回执时保持宽度和文字位置。
+// 固定预留加载位置；按钮文字的右侧配对留白，保持居中并避免等待回执时跳动。
 withDefaults(defineProps<{ busy: boolean, light?: boolean }>(), { light: false })
 </script>
 
