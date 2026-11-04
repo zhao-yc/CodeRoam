@@ -48,7 +48,7 @@ function Prepare-Install {
   $node=& node -p "require('node:fs').realpathSync(process.execPath)"
   if((& $node --version) -notmatch '^v24\.'){throw '服务要求 Node.js 24'}
   New-Item -ItemType Directory -Force -Path (Join-Path $releaseRoot 'supervisor') | Out-Null
-  foreach($name in @('service-supervisor.mjs','service-lifecycle.mjs','runtime-lock.mjs')){Copy-Item -LiteralPath (Join-Path $project "apps/bridge/$name") -Destination (Join-Path $releaseRoot "supervisor/$name")}
+  foreach($name in @('service-supervisor.mjs','service-lifecycle.mjs','runtime-lock.mjs','management-server.mjs','management-client.mjs','management-config.mjs','management-files.mjs')){Copy-Item -LiteralPath (Join-Path $project "apps/bridge/$name") -Destination (Join-Path $releaseRoot "supervisor/$name")}
   $config=Read-Json (Join-Path $project '.local/bridge.json')
   $data=if($config.PSObject.Properties.Name -contains 'dataPath'){$config.dataPath}else{'.local/bridge'}
   $worker=@{entry=$target;bridgeConfig=(Join-Path $project '.local/bridge.json');projectRoot=$project;runDirectory=(Join-Path $project '.local/run');statusFile=([IO.Path]::GetFullPath((Join-Path $project (Join-Path $data 'runtime-status.json'))));logDirectory=(Join-Path $local 'logs')}

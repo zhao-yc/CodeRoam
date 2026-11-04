@@ -14,6 +14,7 @@ import { IpcClient, defaultIpcSocketPath } from '../../packages/protocol/ipc-cli
 import { InstanceHub } from './instance-hub.mjs';
 import { WindowsIpcHost } from './windows-ipc-host.mjs';
 import { createRequestDiagnostics } from '../../packages/protocol/request-diagnostics.mjs';
+import { installManagementChild } from './management-child.mjs';
 
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
 let releaseBridgeLock=()=>{};
@@ -28,13 +29,15 @@ try {
     const ipcHost=process.platform==='win32'&&(config.ipcSocketPath??defaultSocket)===defaultSocket
       ? new WindowsIpcHost({onState:state=>console.log(state==='ready'?'本机多实例管道已就绪':'等待现有桌面释放本机管道')}) : null;
     const hub=new InstanceHub({config,dataPath,diagnostics,ipcHost});
+    const managementStatus=()=>{const maintenance={online:0,grace:0,light:0,legacy:0};for(const runtime of hub.runtimes.values()){const mode=runtime.agent.clientPresence?.mode;if(Object.hasOwn(maintenance,mode))maintenance[mode]++;}return {pid:process.pid,version:'0.1.0',connected:hub.socket?.readyState===1&&hub.supported,maintenance,instances:[...hub.runtimes.values()].map(({instance})=>({label:instance.label,ready:instance.alive&&instance.ready}))};};
     // 私有运行状态只记录模式计数，方便核验降频，不包含电脑或会话编号。
-    const status=connected=>{const maintenance={online:0,grace:0,light:0,legacy:0};for(const runtime of hub.runtimes.values()){const mode=runtime.agent.clientPresence?.mode;if(Object.hasOwn(maintenance,mode))maintenance[mode]++;}fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({pid:process.pid,connected,updatedAt:Date.now(),maintenance}));};
+    const status=connected=>fs.writeFileSync(path.join(dataPath,'runtime-status.json'),JSON.stringify({...managementStatus(),connected,updatedAt:Date.now()}));
     hub.on('maintenance',()=>status(hub.socket?.readyState===1&&hub.supported));
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
     hub.on('disconnected',detail=>{status(false);console.log(`中转连接已断开（代码 ${detail.code}）`);});
     hub.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
     let closing=false;const close=async()=>{if(closing)return;closing=true;try{await hub.close();}finally{releaseBridgeLock();}};
+    installManagementChild({agents:()=>[...hub.runtimes.values()].map(runtime=>runtime.agent),drain:value=>{hub.managementDraining=value;},status:managementStatus,close});
     process.on('SIGINT',close);process.on('SIGTERM',close);hub.start();
   } else {
   const client=new IpcClient({socketPath:config.ipcSocketPath??defaultIpcSocketPath({codexHome:config.codexHome})});
@@ -49,6 +52,7 @@ try {
   agent.predictions.start().catch(()=>{});
   agent.start();
   let closing=false;const close=async()=>{if(closing)return;closing=true;try{agent.predictions.close();await agent.close();}finally{releaseBridgeLock();}};
+  installManagementChild({agents:()=>[agent],drain:()=>{},status:()=>({pid:process.pid,version:'0.1.0',connected:agent.socket?.readyState===1,maintenance:{[agent.clientPresence.mode]:1},instances:[{label:config.label??'电脑',ready:agent.socket?.readyState===1}]}),close});
   process.on('SIGINT',close);process.on('SIGTERM',close);
   }
 }catch(error){releaseBridgeLock();console.error(`电脑连接服务启动失败：${error.message}`);process.exitCode=1;}

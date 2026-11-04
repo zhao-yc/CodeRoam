@@ -4,14 +4,13 @@ import path from 'node:path';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { ThreadCreationClient } from './thread-creation.mjs';
 import { normalizeServiceTier } from './model-settings.mjs';
-
-const SETTINGS_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
-const SETTINGS_CACHE_LIMIT = 64;
+import {validateSettingsCache} from './management-config.mjs';
 
 /** 只读取所选电脑已保存的项目；客户端不能提交任意目录。 */
 export class NewThreadService {
-  constructor({ codexHome = path.join(os.homedir(), '.codex'), codexCliPath, creation = new ThreadCreationClient({ codexHome, codexCliPath }), catalog, now = Date.now } = {}) {
+  constructor({ codexHome = path.join(os.homedir(), '.codex'), codexCliPath, creation = new ThreadCreationClient({ codexHome, codexCliPath }), catalog, now = Date.now, settingsCache } = {}) {
     this.codexHome = codexHome; this.creation = creation; this.catalog = catalog; this.now = now;
+    this.settingsCacheOptions = validateSettingsCache(settingsCache);
     this.settingsCache = new Map();
   }
   projects() {
@@ -54,7 +53,7 @@ export class NewThreadService {
   async settingsConfig(projectId, cwd) {
     const signature = this.settingsSignature(cwd), now = this.now(), creation = this.creation;
     for (const [id, entry] of this.settingsCache) {
-      if (!entry.pending && (now < entry.loadedAt || now - entry.loadedAt >= SETTINGS_CACHE_TTL_MS)) this.settingsCache.delete(id);
+      if (!entry.pending && (now < entry.loadedAt || now - entry.loadedAt >= this.settingsCacheOptions.ttlMs)) this.settingsCache.delete(id);
     }
     const cached = this.settingsCache.get(projectId);
     if (cached && cached.cwd === cwd && cached.signature === signature && cached.creation === creation && cached.resolveCli === creation.resolveCli && cached.codexHome === creation.codexHome && cached.codexCliPath === creation.codexCliPath) {
@@ -78,7 +77,7 @@ export class NewThreadService {
       throw error;
     });
     this.settingsCache.set(projectId, entry);
-    while (this.settingsCache.size > SETTINGS_CACHE_LIMIT) this.settingsCache.delete(this.settingsCache.keys().next().value);
+    while (this.settingsCache.size > this.settingsCacheOptions.maxEntries) this.settingsCache.delete(this.settingsCache.keys().next().value);
     return entry.pending;
   }
   /** 项目资格和模型目录每次重新校验，缓存仅省去重复启动配置读取进程。 */

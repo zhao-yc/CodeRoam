@@ -18,6 +18,9 @@ node_modules/
 apps/mobile/unpackage/
 apps/mobile/.hbuilderx/
 coverage/
+apps/desktop-manager/dist/
+apps/desktop-manager/out/
+apps/desktop-manager/.runtime/
 
 # 私有资料与本地产物
 .private/

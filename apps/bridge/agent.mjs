@@ -45,7 +45,7 @@ function hasDetailWatcher(adapter, threadId) {
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
-  constructor({ config, adapter, journal, nativeDrafts, diagnostics = null, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog }) }) {
+  constructor({ config, adapter, journal, nativeDrafts, diagnostics = null, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog, settingsCache: config.newConversationSettingsCache }) }) {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
     this.diagnostics=diagnostics;this.diagnosticInFlight=0;
@@ -62,7 +62,7 @@ export class BridgeAgent extends EventEmitter {
     this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
     this.operationHistory=journal.db?new StateOperationHistory({db:journal.db,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true})}):null;
     this.taskQueue=journal.db?new TaskQueue({journal,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true}),
-      ready:()=>!this.taskClosed&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
+      ready:()=>!this.taskClosed&&!this.managementDraining&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
       execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.commandId,task.payload.firstMessageGuard),
       reconcile:task=>this.readTaskCommandStatus(task.deviceId,task.pendingCommandId,task.threadId),
       changed:(deviceId,snapshot)=>this.send({v:1,type:'tasks.changed',deviceId,snapshot})}):null;
@@ -174,7 +174,20 @@ export class BridgeAgent extends EventEmitter {
   }
 
   /** 只读取暂停标记；消息队列不能绕过实例级暂停继续投递。 */
-  taskQueuePaused() {return this.taskQueue?.db.prepare('SELECT paused FROM submission_queue_state WHERE singleton=1').get()?.paused===1;}
+  taskQueuePaused() {return this.managementDraining===true||this.taskQueue?.db.prepare('SELECT paused FROM submission_queue_state WHERE singleton=1').get()?.paused===1;}
+  /** 管理端排空只暂停新任务，不改变持久化队列和原有未知结果保护。 */
+  setManagementDraining(value) {
+    this.managementDraining=value===true;
+    if(!this.managementDraining&&!this.stopped){this.taskQueue?.pump().catch(()=>{});this.messageQueue?.pump().catch(()=>{});}
+  }
+  /** 重启前逐实例检查内存请求与自有账本，不读取或修改 Codex 原生数据库。 */
+  managementIdle() {
+    if(this.diagnosticInFlight>0||this.taskQueue?.running||this.messageQueue?.pumping)return false;
+    const db=this.journal.db;if(!db)return true;
+    if(db.prepare("SELECT 1 FROM commands WHERE state='pending' LIMIT 1").get())return false;
+    if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='submission_tasks'").get()&&db.prepare("SELECT 1 FROM submission_tasks WHERE state='running' LIMIT 1").get())return false;
+    return true;
+  }
 
   /** 后台租约独立于手机详情订阅，仍使用原提交设备核验附件和业务权限。 */
   async retainTaskThread(threadId,deviceId,taskId) {
@@ -271,6 +284,7 @@ export class BridgeAgent extends EventEmitter {
     try {
       validateRequest(message);
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
+      if(this.managementDraining&&!taskExecution&&(WRITE_METHODS.has(message.method)||UPLOAD_METHODS.has(message.method)||['tasks.submit','tasks.control'].includes(message.method)))throw new BridgeError('SERVICE_RESTARTING','电脑连接服务正在准备重启，请稍后再操作');
       // 详情读订阅只记录手机本身的存活意图，后台写步骤不会改变它。
       if(!taskExecution&&['thread.watch','thread.history','thread.unwatch'].includes(message.method)&&!message.params.view){
         const devices=this.detailDevices.get(message.params.threadId)??new Set();

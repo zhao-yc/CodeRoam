@@ -81,13 +81,13 @@ export class InstanceHub extends EventEmitter {
   }
   /** 周期发现只改变本服务的上下文，不启动、关闭或重启任何 Codex 桌面。 */
   async refresh() {
-    if (this.stopped) return;
+    if (this.stopped || this.managementDraining) return;
     if (this.scan) return this.scan;
     this.scan = (async () => {
       let rows;
       try { rows = await this.discover(); }
       catch { for (const runtime of this.runtimes.values()) runtime.instance.ready = false; this.publish(); this.emit('warning', { code: 'INSTANCE_DISCOVERY_FAILED', message: '实例身份核对暂时失败，已暂停操作' }); return; }
-      if (this.stopped) return;
+      if (this.stopped || this.managementDraining) return;
       const seen = new Set();
       rows.sort((a, b) => Number(!!a.userData) - Number(!!b.userData) || a.startedAt - b.startedAt);
       for (const row of rows) {
@@ -109,6 +109,7 @@ export class InstanceHub extends EventEmitter {
           const directory = identity.id === this.config.hostId ? this.dataPath : path.join(this.dataPath, 'instances', identity.id.slice(this.config.hostId.length + 1));
           fs.mkdirSync(directory, { recursive: true });
           runtime = this.createRuntime({ instance, config: this.config, dataPath: directory, send: message => this.send(message), diagnostics: this.diagnostics });
+          if(this.managementDraining)runtime.agent.setManagementDraining(true);
           runtime.agent.on('warning', warning => this.emit('warning', warning));
           runtime.agent.on('maintenance',()=>this.emit('maintenance'));
           this.runtimes.set(identity.id, runtime);
