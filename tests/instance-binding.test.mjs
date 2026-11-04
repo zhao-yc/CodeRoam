@@ -2,18 +2,79 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { bindInstanceClients, bindBackendOwners, InstanceIpcClient, instancePages } from '../apps/bridge/instance-binding.mjs';
+import vm from 'node:vm';
+import { bindInstanceClients, bindBackendOwners, InstanceIpcClient, instancePages, instanceProbeExpression, readInstanceOwnership } from '../apps/bridge/instance-binding.mjs';
+
+const modules = { kind: 'webpack', entry: '123456.abcdef1234.js', servicesModule: 'TestService' };
+const resolveModules = () => modules;
 
 test('随机查询仅绑定同号且来源格式有效的协调广播，辅助页面失败不污染其他页面', async () => {
   const client = new EventEmitter(), owner = randomUUID(), foreign = randomUUID();
-  const ids = await bindInstanceClients(client, {}, { pages: async () => ['unsupported', 'main'], query: async (url, nonce) => {
+  const ids = await bindInstanceClients(client, {}, { resolveModules, pages: async () => ['unsupported', 'main'], query: async (url, nonce, located) => {
+    assert.equal(located, modules);
     if (url === 'unsupported') throw new Error('页面不支持');
     client.emit('broadcast', { method: 'thread-stream-following-status-requested', sourceClientId: foreign, params: { conversationId: randomUUID(), hostId: 'local' } });
     client.emit('broadcast', { method: 'thread-stream-following-status-requested', sourceClientId: owner, params: { conversationId: nonce, hostId: 'local' } });
   }, timeoutMs: 15 });
   assert.deepEqual([...ids], [owner]); assert.equal(client.listenerCount('broadcast'), 0);
-  await assert.rejects(bindInstanceClients(client, {}, { pages: async () => ['main'], query: async () => {}, timeoutMs: 10 }), error => error.code === 'INSTANCE_NOT_READY');
+  await assert.rejects(bindInstanceClients(client, {}, { resolveModules, pages: async () => ['main'], query: async () => {}, timeoutMs: 10 }), error => error.code === 'INSTANCE_NOT_READY');
   assert.equal(client.listenerCount('broadcast'), 0);
+});
+
+/** 用合成模块替换导入，只执行本项目生成的固定只读表达式。 */
+function evaluateBinding(expression, exported, document = { readyState: 'complete', scripts: [{ type: 'module', src: 'app://-/assets/' + modules.entry }] }) {
+  const source = expression.replace(/await import\("[^"]+"\)/, 'syntheticModule');
+  return vm.runInNewContext(source, { syntheticModule: exported, document });
+}
+
+test('新版绑定只读已有模块缓存，不调用模块工厂或服务设置器', async () => {
+  const calls = [], nonce = randomUUID();
+  const requireModule = () => { throw new Error('不应执行模块工厂'); };
+  requireModule.c = { TestService: { exports: { appServices: {
+    clientCoordination: { async threadStreamFollowingStatusRequested(params) { calls.push(params); } },
+    appServerManagers: { open() {} },
+  }, setAppHost() { throw new Error('不应创建主机'); } } } };
+  assert.equal(await evaluateBinding(instanceProbeExpression(nonce, modules), { __webpack_require__: requireModule }), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ hostId: 'local', conversationId: nonce }]);
+  await assert.rejects(evaluateBinding(instanceProbeExpression(nonce, modules), { __webpack_require__: requireModule }, { readyState: 'complete', scripts: [] }), /INSTANCE_UNSUPPORTED/);
+  delete requireModule.c.TestService;
+  await assert.rejects(evaluateBinding(instanceProbeExpression(nonce, modules), { __webpack_require__: requireModule }), /INSTANCE_UNSUPPORTED/);
+  const inherited = Object.create({ TestService: { exports: { appServices: {} } } });
+  requireModule.c = inherited;
+  await assert.rejects(evaluateBinding(instanceProbeExpression(nonce, modules), { __webpack_require__: requireModule }), /INSTANCE_UNSUPPORTED/);
+});
+
+test('旧版服务导出继续完成同一只读探针，未知资源或导出拒绝生成表达式', async () => {
+  const nonce = randomUUID(), calls = [];
+  const legacy = { kind: 'esm', shared: 'app-shared-abcdef.js', services: 'currentServices' };
+  const currentServices = {
+    clientCoordination: { async threadStreamFollowingStatusRequested(value) { calls.push(value); } },
+    appServerManagers: { open() {} },
+  };
+  assert.equal(await evaluateBinding(instanceProbeExpression(nonce, legacy), { currentServices }), true);
+  assert.equal(calls[0].conversationId, nonce);
+  for (const invalid of [{ ...modules, entry: '../escape.js' }, { ...modules, servicesModule: 'bad/id' }, { ...modules, servicesModule: undefined }, { ...legacy, services: 'a.b' }, { ...legacy, services: undefined }, { kind: 'unknown' }]) {
+    assert.throws(() => instanceProbeExpression(nonce, invalid), { code: 'INSTANCE_NOT_READY' });
+  }
+});
+
+test('后台归属查询复用同一定位结果，只接纳固定主机和有效会话编号', async () => {
+  const owned = randomUUID(), follower = randomUUID(), opened = [];
+  const requireModule = () => { throw new Error('不应执行模块工厂'); };
+  requireModule.c = { TestService: { exports: { appServices: {
+    clientCoordination: { threadStreamFollowingStatusRequested() {} },
+    appServerManagers: { async open(hostId) {
+      opened.push(hostId);
+      return hostId === 'local' ? { status: 'ready', manager: {
+        async getWorkInProgress() { return [{ conversationId: owned }]; },
+        async getCachedThreadIds() { return [owned, follower, 'invalid']; },
+        async getStreamRole(id) { return { role: id === follower ? 'follower' : 'owner' }; },
+      } } : { status: 'unavailable' };
+    } },
+  } } } };
+  const result = await readInstanceOwnership({}, { resolveModules, pages: async () => ['main'], evaluate: async (_url, expression) => evaluateBinding(expression, { __webpack_require__: requireModule }) });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [{ hostId: 'local', threadId: owned }]);
+  assert.deepEqual(opened, ['local', 'durable']);
 });
 
 test('页面发现只构造核验端口下的固定页面地址，不使用返回的调试地址', async () => {

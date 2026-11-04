@@ -2,11 +2,42 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { IpcClient } from '../../packages/protocol/ipc-client.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
+import { instanceBindingModules } from './instance-binding-modules.mjs';
+
+/** 模块位置来自核验过的安装包，只读取原页面已有的服务单例。 */
+function instanceServicesExpression(modules) {
+  const asset = name => typeof name === 'string' && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\.js$/.test(name);
+  if (modules?.kind === 'webpack' && asset(modules.entry) && typeof modules.servicesModule === 'string' && /^[a-zA-Z0-9_$-]{1,80}$/.test(modules.servicesModule)) {
+    const entry = JSON.stringify('app://-/assets/' + modules.entry);
+    return `
+      if (typeof document === 'undefined' || document.readyState !== 'complete' ||
+          !Array.from(document.scripts).some(script => script.type === 'module' && script.src === ${entry})) {
+        throw Error('INSTANCE_UNSUPPORTED');
+      }
+      const runtime = (await import(${entry})).__webpack_require__;
+      if (typeof runtime !== 'function') throw Error('INSTANCE_UNSUPPORTED');
+      const cache = runtime.c;
+      const record = cache && Object.prototype.hasOwnProperty.call(cache, ${JSON.stringify(modules.servicesModule)})
+        ? cache[${JSON.stringify(modules.servicesModule)}] : null;
+      const services = record?.exports?.appServices;
+      if (typeof services?.clientCoordination?.threadStreamFollowingStatusRequested !== 'function' ||
+          typeof services?.appServerManagers?.open !== 'function') throw Error('INSTANCE_UNSUPPORTED');
+    `;
+  }
+  if (modules?.kind === 'esm' && asset(modules.shared) && typeof modules.services === 'string' && /^[a-zA-Z_$][\w$]*$/.test(modules.services)) {
+    return `
+      const services = (await import(${JSON.stringify('app://-/assets/' + modules.shared)}))[${JSON.stringify(modules.services)}];
+      if (typeof services?.clientCoordination?.threadStreamFollowingStatusRequested !== 'function' ||
+          typeof services?.appServerManagers?.open !== 'function') throw Error('INSTANCE_UNSUPPORTED');
+    `;
+  }
+  throw new BridgeError('INSTANCE_NOT_READY', '当前桌面版本的实例入口暂不兼容');
+}
 
 /** 只调用已加载桌面的固定只读协调查询，不建立第二个 AppHost、不写页面状态。 */
-export function instanceProbeExpression(nonce) {
+export function instanceProbeExpression(nonce, modules) {
   if (!/^[0-9a-f-]{36}$/i.test(nonce)) throw new Error('实例探测编号无效');
-  return `(async()=>{const services=(await import('app://-/assets/app-shared-b9a49a97ca55.js')).Vct;if(!services?.clientCoordination)throw Error('INSTANCE_UNSUPPORTED');await services.clientCoordination.threadStreamFollowingStatusRequested({hostId:'local',conversationId:${JSON.stringify(nonce)}});return true})()`;
+  return `(async()=>{${instanceServicesExpression(modules)}await services.clientCoordination.threadStreamFollowingStatusRequested({hostId:'local',conversationId:${JSON.stringify(nonce)}});return true})()`;
 }
 
 /** 调试地址只能由已核验的回环监听端口及固定页面编号构造，永不信任返回的远程地址。 */
@@ -21,8 +52,8 @@ export async function instancePages(instance, fetcher = fetch) {
 }
 
 /** 固定身份查询等待 Promise 完成；连接用完即关闭，不改动原应用的连接和调试设置。 */
-export function queryInstancePage(url, nonce) {
-  return evaluateInstancePage(url, instanceProbeExpression(nonce)).then(value => { if (value !== true) throw new Error('实例协调接口暂不兼容'); });
+export function queryInstancePage(url, nonce, modules) {
+  return evaluateInstancePage(url, instanceProbeExpression(nonce, modules)).then(value => { if (value !== true) throw new Error('实例协调接口暂不兼容'); });
 }
 
 /** 固定原桌面服务查询的公共传输，不接收手机代码或调试地址。 */
@@ -40,8 +71,9 @@ export function evaluateInstancePage(url, expression) {
 }
 
 /** 主进程执行器与页面有独立 IPC 客户端；只读枚举原管理器实际持有的会话编号。 */
-export async function readInstanceOwnership(instance, { pages = instancePages, evaluate = evaluateInstancePage } = {}) {
-  const expression = `(async()=>{const s=(await import('app://-/assets/app-shared-b9a49a97ca55.js')).Vct;const out=[];for(const hostId of ['local','durable']){const opened=await s.appServerManagers.open(hostId);if(opened.status!=='ready')continue;const m=opened.manager;const active=(await m.getWorkInProgress()).map(x=>x.conversationId).filter(x=>typeof x==='string');const cached=await m.getCachedThreadIds();const ids=[...new Set([...active,...cached])].slice(0,256);for(let i=0;i<ids.length;i+=16){const rows=await Promise.all(ids.slice(i,i+16).map(async id=>({id,role:await m.getStreamRole(id)})));for(const row of rows)if(row.role?.role==='owner')out.push({hostId,threadId:row.id});}}return out})()`;
+export async function readInstanceOwnership(instance, { pages = instancePages, evaluate = evaluateInstancePage, resolveModules = instanceBindingModules } = {}) {
+  const modules = resolveModules(instance.executable);
+  const expression = `(async()=>{${instanceServicesExpression(modules)}const out=[];for(const hostId of ['local','durable']){const opened=await services.appServerManagers.open(hostId);if(opened.status!=='ready')continue;const m=opened.manager;const active=(await m.getWorkInProgress()).map(x=>x.conversationId).filter(x=>typeof x==='string');const cached=await m.getCachedThreadIds();const ids=[...new Set([...active,...cached])].slice(0,256);for(let i=0;i<ids.length;i+=16){const rows=await Promise.all(ids.slice(i,i+16).map(async id=>({id,role:await m.getStreamRole(id)})));for(const row of rows)if(row.role?.role==='owner')out.push({hostId,threadId:row.id});}}return out})()`;
   for (const url of await pages(instance)) {
     try { const result = await evaluate(url, expression); if (Array.isArray(result)) return result.filter(row => ['local', 'durable'].includes(row?.hostId) && /^[0-9a-f-]{36}$/i.test(row.threadId)); } catch { }
   }
@@ -70,7 +102,8 @@ export async function bindBackendOwners(runtimes, { readOwnership = readInstance
 }
 
 /** 将每个已核验页面发出的随机查询与 IPC 广播来源关联，不能按全局所有者响应先后猜测。 */
-export async function bindInstanceClients(client, instance, { pages = instancePages, query = queryInstancePage, timeoutMs = 4000 } = {}) {
+export async function bindInstanceClients(client, instance, { pages = instancePages, query = queryInstancePage, timeoutMs = 4000, resolveModules = instanceBindingModules } = {}) {
+  const modules = resolveModules(instance.executable);
   const ids = new Set();
   for (const url of await pages(instance)) {
     const nonce = randomUUID();
@@ -80,7 +113,7 @@ export async function bindInstanceClients(client, instance, { pages = instancePa
     client.on('broadcast', listener);
     let timer;
     try {
-      const value = await Promise.all([query(url, nonce), Promise.race([observed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('实例广播握手超时')), timeoutMs); })])]);
+      const value = await Promise.all([query(url, nonce, modules), Promise.race([observed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('实例广播握手超时')), timeoutMs); })])]);
       ids.add(value[1]);
     } catch { /* 主窗口和辅助页面能力不同，只接纳完成双向核验的客户端。 */ }
     finally { clearTimeout(timer); client.off('broadcast', listener); }
