@@ -260,7 +260,8 @@ export class ThreadListFeed {
   }
   /** 发布前一次性计算各会话最新正文版本，再清理尾帧，允许发送回调重入。 */
   publishRows(rows,catchup=false,force=false) {
-    if(this.pendingSnapshots.size){rows=rows.map(row=>this.pendingSnapshots.has(row.id)?this.summary(row,this.pendingSnapshots.get(row.id)):row);this.pendingSnapshots.clear();}
+    // 尾帧只补正文版本和标题；运行、未读等状态可能已被后续事件更新，不能重放旧快照。
+    if(this.pendingSnapshots.size){rows=rows.map(row=>{const snapshot=this.pendingSnapshots.get(row.id);return snapshot?this.contentSummary({...row,title:snapshot.title||row.title},snapshot):row;});this.pendingSnapshots.clear();}
     clearTimeout(this.contentTimer);this.contentTimer=null;this.pendingRows=null;this.pendingCatchup=false;
     if(!force&&!catchup&&JSON.stringify(rows)===JSON.stringify(this.rows))return;
     this.rows=rows;this.revision++;

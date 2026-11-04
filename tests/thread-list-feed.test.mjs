@@ -204,6 +204,23 @@ test('同步状态无行变化也推进revision，稳定周期不产生无变化
   await feed.refresh();assert.equal(events.length,2);
 });
 
+test('正文尾帧不能覆盖后到的未读与已读事件，无关会话更新也保留最新标记',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const {adapter,feed,value,events}=fixture(t,{live:true,count:2});await ready(feed);
+ for(const [before,after] of [[false,true],[true,false]]){
+  const base={...value,status:'idle',activeTurnId:'',hasUnreadTurn:before,latestTurn:{turnId:'turn',status:'completed'}};
+  adapter.emit('conversation',base);events.length=0;
+  const tail={...base,messages:[{...base.messages[0],text:'合成尾帧'+after}]};adapter.emit('conversation',tail);
+  assert.ok(feed.pendingSnapshots.has('a'));
+  adapter.emit('readState',{threadId:'a',hasUnreadTurn:after});
+  assert.equal(feed.rows.find(row=>row.id==='a').hasUnreadTurn,after);
+  assert.equal(events.at(-1).threads.find(row=>row.id==='a').contentRevision,conversationContentRevision(tail));
+  adapter.emit('conversation',{...tail,messages:[{...tail.messages[0],text:'另一份尾帧'}],hasUnreadTurn:after});
+  adapter.emit('readState',{threadId:'1',hasUnreadTurn:true});t.mock.timers.tick(1000);await drain();
+  assert.equal(events.at(-1).threads.find(row=>row.id==='a').hasUnreadTurn,after);
+ }
+});
+
 test('关闭取消待发正文，迟到候选快照不能重建订阅或覆盖重入会话',async t=>{
   const {adapter,feed,setActivity,events}=fixture(t);setActivity(['a']);let finish;
   adapter.watch=()=>new Promise(resolve=>{finish=resolve;});

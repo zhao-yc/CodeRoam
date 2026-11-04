@@ -83,6 +83,29 @@ test('真正原生调用超时按阶段给出错误码并释放等待记录',asy
  }
 });
 
+test('完整最近目录超时后缩小查询并沿用可用范围，历史缺字段不伪造未读',async t=>{
+ const calls=[],n=new NativeDesktop({invoke:async(tool,args)=>{
+  calls.push(args);
+  if(args.limit===50&&args.mode!== 'history')throw Object.assign(Error('合成目录超时'),{code:'DESKTOP_NATIVE_TIMEOUT'});
+  return args.mode==='history'?{threads:[{...row(other,true),isUnread:undefined}]}:{threads:[row(id,true)]};
+ }});t.after(()=>n.close());
+ await n.refresh([id,other]);assert.equal(n.unread.get(id),true);assert.equal(n.unread.has(other),false);
+ assert.deepEqual(calls.filter(args=>!args.mode).map(args=>args.limit),[50,25]);
+ calls.length=0;await n.refresh([id]);assert.deepEqual(calls,[{limit:25}]);
+ n.invokeOverride=async()=>{throw Object.assign(Error('合成通道断开'),{code:'DESKTOP_NATIVE_UNAVAILABLE'});};
+ await assert.rejects(n.refresh([id]),{code:'DESKTOP_NATIVE_UNAVAILABLE'});assert.equal(n.readLimit,25);
+});
+
+test('真实目录请求超时发送同编号取消，迟到响应不会占用下一次请求',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const frames=[],n=new NativeDesktop();n.connect=async()=>{};
+ n.socket={writable:true,write(frame){frames.push(JSON.parse(frame.subarray(4).toString()));},destroy(){}};t.after(()=>n.close());
+ const call=n.call('list_threads',{limit:50},id);await Promise.resolve();
+ const rejected=assert.rejects(call,{code:'DESKTOP_NATIVE_TIMEOUT'});t.mock.timers.tick(7000);await rejected;
+ assert.equal(n.pending.size,0);assert.equal(frames.length,2);
+ assert.equal(frames[0].method,'tools/call');assert.deepEqual(frames[1],{jsonrpc:'2.0',id:frames[0].id,method:'tools/cancel'});
+});
+
 test('导航期间合并到旧目录的后台刷新即使旧请求失败也补刷一次',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});
  let fail;let lists=0;

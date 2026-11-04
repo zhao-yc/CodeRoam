@@ -245,7 +245,8 @@ type ComputerIndicator = { hostId: string, state: string }
 function threadState(thread: ComputerThread): string {
   if (thread.cached == true) return 'idle'
   const snapshot = connection.snapshot
-  if (connection.hostId == thread.hostId && snapshot?.threadId == thread.id) return threadIndicator(conversationTaskState(snapshot, thread.online), snapshot?.hasUnreadTurn ?? null)
+  // 未读统一采用列表推送，避免已关闭详情的旧快照遮蔽新结果；旧服务缺字段时才回退。
+  if (connection.hostId == thread.hostId && snapshot?.threadId == thread.id) return threadIndicator(conversationTaskState(snapshot, thread.online), thread.hasUnreadTurn ?? snapshot?.hasUnreadTurn ?? null)
   return threadIndicator(taskState(thread.status ?? '', thread.activeTurnId ?? '', thread.approvalCount ?? 0, thread.pendingQuestionCount ?? 0, thread.online, thread.activeFlags ?? [], thread.latestTurn?.status ?? ''), thread.hasUnreadTurn ?? null)
 }
 

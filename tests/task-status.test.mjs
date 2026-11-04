@@ -6,6 +6,19 @@ import {stripTypeScriptTypes} from 'node:module';
 import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';
 import {EventEmitter} from 'node:events';
 
+test('聊天行的未读与已读采用列表最新值，旧详情和缺字段回退不会遮蔽新结果',()=>{
+ const source=fs.readFileSync('apps/mobile/components/chat-list/chat-list.uvue','utf8');
+ const start=source.indexOf('function threadState('),method=source.slice(start,source.indexOf('\n}',start)+2);
+ const connection={hostId:'host',snapshot:{threadId:'thread',hasUnreadTurn:false}};
+ const context=vm.createContext({connection,conversationTaskState:()=> 'idle',threadIndicator:(state,unread)=>unread===true?'unread':state});
+ vm.runInContext(stripTypeScriptTypes(method)+'; globalThis.subject=threadState',context);
+ const thread={id:'thread',hostId:'host',online:true,hasUnreadTurn:true};
+ assert.equal(context.subject(thread),'unread');
+ delete connection.snapshot.hasUnreadTurn;assert.equal(context.subject(thread),'unread');
+ connection.snapshot.hasUnreadTurn=true;thread.hasUnreadTurn=false;assert.equal(context.subject(thread),'idle');
+ delete thread.hasUnreadTurn;assert.equal(context.subject(thread),'unread');
+});
+
 /** 执行实际状态判定，覆盖等待、结束和断线时不应持续旋转的边界。 */
 test('任务状态区分运行、等待、空闲与断连，不把未知当空闲',()=>{
   const source=fs.readFileSync('apps/mobile/services/bridge.uts','utf8');
