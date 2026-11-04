@@ -234,7 +234,8 @@ async function loadSettings(focusAfter: boolean = false) {
 
 // 项目来自电脑的完整保存清单，默认选择在当前电脑中重新验证。
 async function loadProjects() {
-  if (!props.expanded || !connection.configured || !connection.connected || !computerOnline.value || busy.value) return
+  // 同一连接的展开和状态监听复用在途读取，换电脑或换代仍由监听器撤销旧请求。
+  if (!props.expanded || !connection.configured || !connection.connected || !computerOnline.value || busy.value || projectsLoading.value) return
   const hostId = connection.hostId, request = ++projectRequest, revision = connection.configurationRevision, generation = computerGeneration.value
   const current = (): boolean => alive && connection.connected && hostId == connection.hostId && request == projectRequest && revision == connection.configurationRevision && generation == computerGeneration.value
   projectsLoading.value = true; error.value = ''

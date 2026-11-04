@@ -49,7 +49,38 @@ export class NativeDraftController extends ComposerPredictionReader {
     }
     return out;
   }
-  async capabilities(){try{return(await this.candidates()).length>0;}catch{return false;}}
+  /** 只有项目展示可以复用能力结果；真实打开和写入仍逐次调用原绑定核验。 */
+  async capabilities({reuse=false}={}){
+    if(reuse&&this.instance?.platform==='darwin')return this.projectCapabilities();
+    try{return(await this.candidates()).length>0;}catch{return false;}
+  }
+  /** 能力缓存绑定实例代次及端点，断线、换代或停止立即失效，不作为操作授权。 */
+  projectCapabilityIdentity(){
+    const instance=this.instance;
+    if(this.closed||!instance?.alive||!instance.ready||!instance.generation)return null;
+    return JSON.stringify([instance.generation,instance.pid,instance.startedAt,instance.executable,instance.codexHome,instance.ipcSocketPath,instance.port]);
+  }
+  /** 合并冷启动探测；短期有效结果直接展示，后台刷新有硬期限，旧探测不能覆盖新代次。 */
+  async projectCapabilities(){
+    const identity=this.projectCapabilityIdentity();
+    if(!identity){this.projectCapability=null;this.projectCapabilityReading=null;return false;}
+    const cached=this.projectCapability?.identity===identity?this.projectCapability:null,now=this.now();
+    if(cached&&now<cached.refreshAt)return cached.supported;
+    let reading=this.projectCapabilityReading;
+    if(reading?.identity!==identity){
+      reading={identity};this.projectCapabilityReading=reading;
+      reading.promise=Promise.resolve().then(()=>this.capabilities()).then(supported=>{
+        if(this.projectCapabilityReading!==reading||this.projectCapabilityIdentity()!==identity)return false;
+        const now=this.now();
+        this.projectCapability={identity,supported,refreshAt:now+(supported?30000:1000),expiresAt:now+(supported?120000:1000)};
+        return supported;
+      }).finally(()=>{if(this.projectCapabilityReading===reading)this.projectCapabilityReading=null;});
+    }
+    if(cached&&now<cached.expiresAt)return cached.supported;
+    return reading.promise;
+  }
+  /** 停止时撤销展示缓存，正在返回的旧能力探测也不得恢复它。 */
+  close(){this.projectCapability=null;this.projectCapabilityReading=null;super.close();}
   async assertBinding(binding){
     if(this.closed||this.instance&&(this.instance.alive!==true||this.instance.generation!==binding.generation))throw new BridgeError('DRAFT_DETACHED','所选电脑已重启，请重新连接草稿');
     if(this.instance)await this.instance.verify?.();

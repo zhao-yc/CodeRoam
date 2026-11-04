@@ -87,7 +87,7 @@ export class InstanceRuntime {
   async ready() {
     if (this.closed || !this.instance.alive) return false;
     this.client.refreshRouterClients?.();
-    if (this.instance.ready && (this.isMac || this.instance.directIpc || this.client.allowedClients.size)) return true;
+    if (this.instance.ready && (this.isMac || this.instance.directIpc || this.client.allowedClients.size)) { this.warmProjectCapabilities(); return true; }
     if (!this.bindings) this.bindings = (async () => {
       if (this.isMac) await this.instance.verify();
       try { await this.client.connect(); }
@@ -104,11 +104,16 @@ export class InstanceRuntime {
       } else ids = await this.bind(this.client, this.instance);
       if (this.closed || !this.instance.alive) return false;
       this.client.allowedClients = ids; this.instance.ready = true; this.instance.wasReady = true;
+      this.warmProjectCapabilities();
       this.agent.threadCache.start();
       this.agent.threadListFeed.start();
       await this.agent.predictions.start(); return true;
     })().finally(() => { this.bindings = null; });
     return this.bindings;
+  }
+  /** 已核验实例上线后后台准备项目能力，不阻塞上线或提前创建桌面草稿。 */
+  warmProjectCapabilities() {
+    if (this.isMac) this.agent.nativeDrafts.controller.capabilities({ reuse: true }).catch(() => {});
   }
   async request(message) {
     if (message.generation !== this.instance.generation || !this.instance.alive ||
@@ -119,10 +124,12 @@ export class InstanceRuntime {
     if (usesWindowsIpcWithoutPage(this.instance) && message.method === 'thread.delete') {
       throw new BridgeError('DELETE_UNSUPPORTED', '普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
     }
-    // 读取复用已绑定的实例和运行代次；IPC 接纳新所有者、定向写入和原生导航仍会单独复核。
-    if (this.isMac || (this.instance.directIpc && !READ_METHODS.has(message.method))) await this.instance.verify();
+    // 项目清单沿用 Windows 的已绑定身份；Mac 其他请求及写入仍实时复核，所有者接纳和导航也保持原核验。
+    if (this.isMac && message.method !== 'projects.list' || this.instance.directIpc && !READ_METHODS.has(message.method)) await this.instance.verify();
     this.client.assertCurrent();
-    return this.agent.handleRequest(message);
+    const response = await this.agent.handleRequest(message);
+    if (message.method === 'projects.list') this.client.assertCurrent();
+    return response;
   }
   /** 先断开传输，停止时不再向已撤销身份的客户端发送退订，也不会遗留账本和连接。 */
   async close() { this.closed = true; this.instance.alive = false; this.instance.ready = false; this.client.close(); await this.agent.close(); }

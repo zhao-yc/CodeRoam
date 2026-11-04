@@ -163,3 +163,17 @@ test('单实例只读请求和不可用的原生页面能力不扫描进程，�
     mention.close();
   }
 });
+
+test('Mac 项目读取复用当前绑定，其他读写继续核验；断线或旧代次均不返回缓存结果',async()=>{
+  let scans=0,handled=0,release;
+  const instance={generation:'current',alive:true,ready:true,verify:async()=>{scans++;}};
+  const runtime={isMac:true,instance,client:{assertCurrent(){if(!instance.ready)throw Object.assign(Error('合成离线'),{code:'INSTANCE_NOT_READY'});}},agent:{handleRequest:async message=>{handled++;if(release)await new Promise(done=>{release=done;});return message.method;}}};
+  const request=(method,generation='current')=>InstanceRuntime.prototype.request.call(runtime,{generation,method});
+  assert.equal(await request('projects.list'),'projects.list');assert.equal(scans,0);
+  for(const method of ['threads.list','thread.draft.open','turn.send'])assert.equal(await request(method),method);
+  assert.equal(scans,3);
+  await assert.rejects(request('projects.list','old'),{code:'INSTANCE_CHANGED'});assert.equal(handled,4);
+  release=true;const pending=request('projects.list');await Promise.resolve();instance.ready=false;release();
+  await assert.rejects(pending,{code:'INSTANCE_NOT_READY'});
+  await assert.rejects(request('projects.list'),{code:'INSTANCE_NOT_READY'});assert.equal(handled,5);
+});
