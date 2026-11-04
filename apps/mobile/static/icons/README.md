@@ -14,6 +14,8 @@
 
 列表下拉菜单补充：`bell`、`archive`、`link`、`recent` 为项目自行绘制的线性图标，沿用 72×72 PNG 与三种基础颜色。
 
+执行记录入口补充：`history` 为项目自行绘制的回转箭头与时钟组合图标，沿用 72×72 PNG、1.8 线宽和三种基础颜色，用于任务胶囊及展开后的历史入口。
+
 加号菜单补充：`plugin` 为项目自行绘制的拼图线性图标，沿用 72×72 PNG 与三种基础颜色；追求目标复用已有 `target`。
 
 提交任务状态沿用上述图形，保留透明度并补充语义颜色：`check-success` 为绿色（#16803d），`alert-circle-danger` 为红色（#d92d20），`clock-info` 为蓝色（#286bc1），`hand-stop-paused` 为橙色（#b35a16），`chevron-right-skipped` 为紫色（#8055b3）。待核对复用琥珀色 `alert-triangle-warning`，取消复用灰色 `close-muted`，执行中使用靛蓝色（#4546bd）加载动画，原生端与 Web 使用相同资源。

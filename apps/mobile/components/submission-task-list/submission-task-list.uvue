@@ -18,10 +18,10 @@
     <button v-if="rows.length > 3" class="submission-expand" @click="expanded = !expanded">{{ expanded ? '收起' : '展开全部 ' + rows.length + ' 项' }}</button>
     <text v-if="error.length > 0" class="submission-error">{{ error }}</text>
     <view v-for="instance in hiddenBlockers" :key="instance.hostId" class="submission-recovery"><text class="submission-error">{{ hostName(instance.hostId) }} · 队列已暂停</text><button class="submission-action" :disabled="working.length > 0" @click="recoverPaused(instance)">{{ (instance.snapshot?.blockerId ?? '').length > 0 ? '继续队列' : '查看执行记录' }}</button></view>
-    <view class="submission-footer"><view class="submission-history-entry"><app-icon name="recent" :size="16" tone="muted" /><text class="submission-history-label">执行记录</text><button class="submission-hit" aria-label="查看执行记录" @click="openHistory"></button></view><text class="submission-count">{{ rows.length > 0 ? rows.length + ' 项任务' : '暂无当前任务' }}</text></view>
+    <view class="submission-footer"><view class="submission-history-entry"><app-icon name="history" :size="16" tone="muted" /><text class="submission-history-label">执行记录</text><button class="submission-hit" aria-label="查看执行记录" @click="openHistory"></button></view><text class="submission-count">{{ rows.length > 0 ? rows.length + ' 项任务' : '暂无当前任务' }}</text></view>
     </view>
     <view v-else class="submission-capsule" :class="{ 'submission-capsule-alert': summaryState == 'unknown' || summaryState == 'waiting_resume' }" role="status" aria-live="polite">
-      <app-icon v-if="summaryState == 'idle'" name="recent" :size="16" tone="muted" /><submission-task-status v-else :state="summaryState" />
+      <app-icon v-if="summaryState == 'idle'" name="history" :size="16" tone="muted" /><submission-task-status v-else :state="summaryState" />
       <text class="submission-capsule-label">{{ summaryLabel }}</text><app-icon v-if="hasCurrent" class="submission-capsule-chevron" name="chevron-down" :size="15" tone="muted" />
       <button class="submission-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开提交任务' : '，查看历史')" @click="openPanel"></button>
     </view>
