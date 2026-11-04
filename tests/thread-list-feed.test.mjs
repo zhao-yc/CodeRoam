@@ -34,10 +34,9 @@ test('五十条索引首帧不等待活动清单、未读或任何正文探测',
 });
 
 test('静态索引不会全量watch，完整活动清单缺席仍是unknown，静态转活跃自动发现',async t=>{
-  t.mock.timers.enable({apis:['Date'],now:10000});
   const {feed,probes,setActivity}=fixture(t,{count:50});await ready(feed);
   assert.equal(probes.length,0);assert.ok(feed.list().threads.every(row=>row.status==='unknown'));
-  setActivity(['a']);t.mock.timers.tick(2000);await feed.refresh();assert.equal(probes.length,1);assert.equal(feed.list().threads[0].status,'active');
+  setActivity(['a']);await feed.refresh();assert.equal(probes.length,1);assert.equal(feed.list().threads[0].status,'active');
   const {isCurrent,...settings}=probes[0].settings;
   assert.equal(typeof isCurrent,'function');
   assert.deepEqual(settings,{history:false,snapshotTimeoutMs:1000,ownerTimeoutMs:350});
@@ -52,10 +51,9 @@ test('旧中转默认仅启动预热索引，首个设备进入后才维护活�
 });
 
 test('活动清单从有到无只触发一次终态快照核对，不凭缺席把active改idle',async t=>{
-  t.mock.timers.enable({apis:['Date'],now:10000});
   const {adapter,feed,setActivity}=fixture(t);setActivity(['a']);await ready(feed);
   assert.equal(feed.rows[0].status,'active');setActivity([]);
-  adapter.watch=async()=>{throw new Error('合成核对失败');};t.mock.timers.tick(2000);await feed.refresh();
+  adapter.watch=async()=>{throw new Error('合成核对失败');};await feed.refresh();
   assert.equal(feed.rows[0].status,'active');assert.ok(feed.syncError);
 });
 
@@ -91,7 +89,6 @@ test('活动查询及探测失败保留unknown，失败每条至少十秒退避'
   await ready(feed);assert.equal(feed.list().threads[0].status,'unknown');assert.ok(feed.syncError);
   adapter.readActivityInventory=async()=>({complete:true,threadIds:['a']});setActivity(['a']);
   adapter.watch=async()=>{probes++;throw new Error('合成探测失败');};
-  t.mock.timers.tick(2000);await drain();
   await feed.refresh();await feed.refresh();assert.equal(probes,1);assert.equal(feed.list().threads[0].status,'unknown');
   t.mock.timers.tick(9999);await drain();assert.equal(probes,1);
   t.mock.timers.tick(1);await drain();await feed.refresh();assert.equal(probes,2);
@@ -140,36 +137,6 @@ test('文件通知固定三百毫秒合并，不被持续通知饿死',async t=>
   const {adapter,feed,setRows}=fixture(t);await ready(feed);adapter.watch=async()=>{throw new Error('合成未加载会话');};
   setRows([{id:'a',title:'新索引名称',updatedAt:43}]);feed.schedule();t.mock.timers.tick(150);feed.schedule();t.mock.timers.tick(150);await drain();
   assert.equal(feed.list().threads[0].title,'新索引名称');
-});
-
-test('三百毫秒索引通知立即维护变化单聊，整批活动和原生未读最多每两秒一次',async t=>{
-  t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
-  const {adapter,feed,setRows,probes}=fixture(t);let activities=0,unread=0,indexReads=0;
-  const list=adapter.index.list;adapter.index.list=(...args)=>{indexReads++;return list(...args);};
-  adapter.readActivityInventory=async({rows})=>{activities++;assert.equal(rows.length,1);return {complete:true,threadIds:[]};};
-  adapter.refreshReadState=async()=>{unread++;};
-  await ready(feed);const initialIndex=indexReads;assert.equal(activities,1);assert.equal(unread,1);
-  for(let i=0;i<5;i++) {
-    setRows([{id:'a',title:'合成会话',cwd:'/workspace/demo',updatedAt:43+i}]);feed.schedule();
-    t.mock.timers.tick(300);await drain();
-  }
-  assert.ok(indexReads>=initialIndex+5);assert.equal(activities,1);assert.equal(unread,1);
-  assert.equal(probes.length,1);assert.equal(feed.list().threads[0].status,'active');
-  t.mock.timers.tick(499);await drain();assert.equal(activities,1);
-  t.mock.timers.tick(1);await drain();assert.equal(activities,2);assert.equal(unread,2);
-});
-
-test('活动读取超过本轮预算仍共享原在途读取，不每轮超时后并行重开整批查询',async t=>{
-  t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
-  const {adapter,feed}=fixture(t);let activities=0,finish;
-  adapter.readActivityInventory=()=>{activities++;return new Promise(resolve=>{finish=resolve;});};
-  await feed.watch('phone');await drain();assert.equal(activities,1);
-  t.mock.timers.tick(1800);await drain();assert.equal(feed.syncing,false);assert.ok(feed.syncError);
-  t.mock.timers.tick(200);await drain();assert.equal(activities,1);
-  t.mock.timers.tick(1800);await drain();assert.equal(activities,1);
-  finish({complete:true,threadIds:[]});await drain();
-  adapter.readActivityInventory=async()=>{activities++;return {complete:true,threadIds:[]};};
-  t.mock.timers.tick(200);await drain();assert.equal(activities,2);
 });
 
 test('新watch和追平有完整通知基线，旧通知仅保留pending，真实终态转换正常发送',async t=>{

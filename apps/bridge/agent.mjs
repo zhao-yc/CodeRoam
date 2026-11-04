@@ -69,7 +69,7 @@ export class BridgeAgent extends EventEmitter {
     this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event),{db:journal.db,
       onActivity:inventory=>this.threadCache?.setActivityInventory(inventory),
       onSettled:snapshot=>this.threadCache?.settled(snapshot)});
-    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id),listRows:()=>this.threadListFeed.started&&this.threadListFeed.maintaining()?[...this.threadListFeed.indexRows.values()]:undefined,removed:id=>{
+    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id),removed:id=>{
       if(this.published.delete(id))this.send({v:1,type:'thread.removed',threadId:id});
     }});
     this.clientPresence=new ClientPresenceController({onModeChange:mode=>{this.threadListFeed.setMode(mode);this.threadCache.setMode(mode);this.emit('maintenance',mode);}});

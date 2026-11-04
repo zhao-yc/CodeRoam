@@ -12,13 +12,12 @@ const MAX_SUBSCRIPTIONS = 128;
 
 /** 每个桌面实例独立保留有限的展示正文，订阅身份和实时权限只在内存中存在。 */
 export class ThreadCacheFeed {
-  constructor({ adapter, db, send, blocked, removed = () => {}, listRows }) {
+  constructor({ adapter, db, send, blocked, removed = () => {} }) {
     this.adapter = adapter;
     this.db = db;
     this.send = send;
     this.blocked = blocked;
     this.removed = removed;
-    this.listRows = listRows;
     this.subscriptions = new Map();
     this.targets = new Set();
     this.recent = new Set();
@@ -39,7 +38,6 @@ export class ThreadCacheFeed {
     this.maintenanceGeneration++;
     if(mode==='light') {
       clearTimeout(this.timer);this.timer=null;this.dirty=false;
-      this.sourceView?.close?.();
       for(const id of this.targets)this.stopFollowing(id);
       this.saved.clear();this.reading.clear();this.liveVersions.clear();
     }
@@ -173,28 +171,21 @@ export class ThreadCacheFeed {
     const payload = JSON.stringify(snapshot);
     if (Buffer.byteLength(payload) > MAX_SNAPSHOT_BYTES) return;
     const revision = conversationContentRevision(snapshot);
-    // 高频写入只读版本元数据，避免把两份完整正文从 SQLite 反复复制到 JS 堆。
-    const row = this.db.prepare('SELECT revision, previous_revision, saved_source FROM conversation_cache WHERE thread_id = ?').get(snapshot.threadId);
+    const row = this.row(snapshot.threadId);
     const sourceVersion = savedSource ?? row?.saved_source ?? '';
     if (row?.revision !== revision) {
       if (!row) this.db.prepare(`DELETE FROM conversation_cache WHERE thread_id IN (
         SELECT thread_id FROM conversation_cache ORDER BY touched_at DESC, thread_id LIMIT -1 OFFSET ?)`)
         .run(CACHE_THREAD_LIMIT - 1);
-      // 旧正文在同一条原子语句内成为上一版，不经 JS 读出再绑定写回。
-      this.db.prepare(`INSERT INTO conversation_cache(thread_id, revision, snapshot, saved_source, touched_at)
-        VALUES (?, ?, ?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET
-        previous_revision = conversation_cache.revision, previous_snapshot = conversation_cache.snapshot,
-        revision = excluded.revision, snapshot = excluded.snapshot,
+      this.db.prepare(`INSERT INTO conversation_cache(thread_id, revision, snapshot, previous_revision, previous_snapshot, saved_source, touched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET revision = excluded.revision, snapshot = excluded.snapshot,
+        previous_revision = excluded.previous_revision, previous_snapshot = excluded.previous_snapshot,
         saved_source = excluded.saved_source, touched_at = excluded.touched_at`)
-        .run(snapshot.threadId, revision, payload, sourceVersion, Date.now());
+        .run(snapshot.threadId, revision, payload, row?.revision ?? null, row?.snapshot ?? null, sourceVersion, Date.now());
     } else if (row.saved_source !== sourceVersion) {
       this.db.prepare('UPDATE conversation_cache SET saved_source = ? WHERE thread_id = ?').run(sourceVersion, snapshot.threadId);
     }
-    const baseRevision = row?.revision === revision ? row.previous_revision : row?.revision;
-    // 只有实际订阅需要续接上一版时才读取基线正文；新客户端通常只订阅详情。
-    const needsBaseline = baseRevision && [...this.subscriptions.values()].some(({ versions }) => versions.get(snapshot.threadId) === baseRevision);
-    const basePayload = needsBaseline ? this.db.prepare('SELECT previous_snapshot FROM conversation_cache WHERE thread_id = ?').get(snapshot.threadId)?.previous_snapshot : undefined;
-    this.deliver(snapshot, revision, baseRevision, basePayload);
+    this.deliver(snapshot, revision, row?.revision === revision ? row.previous_revision : row?.revision, row?.revision === revision ? row.previous_snapshot : row?.snapshot);
   }
 
   /** 只有指定设备和订阅才收到其关注会话的最新展示正文。 */
@@ -336,8 +327,7 @@ export class ThreadCacheFeed {
     try {
       this.checkMembership();
       const requested = [...this.subscriptions.values()].reverse().flatMap(({ versions }) => [...versions.keys()]);
-      // 列表已预热时复用其最近排序；成员和来源仍在本轮另行新鲜核验。
-      const latest = (this.listRows?.() ?? this.adapter.index.list({ limit: CACHE_THREAD_LIMIT })).slice(0, CACHE_THREAD_LIMIT).map(row => row.id);
+      const latest = this.adapter.index.list({ limit: CACHE_THREAD_LIMIT }).map(row => row.id);
       const desired = new Set([...new Set([...requested, ...[...this.recent].reverse(), ...latest])].slice(0, CACHE_THREAD_LIMIT));
       for (const id of this.targets) {
         if (desired.has(id)) continue;
@@ -350,16 +340,13 @@ export class ThreadCacheFeed {
       this.targets = desired;
       this.activity=new Set([...this.activity].filter(id=>desired.has(id)));
       for(const id of this.lifecycle.keys())if(!desired.has(id))this.lifecycle.delete(id);
-      // 后台本轮共用一次只读索引批次，避免二十个目标各自打开原生 SQLite。
-      const sourceView = this.adapter.index.historySourceView?.([...desired]);
-      this.sourceView = sourceView;
       for (const id of desired) {
         await nextTick();
         if (this.closed) return;
         if (this.blocked(id)) continue;
         try {
           // 每轮都核对是否已归档或删除，即使 IPC 仍保留先前的所有者。
-          const source = sourceView ? sourceView.source(id) : this.adapter.index.historyCacheSource(id);
+          const source = this.adapter.index.historyCacheSource(id);
           this.verified.add(id);
           const entry = this.mode==='light'?undefined:this.liveEntry(id);
           this.follow(id);
@@ -375,7 +362,7 @@ export class ThreadCacheFeed {
           else if (source) {
             if(this.mode!=='legacy'&&this.adapter.index.historyActivity) {
               let activity=this.lifecycle.get(id);
-              if(activity?.source!==source){activity={source,...(sourceView ? sourceView.activity(id) : this.adapter.index.historyActivity(id))};this.lifecycle.set(id,activity);}
+              if(activity?.source!==source){activity={source,...this.adapter.index.historyActivity(id)};this.lifecycle.set(id,activity);}
               // 轻维护仅在明确终态时读取正文，输出中的文件变化只保留来源标记。
               if(activity.status==='active'||this.mode==='light'&&!['completed','interrupted','failed'].includes(activity.status))continue;
             }else if(this.mode==='light')continue;
@@ -386,7 +373,6 @@ export class ThreadCacheFeed {
         }
       }
     } finally {
-      this.sourceView?.close?.();this.sourceView = undefined;
       this.running = false;
       if (this.dirty) { this.dirty = false; this.schedule(); }
     }
@@ -394,7 +380,6 @@ export class ThreadCacheFeed {
 
   close() {
     this.closed = true;
-    this.sourceView?.close?.();this.sourceView = undefined;
     clearTimeout(this.timer);
     clearInterval(this.interval);
     this.watcher?.close();

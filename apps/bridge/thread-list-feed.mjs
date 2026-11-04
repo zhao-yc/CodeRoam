@@ -20,7 +20,6 @@ export class ThreadListFeed {
     this.mode='legacy';this.closed=false;this.started=false;this.dirty=false;this.syncing=false;
     this.store=new ThreadListStore(db);this.indexRows=new Map();this.changed=new Set();this.initialized=new Set();
     this.probeLeases=new Map();
-    this.nextActivityAt=0;this.nextReadStateAt=0;this.activityReading=null;
     this.owned=new Set();this.nextProbe=new Map();this.activity=new Set();this.pendingSnapshots=new Map();this.recheck=new Set();this.settled=new Set();
     this.onConversation=snapshot=>this.update(snapshot);adapter.on('conversation',this.onConversation);
     this.onReadState=state=>{if(this.started&&!this.closed)this.replace((this.pendingRows??this.rows).map(row=>row.id===state.threadId?{...row,hasUnreadTurn:state.hasUnreadTurn}:row));};
@@ -39,7 +38,7 @@ export class ThreadListFeed {
     if(!['online','grace','light','legacy'].includes(mode))throw new TypeError('未知的列表维护模式');
     const previous=this.mode;this.mode=mode;
     if(previous!==mode){this.generation++;this.dirty=true;for(const lease of this.probeLeases.values())lease.active=false;}
-    if(previous==='light'||previous==='legacy'&&mode!=='legacy'){this.catchupStarted=false;this.nextActivityAt=0;this.nextReadStateAt=0;}
+    if(previous==='light'||previous==='legacy'&&mode!=='legacy')this.catchupStarted=false;
     this.start();
     if(mode==='light'||!this.maintaining())this.releaseAll();
     this.armCycle();if(previous!==mode&&this.maintaining()&&!this.running)this.kick();return mode;
@@ -82,16 +81,6 @@ export class ThreadListFeed {
     this.cycleTimer=setTimeout(()=>{this.cycleTimer=null;this.kick();this.armCycle();},this.mode==='light'?15000:2000);this.cycleTimer.unref?.();
   }
   kick() {this.refresh().catch(()=>{});}
-  /** 索引文件通知不增加整批活动查询频率，未完成的同类读取继续共享。 */
-  activityRead(generation) {
-    if(!this.activityReading&&Date.now()>=this.nextActivityAt) {
-      this.nextActivityAt=Date.now()+(this.mode==='light'?15000:2000);
-      const reading={generation,promise:Promise.resolve().then(()=>this.adapter.readActivityInventory?.({rows:[...this.indexRows.values()]}))};
-      this.activityReading=reading;
-      reading.promise.finally(()=>{if(this.activityReading===reading)this.activityReading=null;}).catch(()=>{});
-    }
-    return this.activityReading;
-  }
   unknown(row) {return {...row,contentRevision:savedContentRevision(row),status:'unknown',activeTurnId:'',approvalCount:0,pendingQuestionCount:0,unansweredQuestionCount:0};}
   /** 失败保留完整旧索引；持久化仅使用展示白名单，绝不恢复实时权限。 */
   readIndex() {
@@ -129,21 +118,16 @@ export class ThreadListFeed {
     // 持续输出引起的索引时间变化属于普通增量，不反复重置通知基线或闪烁加载图标。
     if(catchup){this.catchupStarted=true;this.setSync(true,undefined,true);}
     // 原生未读可能较慢，独立追平且同一实例只允许一份任务，不能阻塞首帧或活动发现。
-    if(!this.readStateRunning&&this.adapter.refreshReadState&&Date.now()>=this.nextReadStateAt) {
-      this.nextReadStateAt=Date.now()+(this.mode==='light'?15000:2000);
+    if(!this.readStateRunning&&this.adapter.refreshReadState) {
       this.readStateRunning=Promise.resolve().then(()=>this.adapter.refreshReadState([...this.ids])).then(()=>{
         if(current())this.replace((this.pendingRows??this.rows).map(row=>this.adapter.native?.unread?.has(row.id)?{...row,hasUnreadTurn:this.adapter.native.unread.get(row.id)}:row));
       }).catch(()=>{}).finally(()=>{this.readStateRunning=null;});
     }
     try {
-      let inventory,inventoryTimeout;const reading=this.activityRead(generation);
-      if(reading) {
-        try {
-          const value=await Promise.race([reading.promise,new Promise((_,reject)=>{inventoryTimeout=setTimeout(()=>reject(new Error('活动清单读取超时')),1800);inventoryTimeout.unref?.();})]);
-          if(reading.generation===generation)inventory=value;
-        } catch {error='电脑聊天活动状态暂时不可用';}
-        finally {clearTimeout(inventoryTimeout);}
-      }
+      let inventory,inventoryTimeout;
+      try {inventory=await Promise.race([this.adapter.readActivityInventory?.(),new Promise((_,reject)=>{inventoryTimeout=setTimeout(()=>reject(new Error('活动清单读取超时')),1800);inventoryTimeout.unref?.();})]);}
+      catch {error='电脑聊天活动状态暂时不可用';}
+      finally {clearTimeout(inventoryTimeout);}
       if(!current())return;
       if(inventory&&Array.isArray(inventory.threadIds)) {
         const activity=new Set(inventory.threadIds);

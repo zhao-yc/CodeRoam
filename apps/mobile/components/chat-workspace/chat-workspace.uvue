@@ -93,9 +93,20 @@ async function openThread(thread: ComputerThread) {
   } catch (reason) { uni.showToast({ title: (reason as Error).message, icon: 'none' }) }
 }
 
+// 详情路由返回时复用原列表页，避免重新挂载后丢失列表的阅读位置。
+function canReturnToListPage(): boolean {
+  const pages = getCurrentPages()
+  return props.detailRoute && pages.length > 1 && pages[pages.length - 2].route == 'pages/index/index'
+}
+
 function closeConversation() {
   switchRevision++; uni.hideKeyboard()
-  if (!wide.value && props.detailRoute && getCurrentPages().length > 1) { uni.navigateBack(); return }
+  // 直达或刷新后的详情没有上一页，必须回到无聊天参数的列表地址。
+  if (props.detailRoute || props.initialTarget != null) {
+    if (canReturnToListPage()) uni.navigateBack({ fail: (_) => { uni.reLaunch({ url: '/pages/index/index' }) } })
+    else uni.reLaunch({ url: '/pages/index/index' })
+    return
+  }
   mode.value = 'list'; detailMounted.value = false; selected.value = null
 }
 
@@ -132,9 +143,9 @@ function onConversationCreated(id: string): Promise<boolean> {
   return selectConversation(workspaceTarget(connection.hostId, id, '', '', connection.cacheNamespace), false)
 }
 function onConversationRemoved(kind: string) {
-  const returningToPage = !wide.value && props.detailRoute && getCurrentPages().length > 1
+  const returningToPage = props.detailRoute || props.initialTarget != null
   closeConversation()
-  // 窄屏返回由原列表页消费提示，隐藏在详情路由内的列表不能提前取走结果。
+  // 路由返回由列表页消费提示，隐藏在详情路由内的列表不能提前取走结果。
   if (returningToPage) return
   nextTick(() => { if (kind == 'archive') listPane.value?.showArchiveSuccessNotice(); else listPane.value?.showDeleteSuccessNotice() })
 }
@@ -147,7 +158,12 @@ function syncNoticeNavigation() {
 }
 function handleBack(): boolean {
   if (mode.value == 'new') { closeNewConversation(); return true }
-  if (mode.value == 'conversation') { if (detailPane.value?.handleBack() == true) return true; if (!props.detailRoute || wide.value) { closeConversation(); return true }; return false }
+  if (mode.value == 'conversation') {
+    if (detailPane.value?.handleBack() == true) return true
+    // 交给框架退出已有列表上方的详情页，避免 navigateBack 再次触发返回拦截。
+    if (canReturnToListPage()) return false
+    closeConversation(); return true
+  }
   return listPane.value?.handleBack() ?? false
 }
 defineExpose({ handleBack })

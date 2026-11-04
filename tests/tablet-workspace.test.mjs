@@ -71,9 +71,10 @@ test('刷新直达聊天等待握手，目标在授权列表时自动打开一�
   await update({connected:true,computers});
   assert.equal(f.selected.value?.threadId,'route-thread');
   assert.deepEqual(f.calls.filter(([kind])=>kind==='toast'||kind==='select'),[['select','host']]);
-  f.closeConversation();
   await update({connected:false});await update({connected:true,computers});
-  assert.equal(f.selected.value,null);
+  assert.equal(f.calls.filter(([kind])=>kind==='select').length,1);
+  f.closeConversation();
+  assert.ok(f.calls.some(([kind,url])=>kind==='relaunch'&&url==='/pages/index/index'));
 });
 
 test('握手确认电脑不在授权列表后才拒绝打开，等待期间换配对则丢弃旧路由',async()=>{

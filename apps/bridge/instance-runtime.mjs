@@ -58,10 +58,10 @@ export class InstanceRuntime {
     this.native = new InstanceNativeDesktop(instance, this.client, { stateDirectory: instance.codexHome });
     this.adapter = new DesktopAdapter({ client: this.client, native: this.native, index: new StateReader(instance.codexHome), modelCatalog: new ModelCatalog({ codexHome: instance.codexHome }), attachments: new AttachmentStore({ root: path.join(dataPath, 'attachments') }), goalController: new InstanceGoalController(instance, this.client, { diagnosticPath: path.join(dataPath, 'goal-ui-diagnostics.jsonl') }), activateThread: this.isMac ? (id, options) => withDesktopUi(() => navigateMacInstance(instance, id, { ...options, verify: () => instance.verify() })) : undefined });
     const activate = this.adapter.activateThread;
-    this.adapter.readActivityInventory = async options => {
+    this.adapter.readActivityInventory = async () => {
       const current=await readInstanceActivity(instance);
       if(current.complete)return current;
-      const saved=await DesktopAdapter.prototype.readActivityInventory.call(this.adapter,options);
+      const saved=await DesktopAdapter.prototype.readActivityInventory.call(this.adapter);
       return {complete:false,threadIds:[...new Set([...current.threadIds,...saved.threadIds])]};
     };
     this.adapter.activateThread = async (id, options) => {
