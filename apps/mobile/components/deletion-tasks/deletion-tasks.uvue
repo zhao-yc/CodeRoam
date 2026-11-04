@@ -1,6 +1,6 @@
 <template>
-  <view v-if="visibleTasks.length > 0 || deletionTasks.error.length > 0" class="delete-tasks">
-    <text v-if="deletionTasks.error.length > 0" class="task-error">{{ deletionTasks.error }}</text>
+  <view v-if="visibleTasks.length > 0 || showLegacyError" class="delete-tasks">
+    <text v-if="showLegacyError" class="task-error">{{ deletionTasks.error }}</text>
     <view v-for="task in visibleTasks" :key="task.commandId" class="delete-task">
       <view class="task-copy"><text class="task-title">{{ title(task) }}</text><text class="task-description">{{ computerName(task.hostId) }} · {{ deletionLabel(task) }}{{ task.state == 'running' ? '，可以继续使用其他聊天' : '' }}</text><text v-if="task.error.length > 0" class="task-error">{{ task.error }}</text></view>
       <button v-if="task.state == 'failed'" class="task-button button-secondary" @click="dismissDeletion(task)">关闭</button>
@@ -14,13 +14,16 @@ import { computed } from 'vue'
 import { connection, Computer, ThreadSummary } from '../../services/bridge.uts'
 import { threadList, ComputerThreads } from '../../services/thread-list.uts'
 import { deletionTasks, DeleteTask, deletionLabel as formatDeletionLabel, checkDeletion as verifyDeletion, dismissDeletion as removeDeletionTask } from '../../services/delete-tasks.uts'
+import { supportsSubmissionTasks } from '../../services/submission-task-state.uts'
+import { legacyDeletionVisible } from '../../services/submission-task-presentation.uts'
 // Android 模板通过本地方法调用服务层。
 function deletionLabel(task: DeleteTask): string { return formatDeletionLabel(task) }
 function checkDeletion(task: DeleteTask) { verifyDeletion(task) }
 function dismissDeletion(task: DeleteTask) { removeDeletionTask(task) }
 const props = defineProps<{ visibleThreadKeys: string[] }>()
-// 正常删除只使用当前列表行的状态；异常或列表之外的任务保留独立处理入口。
-const visibleTasks = computed((): DeleteTask[] => deletionTasks.tasks.filter((task: DeleteTask): boolean => task.state != 'running' || props.visibleThreadKeys.indexOf(task.hostId + ':' + task.threadId) < 0))
+// 支持提交队列的实例统一在提交任务中展示，保留旧连接的独立核对入口。
+const visibleTasks = computed((): DeleteTask[] => deletionTasks.tasks.filter((task: DeleteTask): boolean => legacyDeletionVisible(task.state, props.visibleThreadKeys.indexOf(task.hostId + ':' + task.threadId) >= 0, supportsSubmissionTasks(task.hostId))))
+const showLegacyError = computed((): boolean => deletionTasks.error.length > 0 && (connection.computers.length == 0 || connection.computers.some((computer: Computer): boolean => !supportsSubmissionTasks(computer.id))))
 // 名称仅从当前应用列表读取，不随删除任务写入持久存储。
 function title(task: DeleteTask): string { return threadList.computers.find((computer: ComputerThreads): boolean => computer.hostId == task.hostId)?.threads.find((thread: ThreadSummary): boolean => thread.id == task.threadId)?.title ?? '聊天删除任务' }
 function computerName(hostId: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == hostId)?.label ?? '原电脑' }

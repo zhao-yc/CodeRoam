@@ -1,0 +1,32 @@
+import type { SubmissionTask } from './submission-task-state.uts'
+import { submissionStageDetail } from './submission-task-state.uts'
+
+// 首页只展示一条进度说明；失败原因另占一行，完整步骤留在执行记录。
+export function submissionCardMeta(task: SubmissionTask, isPausedBlocker: boolean): string {
+  if (task.localOnly == true) return '入队待核对'
+  if (isPausedBlocker) {
+    if (task.state == 'failed') return '失败 · 队列已暂停'
+    if (task.state == 'unknown') return '待核对 · 队列已暂停'
+    if (task.state == 'waiting_resume') return '等待继续 · 队列已暂停'
+    return '队列已暂停'
+  }
+  const sequence = '#' + task.position
+  if (task.state == 'running') {
+    const detail = submissionStageDetail(task).trim()
+    if (detail.length > 0) return sequence + ' · ' + detail
+  }
+  return sequence
+}
+
+// 单行摘要不改写原错误；点击后仍可读取原文及历史步骤。
+export function submissionCardError(task: SubmissionTask): string { return task.error.trim().replace(/\s+/g, ' ') }
+
+// 按实际显示的卡片去重，折叠到三项之外的暂停源仍须保留恢复入口。
+export function submissionNeedsPauseNotice(paused: boolean, blockerId: string, shownTaskIds: string[]): boolean {
+  return paused && (blockerId.length == 0 || shownTaskIds.indexOf(blockerId) < 0)
+}
+
+// 新队列接管该实例的删除展示，旧服务沿用列表行与独立提示的原有规则。
+export function legacyDeletionVisible(state: string, isThreadVisible: boolean, supportsTaskQueue: boolean): boolean {
+  return !supportsTaskQueue && (state != 'running' || !isThreadVisible)
+}

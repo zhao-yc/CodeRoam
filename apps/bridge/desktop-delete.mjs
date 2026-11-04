@@ -7,6 +7,26 @@ import { withDesktopUi } from './desktop-ui-coordinator.mjs';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+/** 删除发现只复用原实例已核验的页面端口，不能按版本或进程名借用其他桌面。 */
+export function createInstanceDeletionDiscovery(instance, client) {
+  const fields = ['pid', 'port', 'executable', 'generation', 'startedAt'];
+  const identity = Object.fromEntries(fields.map(key => [key, instance?.[key]]));
+  const assertBinding = () => {
+    if (client?.instance !== instance || instance?.alive !== true || instance?.ready !== true || fields.some(key => instance[key] !== identity[key])) throw new BridgeError('INSTANCE_CHANGED', '删除目标实例已变化，请重新连接并核对原操作');
+  };
+  return async () => {
+    if (typeof client?.assertCurrent !== 'function' || typeof instance?.verify !== 'function') throw new BridgeError('INSTANCE_CHANGED', '尚未核验删除目标实例，请重新连接原桌面');
+    client.assertCurrent(); assertBinding();
+    const verified = await instance.verify();
+    client.assertCurrent(); assertBinding();
+    if (verified === false) throw new BridgeError('INSTANCE_CHANGED', '删除目标实例身份尚未确认，请重新连接原桌面');
+    const { pid, port, executable, generation, startedAt } = identity;
+    // 缺少页面能力时明确返回不可用；不枚举进程、不打开端口，也不切换到其他实例。
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(port) || port < 1 || port > 65535 || typeof executable !== 'string' || !executable.trim() || typeof generation !== 'string' || !generation || startedAt == null) return [];
+    return [{ pid, port, executable }];
+  };
+}
+
 /** 每次删除独立连接已验证的原桌面页面，断线后不重连、不重放交互。 */
 class DeletionPage {
   constructor(url) { this.url = url; this.pending = new Map(); this.sequence = 0; }

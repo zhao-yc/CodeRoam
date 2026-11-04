@@ -8,7 +8,7 @@ import { AttachmentStore } from './attachment-store.mjs';
 import { Journal } from './journal.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
-import { DesktopDeleteController } from './desktop-delete.mjs';
+import { DesktopDeleteController, createInstanceDeletionDiscovery } from './desktop-delete.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { DesktopFileReportReader } from './file-reports.mjs';
 import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
@@ -72,7 +72,8 @@ export class InstanceRuntime {
     // 目录查询和创建共用原实例的 CODEX_HOME 与已核验桌面随附 CLI。
     const desktopIdentity = { platform: instance.platform, executable: instance.executable };
     const newThreads = new NewThreadService({ codexHome: instance.codexHome, catalog: this.adapter.modelCatalog, creation: new ThreadCreationClient({ codexHome: instance.codexHome, resolveCli: () => instanceCodexPath(desktopIdentity) }) });
-    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }), diagnostics });
+    // 删除与草稿、文件汇总共用同一个已绑定实例，桌面升级不依赖旧版本的全局端口发现。
+    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ discover: createInstanceDeletionDiscovery(instance, this.client), diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }), diagnostics });
     this.agent.nativeDrafts.controller.close();
     this.agent.nativeDrafts.controller=new NativeDraftController({adapter:this.adapter,instance,discover:async()=>instance.alive&&instance.port?[{pid:instance.pid,port:instance.port,executable:instance.executable}]:[]});
     this.agent.predictions.close();
