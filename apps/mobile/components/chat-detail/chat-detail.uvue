@@ -53,7 +53,11 @@
             <view class="turn-failure-copy"><text class="turn-failure-text" selectable>{{ entry.text }}</text><text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingCachedContent" class="turn-failure-hint">更新电脑连接服务后可重试</text></view>
             <view v-if="!cacheOnly && entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
           </view>
-          <view v-else-if="entry.role == 'process'" class="process-toggle action-frame"><text class="process-label">{{ entry.label }}</text><app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button></view>
+          <view v-else-if="entry.role == 'process'" class="process-toggle action-frame">
+            <text v-if="!showProcessDurationOnly || (entry.durationLabel ?? '').length > 0" class="process-label">{{ showProcessDurationOnly ? entry.durationLabel : entry.label }}</text>
+            <app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" />
+            <button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button>
+          </view>
           <template v-else>
             <view class="execution-toggle action-frame"><app-icon name="edit" :size="19" tone="muted" /><text class="execution-summary">{{ entry.label }}</text><app-icon :name="isExecutionExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" /><button class="action-hitbox" hover-class="action-pressed" :aria-label="(isExecutionExpanded(entry) ? '收起' : '展开') + entry.label" @click="toggleExecutions(entry)"></button></view>
             <scroll-view v-if="isExecutionExpanded(entry)" direction="vertical" class="execution-list" :style="{ height: Math.min(240, entry.executions.length * 44) + 'px' }" @touchstart.stop="beginExecutionTouch" @touchend.stop="endExecutionTouch" @touchcancel.stop="endExecutionTouch">
@@ -199,6 +203,15 @@ import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '.
 import type { WorkspaceTarget } from '../../services/workspace-layout.uts'
 const liquidGlass = useLiquidGlass()
 const props = withDefaults(defineProps<{ target: WorkspaceTarget, active: boolean, paneWidth: number, paneHeight: number, embedded?: boolean, paneLeft?: number }>(), { embedded: false, paneLeft: 0 })
+// 仅宽屏网页采用桌面样式，无耗时的过程仍保留可展开箭头。
+const showProcessDurationOnly = computed((): boolean => {
+  // #ifdef WEB
+  return props.embedded == true
+  // #endif
+  // #ifndef WEB
+  return false
+  // #endif
+})
 const emit = defineEmits<{ close: [], removed: [kind: string], 'connect-cached': [] }>()
 // 缓存与实时详情使用不同的工作区键，连接时重新挂载正常面板。
 const cacheOnly = props.target.cacheOnly == true

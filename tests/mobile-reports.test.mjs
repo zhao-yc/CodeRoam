@@ -10,7 +10,7 @@ import {normalizeConversation} from '../apps/bridge/conversation.mjs';
 function fixture(){
   const context=componentContext({});
   const source=fs.readFileSync('apps/mobile/services/executions.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={reportTimeline,reportTurnIds,reportProcessLabel,executionTimeline,executionTitle,executionGroupExpanded,retainExpandedExecutions,toggleExecutionGroup};',context);
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={reportTimeline,reportTurnIds,reportProcessLabel,reportProcessDurationLabel,executionTimeline,executionTitle,executionGroupExpanded,retainExpandedExecutions,toggleExecutionGroup};',context);
   return context.subject;
 }
 const plain=value=>JSON.parse(JSON.stringify(value));
@@ -26,6 +26,7 @@ test('明确完成轮次默认仅保留提问、过程入口和最终报告，�
   const collapsed=f.reportTimeline(state,[]);
   assert.deepEqual(plain(collapsed.map(entry=>entry.id)),['u','process:turn:final','final']);
   assert.equal(collapsed[1].label,'用时 2分钟50秒 · 查看执行过程');
+  assert.equal(collapsed[1].durationLabel,'用时 2分钟50秒');
   assert.deepEqual(plain(f.reportTimeline(state,['process:turn:final']).map(entry=>entry.id)),['u','process:turn:final','progress','execution:c','more','answer','final']);
   assert.match(f.reportTimeline(state,['process:turn:final'])[1].label,/收起执行过程/);
 });
@@ -73,10 +74,10 @@ test('纯报告不生成空过程入口，多轮独立且不吞并后续报告�
 
 test('耗时未知不估算，缺失轮次编号及非连续轮次不折叠，历史裁剪仍可显示报告',()=>{
   const f=fixture(),state=snapshot();
-  assert.equal(f.reportProcessLabel(null,false),'查看执行过程');
-  for(const ms of [-1,NaN,Infinity])assert.equal(f.reportProcessLabel(ms,false),'查看执行过程');
-  assert.equal(f.reportProcessLabel(1,false),'用时 不足1秒 · 查看执行过程');
-  assert.equal(f.reportProcessLabel(3661000,true),'用时 1小时1分钟1秒 · 收起执行过程');
+  for(const ms of [null,-1,NaN,Infinity])assert.equal(f.reportProcessDurationLabel(ms),'');
+  assert.equal(f.reportProcessLabel('',false),'查看执行过程');
+  assert.equal(f.reportProcessDurationLabel(1),'用时 不足1秒');
+  assert.equal(f.reportProcessLabel(f.reportProcessDurationLabel(3661000),true),'用时 1小时1分钟1秒 · 收起执行过程');
   state.messages.shift();assert.equal(f.reportTimeline(state,[])[0].role,'process');
   state.messages.splice(2,0,{id:'other',role:'user',text:'另一轮',turnId:'other',status:''});
   assert.deepEqual(plain(f.reportTurnIds(state)),[]);
@@ -114,6 +115,7 @@ test('首份总结没有过程也不会阻止后续报告收起，提问与两�
  const f=fixture(),state=multipleReports(),entries=f.reportTimeline(state,[]);
  assert.deepEqual(plain(entries.map(e=>e.id)),['u','early','followup','process:turn:final','final']);
  assert.equal(entries[3].label,'查看执行过程');
+ assert.equal(entries[3].durationLabel,'');
  assert.deepEqual(plain(f.reportTimeline(state,['process:turn:final']).filter(e=>e.role!=='process').map(e=>e.id)),['u','early','followup','progress','execution:c','final']);
  assert.deepEqual(plain(f.reportTurnIds(state)),['turn']);
 });

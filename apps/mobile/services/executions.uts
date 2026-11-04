@@ -1,7 +1,7 @@
 import { ChatMessage, Conversation, ConversationTurn, Approval, QuestionGroup } from './bridge.uts'
 import type { MessageAnnotation, MessageAttachment } from './annotations.uts'
 
-export type TimelineEntry = { kind?: string, reportId?: string, id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, annotations?: MessageAnnotation[], attachments?: MessageAttachment[] }
+export type TimelineEntry = { kind?: string, reportId?: string, id: string, role: string, text: string, imageCount?: number, turnId: string, executions: ChatMessage[], label: string, durationLabel?: string, annotations?: MessageAnnotation[], attachments?: MessageAttachment[] }
 
 // 返回每段明确最终回复前的正文起点，保留段首提问，段中追加仍属于过程。
 function reportPromptEnd(messages: ChatMessage[], start: number, end: number): number {
@@ -45,16 +45,19 @@ export function reportTurnIds(snapshot: Conversation | null): string[] {
 }
 
 // 耗时只使用桌面明确提供的毫秒值，不以手机接收或打开页面的时间估算。
-export function reportProcessLabel(durationMs: number | null, expanded: boolean): string {
-  let duration = ''
-  if (durationMs != null && durationMs >= 0 && durationMs <= Number.MAX_SAFE_INTEGER) {
-    const seconds = Math.floor(durationMs / 1000)
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const remaining = seconds % 60
-    duration = seconds == 0 ? '不足1秒' : (hours > 0 ? hours + '小时' : '') + (minutes > 0 ? minutes + '分钟' : '') + (remaining > 0 ? remaining + '秒' : '')
-  }
-  return (duration.length > 0 ? '用时 ' + duration + ' · ' : '') + (expanded ? '收起执行过程' : '查看执行过程')
+export function reportProcessDurationLabel(durationMs: number | null): string {
+  if (durationMs == null || !(durationMs >= 0 && durationMs <= Number.MAX_SAFE_INTEGER)) return ''
+  const seconds = Math.floor(durationMs / 1000)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remaining = seconds % 60
+  const duration = seconds == 0 ? '不足1秒' : (hours > 0 ? hours + '小时' : '') + (minutes > 0 ? minutes + '分钟' : '') + (remaining > 0 ? remaining + '秒' : '')
+  return '用时 ' + duration
+}
+
+// 操作文案供窄屏和无障碍读取，宽屏视觉只使用耗时。
+export function reportProcessLabel(durationLabel: string, expanded: boolean): string {
+  return (durationLabel.length > 0 ? durationLabel + ' · ' : '') + (expanded ? '收起执行过程' : '查看执行过程')
 }
 
 // 扁平化显示容器复用现有正文和命令详情，展开后严格保持原消息顺序。
@@ -83,8 +86,8 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
           const processId = 'process:' + turnId + ':' + group[finalIndex].id
           const expanded = expandedReports.indexOf(processId) >= 0
           // 多份报告共享底层轮次总耗时，不能将总耗时冒充每段耗时。
-          const duration = finals.length == 1 ? turn?.durationMs ?? null : null
-          entries.push({ id: processId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(duration, expanded) })
+          const durationLabel = reportProcessDurationLabel(finals.length == 1 ? turn?.durationMs ?? null : null)
+          entries.push({ id: processId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(durationLabel, expanded), durationLabel })
           if (expanded) entries.push(...executionTimeline(group.slice(promptEnd, finalIndex).filter((message: ChatMessage): boolean => message.kind != 'imageGeneration')))
         }
         entries.push(...executionTimeline(group.slice(finalIndex, finalIndex + 1)))
