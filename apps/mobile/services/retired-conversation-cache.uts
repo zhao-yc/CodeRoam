@@ -3,14 +3,23 @@ import { purgeConversationCacheBodies } from '@/uni_modules/codex-conversation-d
 let retired = false
 let pending: Promise<void> | null = null
 
+// 异步等待兼容原生 Promise，并在存储失败后释放本次重试锁。
+async function purgeRetiredBodies(): Promise<void> {
+  try {
+    await purgeConversationCacheBodies()
+    uni.removeStorageSync('codex-mobile-conversation-cache-v1')
+    retired = true
+  } catch (_) {
+    // 下次启动或返回前台时重试。
+  } finally {
+    pending = null
+  }
+}
+
 // 升级时清理旧正文。清理失败留待下次前台重试，连接和列表加载继续进行。
 export function retireConversationCacheBodies(): Promise<void> {
   if (retired) return Promise.resolve()
   if (pending != null) return pending!
-  pending = purgeConversationCacheBodies().then(() => {
-    // 数据库事务完成后再移除旧 Storage，期间不会读取或展示旧正文。
-    uni.removeStorageSync('codex-mobile-conversation-cache-v1')
-    retired = true
-  }).catch((_: Error) => {}).finally(() => { pending = null })
+  pending = purgeRetiredBodies()
   return pending!
 }

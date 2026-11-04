@@ -20,7 +20,7 @@ function fixture(storage = new Map()) {
     watch(source, callback, options = {}) { const read = typeof source === 'function' ? source : () => source.value; const w = { read, callback, last: read() }; watches.push(w); if (options.immediate) callback(w.last); },
     setTimeout(fn, delay) { const id = ++nextTimer; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id),
     uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), showToast: options => notices.push(options.title), showModal: options => modals.push(options), showLoading() { throw new Error('后台删除不能全屏等待'); }, hideKeyboard() {}, navigateBack: () => { c.returned++; }, reLaunch: () => { c.returned++; } },
-    clearConversationCache: (...args) => caches.push(args), clearDeletedDrafts: (...args) => drafts.push(args), removeDeletedThreads: (...args) => removed.push(args),
+    clearFileReportCache: (...args) => caches.push(args), clearDeletedDrafts: (...args) => drafts.push(args), removeDeletedThreads: (...args) => removed.push(args),
     ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }),
     pageHostId: { value: 'pc' }, pageThreadId: { value: 'root' }, pageVisible: { value: true }, busy: { value: false }, operationError: { value: '' }, archivePromptOpen: false,
     cachedDetail: { value: null }, cacheDirty: false, cacheWriteTimer: 0, historyRequest: 0, historyPage: { value: { messages: ['合成历史'] } }, historyError: { value: '' },
@@ -78,7 +78,8 @@ test('返回并打开其他电脑聊天后，成功只清理原目标且不导�
   f.tick(); call.resolve(receipt()); await flush();
   assert.equal(f.c.returned, 0); assert.equal(f.c.connection.activeThreadId, 'root'); assert.equal(f.c.historyPage.value.messages[0], '合成历史');
   assert.equal(f.removed[0][0], 'pc'); assert.deepEqual(Array.from(f.removed[0][1]), ['root', 'child']); assert.equal(f.drafts[0][0], 'pc'); assert.deepEqual(Array.from(f.drafts[0][1]), ['root', 'child']);
-  assert.equal(f.removed.length, 1); assert.equal(f.drafts.length, 1); assert.equal(f.caches.length, 0);
+  assert.equal(f.removed.length, 1); assert.equal(f.drafts.length, 1); assert.equal(f.caches.length, 1);
+  assert.equal(f.caches[0][0], 'synthetic-pair'); assert.equal(f.caches[0][1], 'pc'); assert.deepEqual(Array.from(f.caches[0][2]), ['root', 'child']);
   assert.equal(f.c.connection.snapshot, currentSnapshot); assert.equal(f.c.connection.preview, currentPreview);
   assert.equal(f.acceptReceipt({ namespace: 'synthetic-pair', hostId: 'pc', threadId: 'root' }, receipt()), false); assert.equal(f.removed.length, 1);
 });

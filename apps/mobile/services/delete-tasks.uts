@@ -1,6 +1,7 @@
 import { reactive, watch } from 'vue'
 import { bridge, connection, Computer, PendingCommand } from './bridge.uts'
 import { clearDeletedDrafts } from './composer.uts'
+import { clearFileReportCache } from './file-report-cache.uts'
 import { removeDeletedThreads } from './thread-list.uts'
 
 export type DeleteTask = { namespace: string, hostId: string, threadId: string, commandId: string, state: string, error: string, checking: boolean }
@@ -41,6 +42,7 @@ function acceptReceipt(task: DeleteTask, result: UTSJSONObject | null): boolean 
   // 同步通知详情页废弃历史读取，然后清除应用级数据。
   deletionTasks.revision++
   removeDeletedThreads(task.hostId, ids); clearDeletedDrafts(task.hostId, ids)
+  clearFileReportCache(task.namespace, task.hostId, ids)
   if (connection.hostId == task.hostId && ids.indexOf(connection.activeThreadId) >= 0) { connection.activeThreadId = ''; connection.snapshot = null; connection.preview = null; connection.epoch = ''; connection.sequence = 0; bridge.syncPendingCommand() }
   bridge.clearCommand(task.commandId, task.hostId)
   if (bridge.pendingCommand(task.hostId, task.threadId) == task.commandId) { task.state = 'unknown'; task.error = '删除已确认，本地核对记录尚未清除，请检查存储后核对'; saveQuietly(); return true }

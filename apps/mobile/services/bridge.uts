@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 // 能力标志随完整及增量快照传递；旧连接不提供聊天引用入口。
 import { applyNativeDraftSnapshot } from './native-draft.uts'
+import { clearFileReportCache } from './file-report-cache.uts'
 import type { QueuedMessage } from './message-queue.uts'
 import type { ThreadGoal } from './goals.uts'
 import type { PermissionState } from './permissions.uts'
@@ -417,6 +418,8 @@ class MobileBridge {
       clearTimeout(entry.timer); this.pending.delete(id)
       const error = envelope['error'] as UTSJSONObject | null
       if (error != null) {
+        // 首屏到达后会话仍可能被移除，明确不存在时立即释放当前正文。
+        if (entry.method == 'thread.watch' && error.getString('code') == 'THREAD_NOT_FOUND') this.invalidateRemovedConversation(entry.hostId, entry.threadId)
         // 电脑明确拒绝授权时立即移出名单，等后续权威清单重新确认。
         if (error.getString('code') == 'HOST_FORBIDDEN') {
           connection.computers = connection.computers.filter((computer: Computer): boolean => computer.id != entry.hostId)
@@ -755,6 +758,7 @@ class MobileBridge {
   // 电脑确认移除后清除当前页面正文，并废弃实时和在途订阅。
   invalidateRemovedConversation(hostId: string, threadId: string) {
     if (connection.hostId != hostId || connection.activeThreadId != threadId) return
+    clearFileReportCache(connection.cacheNamespace, hostId, [threadId])
     this.openingRevision++; this.syncingThread = ''
     this.clearConversationSubscription()
     connection.activeThreadId = ''; connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0

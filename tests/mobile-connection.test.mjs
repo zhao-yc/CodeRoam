@@ -6,15 +6,15 @@ import {stripTypeScriptTypes} from 'node:module';
 
 /** 直接执行项目 UTS 的连接逻辑，用可控计时器复现原生 onError 后没有 onClose 的情况。 */
 function mobileFixture(storage=new Map()){
-  const timers=new Map(),sockets=[];let timerId=0;
+  const timers=new Map(),sockets=[],fileCacheClears=[];let timerId=0;
   const uni={getStorageSync:key=>storage.get(key)??'',setStorageSync(key,value){storage.set(key,value);},removeStorageSync(key){storage.delete(key);},onNetworkStatusChange(){},request(options){options.success({statusCode:200,data:{ticket:'t'.repeat(43)}});},connectSocket(){
     const socket={callbacks:{},closeCount:0,close(){this.closeCount++;},onMessage(fn){this.callbacks.message=fn;},onClose(fn){this.callbacks.close=fn;},onError(fn){this.callbacks.error=fn;}};sockets.push(socket);return socket;
   }};
-  const context=vm.createContext({uni,Map,Promise,Error,JSON,Math,Date,reactive:value=>value,setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
+  const context=vm.createContext({uni,Map,Promise,Error,JSON,Math,Date,clearFileReportCache:(...args)=>fileCacheClears.push(args),reactive:value=>value,setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
   let source=fs.readFileSync(new URL('../apps/mobile/services/bridge.uts',import.meta.url),'utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
   source=stripTypeScriptTypes(source,{mode:'transform'});vm.runInContext(source+'\nglobalThis.subject={MobileBridge,connection};',context);
   const {MobileBridge,connection}=context.subject,bridge=new MobileBridge();bridge.config={relayUrl:'wss://relay.example/ws',hostId:'pc',token:'s'.repeat(43)};
-  return {bridge,connection,timers,sockets,storage,uni};
+  return {bridge,connection,timers,sockets,storage,uni,fileCacheClears};
 }
 
 test('票据接口明确拒绝配对时清除旧缓存范围，普通连接失败继续保留',()=>{
@@ -266,6 +266,7 @@ test('首屏丢失后只补一次完整正文，重连沿用当前画面并以�
 
 test('首屏确认之后的迟到预览不能覆盖实时正文，明确删除事件关闭当前内容',async()=>{
   const f=connectedFixture();f.connection.supportsConversationPreview=true;f.connection.supportsConversationCache=true;
+  f.connection.cacheNamespace='synthetic-pair';
   const opening=f.bridge.openThread('thread'),request=f.sent[0];
   sendPreview(f,request);
   respond(f,request,{snapshot:previewSnapshot('thread','实时正文'),epoch:'one',seq:1,desktopActivated:true});await opening;
@@ -273,13 +274,23 @@ test('首屏确认之后的迟到预览不能覆盖实时正文，明确删除�
   assert.equal(f.connection.snapshot.messages[0].text,'实时正文');assert.equal(f.connection.preview,null);
   f.bridge.receive(utsObject({type:'thread.removed',hostId:'pc',threadId:'thread'}));
   assert.equal(f.connection.snapshot,null);assert.equal(f.connection.preview,null);assert.equal(f.connection.activeThreadId,'');
+  assert.equal(f.fileCacheClears.length,1);assert.equal(f.fileCacheClears[0][0],'synthetic-pair');assert.equal(f.fileCacheClears[0][1],'pc');assert.deepEqual(Array.from(f.fileCacheClears[0][2]),['thread']);
+});
+
+test('首屏返回后电脑确认聊天不存在，立即清除预览且不自动重新打开',async()=>{
+  const f=connectedFixture();f.connection.supportsConversationPreview=true;f.connection.supportsConversationCache=true;
+  const opening=f.bridge.openThread('thread'),rejected=assert.rejects(opening,/已移除/),request=f.sent[0];
+  sendPreview(f,request);
+  respond(f,request,null,{code:'THREAD_NOT_FOUND',message:'聊天已移除'});await rejected;
+  assert.equal(f.connection.snapshot,null);assert.equal(f.connection.preview,null);assert.equal(f.connection.activeThreadId,'');
+  assert.equal(f.sent.filter(item=>item.method==='thread.watch').length,1);
 });
 
 test('电脑确认移除活跃会话时撤销订阅，迟到回执和事件无法恢复旧正文',async()=>{
   const f=connectedFixture(),version='content:'+'a'.repeat(64);
   Object.assign(f.connection,{supportsConversationCache:true,computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',messages:[]},contentRevision:version,subscribedHostId:'pc',subscribedThreadId:'thread',epoch:'old',sequence:2});
   const pending=f.bridge.watch('thread');
-  f.bridge.invalidateRemovedConversation('other','thread');assert.equal(f.connection.subscribedThreadId,'thread');
+  f.bridge.invalidateRemovedConversation('other','thread');assert.equal(f.connection.subscribedThreadId,'thread');assert.equal(f.fileCacheClears.length,0);
   f.bridge.invalidateRemovedConversation('pc','thread');assert.equal(f.sent[1].method,'thread.unwatch');
   f.bridge.receive(utsObject({type:'event',hostId:'pc',threadId:'thread',epoch:'old',seq:3,snapshot:{threadId:'thread',messages:[]}}));
   respond(f,f.sent[0],{snapshot:{threadId:'thread',messages:[]},epoch:'old',seq:4,contentRevision:version});

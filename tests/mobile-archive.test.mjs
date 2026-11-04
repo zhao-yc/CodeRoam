@@ -22,7 +22,7 @@ function fixture() {
   };
   Object.assign(context, { removeArchivedThread() {}, notify: message => context.notices.push(message), closeActions() {}, getCurrentPages: () => [{}, {}], isCurrentPage: () => context.connection.hostId === context.pageHostId.value && context.connection.activeThreadId === context.pageThreadId.value, acceptPlanReceipt: () => false, settleSubmission() {}, refresh() {} });
   const notices = fs.readFileSync('apps/mobile/services/page-notices.uts', 'utf8').replace(/\bexport /g, '');
-  Object.assign(context, {clearConversationCache(){},pageCacheNamespace:{value:'synthetic-pair'},cachedDetail:{value:null},cacheDirty:false,cacheWriteTimer:0,clearTimeout(){}});
+  Object.assign(context, {props:{target:{cacheNamespace:'synthetic-pair'}},fileCacheClears:[],clearFileReportCache(...args){context.fileCacheClears.push(args);},clearTimeout(){}});
   vm.runInNewContext(stripTypeScriptTypes(notices + '\n' + methods, { mode: 'transform' }) + '\nglobalThis.subject={archiveFromMenu};', componentScope(context));
   context.emit = (event,kind) => { context.returned++; home.show(); };
   home = homeFixture(context.consumeArchiveSuccessNotice);
@@ -48,6 +48,7 @@ test('菜单归档可取消，重复点击不叠加提交，确认成功后才�
   assert.equal(f.context.calls.length, 1); assert.equal(f.context.returned, 0); assert.equal(f.context.connection.threads.length, 2);
   assert.equal(f.context.loadingEvents[0].title, '正在归档…'); assert.equal(f.context.loadingEvents[0].mask, true); assert.equal(f.context.notices.length, 0);
   f.respond({ threadId: 'thread', archived: true }); await flush();
+  assert.equal(f.context.fileCacheClears.length, 1); assert.equal(f.context.fileCacheClears[0][0], 'synthetic-pair'); assert.equal(f.context.fileCacheClears[0][1], 'pc'); assert.deepEqual(Array.from(f.context.fileCacheClears[0][2]), ['thread']);
   assert.equal(f.context.returned, 1); assert.deepEqual(Array.from(f.context.connection.threads, item => item.id), ['other']);
   assert.equal(f.context.connection.snapshot, null); assert.equal(f.context.connection.activeThreadId, ''); assert.equal(f.context.draft, '保留的草稿');
   assert.equal(f.context.loadingEvents.at(-1), '关闭'); assert.equal(f.context.notices.length, 0);
