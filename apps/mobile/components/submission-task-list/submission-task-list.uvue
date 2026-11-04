@@ -1,6 +1,7 @@
 <template>
-  <view v-if="available" class="submission-panel">
-    <view class="submission-heading"><text class="submission-title">{{ rows.length > 0 ? '提交任务 · ' + rows.length : '提交任务' }}</text><button class="submission-history" @click="openHistory">执行记录</button></view>
+  <view v-if="available && active && !obscured" class="submission-dock" :class="{ 'submission-dock-glass': glass }">
+    <view v-if="opened" class="submission-panel">
+    <view class="submission-heading"><text class="submission-title">{{ rows.length > 0 ? '提交任务 · ' + rows.length : '提交任务' }}</text><view class="submission-collapse"><text class="submission-collapse-label">收起</text><app-icon name="chevron-down" :size="16" tone="muted" /><button class="submission-hit" aria-label="收起提交任务" @click="closePanel"></button></view></view>
     <scroll-view v-if="shownRows.length > 0" direction="vertical" class="submission-rows" :show-scrollbar="false" :style="{ maxHeight: expanded ? '280px' : '222px' }">
       <view v-for="row in shownRows" :key="row.hostId + ':' + row.task.id" class="submission-row">
         <view class="submission-main" @click="openTask(row.hostId, row.task)"><text class="submission-row-title">{{ row.task.title.length > 0 ? row.task.title : taskTitle(row.task) }}</text><view class="submission-meta"><text class="submission-description">{{ hostName(row.hostId) }} · {{ cardMeta(row.hostId, row.task) }}</text><submission-task-status :state="row.task.state" /></view><text v-if="row.task.error.length > 0" class="submission-error submission-error-summary" @click.stop="showError(row.task)">{{ cardError(row.task) }}</text></view>
@@ -17,20 +18,28 @@
     <button v-if="rows.length > 3" class="submission-expand" @click="expanded = !expanded">{{ expanded ? '收起' : '展开全部 ' + rows.length + ' 项' }}</button>
     <text v-if="error.length > 0" class="submission-error">{{ error }}</text>
     <view v-for="instance in hiddenBlockers" :key="instance.hostId" class="submission-recovery"><text class="submission-error">{{ hostName(instance.hostId) }} · 队列已暂停</text><button class="submission-action" :disabled="working.length > 0" @click="recoverPaused(instance)">{{ (instance.snapshot?.blockerId ?? '').length > 0 ? '继续队列' : '查看执行记录' }}</button></view>
+    <view class="submission-footer"><view class="submission-history-entry"><app-icon name="recent" :size="16" tone="muted" /><text class="submission-history-label">执行记录</text><button class="submission-hit" aria-label="查看执行记录" @click="openHistory"></button></view><text class="submission-count">{{ rows.length > 0 ? rows.length + ' 项任务' : '暂无当前任务' }}</text></view>
+    </view>
+    <view v-else class="submission-capsule" :class="{ 'submission-capsule-alert': summaryState == 'unknown' || summaryState == 'waiting_resume' }" role="status" aria-live="polite">
+      <app-icon v-if="summaryState == 'idle'" name="recent" :size="16" tone="muted" /><submission-task-status v-else :state="summaryState" />
+      <text class="submission-capsule-label">{{ summaryLabel }}</text><app-icon v-if="hasCurrent" class="submission-capsule-chevron" name="chevron-down" :size="15" tone="muted" />
+      <button class="submission-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开提交任务' : '，查看历史')" @click="openPanel"></button>
+    </view>
   </view>
 </template>
 
 <script setup lang="uts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import AppIcon from '../app-icon/app-icon.uvue'
 import SubmissionTaskStatus from '../submission-task-status/submission-task-status.uvue'
 import { connection, Computer } from '../../services/bridge.uts'
 import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, submissionVisible } from '../../services/submission-task-state.uts'
-import { submissionCardMeta, submissionCardError, submissionNeedsPauseNotice } from '../../services/submission-task-presentation.uts'
+import { submissionCardMeta, submissionCardError, submissionNeedsPauseNotice, submissionFloatingState, submissionFloatingLabel } from '../../services/submission-task-presentation.uts'
 import { controlSubmissionTask, readSubmissionTasks, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
 type TaskRow = { hostId: string, task: SubmissionTask }
-const props = withDefaults(defineProps<{ hostId?: string }>(), { hostId: '' })
+const props = withDefaults(defineProps<{ hostId?: string, active?: boolean, obscured?: boolean, glass?: boolean }>(), { hostId: '', active: true, obscured: false, glass: false })
 const emit = defineEmits<{ open: [hostId: string, threadId: string, title: string] }>()
-const expanded = ref(false), error = ref(''), working = ref('')
+const opened = ref(false), expanded = ref(false), error = ref(''), working = ref('')
 const instances = computed((): InstanceSubmissionTasks[] => submissionTasks.instances.filter((instance: InstanceSubmissionTasks): boolean => props.hostId.length == 0 || instance.hostId == props.hostId))
 const available = computed((): boolean => instances.value.some((instance: InstanceSubmissionTasks): boolean => instance.supported) || submissionTasks.pending.some((record: PendingSubmission): boolean => record.unknown && !record.accepted && (props.hostId.length == 0 || record.hostId == props.hostId)))
 const rows = computed((): TaskRow[] => {
@@ -45,16 +54,26 @@ const rows = computed((): TaskRow[] => {
 })
 const shownRows = computed((): TaskRow[] => expanded.value ? rows.value : rows.value.slice(0, 3))
 const hiddenBlockers = computed((): InstanceSubmissionTasks[] => instances.value.filter((instance: InstanceSubmissionTasks): boolean => submissionNeedsPauseNotice(instance.snapshot?.paused == true, instance.snapshot?.blockerId ?? '', shownRows.value.filter((row: TaskRow): boolean => row.hostId == instance.hostId).map((row: TaskRow): string => row.task.id))))
+const queuePaused = computed((): boolean => instances.value.some((instance: InstanceSubmissionTasks): boolean => instance.snapshot?.paused == true))
+const hasCurrent = computed((): boolean => rows.value.length > 0 || queuePaused.value)
+const summaryState = computed((): string => submissionFloatingState(rows.value.map((row: TaskRow): SubmissionTask => row.task), queuePaused.value))
+const summaryLabel = computed((): string => submissionFloatingLabel(summaryState.value, rows.value.length))
+// 浮窗只控制展示；收起、切换电脑和离开页面都不取消已入队的任务。
+function closePanel() { opened.value = false; expanded.value = false }
+function openPanel() { if (hasCurrent.value) opened.value = true; else openHistory() }
+watch((): string => props.hostId + ':' + submissionTasks.namespace + ':' + props.active + ':' + props.obscured, () => { closePanel(); error.value = '' })
+// 成功五秒后由既有任务时钟移出，自动恢复为常驻历史入口。
+watch((): boolean => hasCurrent.value, (current: boolean) => { if (!current) closePanel() })
 function cardMeta(hostId: string, task: SubmissionTask): string { const snapshot = instances.value.find((instance: InstanceSubmissionTasks): boolean => instance.hostId == hostId)?.snapshot; return submissionCardMeta(task, snapshot?.paused == true && snapshot.blockerId == task.id) }
 function cardError(task: SubmissionTask): string { return submissionCardError(task) }
 function canResume(hostId: string, task: SubmissionTask): boolean { const snapshot = instances.value.find((instance: InstanceSubmissionTasks): boolean => instance.hostId == hostId)?.snapshot; return snapshot?.paused == true && snapshot.blockerId == task.id && ['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(task.state) >= 0 }
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
 function taskTitle(task: SubmissionTask): string { return task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }
-function openHistory() { uni.navigateTo({ url: '/pages/task-history/index' + (props.hostId.length > 0 ? '?hostId=' + encodeURIComponent(props.hostId) : '') }) }
-function openInstanceHistory(hostId: string) { uni.navigateTo({ url: '/pages/task-history/index?hostId=' + encodeURIComponent(hostId) }) }
+function openHistory() { closePanel(); uni.navigateTo({ url: '/pages/task-history/index' + (props.hostId.length > 0 ? '?hostId=' + encodeURIComponent(props.hostId) : '') }) }
+function openInstanceHistory(hostId: string) { closePanel(); uni.navigateTo({ url: '/pages/task-history/index?hostId=' + encodeURIComponent(hostId) }) }
 // 首页错误只占一行，用户点击仍能读取完整原因。
 function showError(task: SubmissionTask) { uni.showModal({ title: '执行失败详情', content: task.error, showCancel: false, confirmText: '知道了' }) }
-function openTask(hostId: string, task: SubmissionTask) { if (task.threadId.length > 0 && task.method != 'thread.delete') emit('open', hostId, task.threadId, task.title) }
+function openTask(hostId: string, task: SubmissionTask) { if (task.threadId.length > 0 && task.method != 'thread.delete') { closePanel(); emit('open', hostId, task.threadId, task.title) } }
 // 关闭明确失败项后继续后续任务；结果未知或待恢复的任务仍需核对、继续或明确跳过。
 async function act(hostId: string, task: SubmissionTask, action: string, confirmed: boolean = false) {
   if (working.value.length > 0) return
@@ -98,12 +117,18 @@ async function recoverPaused(instance: InstanceSubmissionTasks) {
 </script>
 
 <style>
-.submission-panel { margin: 0 16px 6px; flex-shrink: 0; border-bottom-width: 1px; border-bottom-color: #e5e8f1; padding-bottom: 6px; }
-.submission-heading { flex-direction: row; align-items: center; min-height: 32px; }
-.submission-title { flex: 1; font-size: 13px; font-weight: bold; color: #596479; }
-.submission-history, .submission-action, .submission-expand { margin: 0; padding: 4px 6px; background-color: transparent; color: #4546bd; font-size: 12px; line-height: 20px; }
-.submission-rows { flex-shrink: 1; }
-.submission-row { flex-direction: row; align-items: center; background-color: #f3f4ff; border-radius: 10px; margin-top: 5px; padding: 9px 10px; }
+.submission-dock { position: absolute; left: 16px; right: 16px; bottom: 12px; z-index: 20; max-height: 100%; overflow: visible; }
+.submission-dock-glass { bottom: 70px; }
+.submission-panel, .submission-capsule { border-width: 1px; border-style: solid; border-color: #e5e8f1; background-color: #ffffff; box-shadow: 0 5px 18px rgba(35, 43, 72, 0.12); }
+.submission-panel { border-radius: 24px; padding: 4px 14px; flex-shrink: 1; min-height: 0; }
+.submission-heading { flex-direction: row; align-items: center; min-height: 48px; }
+.submission-title { flex: 1; font-size: 14px; font-weight: bold; color: #1a2135; }
+.submission-collapse { position: relative; flex-direction: row; height: 44px; padding-left: 12px; align-items: center; }
+.submission-collapse-label { font-size: 12px; color: #596479; margin-right: 4px; }
+.submission-hit { position: absolute; left: 0; right: 0; top: 0; bottom: 0; margin: 0; padding: 0; border-width: 0; background-color: transparent; border-radius: 24px; }
+.submission-action, .submission-expand { margin: 0; padding: 6px; background-color: transparent; color: #4546bd; font-size: 12px; line-height: 22px; min-height: 34px; }
+.submission-rows { flex-shrink: 1; min-height: 0; }
+.submission-row { flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #e5e8f1; padding: 10px 0; }
 .submission-main { flex: 1; min-width: 0; }
 .submission-meta { flex-direction: row; align-items: center; }
 .submission-meta .submission-task-status { margin-left: 6px; }
@@ -114,4 +139,17 @@ async function recoverPaused(instance: InstanceSubmissionTasks) {
 .submission-error-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .submission-expand { align-self: center; }
 .submission-recovery { flex-direction: row; align-items: center; justify-content: space-between; }
+.submission-footer { min-height: 44px; flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #e5e8f1; }
+.submission-history-entry { position: relative; flex-direction: row; align-items: center; height: 44px; padding-right: 10px; }
+.submission-history-label { color: #4546bd; font-size: 12px; margin-left: 6px; }
+.submission-count { flex: 1; text-align: right; font-size: 11px; color: #737d91; }
+.submission-capsule { position: relative; align-self: flex-end; flex-direction: row; align-items: center; min-height: 44px; max-width: 100%; padding: 0 12px; border-radius: 24px; }
+.submission-capsule-label { font-size: 12px; line-height: 20px; color: #4546bd; margin-left: 7px; margin-right: 5px; }
+.submission-capsule-alert { background-color: #fff8f1; border-color: #f0ddcd; }
+.submission-capsule-chevron { transform: rotate(180deg); }
+/* #ifdef WEB */
+.submission-row-title, .submission-description, .submission-error-summary { display: block; }
+@media (max-height: 600px) { .submission-rows { max-height: 140px !important; } }
+@media (max-height: 420px) { .submission-rows { max-height: 80px !important; } }
+/* #endif */
 </style>

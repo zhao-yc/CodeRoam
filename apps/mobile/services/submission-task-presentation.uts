@@ -30,6 +30,22 @@ export function submissionCardMeta(task: SubmissionTask, isPausedBlocker: boolea
 // 单行摘要不改写原错误；点击后仍可读取原文及历史步骤。
 export function submissionCardError(task: SubmissionTask): string { return task.error.trim().replace(/\s+/g, ' ') }
 
+// 汇总所选实例的当前任务；异常优先，关闭异常卡后也不能把暂停队列显示为空闲。
+export function submissionFloatingState(tasks: SubmissionTask[], paused: boolean): string {
+  if (tasks.some((task: SubmissionTask): boolean => task.state == 'unknown' || task.state == 'failed')) return 'unknown'
+  if (paused || tasks.some((task: SubmissionTask): boolean => task.state == 'waiting_resume')) return 'waiting_resume'
+  if (tasks.some((task: SubmissionTask): boolean => task.state == 'running')) return 'running'
+  if (tasks.some((task: SubmissionTask): boolean => task.state == 'queued')) return 'queued'
+  return tasks.length > 0 ? 'succeeded' : 'idle'
+}
+
+// 胶囊只显示状态与总数，具体电脑、真实阶段及管理操作放在展开的浮窗中。
+export function submissionFloatingLabel(state: string, count: number): string {
+  if (state == 'idle') return '执行记录'
+  const label = state == 'unknown' ? '需处理' : state == 'waiting_resume' ? '队列已暂停' : state == 'running' ? '执行中' : state == 'queued' ? '等待执行' : '已完成'
+  return count > 0 ? label + ' · ' + count : label
+}
+
 // 按实际显示的卡片去重，折叠到三项之外的暂停源仍须保留恢复入口。
 export function submissionNeedsPauseNotice(paused: boolean, blockerId: string, shownTaskIds: string[]): boolean {
   return paused && (blockerId.length == 0 || shownTaskIds.indexOf(blockerId) < 0)

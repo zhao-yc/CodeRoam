@@ -28,7 +28,6 @@
       <view v-if="displayComputers.length > 1" :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
       <scroll-view direction="horizontal" :show-scrollbar="false" class="computer-scroll"><view class="computer-tab-content"><view v-for="computer in displayComputers" :key="computer.id" :id="computerTabElementId(computer.id)" :class="['computer-tab', selectedComputerId == computer.id ? 'computer-tab-selected' : '']" :aria-label="computer.label + (computer.online && connection.connected ? '，在线' : '，离线')" @click="chooseComputerFilter(computer.id)" @longpress="openComputerMenu(computer.id)" @touchend="finishComputerPress"><view v-if="computerIndicator(computer.id) != 'idle'" class="computer-indicator" :aria-label="computerIndicator(computer.id) == 'running' ? '有任务执行中' : '有未读结果'"><loading v-if="computerIndicator(computer.id) == 'running'" class="computer-spinner" :paused="!pageVisible" /><view v-else class="computer-unread-dot"></view></view><view class="computer-connection-content" :aria-label="computerSyncLabel(computer.id)"><view v-if="computerSyncState(computer.id) == 'loading'" class="computer-loading-indicator" role="img" aria-label="正在同步聊天"><cache-activity-icon :spinning="pageVisible" /></view><app-icon v-else :name="iconForComputer(computer)" :size="17" tone="muted" /><text class="tab-label computer-name">{{ computer.label }}</text></view><view v-if="computerSyncState(computer.id) == 'offline' || computerSyncState(computer.id) == 'error'" class="computer-sync-badge" :aria-label="computerSyncLabel(computer.id)"><app-icon name="alert-triangle" :size="14" tone="warning" /></view></view></view></scroll-view>
     </view>
-    <submission-task-list :host-id="selectedComputerId" @open="openSubmittedTask" />
     <view v-if="connection.error.length > 0" class="notice"><text class="notice-text">{{ connection.error }}</text></view>
     <scroll-view direction="vertical" :show-scrollbar="false" :scroll-top="threadScrollTop" class="thread-list" @scroll="onThreadListScroll">
       <view class="list-content">
@@ -52,13 +51,15 @@
             </view>
           </view>
         </view>
-        <!-- 为悬浮按钮保留末行滚动空间，滚动中列表仍从玻璃下方经过。 -->
+        <!-- 末行可滚过任务胶囊与玻璃按钮，浮层不挤占首屏聊天的位置。 -->
         <view class="list-bottom" :class="{ 'list-bottom-glass': liquidGlass }"></view>
       </view>
     </scroll-view>
     <view v-if="liquidGlass" class="list-new-glass">
       <liquid-glass-control symbol="plus" :title="props.wide ? '新聊天' : '问问 Codex'" :label="props.wide ? '新聊天' : '问问 Codex，开启新聊天'" :disabled="creatingConversation" @activate="openNewConversation" />
     </view>
+    <!-- 任务浮层锚定列表窗格，手机和平板都不占用聊天行的位置。 -->
+    <submission-task-list :host-id="selectedComputerId" :active="pageVisible" :obscured="menuMounted || editingComputer != null" :glass="liquidGlass" @open="openSubmittedTask" />
     </view>
     <view v-if="!liquidGlass && props.wide" class="list-new-button action-frame">
       <composer-plus light /><text class="list-new-button-label">新聊天</text>
@@ -483,7 +484,7 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 }
 /* #endif */
 .new-page-title { flex: 1; text-align: center; }
-.list-shell { flex: 1; height: 0; min-height: 0; }
+.list-shell { position: relative; flex: 1; height: 0; min-height: 0; }
 /* 全部标签固定，电脑标签在剩余宽度内横向滚动。 */
 .computer-tabs { height: 56px; padding: 4px 16px 8px; flex-direction: row; align-items: center; flex-shrink: 0; }
 .computer-tab { position: relative; overflow: visible; height: 44px; padding: 0 12px; border-radius: 22px; flex-direction: row; align-items: center; flex-shrink: 0; margin-right: 8px; }
@@ -523,8 +524,8 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .thread-meta-icon { flex-shrink: 0; }
 .thread-project { flex: 1; min-width: 0; font-size: 13px; line-height: 20px; color: #596479; margin-left: 6px; lines: 1; text-overflow: ellipsis; }
 .thread-status { margin-left: 8px; flex-shrink: 0; }
-.list-bottom { height: 16px; }
-.list-bottom-glass { height: 70px; }
+.list-bottom { height: 72px; }
+.list-bottom-glass { height: 126px; }
 .list-shell-glass { position: relative; }
 .list-new-glass { position: absolute; left: 16px; right: 16px; bottom: 12px; height: 46px; z-index: 1; }
 .empty { padding: 50px 0 28px; align-items: center; }

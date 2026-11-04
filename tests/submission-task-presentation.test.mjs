@@ -6,8 +6,29 @@ import { stripTypeScriptTypes } from 'node:module';
 
 const source = ['submission-task-state', 'submission-task-presentation'].map(name => fs.readFileSync('apps/mobile/services/' + name + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '')).join('\n');
 const context = vm.createContext({ reactive: value => value });
-vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={submissionCardMeta,submissionCardError,submissionNeedsPauseNotice,legacyDeletionVisible,submissionHistoryOrder};', context);
+vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={submissionCardMeta,submissionCardError,submissionNeedsPauseNotice,legacyDeletionVisible,submissionHistoryOrder,submissionFloatingState,submissionFloatingLabel,submissionVisible};', context);
 const subject = context.subject;
+
+test('浮窗汇总跨实例状态时优先提示异常，关闭异常卡也保留暂停入口', () => {
+  const tasks = states => states.map(state => ({ state }));
+  assert.equal(subject.submissionFloatingState(tasks(['queued', 'running', 'failed']), false), 'unknown');
+  assert.equal(subject.submissionFloatingState(tasks(['running', 'unknown']), false), 'unknown');
+  assert.equal(subject.submissionFloatingState(tasks(['running']), true), 'waiting_resume');
+  assert.equal(subject.submissionFloatingState([], true), 'waiting_resume');
+  assert.equal(subject.submissionFloatingState(tasks(['queued', 'succeeded', 'running']), false), 'running');
+  assert.equal(subject.submissionFloatingState(tasks(['queued', 'succeeded']), false), 'queued');
+  assert.equal(subject.submissionFloatingLabel('running', 3), '执行中 · 3');
+  assert.equal(subject.submissionFloatingLabel('waiting_resume', 0), '队列已暂停');
+});
+
+test('成功五秒后胶囊变为历史入口，失败及未知任务保持可见', () => {
+  const tasks = [{ state: 'succeeded', completedAt: 1000 }, { state: 'failed' }, { state: 'unknown' }];
+  assert.equal(subject.submissionFloatingState(tasks.slice(0, 1).filter(task => subject.submissionVisible(task, 5999)), false), 'succeeded');
+  const visible = tasks.filter(task => subject.submissionVisible(task, 6000));
+  assert.deepEqual(visible.map(task => task.state), ['failed', 'unknown']);
+  assert.equal(subject.submissionFloatingState(visible, false), 'unknown');
+  assert.equal(subject.submissionFloatingLabel(subject.submissionFloatingState([], false), 0), '执行记录');
+});
 
 test('跨实例合并历史按实际完成时间倒序，早提交的重试成功记录也能排在最前', () => {
   const tasks = [{ id: 'later-submitted', position: 80, createdAt: 900, completedAt: 1000 }, { id: 'retried', position: 6, createdAt: 100, completedAt: 3000 }, { id: 'other-instance', position: 2, createdAt: 800, completedAt: 2000 }];
