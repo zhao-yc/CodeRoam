@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { BridgeError, validatePluginIds, validateThreadMentionIds } from '../../packages/protocol/contracts.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
+import { pluginPrompt } from './plugins.mjs';
+import { threadMentionPrompt } from './thread-mentions.mjs';
+import { validateMessageChoices } from '../../packages/protocol/contracts.mjs';
+import { validateSettings } from './model-settings.mjs';
 
 const WATCHER = 'message-queue';
 
-/** 队列只保存在连接服务自己的账本中；手机退出不影响已经确认入队的消息。 */
+/** 优先复用原桌面队列；旧服务账本仍保留待处理消息，手机退出不影响已确认入队内容。 */
 export class MessageQueue {
   constructor({ journal, adapter, exclusive, changed, blocked = () => false, dispatch = null }) {
     this.db = journal.db; this.adapter = adapter; this.exclusive = exclusive; this.changed = changed; this.blocked = blocked;
@@ -27,9 +31,9 @@ export class MessageQueue {
   decorate(snapshot) {
     const queuedMessages = this.rows(snapshot.threadId).map(row => {
       const payload = JSON.parse(row.payload);
-      return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error, ...(payload.plugins?.length ? { plugins: payload.plugins.map(({id,displayName}) => ({id,displayName})) } : {}), ...(payload.threadMentions?.length ? { threadMentions: payload.threadMentions.map(({id,title}) => ({id,title})) } : {}) };
+      return { id: row.id, text: payload.text, imageCount: payload.images.length, attachmentCount: payload.attachments.length, state: row.state, error: row.error, ...(this.adapter.nativeQueue?.used.has(snapshot.threadId) ? {source:row.id.startsWith('desktop-')?'desktop':'legacy'} : {}), ...(payload.plugins?.length ? { plugins: payload.plugins.map(({id,displayName}) => ({id,displayName})) } : {}), ...(payload.threadMentions?.length ? { threadMentions: payload.threadMentions.map(({id,title}) => ({id,title})) } : {}) };
     });
-    return { ...snapshot, supportsMessageQueue: true, supportsQueueEditing: true, queuedMessages };
+    return { ...snapshot, supportsMessageQueue: true, supportsQueueEditing: true, queuedMessages: [...snapshot.queuedMessages ?? [], ...queuedMessages] };
   }
 
   async snapshot(threadId) {
@@ -48,8 +52,11 @@ export class MessageQueue {
       if (this.rows(threadId).length >= 20) throw new BridgeError('QUEUE_FULL', '最多排队20条消息，请先处理已有消息');
       const snapshot = await this.snapshot(threadId);
       if (snapshot.readOnly) throw new BridgeError('HISTORY_READ_ONLY', '请先连接原桌面聊天再排队');
+      const choices = params.choices === undefined ? {} : validateMessageChoices(params.choices);
+      // 原生权限选择必须由原生完整流程处理；显式权限选项沿用已验证的旧队列，不提前改变当前任务。
+      if (!snapshot.supportsNativeMessageQueue && this.adapter.nativeQueue?.used.has(threadId)) throw new BridgeError('NATIVE_QUEUE_UNAVAILABLE','电脑队列连接中断，消息未转入其他队列，请同步后重试');
       // 排队偏好只约束忙时跟进；以电脑最新事实判断，空闲且无待发消息时直接开始一轮。
-      const hasBacklog = this.rows(threadId).some(row => row.state !== 'editing');
+      const hasBacklog = this.rows(threadId).some(row => row.state !== 'editing') || (snapshot.queuedMessages?.length ?? 0) > 0;
       const waitingForInput = snapshot.approvals?.length || snapshot.pendingPlan || snapshot.questionGroups?.some(group => group.state === 'pending' && group.kind === 'native');
       if (!hasBacklog && snapshot.status === 'idle' && !snapshot.activeTurnId && !waitingForInput) {
         try {
@@ -60,6 +67,10 @@ export class MessageQueue {
           // 仅明确的轮次竞争可安全回队；超时或结果未知不能再次保存正文造成重复投递。
           if (error.code !== 'TURN_ACTIVE' || error.outcomeUnknown) { this.release(threadId); throw error; }
         }
+      }
+      if (snapshot.supportsNativeMessageQueue && choices.permissionMode === undefined) {
+        try { return await this.enqueueNative(params, commandId, deviceId, snapshot, choices); }
+        finally { this.release(threadId); }
       }
       let selection, mentions;
       try {
@@ -76,6 +87,15 @@ export class MessageQueue {
       return { ok: true, queued: true, queueId: id };
     }
     const row = this.rows(threadId).find(item => item.id === params.queueId);
+    if (!row && params.queueId?.startsWith('desktop-') && this.adapter.nativeQueue) {
+      const result = await this.adapter.nativeQueue.operate(queueAction, params, commandId, deviceId);
+      if (result.edited) {
+        // 原生撤回结果落入私有账本后才回传手机；回执丢失或手机退出仍可继续恢复草稿。
+        this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'editing')").run(params.queueId, threadId, deviceId, commandId, JSON.stringify({threadId,...result.draft}));
+        this.changed(threadId);
+      }
+      return {...result,queueId:params.queueId};
+    }
     if (!row) throw new BridgeError('QUEUE_CHANGED', '这条排队消息已处理，请重新同步');
     if (row.device_id !== deviceId) throw new BridgeError('QUEUE_FORBIDDEN', '只能处理本设备发送的排队消息');
     if (queueAction === 'edit') return this.withdrawForEdit(row);
@@ -87,6 +107,33 @@ export class MessageQueue {
     const snapshot = await this.snapshot(threadId);
     if (!snapshot.activeTurnId || snapshot.activeTurnId !== params.expectedTurnId) throw new BridgeError('STALE_TURN', '当前任务已经变化，消息仍保留在队列中');
     return this.deliver(row, 'turn.steer', snapshot.activeTurnId);
+  }
+
+  /** 所有文件及引用都在电脑端解析，调用原生逐条追加接口，绝不回写整份队列。 */
+  async enqueueNative(params, commandId, deviceId, snapshot, choices) {
+    const {threadId}=params, entry=this.adapter.subscribed(threadId,deviceId), owner={...entry.owner};
+    const selection=params.pluginIds?.length?await this.adapter.selectPlugins(threadId,deviceId,params.pluginIds):null;
+    const mentions=params.threadMentionIds?.length?await this.adapter.threadMentions?.select(params.threadMentionIds,threadId,deviceId):null;
+    if(params.threadMentionIds?.length&&!mentions)throw new BridgeError('THREAD_MENTIONS_UNAVAILABLE','当前电脑暂不支持聊天引用');
+    const prompt=threadMentionPrompt(pluginPrompt(params.text??'',selection?.plugins??[]),mentions);
+    const cwd=entry.state.cwd??entry.state.environments?.[0]?.cwd;
+    const images=validateImages(params.images);
+    let submissionOptions;
+    const changes=Object.fromEntries(['model','effort','serviceTier','mode'].filter(key=>choices[key]!==undefined).map(key=>[key,choices[key]]));
+    if(Object.keys(changes).length) {
+      const current=await this.adapter.readSettings(threadId,deviceId);
+      const {threadSettings,selected}=validateSettings(changes,current.settings,current.models,entry.state.latestCollaborationMode);
+      if(images.length&&current.models.find(model=>model.id===selected.model)?.supportsImages===false)throw new BridgeError('IMAGES_UNSUPPORTED','当前模型不支持图片，请切换模型');
+      submissionOptions={executionHostId:owner.hostId,collaborationMode:threadSettings.collaborationMode,serviceTier:threadSettings.serviceTier??null};
+    }
+    selection?.check();mentions?.check();
+    const files=this.adapter.attachments.materialize(deviceId,threadId,params.attachments,cwd,images.length);
+    const message={id:commandId,text:prompt,cwd,createdAt:Date.now(),context:{prompt:prompt+(mentions?.contextText??''),addedFiles:[],fileAttachments:files.map(file=>({label:file.label,path:file.path,fsPath:file.path})),imageAttachments:images.map((src,index)=>({id:commandId+':image:'+index,src})),ideContext:null,workspaceRoots:[cwd],...(mentions?.references?.length&&mentions.mode!=='savedContext'?{threadReferences:mentions.references}:{})},...(submissionOptions?{submissionOptions}:{})};
+    selection?.check();mentions?.check();
+    const current=this.adapter.subscribed(threadId,deviceId);
+    if(current!==entry||current.owner.clientId!==owner.clientId||current.owner.hostId!==owner.hostId)throw new BridgeError('OWNER_UNAVAILABLE','电脑聊天归属已变化，请重新同步');
+    const result=await this.adapter.nativeQueue.operate('enqueue',params,commandId,deviceId,message);
+    this.changed(threadId);return result;
   }
 
   /** 先停止自动投递，再回传完整草稿；手机确认恢复前保留可再次读取的撤回记录。 */

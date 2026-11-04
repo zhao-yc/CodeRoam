@@ -11,6 +11,7 @@ import { applyPatches, normalizeConversation } from './conversation.mjs';
 import { formatQuestionReply, validateQuestionAnswers, questionCounts } from './questions.mjs';
 import { DesktopNavigation } from './desktop-navigation.mjs';
 import { NativeDesktop } from './native-desktop.mjs';
+import { NativeMessageQueue } from './native-message-queue.mjs';
 import { openDesktopThread } from './desktop-launcher.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
 import { resetPlanAfterSend, preparePlanForSend } from './plan-reset.mjs';
@@ -27,7 +28,7 @@ import { usesWindowsIpcWithoutPage, supportsDesktopIpcNewConversation } from './
 
 /** 作为现有桌面会话的跟随者操作，所有执行与审批仍由原桌面所有者完成。 */
 export class DesktopAdapter extends EventEmitter {
-  constructor({ client = new IpcClient(), native=null, index, hosts = ['local','durable'], snapshotTimeoutMs = 8000, activateThread=openDesktopThread, loadTimeoutMs=10000, modelCatalog=new ModelCatalog(), attachments=new AttachmentStore(), goalController=new DesktopGoalController(), permissionCatalog=null } = {}) {
+  constructor({ client = new IpcClient(), native=null, nativeQueue=null, index, hosts = ['local','durable'], snapshotTimeoutMs = 8000, activateThread=openDesktopThread, loadTimeoutMs=10000, modelCatalog=new ModelCatalog(), attachments=new AttachmentStore(), goalController=new DesktopGoalController(), permissionCatalog=null } = {}) {
     super();
     this.client=client; this.index=index; this.hosts=hosts; this.snapshotTimeoutMs=snapshotTimeoutMs;
     this.modelCatalog=modelCatalog;this.attachments=attachments;
@@ -35,6 +36,7 @@ export class DesktopAdapter extends EventEmitter {
     this.conversations=new Map(); this.connecting=null; this.reconnectTimer=null; this.stopped=false;
     this.activityHistory=new Map();this.backgroundRotation={startedAt:0,count:0};
     this.native=native??(client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null,ipcSocketPath:client.socketPath}):null);
+    this.nativeQueue=nativeQueue??(client instanceof IpcClient?new NativeMessageQueue({adapter:this}):null);
     this.native?.on('changed',ids=>{if(this.stopped)return;for(const id of ids){const entry=this.conversations.get(id);if(entry?.state)this.emit('conversation',this.snapshot(entry.state));else this.emit('readState',{threadId:id,hasUnreadTurn:this.native.unread.get(id)});}});
     this.activateThread=(id,options)=>activateThread(id,{...options,nativeApi:this.native??undefined});this.loadTimeoutMs=loadTimeoutMs;this.loadingThreads=new Map();this.navigation=new DesktopNavigation();
     client.on('broadcast', message => this.onBroadcast(message));
@@ -207,15 +209,23 @@ export class DesktopAdapter extends EventEmitter {
       }
       catch(error) { if(this.conversations.get(threadId)===entry&&(!navigation||this.navigation.current===navigation||this.navigation.current?.threadId!==threadId)) this.unwatch(threadId,deviceId); throw error; }
       entry.owner=discovered;
-      if(entry.owner?.clientId!==previous?.clientId){entry.state=null;entry.revision=null;}
+      if(entry.owner?.clientId!==previous?.clientId||entry.owner?.hostId!==previous?.hostId){entry.state=null;entry.revision=null;this.nativeQueue?.forget(threadId);}
       if(!entry.owner) { this.unwatch(threadId,deviceId); throw new BridgeError('HISTORY_READ_ONLY','请先点击继续此聊天，加载完成后再操作'); }
     }
-    if(entry.state&&!fresh) return this.snapshot(entry.state);
+    if(entry.state&&!fresh) return this.queueSnapshot(entry,threadId,deviceId);
     const snapshot=new Promise((resolve,reject)=>{
       const waiter={resolve,reject}; waiter.timer=setTimeout(()=>{entry.waiters=entry.waiters.filter(value=>value!==waiter);reject(new BridgeError('SNAPSHOT_TIMEOUT','桌面聊天快照读取超时'));},Math.min(snapshotTimeoutMs,Math.max(1,requestDeadline-Date.now())));entry.waiters.push(waiter);
     });
     this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:true},1,[entry.owner.clientId]);
-    return snapshot;
+    await snapshot;
+    return this.queueSnapshot(entry,threadId,deviceId);
+  }
+
+  /** 详情首次返回前补齐原生队列；后台列表及缓存跟随不扫描页面通道。 */
+  async queueSnapshot(entry,threadId,deviceId) {
+    if(!internalWatcher(deviceId)&&!deviceId.startsWith('status:')&&!deviceId.startsWith('submission:'))await this.nativeQueue?.refresh(threadId,deviceId);
+    if(this.conversations.get(threadId)!==entry||!entry.state)throw new BridgeError('SUBSCRIPTION_CANCELED','聊天同步已取消');
+    return this.snapshot(entry.state);
   }
 
   unwatch(threadId,deviceId) {
@@ -228,7 +238,7 @@ export class DesktopAdapter extends EventEmitter {
         // 旧所有者换代后也必须释放本地状态，定向退订只作尽力通知。
         try { this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:false},1,[entry.owner.clientId]); } catch { }
       }
-      clearTimeout(entry.publishTimer); this.conversations.delete(threadId);
+      clearTimeout(entry.publishTimer); this.conversations.delete(threadId);this.nativeQueue?.forget(threadId);
     }
     return {ok:true};
   }
@@ -336,7 +346,7 @@ export class DesktopAdapter extends EventEmitter {
   get supportsFileReports() { return this.nativeFileReportAvailable?.()??(process.platform==='win32'&&!usesWindowsIpcWithoutPage(this.client.instance)); }
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {
-    const snapshot={...recentConversationPage(normalizeConversation(state,{...RECENT_CONVERSATION_OPTIONS,...options})),supportsReadState:this.native?.platform==='win32',supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
+    const snapshot={...recentConversationPage(normalizeConversation(state,{...RECENT_CONVERSATION_OPTIONS,...options})),...this.nativeQueue?.snapshot(state.id),supportsReadState:this.native?.platform==='win32',supportsThreadMentions:this.threadMentions?.supported===true,supportsFileReports:this.supportsFileReports,supportsComposerPrediction:process.platform==='win32',predictionTurnId:predictionTurnId(state),supportsGoalControl:this.goalController.available&&Object.hasOwn(state,'threadGoal')};
     // 侧边栏保存的未读独立于流式快照，不能用快照默认 false 提前清理桌面蓝点。
     if(this.native){if(this.native.unread.has(state.id))snapshot.hasUnreadTurn=this.native.unread.get(state.id);else delete snapshot.hasUnreadTurn;}
     const entry=this.conversations.get(state.id);
@@ -523,7 +533,7 @@ export class DesktopAdapter extends EventEmitter {
   }
 
   close() {
-    this.stopped=true;this.navigation.close();this.native?.close();clearTimeout(this.reconnectTimer);
+    this.stopped=true;this.navigation.close();this.nativeQueue?.close();this.native?.close();clearTimeout(this.reconnectTimer);
     for(const [threadId,entry] of this.conversations) { for(const waiter of entry.waiters) {clearTimeout(waiter.timer);waiter.reject(new Error('连接服务已停止'));} if(entry.owner&&this.client.socket?.writable)this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:threadId,following:false},1,[entry.owner.clientId]);clearTimeout(entry.publishTimer); }
     this.conversations.clear();this.client.close();
   }

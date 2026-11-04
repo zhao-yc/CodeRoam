@@ -1,9 +1,11 @@
 import type { SelectedPlugin } from './plugins.uts'
 import type { SelectedThreadMention } from './thread-mentions.uts'
-export type QueuedMessage = { id: string, text: string, imageCount: number, attachmentCount: number, state: string, error: string, plugins?: SelectedPlugin[], threadMentions?: SelectedThreadMention[] }
+// 来源和操作能力缺省时沿用旧队列行为，原生附件仍只提供数量，不传本机路径或附件正文。
+export type QueuedMessage = { id: string, text: string, imageCount: number, attachmentCount: number, state: string, error: string, plugins?: SelectedPlugin[], threadMentions?: SelectedThreadMention[], source?: string, canEdit?: boolean, canCancel?: boolean, canSteer?: boolean }
 
 // 排队和已执行消息分开展示，不能把成功入队误报成已经送达模型。
 export function queuedMessageLabel(state: string): string {
+  if (state == 'paused') return '排队已暂停'
   if (state == 'editing') return '已撤回，可继续编辑'
   if (state == 'sending') return '正在发送…'
   if (state == 'dispatched') return '正在确认任务开始…'
