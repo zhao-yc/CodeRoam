@@ -13,7 +13,8 @@ const props = defineProps<{ state: string }>()
 // 使用形状区分状态，文字保留为无障碍名称和 Web 悬停提示。
 const label = computed((): string => submissionStateLabel(props.state))
 const icon = computed((): string => props.state == 'succeeded' ? 'check' : props.state == 'failed' ? 'alert-circle' : props.state == 'queued' ? 'clock' : props.state == 'waiting_resume' ? 'hand-stop' : props.state == 'canceled' || props.state == 'cancelled' ? 'close' : props.state == 'skipped' ? 'chevron-right' : 'alert-triangle')
-const tone = computed((): string => props.state == 'failed' || props.state == 'unknown' ? 'warning' : props.state == 'succeeded' ? 'dark' : 'muted')
+// 语义颜色随 PNG 一起打包，原生端和 Web 共用；形状和文字提示继续独立表达状态。
+const tone = computed((): string => props.state == 'succeeded' ? 'success' : props.state == 'failed' ? 'danger' : props.state == 'queued' ? 'info' : props.state == 'waiting_resume' ? 'paused' : props.state == 'skipped' ? 'skipped' : props.state == 'canceled' || props.state == 'cancelled' ? 'muted' : 'warning')
 </script>
 
 <style>
