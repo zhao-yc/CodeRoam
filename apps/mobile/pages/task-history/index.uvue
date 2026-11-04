@@ -53,13 +53,11 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import SubmissionTaskStatus from '../../components/submission-task-status/submission-task-status.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
-import { bridge, connection, Computer, computerIcon as resolveComputerIcon, ThreadSummary } from '../../services/bridge.uts'
+import { bridge, connection, Computer, computerIcon as resolveComputerIcon } from '../../services/bridge.uts'
 import { SubmissionTask, submissionStageDetail, submissionInstance } from '../../services/submission-task-state.uts'
 import { readSubmissionTasks, controlSubmissionTask } from '../../services/submission-tasks.uts'
 import { submissionHistoryOrder } from '../../services/submission-task-presentation.uts'
 type HistoryRow = { hostId: string, task: SubmissionTask }
-type HistoryChatTitle = { hostId: string, threadId: string, title: string }
-const chatTitles = ref<HistoryChatTitle[]>([])
 type HistoryCursor = { hostId: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
 const category = ref('submission')
@@ -81,34 +79,11 @@ const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全
 const selectedHostIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == hostId.value) ?? null))
 const selectedStateLabel = computed((): string => stateLabels.value[stateValues.value.indexOf(state.value)] ?? '全部状态')
 const hasMore = computed((): boolean => cursors.value.some((cursor: HistoryCursor): boolean => cursor.more))
-// 标题按电脑和聊天编号共同匹配，避免多实例同编号串到其他聊天。
+// 聊天标题随执行记录持久化，历史页不再额外查询普通或归档列表。
 function chatTitle(id: string, task: SubmissionTask): string {
-  const title = chatTitles.value.find((item: HistoryChatTitle): boolean => item.hostId == id && item.threadId == task.threadId)?.title ?? ''
+  const title = task.threadTitle ?? ''
   if (title.length > 0) return title
-  return task.kind == 'newConversation' ? task.title : '标题暂不可用'
-}
-// 只读查询普通与归档列表，不打开聊天、不切换电脑，也不加载消息正文。
-async function loadChatTitles(id: string, revision: number, namespace: string) {
-  const missing = (): boolean => rows.value.some((row: HistoryRow): boolean => row.hostId == id && row.task.threadId.length > 0 && !chatTitles.value.some((item: HistoryChatTitle): boolean => item.hostId == id && item.threadId == row.task.threadId))
-  for (const archived of [false, true]) {
-    for (let offset = 0; offset <= 10000 && missing(); offset += 100) {
-      if (revision != request || namespace != connection.cacheNamespace) return
-      try {
-        const result = await bridge.readComputerMenu(id, { archived, offset, limit: 100 })
-        if (revision != request || namespace != connection.cacheNamespace) return
-        // 旧服务若忽略归档参数，不能把普通列表误当作归档继续翻页。
-        if (archived && result.getBoolean('archived') != true) break
-        const threads = JSON.parse<ThreadSummary[]>(JSON.stringify(result['threads'] ?? [] as ThreadSummary[])) ?? [] as ThreadSummary[]
-        threads.forEach((thread: ThreadSummary) => {
-          if (thread.title.trim().length == 0) return
-          const previous = chatTitles.value.find((item: HistoryChatTitle): boolean => item.hostId == id && item.threadId == thread.id)
-          if (previous != null) previous.title = thread.title
-          else chatTitles.value.push({ hostId: id, threadId: thread.id, title: thread.title } as HistoryChatTitle)
-        })
-        if (threads.length < 100) break
-      } catch (_) { break } // 标题查询失败仍保留执行记录和打开入口，刷新时重新读取。
-    }
-  }
+  return task.kind == 'newConversation' ? task.title : '历史记录未保存标题'
 }
 function stageDetail(task: SubmissionTask): string { return submissionStageDetail(task) }
 function canResume(row: HistoryRow): boolean { const snapshot = submissionInstance(row.hostId)?.snapshot; return snapshot?.paused == true && snapshot.blockerId == row.task.id && ['failed', 'waiting_resume', 'succeeded', 'skipped', 'canceled', 'cancelled'].indexOf(row.task.state) >= 0 }
@@ -154,13 +129,12 @@ async function loadMore() {
       }
     }
     rows.value = rows.value.sort((a: HistoryRow, b: HistoryRow): number => submissionHistoryOrder(a.task, b.task))
-    for (const cursor of cursors.value) await loadChatTitles(cursor.hostId, revision, namespace)
     if (revision == request) error.value = failures.join('；')
   } catch (reason) { if (revision == request) error.value = (reason as Error).message }
   finally { if (revision == request) { loading.value = false; refreshing.value = false } }
 }
 function reload() {
-  request++; loading.value = false; error.value = ''; rows.value = [] as HistoryRow[]; chatTitles.value = [] as HistoryChatTitle[]
+  request++; loading.value = false; error.value = ''; rows.value = [] as HistoryRow[]
   cursors.value = connection.computers.filter((computer: Computer): boolean => computer.online && (hostId.value.length == 0 || computer.id == hostId.value)).map((computer: Computer): HistoryCursor => ({ hostId: computer.id, before: 0, more: true } as HistoryCursor))
   if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
   loadMore()

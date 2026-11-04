@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 
 export type SubmissionStep = { name: string, state: string, at?: number }
-export type SubmissionTask = { id: string, position: number, kind: string, method: string, title: string, threadId: string, projectId: string, state: string, stage: string, error: string, createdAt: number, startedAt: number, completedAt: number, updatedAt: number, dismissed: boolean, steps: SubmissionStep[], result?: UTSJSONObject, localOnly?: boolean, historyExpired?: boolean, attempt?: number, canRetry?: boolean }
+export type SubmissionTask = { id: string, position: number, kind: string, method: string, title: string, threadTitle?: string, threadId: string, projectId: string, state: string, stage: string, error: string, createdAt: number, startedAt: number, completedAt: number, updatedAt: number, dismissed: boolean, steps: SubmissionStep[], result?: UTSJSONObject, localOnly?: boolean, historyExpired?: boolean, attempt?: number, canRetry?: boolean }
 export type SubmissionSnapshot = { supportsTaskQueue: boolean, revision: number, paused: boolean, blockerId: string, tasks: SubmissionTask[], now: number, nextCursor?: number }
 export type InstanceSubmissionTasks = { hostId: string, generation: string, supported: boolean, loading: boolean, error: string, snapshot: SubmissionSnapshot | null, clockOffset: number }
 export type AcceptedSubmission = { revision: number, hostId: string, taskId: string, threadId: string, method: string }

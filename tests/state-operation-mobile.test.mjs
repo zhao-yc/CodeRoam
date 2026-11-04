@@ -16,14 +16,14 @@ test('执行记录按实例隔离错误，失败实例不继续翻页，成功�
     readSubmissionTasks: async (hostId, params) => {
       calls.push({ hostId, params });
       if (hostId === 'legacy-host') throw Error('请更新连接服务');
-      return { tasks: [{ id: 'synthetic-operation', kind: 'operation' }], getBoolean: () => true, getNumber: () => 0 };
+      return { tasks: [{ id: 'synthetic-operation', kind: 'operation', threadTitle: '持久化标题' }], getBoolean: () => true, getNumber: () => 0 };
     },
     loadChatTitles: async hostId => { titles.push(hostId); },
   });
   vm.runInContext(stripTypeScriptTypes(body, { mode: 'transform' }) + '\nglobalThis.load=loadMore;', context);
   await context.load();
   assert.equal(calls.length, 2); assert.equal(calls[1].params.category, 'operation');
-  assert.equal(rows.value.length, 1); assert.equal(rows.value[0].hostId, 'current-host');
-  assert.ok(titles.includes('current-host')); assert.match(error.value, /legacy-host：请更新连接服务/);
+  assert.equal(rows.value[0].task.threadTitle, '持久化标题'); assert.equal(rows.value.length, 1); assert.equal(rows.value[0].hostId, 'current-host');
+  assert.equal(titles.length, 0); assert.match(error.value, /legacy-host：请更新连接服务/);
   assert.equal(cursors.value[0].more, false); assert.equal(loading.value, false);
 });
