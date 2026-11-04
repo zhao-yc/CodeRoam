@@ -67,8 +67,8 @@ button::after { border: none; }
 .chat-workspace.workspace-wide #home-page :is(.list-title-text, .thread-title, .search-input, .empty-title) { color: var(--list-ink); }
 .chat-workspace.workspace-wide #home-page :is(.tab-label, .group-title, .thread-computer, .thread-project, .thread-time, .description) { color: var(--list-muted); }
 .chat-workspace.workspace-wide #home-page .search-field { background-color: #ffffff; border-color: var(--list-line); }
-.chat-workspace.workspace-wide #home-page .thread { border-bottom-color: var(--list-line); }
-.chat-workspace.workspace-wide #home-page .thread-selected { background-color: var(--list-selection); border-bottom-color: var(--list-selection); }
+.chat-workspace.workspace-wide #home-page .thread { border-bottom-width: 0; }
+.chat-workspace.workspace-wide #home-page .thread-selected { background-color: var(--list-selection); }
 .chat-workspace.workspace-wide #home-page :is(.computer-tab-selected, .button-secondary, .thread-question) { background-color: var(--list-selection); }
 .chat-workspace.workspace-wide #home-page :is(.computer-tab-selected .tab-label, .thread-question) { color: var(--list-accent); }
 .chat-workspace.workspace-wide #home-page :is(.list-new-button, .button-primary, .computer-unread-dot, .thread-status .unread-dot) { background-color: var(--list-accent); }
