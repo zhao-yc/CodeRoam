@@ -3,8 +3,8 @@
     <view class="history-header"><view class="history-back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回上一页" @click="goBack"></button></view><text class="history-heading">执行记录</text></view>
     <view class="history-filters">
       <!-- 按文字和图标的整体宽度居中，避免按钮默认布局和字符箭头基线造成偏移。 -->
-      <view class="history-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
-        <view class="history-filter-content"><text class="history-filter-label" :class="hostId.length > 0 ? 'history-filter-label-active' : ''">{{ selectedHostLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
+      <view class="history-filter history-host-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
+        <view class="history-filter-content"><view v-if="hostId.length > 0" class="history-selected-icon"><app-icon :name="selectedHostIcon" tone="muted" :size="16" /></view><text class="history-filter-label" :class="hostId.length > 0 ? 'history-filter-label-active' : ''">{{ selectedHostLabel }}</text></view><view class="history-host-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view>
         <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选实例" @click="chooseHost"></button>
       </view>
       <view class="history-filter history-state-filter" :class="state.length > 0 ? 'history-filter-active' : ''">
@@ -71,6 +71,8 @@ watch((): string => connection.connected.toString() + ':' + connection.cacheName
 const stateValues = ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped']
 const stateLabels = ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过']
 const selectedHostLabel = computed((): string => hostId.value.length == 0 ? '全部实例' : hostName(hostId.value))
+// 与选择列表共用实例图标映射，连接设置更新图标时筛选框同步更新。
+const selectedHostIcon = computed((): string => computerIcon(connection.computers.find((computer: Computer): boolean => computer.id == hostId.value) ?? null))
 const selectedStateLabel = computed((): string => stateLabels[stateValues.indexOf(state.value)] ?? '全部状态')
 const hasMore = computed((): boolean => cursors.value.some((cursor: HistoryCursor): boolean => cursor.more))
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原实例' }
@@ -194,6 +196,10 @@ onUnload(() => { closeHostPicker(); pageVisible.value = false; request++; refres
 .action-pressed { background-color: rgba(69, 70, 189, 0.07); }
 .history-filters { flex-direction: row; align-items: center; padding: 12px 16px; flex-shrink: 0; }
 .history-filter { position: relative; flex: 1; min-width: 0; height: 44px; margin: 0 8px 0 0; padding: 0 10px; flex-direction: row; align-items: center; justify-content: center; border-width: 1px; border-style: solid; border-color: #e4e7ef; border-radius: 12px; background-color: #f7f8fc; overflow: hidden; }
+/* 左右对称预留箭头空间，图标和名称的组合独立居中，长名称只压缩文字。 */
+.history-host-filter { padding: 0 30px; }
+.history-selected-icon { width: 16px; height: 20px; margin-right: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
+.history-host-chevron { position: absolute; right: 10px; top: 0; bottom: 0; width: 14px; align-items: center; justify-content: center; }
 .history-filter-content { flex-direction: row; align-items: center; justify-content: center; max-width: 100%; min-width: 0; height: 20px; }
 .history-filter-label { flex-shrink: 1; min-width: 0; height: 20px; font-size: 13px; line-height: 20px; text-align: center; color: #596479; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-filter-chevron { width: 14px; height: 20px; margin-left: 6px; flex-shrink: 0; align-items: center; justify-content: center; }
