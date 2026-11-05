@@ -12,5 +12,5 @@
 
 - 与最新主分支整合后的完整源码：`npm test`，386 项通过，0 失败、0 跳过。
 - `npm run check:privacy` 通过；提交、推送前继续扫描实际暂存内容及全部待推送历史。
-- HBuilderX 5.34 Web 编译和导出通过，当时使用隔离验证工程。当前名称下的命令形式：`cli publish web --project <手机工程的绝对路径> --webTitle "码随行 CodeRoam"`。验证时公开工程保留空 AppID，验证副本仅在本机补齐已有 AppID。
+- HBuilderX 5.34 Web 编译和导出通过，当时使用隔离验证工程。当前名称下的命令形式：`cli publish web --project <手机工程的绝对路径> --webTitle "CodeRoam"`。验证时公开工程保留空 AppID，验证副本仅在本机补齐已有 AppID。
 - 本次不包含公网部署、APK 发布、真实桌面操作或 Android/iOS 真机验收。

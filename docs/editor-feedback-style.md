@@ -11,6 +11,6 @@
 - `npm run check:privacy` 通过。
 - `npm test`：342 项通过，无失败或跳过。
 - HBuilderX 5.34 Web 编译及导出成功，使用独立源码副本；公开 manifest 保持空 AppID，本机标识仅用于忽略目录中的验证副本。
-- 当前名称下的命令形式：`cli publish web --project <手机工程的绝对路径> --webTitle "码随行 CodeRoam"`。
+- 当前名称下的命令形式：`cli publish web --project <手机工程的绝对路径> --webTitle "CodeRoam"`。
 - 同一组件样式此前已通过 ego lite 模拟状态检查：390×844 连接提示与 320×640 长错误提示，禁用加号背景透明，提示位于输入框下方并自然换行；截图和日志不公开。
 - 未新增真实桌面会话、Android/iOS 真机验收、APK 或线上部署。

@@ -1,10 +1,10 @@
-# 码随行 CodeRoam
+# CodeRoam
 
 使用自己的手机连接正在运行的 Codex Windows 或 Mac 桌面会话。手机界面使用 **uni-app x / UTS / uvue**，电脑桥接复用现有桌面会话，中转通过 HTTPS 和 WSS 连接两端。
 
 这是社区维护的非官方项目，与 OpenAI 无隶属关系。仓库提供源码和自建中转方案，不提供共享账号、公共中转服务、配对凭据或签名安装包。
 
-项目统一使用「码随行 CodeRoam」作为对外名称。现有仓库地址、应用标识、配对协议、缓存键和服务目录保留原值，确保已安装版本与已有连接继续兼容；文中的 Codex 指所连接的桌面产品。
+项目统一使用「CodeRoam」作为对外名称。现有仓库地址、应用标识、配对协议、缓存键和服务目录保留原值，确保已安装版本与已有连接继续兼容；文中的 Codex 指所连接的桌面产品。
 
 ## 功能
 
@@ -50,7 +50,7 @@ node apps/bridge/cli.mjs --config .local/bridge.json
 
 ```powershell
 & $env:HBX_CLI launch web --project "$PWD/apps/mobile" --ui true
-& $env:HBX_CLI publish web --project "$PWD/apps/mobile" --webTitle '码随行 CodeRoam'
+& $env:HBX_CLI publish web --project "$PWD/apps/mobile" --webTitle 'CodeRoam'
 ```
 
 日常开发、运行和重新打包复用固定的 `apps/mobile` 工程。只有需要隔离验证或私有配置时才创建临时工程；用完后停止对应任务，从 HBuilderX 项目列表移除临时工程，并清理临时源码目录。清理前确认目录已不再使用，必要产物和私有文件已妥善保存。

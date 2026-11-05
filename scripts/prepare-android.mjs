@@ -21,6 +21,6 @@ const config={project:path.resolve('apps/mobile'),platform:'android',iscustom:fa
 const backup=path.resolve(backupRoot,new Date().toISOString().replace(/[:.]/g,'-')+'-android');fs.mkdirSync(backup,{recursive:true});
 fs.copyFileSync(certFile,path.join(backup,'codex-mobile.p12'),fs.constants.COPYFILE_EXCL);
 fs.writeFileSync(path.join(backup,'pack.json'),JSON.stringify(config,null,2),{flag:'wx',mode:0o600});
-fs.writeFileSync(path.join(backup,'备份说明.md'),'# Android 签名备份\n\n应用：码随行 CodeRoam；AppID 以自己的 manifest.json 为准；包名 org.example.codexmobile。\n\ncodex-mobile.p12 是本应用独立签名，pack.json 包含签名密码和本机绝对路径，禁止提交 Git 或上传公开存储。更换电脑后请更新 config 中 project、certfile 的绝对路径，保持同一证书才能覆盖安装更新。此证书不是 Google Play 上传密钥，也不代表已经上架。\n',{flag:'wx'});
+fs.writeFileSync(path.join(backup,'备份说明.md'),'# Android 签名备份\n\n应用：CodeRoam；AppID 以自己的 manifest.json 为准；包名 org.example.codexmobile。\n\ncodex-mobile.p12 是本应用独立签名，pack.json 包含签名密码和本机绝对路径，禁止提交 Git 或上传公开存储。更换电脑后请更新 config 中 project、certfile 的绝对路径，保持同一证书才能覆盖安装更新。此证书不是 Google Play 上传密钥，也不代表已经上架。\n',{flag:'wx'});
 fs.writeFileSync(configFile,JSON.stringify(config,null,2),{flag:'wx',mode:0o600});
 console.log(JSON.stringify({status:'Android 独立签名已生成并备份',backup}));

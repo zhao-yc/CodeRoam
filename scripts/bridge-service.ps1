@@ -98,7 +98,7 @@ if($Action -eq 'install') {
   Copy-Item -LiteralPath $binary -Destination $installed
   Copy-Item -LiteralPath (Join-Path $local 'service.json') -Destination (Join-Path $systemRoot 'service.json')
   foreach($protectedFile in @($installed,(Join-Path $systemRoot 'service.json'))){$fileAcl=Get-Acl -LiteralPath $protectedFile;$fileAcl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')));Set-Acl -LiteralPath $protectedFile -AclObject $fileAcl}
-  if($null -eq $existing){New-Service -Name $serviceName -DisplayName '码随行 CodeRoam 桥接托管服务' -BinaryPathName ('"'+$installed+'"') -StartupType Automatic -Description '开机启动托管器；登录后以原账号运行桥接，异常退出自动恢复，不改变 Codex 审批与沙箱。'|Out-Null}
+  if($null -eq $existing){New-Service -Name $serviceName -DisplayName 'CodeRoam 桥接托管服务' -BinaryPathName ('"'+$installed+'"') -StartupType Automatic -Description '开机启动托管器；登录后以原账号运行桥接，异常退出自动恢复，不改变 Codex 审批与沙箱。'|Out-Null}
   Native-Service @('config',$serviceName,'start=','auto')
   Native-Service @('failure',$serviceName,'reset=','86400','actions=','restart/5000/restart/15000/restart/30000')
   Native-Service @('failureflag',$serviceName,'1')

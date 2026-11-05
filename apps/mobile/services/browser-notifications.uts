@@ -176,7 +176,7 @@ export async function deliverBrowserTaskNotice(notice: TaskNotice) {
 export async function testBrowserNotification() {
   refreshCapability()
   if (!browserNotifications.enabled || !browserNotifications.ready || browserNotifications.permission != 'granted') throw new Error('请先开启浏览器通知并允许权限')
-  await workerRequest({ type: 'codex-notice-show', tag: 'codex-mobile-test-' + crypto.randomUUID(), title: '码随行 CodeRoam 通知测试', body: '浏览器通知已就绪，查看其他页面时也可接收任务提醒。', test: true })
+  await workerRequest({ type: 'codex-notice-show', tag: 'codex-mobile-test-' + crypto.randomUUID(), title: 'CodeRoam 通知测试', body: '浏览器通知已就绪，查看其他页面时也可接收任务提醒。', test: true })
 }
 
 export function browserNotificationLabel(): string {

@@ -6,9 +6,9 @@
  <uses-permission android:name="android.permission.CAMERA" tools:node="remove" />
  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
- <application android:name="io.dcloud.uniapp.UniApplication" android:label="码随行 CodeRoam" android:allowBackup="false" tools:replace="android:allowBackup" android:supportsRtl="true">
+ <application android:name="io.dcloud.uniapp.UniApplication" android:label="CodeRoam" android:allowBackup="false" tools:replace="android:allowBackup" android:supportsRtl="true">
  <meta-data android:name="DCLOUD_UNI_APPID" android:value="__UNI__0000000" />
- <activity android:name="io.dcloud.uniapp.UniAppActivity" android:exported="true" android:label="码随行 CodeRoam" android:screenOrientation="portrait" android:theme="@style/UniAppX.Activity.DefaultTheme" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|keyboard|keyboardHidden|smallestScreenSize|screenLayout|screenSize|mcc|mnc|fontScale|navigation|uiMode" tools:replace="android:label,android:exported,android:theme,android:configChanges,android:windowSoftInputMode,android:screenOrientation">
+ <activity android:name="io.dcloud.uniapp.UniAppActivity" android:exported="true" android:label="CodeRoam" android:screenOrientation="portrait" android:theme="@style/UniAppX.Activity.DefaultTheme" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|keyboard|keyboardHidden|smallestScreenSize|screenLayout|screenSize|mcc|mnc|fontScale|navigation|uiMode" tools:replace="android:label,android:exported,android:theme,android:configChanges,android:windowSoftInputMode,android:screenOrientation">
 
  </activity>
  <activity android:name="org.example.codexmobile.MainActivity" android:exported="true" android:theme="@style/Theme.AppCompat.Light.NoActionBar">

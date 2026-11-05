@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "码随行 CodeRoam 电脑连接服务管理客户端",
+  "description": "CodeRoam 电脑连接服务管理客户端",
   "author": { "name": "zhao-yc", "email": "zhao-yc@users.noreply.github.com" },
   "license": "MIT",
   "main": "electron/main.mjs",

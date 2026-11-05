@@ -28,7 +28,7 @@
 
 - `npm run check:privacy`、`npm run check:privacy:staged` 通过。
 - `npm test`：365 项通过，零失败、零跳过。
-- HBuilderX 5.34.2026102909：Web 编译及导出成功，当时使用验证副本。当前名称下的命令形式：`cli publish web --project <手机工程的绝对路径> --webTitle "码随行 CodeRoam"`。
+- HBuilderX 5.34.2026102909：Web 编译及导出成功，当时使用验证副本。当前名称下的命令形式：`cli publish web --project <手机工程的绝对路径> --webTitle "CodeRoam"`。
 - DCloud 要求编译账号具有有效 AppID，因此仅在 Git 忽略的本机验证副本使用已有 AppID；公开 manifest 仍保持空值。验证日志与产物不提交。
 - 保留对历史补页、报告折叠、执行详情、草稿、页面返回和注释面板清理的回归覆盖。
 - 本轮未操作真实桌面会话，未部署公网，未生成 APK，未新增 Android/iOS 真机验收。编译和模拟测试不能替代这些验收。
