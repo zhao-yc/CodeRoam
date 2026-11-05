@@ -136,8 +136,11 @@ function onNewConversationBusy(value: boolean) { creating.value = value }
 // 入队只返回列表，不由迟到的执行结果抢走用户正在查看的聊天。
 function onConversationQueued() {
   creating.value = false; switchRevision++; newReady.value = false
-  if (props.detailRoute || props.initialTarget != null) { uni.reLaunch({ url: '/pages/index/index' }); return }
+  // 提交仍在后台进行，返回后的提示不能提前宣称电脑已接收或执行成功。
+  const showSubmissionNotice = (): void => { uni.showToast({ title: '正在提交新聊天，可在执行记录中查看进度', icon: 'none', duration: 3000 }) }
+  if (props.detailRoute || props.initialTarget != null) { uni.reLaunch({ url: '/pages/index/index', success: () => { showSubmissionNotice() } }); return }
   selected.value = null; detailMounted.value = false; mode.value = 'list'
+  nextTick(showSubmissionNotice)
 }
 function onConversationCreated(id: string): Promise<boolean> {
   creating.value = false
