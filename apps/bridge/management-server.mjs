@@ -14,6 +14,9 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 export function readManagementLogs(file, limit = 100) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw fail('日志条数须为 1 到 200', 'MANAGEMENT_REQUEST_INVALID');
   const names = {supervisor_started: '守护进程已启动', supervisor_stopping: '守护进程正在停止', bridge_spawned: '桥接进程已启动', bridge_started: '桥接程序开始运行', bridge_observed_exit: '桥接进程已退出', bridge_exit: '桥接程序已退出', bridge_restart_scheduled: '已安排恢复桥接', bridge_spawn_failed: '桥接进程启动失败', bridge_fatal: '桥接进程出现异常', management_restart_requested: '已接收管理端重启请求', management_restart_rejected: '管理端重启请求未执行'};
+  names.management_start_requested = '已接收管理端启动请求';
+  names.management_stop_requested = '已接收管理端停止请求';
+  names.management_stop_rejected = '管理端停止请求未执行';
   let descriptor;
   try {
     const info = fs.lstatSync(file); if (!info.isFile() || info.isSymbolicLink()) return {entries: []};
@@ -45,7 +48,7 @@ function localAddress() {
 }
 
 /** 固定 worker 的本机能力接口，短连接一条请求，令牌仅在私有端点文件中存放。 */
-export async function startManagementServer({worker, workerConfigPath = null, status, restart, setBackgroundSync, setStartup}) {
+export async function startManagementServer({worker, workerConfigPath = null, status, restart, startBridge, stopBridge, setBackgroundSync, setStartup}) {
   const address = localAddress(), token = randomBytes(32).toString('hex'), identity = managementWorkerIdentity(worker);
   const revision = workerConfigPath ? createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') : null;
   const file = path.join(worker.runDirectory, 'management.json'), sockets = new Set(); let closed = false;
@@ -55,7 +58,7 @@ export async function startManagementServer({worker, workerConfigPath = null, st
   const dispatch = async (method, params, socket) => {
     current();
     if (!object(params)) throw fail('管理操作参数无效', 'MANAGEMENT_REQUEST_INVALID');
-    if (['status', 'config.read', 'service.restart'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
+    if (['status', 'config.read', 'service.restart', 'service.start', 'service.stop'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
     if (method === 'status') return status();
     if (method === 'config.read') return readManagedConfig(worker.bridgeConfig);
     if (method === 'config.save') {
@@ -67,6 +70,8 @@ export async function startManagementServer({worker, workerConfigPath = null, st
       return readManagementLogs(path.join(worker.logDirectory, 'lifecycle.jsonl'), params.limit ?? 100);
     }
     if (method === 'service.restart') return restart();
+    if (method === 'service.start' && startBridge) return startBridge();
+    if (method === 'service.stop' && stopBridge) return stopBridge();
     if (method === 'sync.set') {
       if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
         throw fail('后台数据同步开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');

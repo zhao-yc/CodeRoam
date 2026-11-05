@@ -114,9 +114,12 @@ test('真实托管管理重启只关闭合成子进程，保存配置要等重�
   const f=fixture(t),helper=pathToFileURL(path.resolve('apps/bridge/management-child.mjs')).href;
   const setting=pathToFileURL(path.resolve('apps/bridge/background-sync-setting.mjs')).href;
   fs.writeFileSync(f.worker.entry,`
+    import fs from 'node:fs';
     import {installManagementChild} from ${JSON.stringify(helper)};
     import {applyBackgroundSyncSetting,readBackgroundSyncSetting} from ${JSON.stringify(setting)};
-    const file='background-sync.json',agents=()=>[];
+    const file='background-sync.json';
+    const agent={setManagementDraining(){},managementIdle:()=>!fs.existsSync('synthetic-busy'),setBackgroundSyncEnabled(){}};
+    const agents=()=>[agent];
     const config={backgroundSyncEnabled:readBackgroundSyncSetting(file)};
     const timer=setInterval(()=>{},1000);
     installManagementChild({
@@ -146,4 +149,26 @@ test('真实托管管理重启只关闭合成子进程，保存配置要等重�
   assert.equal(after.backgroundSyncEnabled,false);
   assert.deepEqual(await client.request('sync.set',{enabled:true}),{backgroundSyncEnabled:true});
   assert.equal((await client.request('status')).pid,after.pid);
+
+  const busy=path.join(f.worker.projectRoot,'synthetic-busy');
+  fs.writeFileSync(busy,'');
+  await assert.rejects(client.request('service.stop'),{code:'MANAGEMENT_BUSY'});
+  assert.equal((await client.request('status')).serviceState,'running');
+  fs.unlinkSync(busy);
+  await assert.rejects(client.request('service.stop',{force:true}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  assert.deepEqual(await client.request('service.stop'),{accepted:true});
+  const stopped=await wait(async()=>{const value=await client.request('status');return value.serviceState==='stopped'?value:null;});
+  assert.equal(stopped.running,false);
+  assert.equal(stopped.connected,false);
+  assert.equal(stopped.pid,null);
+  assert.equal(stopped.supervisorPid,before.supervisorPid);
+  assert.deepEqual(await client.request('service.stop'),{accepted:true});
+  await assert.rejects(client.request('service.restart'),{code:'MANAGEMENT_NOT_READY'});
+  assert.equal((await client.request('status')).serviceState,'stopped');
+  assert.deepEqual(await client.request('service.start'),{accepted:true});
+  const resumed=await wait(async()=>{const value=await client.request('status');return value.serviceState==='running'&&value.connected?value:null;});
+  assert.notEqual(resumed.pid,after.pid);
+  assert.equal(resumed.supervisorPid,before.supervisorPid);
+  assert.deepEqual(await client.request('service.start'),{accepted:true});
+  assert.equal((await client.request('status')).pid,resumed.pid);
 });

@@ -82,6 +82,8 @@ else {
     handle('manager:set-background-sync', value => controller.request('sync.set', value));
     handle('manager:set-startup', value => controller.request('startup.set', value));
     handle('manager:restart', () => controller.request('service.restart'));
+    handle('manager:start', () => controller.request('service.start'));
+    handle('manager:stop', () => controller.request('service.stop'));
     const brand = nativeImage.createFromPath(path.join(directory, 'tray.png'));
     if (process.platform === 'darwin') app.dock.setIcon(brand);
     tray = new Tray(process.platform === 'darwin' ? brand.resize({width: 18, height: 18}) : brand);

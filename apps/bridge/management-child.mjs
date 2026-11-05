@@ -39,7 +39,7 @@ export function installManagementChild({agents, drain, status, close, setBackgro
     } catch {
       // 关闭已经开始后不能恢复部分失效的实例；退出交给原守护恢复，避免永久锁写。
       if(shuttingDown)reply(message.requestId,null,{code:'MANAGEMENT_RESTARTING',message:'关闭过程未完整确认，连接服务正在重新启动'},()=>exit(1));
-      else reply(message.requestId, null, {code: 'MANAGEMENT_BUSY', message: '手机仍有操作未完成，或服务尚未就绪；本次没有重启'});
+      else reply(message.requestId, null, {code: 'MANAGEMENT_BUSY', message: '手机仍有操作未完成，或服务尚未就绪，请稍后重试'});
     }
   };
   channel.on('message', listener);

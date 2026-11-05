@@ -14,6 +14,7 @@ const config = ref<ConfigSnapshot | null>(null)
 const logs = ref<LogEntry[]>([])
 const loading = ref(true), refreshing = ref(false), choosing = ref(false), saving = ref(false), restarting = ref(false), reloadingConfig = ref(false), configLoading = ref(false), logsLoading = ref(false)
 const changingSetting = ref<ServiceSetting | null>(null), restartPreviousPid = ref<number | null>(null)
+const changingService = ref<'start' | 'stop' | null>(null)
 const error = ref(''), statusError = ref(''), configError = ref(''), feedback = ref(''), logError = ref(''), confirmRestart = ref(false), lastUpdated = ref<Date | null>(null)
 const form = reactive({ label: '', relayUrl: '', multiInstance: true, cacheHours: 2, maxEntries: 64 })
 let timer: ReturnType<typeof setInterval> | undefined
@@ -29,12 +30,28 @@ const currentPage = computed(() => pages.find(item => item.id === page.value)!)
 const ready = computed(() => Boolean(api && context.value?.configured))
 const dirty = computed(() => config.value !== null && JSON.stringify(form) !== initialForm)
 const availableInstances = computed(() => status.value?.instances.filter(item => item.ready).length ?? 0)
-const statusLabel = computed(() => !ready.value ? '尚未连接服务' : refreshing.value && !status.value ? '正在读取状态' : !status.value?.running ? '服务未就绪' : status.value.connected ? '已连接中转' : '等待中转连接')
+const serviceState = computed(() => status.value?.serviceState)
+const statusLabel = computed(() => {
+  if (!ready.value) return '尚未连接服务'
+  if (changingService.value === 'start' || serviceState.value === 'starting') return '正在启动'
+  if (changingService.value === 'stop' || serviceState.value === 'stopping') return '正在停止'
+  if (serviceState.value === 'stopped') return '服务已停止'
+  if (refreshing.value && !status.value) return '正在读取状态'
+  if (!status.value?.running) return '服务未就绪'
+  return status.value.connected ? '已连接中转' : '等待中转连接'
+})
 const statusTone = computed(() => status.value?.running && status.value.connected ? 'online' : 'waiting')
 const latestLogs = computed(() => logs.value.slice(-5).reverse())
 const logRows = computed(() => logs.value.slice().reverse())
 const version = computed(() => context.value?.version || '—')
-const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value || changingSetting.value !== null)
+const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value || changingSetting.value !== null || changingService.value !== null)
+const serviceControlBusy = computed(() => changingService.value !== null || serviceState.value === 'starting' || serviceState.value === 'stopping')
+const serviceControlDisabled = computed(() => operationBusy.value || refreshing.value || confirmRestart.value || restartPreviousPid.value !== null || serviceControlBusy.value || !serviceState.value)
+const serviceControlLabel = computed(() => {
+  if (serviceControlBusy.value) return statusLabel.value
+  if (!serviceState.value) return status.value ? '暂不支持启停' : '等待后台就绪'
+  return serviceState.value === 'running' ? '停止服务' : '启动服务'
+})
 const serviceSettings: { key: ServiceSetting; descriptionId: string; title: string; description: string; offLabel: string }[] = [
   { key: 'backgroundSyncEnabled', descriptionId: 'background-sync-description', title: '后台数据同步', description: '暂停后仍可手动打开聊天、发送消息和处理审批。', offLabel: '已暂停' },
   { key: 'startupEnabled', descriptionId: 'startup-description', title: '开机启动', description: '', offLabel: '已关闭' },
@@ -43,7 +60,7 @@ const startupDescription = computed(() => {
   if (context.value?.platform === 'win32') return '开启后，守护随 Windows 启动，登录后启动桥接。关闭后改为手动启动，当前服务继续运行。切换时需确认 Windows 管理员授权。'
   return '开启后，守护在登录 macOS 时自动启动。关闭后，下次登录需手动启动，当前服务继续运行。'
 })
-const serviceSettingsLocked = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || !status.value?.running)
+const serviceSettingsLocked = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || serviceControlBusy.value)
 
 function serviceSettingDisabled(key: ServiceSetting): boolean {
   return serviceSettingsLocked.value || typeof status.value?.[key] !== 'boolean'
@@ -52,7 +69,7 @@ function serviceSettingDisabled(key: ServiceSetting): boolean {
 function serviceSettingLabel(key: ServiceSetting, offLabel: string): string {
   if (changingSetting.value === key) return key === 'startupEnabled' && context.value?.platform === 'win32' ? '等待 Windows 确认…' : '正在应用…'
   if (restarting.value || restartPreviousPid.value !== null) return '等待后台重启'
-  if (!status.value?.running) return '等待后台就绪'
+  if (!status.value || key === 'backgroundSyncEnabled' && !status.value.running) return '等待后台就绪'
   const enabled = status.value[key]
   if (typeof enabled !== 'boolean') return key === 'startupEnabled' ? '当前服务暂不支持' : '当前服务版本暂不支持'
   return enabled ? '已开启' : offLabel
@@ -94,7 +111,7 @@ async function loadMissingConfig(requestGeneration = generation) {
 
 // 每次选择服务都会推进代次，旧服务的异步回执不会污染新界面。
 async function refreshStatus(showFeedback = false) {
-  if (!api || !ready.value || refreshing.value || changingSetting.value !== null || restarting.value) return
+  if (!api || !ready.value || refreshing.value || changingSetting.value !== null || changingService.value !== null || restarting.value) return
   refreshing.value = true
   const requestGeneration = generation
   const request = ++statusRequest
@@ -216,6 +233,26 @@ async function reloadConfig() {
   finally { if (current(requestGeneration)) reloadingConfig.value = false }
 }
 
+// 主按钮等待守护回执，再重新读取真实进程状态。
+async function toggleService() {
+  if (!api || serviceControlDisabled.value) return
+  const requestGeneration = generation
+  const action = serviceState.value === 'running' ? 'stop' : 'start'
+  changingService.value = action
+  error.value = ''; feedback.value = ''
+  invalidateStatus()
+  try {
+    if (action === 'stop') await api.stop()
+    else await api.start()
+  } catch (reason) { if (current(requestGeneration)) error.value = message(reason) }
+  finally {
+    if (current(requestGeneration)) {
+      changingService.value = null
+      await refreshStatus()
+    }
+  }
+}
+
 // 重启由后台核验在途任务后执行；前端不停止进程，也不创建另一份桥接。
 async function restart() {
   if (!api || operationBusy.value || restartPreviousPid.value !== null || !status.value?.running) return
@@ -277,7 +314,24 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
       <section v-else-if="!ready" class="empty-state panel"><div class="empty-icon"><Icon name="folder" :size="32" /></div><h2>连接现有的后台服务</h2><p>选择守护服务使用的 <code>worker.json</code>，<br />即可查看运行状态、调整配置和读取日志。</p><button class="button primary" :disabled="loading || operationBusy" @click="chooseWorker"><Icon name="folder" :size="18" />{{ choosing ? '正在选择…' : '选择服务配置' }}<Icon name="arrow" :size="16" /></button><div class="muted-note">管理客户端连接已有守护，不会重复启动桥接进程。</div></section>
 
       <template v-else-if="page === 'overview'">
-        <section class="stat-grid" aria-label="运行摘要"><article class="stat-card"><div class="stat-caption"><span>中转连接</span><Icon name="signal" :size="18" /></div><strong class="stat-value" :class="{ 'text-online': status?.connected }">{{ status?.connected ? '已连接' : status?.running ? '连接中' : '未就绪' }}</strong><span class="stat-note"><span :class="['status-dot', statusTone]"></span>{{ status?.running ? '后台服务正在运行' : '等待后台服务就绪' }}</span></article><article class="stat-card"><div class="stat-caption"><span>可用桌面实例</span><Icon name="monitor" :size="19" /></div><strong class="stat-value">{{ status ? availableInstances : '—' }}<small v-if="status">个</small></strong><span class="stat-note">已检测 {{ status?.instances.length ?? 0 }} 个实例</span></article><article class="stat-card"><div class="stat-caption"><span>配置状态</span><Icon name="sliders" :size="18" /></div><strong class="stat-value compact" :class="{ 'text-waiting': status?.restartRequired }">{{ !status ? '待核验' : status.restartRequired ? '等待应用' : '已同步' }}</strong><span class="stat-note">{{ status?.restartRequired ? '保存的更改需要重启服务' : '按当前生效配置运行' }}</span></article></section>
+        <section class="stat-grid overview-stats" aria-label="运行摘要">
+          <article class="stat-card connection-card">
+            <div class="connection-summary">
+              <div class="stat-caption"><span>中转连接</span><Icon name="signal" :size="18" /></div>
+              <strong class="stat-value compact" :class="{ 'text-online': status?.connected && !serviceControlBusy }" role="status">{{ statusLabel }}</strong>
+              <span class="stat-note"><span :class="['status-dot', statusTone]"></span>{{ serviceState === 'stopped' ? '可随时重新启动' : status?.running ? '后台服务正在运行' : '等待后台服务就绪' }}</span>
+            </div>
+            <div class="connection-control">
+              <button class="service-power" :disabled="serviceControlDisabled" :aria-label="serviceControlLabel" :title="serviceControlLabel" @click="toggleService">
+                <span v-if="serviceControlBusy" class="button-spinner"></span>
+                <Icon v-else :name="serviceState === 'running' ? 'pause' : 'play'" :size="30" />
+              </button>
+              <span>{{ serviceControlLabel }}</span>
+            </div>
+          </article>
+          <article class="stat-card"><div class="stat-caption"><span>可用桌面实例</span><Icon name="monitor" :size="19" /></div><strong class="stat-value">{{ status ? availableInstances : '—' }}<small v-if="status">个</small></strong><span class="stat-note">已检测 {{ status?.instances.length ?? 0 }} 个实例</span></article>
+          <article class="stat-card"><div class="stat-caption"><span>配置状态</span><Icon name="sliders" :size="18" /></div><strong class="stat-value compact" :class="{ 'text-waiting': status?.restartRequired }">{{ !status ? '待核验' : status.restartRequired ? '等待应用' : '已同步' }}</strong><span class="stat-note">{{ status?.restartRequired ? '保存的更改需要重启服务' : '按当前生效配置运行' }}</span></article>
+        </section>
         <section class="panel">
           <div class="panel-heading">
             <div><h2>后台服务</h2><p>关闭管理窗口后，手机连接继续运行。</p></div>
@@ -340,6 +394,61 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
 </template>
 
 <style scoped>
+.overview-stats {
+  grid-template-columns: minmax(0, 1.7fr) repeat(2, minmax(0, 1fr));
+}
+
+.connection-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.connection-summary .stat-caption {
+  justify-content: flex-start;
+  gap: 7px;
+}
+
+.connection-control {
+  min-width: 86px;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  color: var(--primary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.service-power {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 25px;
+  background: var(--primary);
+  color: white;
+  box-shadow: 0 0 0 7px #ececfa, 0 6px 14px #4546bd35;
+  transition: transform .15s, box-shadow .15s;
+}
+
+.service-power:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 7px #e7e7fc, 0 8px 16px #4546bd45;
+}
+
+.service-power:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 9px;
+}
+
+.service-power .button-spinner {
+  width: 23px;
+  height: 23px;
+}
+
 .service-setting {
   margin: 0 23px 19px;
   padding-top: 15px;

@@ -27,6 +27,7 @@ export type RuntimeStatus = {
   configPath: string
   backgroundSyncEnabled?: boolean
   startupEnabled?: boolean
+  serviceState?: 'starting' | 'running' | 'stopping' | 'stopped'
 }
 
 export type LogEntry = { time: number | string; level: string; message: string }
@@ -40,4 +41,6 @@ export type DesktopManager = {
   setBackgroundSync(input: { enabled: boolean }): Promise<{ backgroundSyncEnabled: boolean }>
   setStartup(input: { enabled: boolean }): Promise<{ startupEnabled: boolean }>
   restart(): Promise<unknown>
+  start(): Promise<unknown>
+  stop(): Promise<unknown>
 }
