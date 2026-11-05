@@ -85,6 +85,7 @@ function mobile(){
   const code=source.slice(source.indexOf('const predictionAllowed ='),source.indexOf('function notify(message: string)'))+'\n'+source.match(/^function applyComposerEnter\(\) \{[\s\S]*?^\}/m)[0]+keyboard;
   const ref=value=>({value});const pending=[],saved=[],timers=[];let sends=0;
   const c={props:{active:true,disabled:false,get text(){return c.draft.value;},get prediction(){return c.ui?.visiblePrediction.value ?? '';}},alive:true,dismissGoal(){},imageBusy:ref(false),filesReady:ref(true),send:()=>{sends++;},ref,computed:fn=>({get value(){return fn();}}),pageVisible:ref(true),canWrite:ref(true),goalHostOnline:ref(true),connection:{epoch:'e',subscriptionRevision:1,snapshot:{supportsComposerPrediction:true,predictionTurnId:'turn-1'}},activeTurnId:ref(''),currentTaskState:ref('idle'),draft:ref(''),draftPlugins:ref([]),draftMentions:ref([]),mentionOpen:ref(false),draftImages:ref([]),draftFiles:ref([]),pendingQuestionCount:ref(0),approvalCount:ref(0),pageHostId:ref('host'),pageThreadId:ref('thread-1'),predictionText:ref(''),predictionFocus:ref(false),inputFocused:ref(false),composerBlurTimer:0,pageAlive:true,predictionRevision:0,predictionTimer:0,predictionExpiryTimer:0,predictionDeadline:0,Date,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},watch(){},onUnload(){},nextTick:fn=>fn(),saveDraft:(host,thread,text)=>{saved.push({host,thread,text});c.draft.value=text;},bridge:{request:(method,params)=>{assert.equal(method,'thread.prediction.read');return new Promise(resolve=>pending.push(resolve));}}};
+  c.pendingQuestionGroups=ref([]);
   c.emit=event=>{
     if(event==='submit')c.ui.applyComposerEnter();
     if(event==='focus')c.ui.onComposerFocus();
@@ -101,6 +102,21 @@ function mobile(){
 }
 test('手机采纳仅填入草稿，保留空格换行且不自动发送',async()=>{const m=mobile();m.ui.pollPrediction(0);m.resolve(prediction);await Promise.resolve();m.ui.acceptPrediction();assert.equal(m.saved[0].text,prediction.text);assert.equal(m.c.predictionText.value,'');assert.equal(m.pending.length,0);});
 test('手机旧回执、已输入草稿和过期预测均不覆盖草稿',async()=>{const m=mobile();m.ui.pollPrediction(0);m.ui.resetPrediction();m.resolve(prediction);await Promise.resolve();assert.equal(m.c.predictionText.value,'');m.c.predictionText.value='旧预测';m.c.draft.value='用户草稿';m.ui.acceptPrediction();assert.equal(m.saved.length,0);m.c.draft.value='';m.c.predictionDeadline=0;m.ui.acceptPrediction();assert.equal(m.saved.length,0);});
+
+test('异步待答题可显示完成轮次预测，原生阻塞题和运行中轮次隐藏预测',async()=>{
+  const m=mobile();
+  m.c.pendingQuestionCount.value=1;
+  m.c.pendingQuestionGroups.value=[{kind:'async',state:'pending'}];
+  m.ui.pollPrediction(0);assert.equal(m.pending.length,1);
+  m.resolve(prediction);await Promise.resolve();
+  assert.equal(m.ui.visiblePrediction.value,prediction.text);
+  m.c.pendingQuestionGroups.value.push({kind:'native',state:'pending'});
+  assert.equal(m.ui.visiblePrediction.value,'');
+  m.ui.pollPrediction(0);assert.equal(m.pending.length,0);
+  m.c.pendingQuestionGroups.value=[{kind:'async',state:'pending'}];
+  m.c.activeTurnId.value='running-turn';
+  assert.equal(m.ui.visiblePrediction.value,'');
+});
 
 test('预测仅作占位提示，回车后才填草稿，新轮次继续读取',async()=>{
   const m=mobile();m.ui.pollPrediction(0);m.resolve(prediction);await Promise.resolve();

@@ -539,8 +539,8 @@ function measureTimelinePosition(userScroll: boolean = false): boolean {
   return userScroll && timelineUserScrolling && !touchingTimeline && !readingCorrectionPending && scrollBottom.bottom <= viewport.bottom + 2
 }
 
-// 预测只在当前实时会话的空草稿中展示，任何身份、轮次或连接变化立即失效。
-const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && draftPlugins.value.length == 0 && draftMentions.value.length == 0 && !mentionOpen.value && pendingQuestionCount.value == 0 && approvalCount.value == 0)
+// 预测只在当前实时会话的空草稿中展示。异步题目可与桌面预测并存，原生阻塞题仍禁止展示。
+const predictionAllowed = computed((): boolean => pageVisible.value && canWrite.value && goalHostOnline.value && connection.snapshot?.supportsComposerPrediction == true && (connection.snapshot?.predictionTurnId ?? '').length > 0 && activeTurnId.value.length == 0 && currentTaskState.value != 'running' && draft.value.length == 0 && draftImages.value.length == 0 && draftFiles.value.length == 0 && draftPlugins.value.length == 0 && draftMentions.value.length == 0 && !mentionOpen.value && pendingQuestionGroups.value.every((group: QuestionGroup): boolean => group.kind != 'native') && approvalCount.value == 0)
 const visiblePrediction = computed((): string => predictionAllowed.value ? predictionText.value : '')
 function resetPrediction() { predictionRevision++; clearTimeout(predictionTimer); clearTimeout(predictionExpiryTimer); predictionText.value = ''; predictionDeadline = 0 }
 // 按完成时间串行轮询；旧页面和旧轮次的迟到回执不会写回当前输入框。
