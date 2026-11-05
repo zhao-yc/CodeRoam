@@ -18,7 +18,7 @@ const command = (taskId = randomUUID(), method = 'thread.settings.update', param
 
 const idleChat = (extra = {}) => ({ threadId: 'synthetic-thread', status: 'idle', activeTurnId: '', messages: [], ...extra });
 
-test('空闲消息仅在事务提交后出现，执行状态变化同步，真实同编号消息接替后不再补出', async t => {
+test('空闲消息仅在事务提交后出现，桌面成功回执到达即移除占位', async t => {
   const snapshots = [];
   const f = fixture(t, { ready: () => false, readConversation: () => idleChat(), messagesChanged: () => snapshots.push(f.queue.decorateMessages(idleChat())) });
   assert.deepEqual(f.queue.decorateMessages(idleChat()).messages, []);
@@ -32,9 +32,10 @@ test('空闲消息仅在事务提交后出现，执行状态变化同步，真�
   f.queue.ready = () => true;
   await f.queue.pump();
   assert.ok(snapshots.some(snapshot => snapshot.messages[0]?.status === 'running'));
-  assert.equal(snapshots.at(-1).messages[0].status, 'succeeded');
+  assert.deepEqual(snapshots.at(-1).messages, [], '成功回执到达即移除，无需等待正式消息');
+  assert.equal(f.queue.row('phone', input.taskId).message_display, null);
   assert.equal(f.queue.row('phone', input.taskId).payload, null, '执行正文按原规则释放');
-  const echoed = { id: input.taskId, role: 'user', text: '合成入库消息', turnId: 'synthetic-turn', status: 'completed' };
+  const echoed = { id: 'synthetic-desktop-message', role: 'user', text: '合成入库消息', turnId: 'synthetic-turn', status: 'completed' };
   assert.deepEqual(f.queue.decorateMessages(idleChat({ messages: [echoed] })).messages, [echoed]);
   assert.deepEqual(f.queue.decorateMessages(idleChat()).messages, [], '翻页或重连缺少已同步消息时不能重新出现占位');
 });
@@ -50,6 +51,47 @@ test('入库消息按聊天和实例隔离，同文消息只按执行编号收�
   assert.equal(second.queue.decorateMessages(idleChat()).messages.length, 0);
   assert.equal(first.queue.submit('phone', input).duplicate, true);
   assert.equal(first.queue.decorateMessages(idleChat()).messages.length, 1);
+});
+
+test('成功状态和占位清理同事务完成，通知到达时已可读取完整回执', t => {
+  const f = fixture(t, { ready: () => false, readConversation: () => idleChat() });
+  const input = command(randomUUID(), 'turn.send', { threadId: 'synthetic-thread', text: '合成事务消息' });
+  f.queue.submit('phone', input);
+  const notifications = [];
+  f.queue.messagesChanged = () => {
+    notifications.push({ row: f.queue.row('phone', input.taskId), receipt: f.queue.list('phone', { taskId: input.taskId }).tasks[0].result, messages: f.queue.decorateMessages(idleChat()).messages });
+  };
+  f.queue.finish(f.queue.row('phone', input.taskId), 'succeeded', { ok: true });
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].row.state, 'succeeded');
+  assert.equal(notifications[0].row.message_display, null);
+  assert.equal(notifications[0].receipt.ok, true);
+  assert.deepEqual(notifications[0].messages, []);
+});
+
+test('旧版成功占位在下次快照收口，重启和重连不会恢复', async t => {
+  const f = fixture(t, { ready: () => false, readConversation: () => idleChat() });
+  const input = command(randomUUID(), 'turn.send', { threadId: 'synthetic-thread', text: '合成旧版消息' });
+  f.queue.submit('phone', input);
+  f.journal.db.prepare("UPDATE submission_tasks SET state='succeeded' WHERE id=?").run(input.taskId);
+  await f.queue.close();
+  const recovered = new TaskQueue({ journal: f.journal, ready: () => false, execute: async () => assert.fail('恢复只展示') });
+  t.after(() => recovered.close());
+  assert.deepEqual(recovered.decorateMessages(idleChat()).messages, []);
+  assert.equal(recovered.row('phone', input.taskId).message_display, null);
+  const real = { id: 'synthetic-desktop-id', role: 'user', text: '合成旧版消息', turnId: 'synthetic-turn', status: 'completed' };
+  assert.deepEqual(recovered.decorateMessages(idleChat({ messages: [real] })).messages, [real]);
+  assert.deepEqual(recovered.decorateMessages(idleChat()).messages, []);
+});
+
+test('连续同文消息各自等待成功回执，单条成功只清除对应占位', t => {
+  const f = fixture(t, { ready: () => false, readConversation: () => idleChat() });
+  const inputs = [command(randomUUID(), 'turn.send', { threadId: 'synthetic-thread', text: '相同合成正文' }), command(randomUUID(), 'turn.send', { threadId: 'synthetic-thread', text: '相同合成正文' })];
+  inputs.forEach(input => f.queue.submit('phone', input));
+  f.queue.finish(f.queue.row('phone', inputs[0].taskId), 'succeeded', { ok: true });
+  assert.deepEqual(f.queue.decorateMessages(idleChat()).messages.map(message => message.id), [inputs[1].taskId]);
+  f.queue.finish(f.queue.row('phone', inputs[1].taskId), 'succeeded', { ok: true });
+  assert.deepEqual(f.queue.decorateMessages(idleChat()).messages, []);
 });
 
 test('忙时排队与追加沿用原入口，空闲附件只展示计数且不暴露图片或路径', t => {
