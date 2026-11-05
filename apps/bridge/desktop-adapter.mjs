@@ -288,15 +288,16 @@ export class DesktopAdapter extends EventEmitter {
     return {images:message.images};
   }
 
-  /** 仅当前设备已订阅且仍有效的聊天可确认已读；历史浏览也不需要导航桌面。 */
+  /** 接收时校验设备订阅；已接受的已读确认独立完成，手机切页不能撤销。 */
   async markRead(threadId, deviceId) {
     const entry=this.conversations.get(threadId);
-    const current=()=>!this.stopped&&this.conversations.get(threadId)===entry&&entry?.watchers.has(deviceId);
-    if(!current())throw new BridgeError('SUBSCRIPTION_REQUIRED','请先查看这条聊天再确认已读');
+    if(this.stopped||!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先查看这条聊天再确认已读');
+    // 授权固定到请求中的聊天编号，只以服务生命周期约束后续调用，避免退订丢弃真实回执。
+    const current=()=>!this.stopped;
     if(this.native?.platform!=='win32')throw new BridgeError('READ_STATE_UNAVAILABLE','当前电脑暂不支持独立的已读确认');
     this.client.assertCurrent?.();
     await this.client.instance?.verify?.();
-    if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','聊天已切换，已取消旧的已读确认');
+    if(!current())throw new BridgeError('DESKTOP_CLOSED','电脑连接已关闭，已读确认未完成');
     await this.native.markRead(threadId,current);
     return {threadId,read:true};
   }

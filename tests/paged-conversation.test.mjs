@@ -71,6 +71,38 @@ test('独立已读失败或确认期间切换会话时，不提前清除未读',
   let current=true;n.invokeOverride=async()=>{current=false;return {threadId:id,hostId:'local',read:true};};await assert.rejects(n.markRead(id,()=>current),{code:'SUBSCRIPTION_CANCELED'});assert.equal(n.unread.get(id),true);
 });
 
+test('已接受的已读确认在实例核验或原生回执期间退订仍完成原聊天',async t=>{
+  for (const phase of ['verify', 'receipt']) {
+    let release, entered;
+    const waiting = new Promise(resolve => { entered = resolve; });
+    const pause = () => new Promise(resolve => { release = resolve; entered(); });
+    const calls = [], client = new EventEmitter();
+    client.close = () => {};
+    client.instance = { verify: async () => { if (phase === 'verify') await pause(); } };
+    const native = new NativeDesktop({ platform: 'win32', invoke: async (tool, args) => {
+      calls.push({ tool, threadId: args.threadId });
+      if (phase === 'receipt') await pause();
+      return { threadId: args.threadId, hostId: 'local', read: true };
+    } });
+    const adapter = new DesktopAdapter({ client, native });
+    t.after(() => adapter.close());
+    adapter.conversations.set(id, { watchers: new Set(['phone']), owner: null, state: null, waiters: [] });
+    native.unread.set(id, true);
+    const operation = adapter.markRead(id, 'phone');
+    await waiting;
+    adapter.unwatch(id, 'phone');
+    // 新页面使用另一订阅对象，旧请求只能完成原目标，不能依赖或改写新页面。
+    adapter.conversations.set('synthetic-other', { watchers: new Set(['phone']), owner: null, state: null, waiters: [] });
+    native.unread.set('synthetic-other', true);
+    release();
+    assert.deepEqual(await operation, { threadId: id, read: true });
+    assert.deepEqual(calls, [{ tool: 'set_thread_read_state', threadId: id }]);
+    assert.equal(native.unread.get(id), false);
+    assert.equal(native.unread.get('synthetic-other'), true);
+    await assert.rejects(adapter.markRead(id, 'phone'), { code: 'SUBSCRIPTION_REQUIRED' });
+  }
+});
+
 /** 执行真实详情确认方法，控制下一帧及异步回执，检查页面可见性边界。 */
 function visibleReadFixture(){
   const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'),start=source.indexOf('let readRequestKey ='),end=source.indexOf('watch((): string => [pageVisible.value',start);
