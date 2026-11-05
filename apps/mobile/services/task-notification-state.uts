@@ -58,7 +58,7 @@ export class TaskNotificationCenter {
       state.pending.forEach((action: NotificationAction) => { this.add(hostId, generation, thread, action.kind, action.turnId, action.id) })
       const oldRow = oldThreads.find((row: ThreadSummary): boolean => row.id == thread.id)
       const old = oldRow?.notificationState
-      const terminal = state.latestTurnStatus == 'completed' || state.latestTurnStatus == 'failed'
+      const terminal = ['completed', 'failed', 'reviewStopped'].indexOf(state.latestTurnStatus) >= 0
       const changed = old?.latestTurnId != state.latestTurnId || old?.latestTurnStatus != state.latestTurnStatus
       const needsInteraction = state.pending.some((action: NotificationAction): boolean => action.turnId == state.latestTurnId)
       if (!baseline && thread.notificationBaseline != true && (oldRow == null || old != null && old.latestTurnId.length > 0) && changed && terminal && state.latestTurnId.length > 0 && (state.latestTurnStatus == 'failed' || !needsInteraction)) this.add(hostId, generation, thread, state.latestTurnStatus, state.latestTurnId, '')
@@ -70,7 +70,7 @@ export class TaskNotificationCenter {
 
   // 去重身份包含电脑及实例代次，不按会话标题或待办数量猜测。
   private add(hostId: string, generation: string, thread: ThreadSummary, kind: string, turnId: string, targetId: string) {
-    if (['question', 'approval', 'plan', 'completed', 'failed'].indexOf(kind) < 0) return
+    if (['question', 'approval', 'plan', 'completed', 'failed', 'reviewStopped'].indexOf(kind) < 0) return
     const key = JSON.stringify([hostId, generation, thread.id, kind, turnId, targetId])
     if (this.seen.has(key)) return
     this.seen.add(key)
@@ -85,7 +85,7 @@ export class TaskNotificationCenter {
   valid(notice: TaskNotice): boolean {
     const row = this.hosts.find((host: NoticeHost): boolean => host.hostId == notice.hostId && host.generation == notice.generation)?.threads.find((thread: ThreadSummary): boolean => thread.id == notice.threadId)
     if (row == null) return false
-    if (notice.kind == 'completed' || notice.kind == 'failed') return true
+    if (['completed', 'failed', 'reviewStopped'].indexOf(notice.kind) >= 0) return true
     return row.notificationState?.pending.some((action: NotificationAction): boolean => action.kind == notice.kind && action.id == notice.targetId && action.turnId == notice.turnId) == true
   }
 
@@ -125,6 +125,7 @@ export class TaskNotificationCenter {
 // 标题只表达结构化事件类型，详情名称单独展示。
 export function taskNoticeTitle(kind: string): string {
   if (kind == 'completed') return 'Codex 任务已完成'
+  if (kind == 'reviewStopped') return 'Codex 操作已被自动审查终止'
   if (kind == 'failed') return 'Codex 任务失败'
   if (kind == 'question') return 'Codex 需要你回答'
   if (kind == 'approval') return 'Codex 等待审批'

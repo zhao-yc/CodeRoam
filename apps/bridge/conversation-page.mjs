@@ -16,5 +16,5 @@ export function recentConversationPage(snapshot) {
   const ids = new Set(messages.map(message => message.turnId));
   const turns = snapshot.turns ?? [];
   const first = turns.findIndex(turn => ids.has(turn.turnId));
-  return { ...snapshot, messages, turns: turns.filter((turn, index) => ids.has(turn.turnId) || turn.turnId === snapshot.latestTurn?.turnId || first >= 0 && index >= first && turn.status === 'failed') };
+  return { ...snapshot, messages, turns: turns.filter((turn, index) => ids.has(turn.turnId) || turn.turnId === snapshot.latestTurn?.turnId || first >= 0 && index >= first && ['failed', 'reviewStopped', 'interrupted'].includes(turn.status)) };
 }

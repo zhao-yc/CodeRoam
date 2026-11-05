@@ -228,7 +228,7 @@ export class ThreadListFeed {
     this.replace((this.pendingRows??this.rows).map(row=>row.id===snapshot.threadId?this.summary(row,snapshot):row),false,baseline);
     this.initialized.add(snapshot.threadId);
     const settled=!this.needsAttention(this.stateSummary({id:snapshot.threadId},snapshot))&&snapshot.status==='idle';
-    const terminal=!snapshot.activeTurnId&&snapshot.status!=='active'&&['completed','failed','interrupted'].includes(snapshot.latestTurn?.status);
+    const terminal=!snapshot.activeTurnId&&snapshot.status!=='active'&&['completed','failed','interrupted','reviewStopped'].includes(snapshot.latestTurn?.status);
     if(settled||terminal){
       // 终态先推送内存结果，再尽力保存展示字段；缓存故障不能阻止正文保存和内部订阅释放。
       try {this.store.save(this.pendingRows??this.rows);this.store.flush();}catch{}

@@ -58,7 +58,7 @@ export function taskState(status: string, activeTurnId: string, approvalCount: n
   if (activeFlags.indexOf('waitingOnUserInput') >= 0 || questionCount > 0) return 'question'
   if (activeFlags.indexOf('waitingOnApproval') >= 0 || approvalCount > 0) return 'approval'
   if (status == 'active' || activeTurnId.length > 0) return 'running'
-  if (latestTurnStatus == 'failed') return 'failed'
+  if (['failed', 'reviewStopped', 'interrupted'].indexOf(latestTurnStatus) >= 0) return latestTurnStatus
   return status == 'idle' ? 'idle' : 'unknown'
 }
 // 异步问答允许任务继续运行，不能因历史待回答问题而隐藏运行指示。

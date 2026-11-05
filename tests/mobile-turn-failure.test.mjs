@@ -10,7 +10,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const state = () => ({threadId:'thread', status:'idle', activeTurnId:'', latestTurn:{turnId:'failed', status:'failed'}, supportsTurnRetry:true, turns:[{turnId:'failed', status:'failed', errorMessage:'Selected model is at capacity. Please try a different model.'}], messages:[], approvals:[], questionGroups:[]});
 
 /** 使用真实 UTS 组装时间线，覆盖空轮次、历史顺序和不可重试边界。 */
-test('失败原文插在对应轮次末尾，无消息轮次仍显示且正常停止不生成卡片', () => {
+test('失败和中断提示插在对应轮次末尾，无消息轮次仍显示', () => {
   const c = componentContext({});
   vm.runInContext(stripTypeScriptTypes(uts('turn-failure')) + ';globalThis.f={failureTimeline,retryTarget,latestFailureTurnId}', c);
   const s=state(); s.turns.unshift({turnId:'older',status:'failed',errorMessage:'Earlier failure'}); s.turns.push({turnId:'next',status:'inProgress'});
@@ -20,7 +20,11 @@ test('失败原文插在对应轮次末尾，无消息轮次仍显示且正常�
   assert.equal(entries[2].text,s.turns[1].errorMessage); assert.equal(messages.length,2);
   delete s.turns[1].errorMessage;
   assert.match(c.f.failureTimeline(s,[])[1].text,/未提供具体原因/);
-  s.turns=[{turnId:'stopped',status:'interrupted'}];assert.equal(c.f.failureTimeline(s,[]).length,0);
+  s.turns=[{turnId:'stopped',status:'interrupted'}];assert.equal(c.f.failureTimeline(s,[])[0].text,'本轮操作已中断');
+  s.turns=[{turnId:'review',status:'reviewStopped',errorMessage:'本轮操作已被自动审查终止'}];
+  assert.equal(c.f.failureTimeline(s,[])[0].role,'interruption');
+  assert.equal(c.f.failureTimeline(s,[])[0].label,'自动审查终止');
+  assert.equal(c.f.retryTarget({...s,latestTurn:{turnId:'review',status:'reviewStopped'}}),'');
   assert.equal(c.f.retryTarget(state()),'failed');
   for(const change of [{readOnly:true},{status:'active'},{activeTurnId:'running'},{approvals:[{id:'a'}]},{questionGroups:[{state:'pending'}]},{pendingPlan:{id:'plan'}},{activeFlags:['waitingOnApproval']},{latestTurn:{turnId:'next',status:'completed'}}]) assert.equal(c.f.retryTarget({...state(),...change}),'');
 });
