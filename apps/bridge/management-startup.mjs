@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -121,6 +122,86 @@ export function createWindowsStartupControl({workerConfigPath, projectRoot}, {
         }
         return {startupEnabled: enabled};
       } finally { changing = false; }
+    },
+  };
+}
+
+const macAgentLabel = 'com.coderoam.bridge';
+const plistText = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+/** 只管理本用户、当前托管入口生成的登录项。launchd 会在下次登录时读取该文件。 */
+export function createMacStartupControl({workerConfigPath, projectRoot}, {
+  runtime = process, supervisor = supervisorPath, user = os.userInfo,
+} = {}) {
+  if (runtime.platform !== 'darwin') return null;
+  const paths = [runtime.execPath, supervisor, workerConfigPath, projectRoot];
+  if (paths.some(value => typeof value !== 'string' || !path.posix.isAbsolute(value) || /[\x00-\x1f]/.test(value))) return null;
+  let account;
+  try { account = user(); } catch { return null; }
+  const {uid, homedir} = account;
+  if (uid <= 0 || !path.posix.isAbsolute(homedir)) return null;
+  const directory = path.join(homedir, 'Library', 'LaunchAgents');
+  const file = path.join(directory, macAgentLabel + '.plist');
+  const args = [runtime.execPath, supervisor, '--config', workerConfigPath];
+  const content = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0"><dict>',
+    `<key>Label</key><string>${macAgentLabel}</string>`,
+    '<key>ProgramArguments</key><array>',
+    ...args.map(value => `<string>${plistText(value)}</string>`),
+    '</array>',
+    `<key>WorkingDirectory</key><string>${plistText(projectRoot)}</string>`,
+    '<key>RunAtLoad</key><true/>',
+    '<key>KeepAlive</key><true/>',
+    '</dict></plist>',
+    '',
+  ].join('\n');
+
+  function checkDirectory() {
+    const info = fs.lstatSync(directory);
+    if (!info.isDirectory() || info.uid !== uid || (info.mode & 0o022) !== 0) throw Error('登录项目录归属或权限异常');
+  }
+
+  function read() {
+    try {
+      checkDirectory();
+      const info = fs.lstatSync(file);
+      if (!info.isFile() || info.uid !== uid || (info.mode & 0o022) !== 0 || info.size !== Buffer.byteLength(content)) return undefined;
+      return fs.readFileSync(file, 'utf8') === content ? true : undefined;
+    } catch (error) { return error.code === 'ENOENT' ? false : undefined; }
+  }
+
+  return {
+    read,
+    set(enabled) {
+      if (typeof enabled !== 'boolean') throw failure('开机启动开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
+      const current = read();
+      if (current === undefined) throw failure('无法确认 macOS 登录项归属，请检查现有登录项', 'MANAGEMENT_STARTUP_UNAVAILABLE');
+      if (current === enabled) return {startupEnabled: enabled};
+      try {
+        if (enabled) {
+          fs.mkdirSync(directory, {recursive: true, mode: 0o700});
+          checkDirectory();
+          // 先写好完整文件，再原子创建固定入口。已有同名登录项时保留现场。
+          const temporary = fs.mkdtempSync(path.join(directory, '.coderoam-'));
+          const candidate = path.join(temporary, 'agent.plist');
+          try {
+            fs.writeFileSync(candidate, content, {mode: 0o600, flag: 'wx'});
+            fs.linkSync(candidate, file);
+          } finally {
+            try { fs.unlinkSync(candidate); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            fs.rmdirSync(temporary);
+          }
+        } else {
+          // 删除下次登录的配置，无需卸载当前会话中已运行的守护。
+          fs.unlinkSync(file);
+        }
+        if (read() !== enabled) throw Error('登录项状态未确认');
+        return {startupEnabled: enabled};
+      } catch {
+        throw failure('未能确认 macOS 登录启动设置，请刷新后重试', 'MANAGEMENT_STARTUP_FAILED');
+      }
     },
   };
 }

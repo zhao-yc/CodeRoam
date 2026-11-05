@@ -7,7 +7,7 @@ import {lifecycleEvent} from './service-lifecycle.mjs';
 import {acquireRuntimeLock} from './runtime-lock.mjs';
 import {readManagedConfig} from './management-config.mjs';
 import {startManagementServer} from './management-server.mjs';
-import {createWindowsStartupControl} from './management-startup.mjs';
+import {createMacStartupControl, createWindowsStartupControl} from './management-startup.mjs';
 import {randomUUID} from 'node:crypto';
 
 /** 原账号下的单实例守护进程；只启动固定 Node 入口，不重放任何手机请求。 */
@@ -17,7 +17,8 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
   fs.mkdirSync(logDirectory,{recursive:true});fs.mkdirSync(runDirectory,{recursive:true});
   const log=path.join(logDirectory,'lifecycle.jsonl'),stateFile=path.join(logDirectory,'supervisor.json');
   const release=await acquireRuntimeLock(path.join(fs.realpathSync.native(logDirectory),'supervisor'));
-  const startup=createWindowsStartupControl({workerConfigPath,projectRoot});
+  const startupOptions={workerConfigPath,projectRoot};
+  const startup=createWindowsStartupControl(startupOptions)??createMacStartupControl(startupOptions);
   let child=null,timer=null,stopping=false,attempt=0,startedAt=0,activeRevision='',management=null,restarting=false,manualRestart=false,changingSync=false;
   const pending=new Map();
   const save=extra=>fs.writeFileSync(stateFile,JSON.stringify({supervisorPid:process.pid,childPid:child?.pid??null,entry,updatedAt:Date.now(),...extra}));

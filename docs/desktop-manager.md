@@ -1,6 +1,6 @@
 # CodeRoam · 电脑连接管理客户端
 
-桌面管理客户端使用 Electron、Vue 3 和 TypeScript，第一版以 Windows 为运行和验收目标。它通过本机管理通道连接已经安装的电脑连接服务，提供运行概览、配置编辑、生命周期日志和受控重启。
+桌面管理客户端使用 Electron、Vue 3 和 TypeScript，支持 Windows 和 macOS。它通过本机管理通道连接已经启动的电脑连接服务，提供运行概览、配置编辑、生命周期日志和受控重启。
 
 管理客户端和 Node.js 24 守护进程独立运行。关闭窗口后客户端仍在托盘中，双击托盘图标或使用托盘菜单可重新打开窗口；选择托盘菜单中的“退出管理客户端”后，后台守护仍继续运行，手机连接不受管理窗口生命周期影响。
 
@@ -24,13 +24,16 @@ npm run desktop:start
 
 # 编译并生成 Windows x64 的本机运行目录。
 npm run desktop:pack:win
+
+# 在 Mac 上编译并生成当前架构的应用目录。
+npm run desktop:pack:mac
 ```
 
 Windows 打包命令要求在 Windows x64 环境下使用 Node.js 24。默认输出位于 `apps/desktop-manager/out/win-unpacked`，可从该目录运行客户端。界面使用本地打包资源，不依赖公网管理页面。
 
 当前打包资源包含独立的 Node.js 24、桥接源码和所需依赖。首版管理已经安装的服务，尚未提供一键服务安装向导；打包目录不代表系统服务已经安装。Windows 安装、升级守护服务仍需按项目现有的托管流程操作，避免同时启动另一份桥接。
 
-本说明不表示产物已经完成代码签名，也不表示已发布安装器。Mac 的本机通信接口保留，当前没有 Mac 真机验收结论。
+Mac 打包使用原生架构的 Node.js 24。本机运行目录和代码签名、正式发行属于不同步骤。
 
 ## 关联现有服务
 
@@ -39,6 +42,32 @@ Windows 打包命令要求在 Windows x64 环境下使用 Node.js 24。默认输
 `worker.json` 是托管配置，其中包含桥接入口、业务配置文件、工作目录、运行记录目录和日志目录等固定路径。这里应选择托管配置，而非保存中转地址和配对信息的 `bridge.json`。管理客户端只记住所选托管文件的位置，不复制配对令牌。
 
 现有守护需要升级到支持本机管理接口的版本。未选择服务时，界面会提示关联；已选择但接口暂时不可用时，界面会显示实际错误，不使用模拟在线状态。
+
+### 在 Mac 上启动守护
+
+配对完成后，从仓库根目录生成托管配置。先正常退出同一配置正在运行的桥接，然后执行以下命令。命令会保留已有的 `.local/worker.json`。
+
+```sh
+node --input-type=module <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+const projectRoot = process.cwd();
+const bridgeConfig = path.resolve('.local/bridge.json');
+const {dataPath = '.local/bridge'} = JSON.parse(fs.readFileSync(bridgeConfig, 'utf8'));
+const worker = {
+  entry: path.resolve('apps/bridge/cli.mjs'),
+  bridgeConfig,
+  projectRoot,
+  runDirectory: path.resolve('.local/run'),
+  logDirectory: path.resolve('.local/bridge-service/logs'),
+  statusFile: path.resolve(dataPath, 'runtime-status.json'),
+};
+fs.writeFileSync('.local/worker.json', JSON.stringify(worker, null, 2) + '\n', {flag: 'wx', mode: 0o600});
+NODE
+node apps/bridge/service-supervisor.mjs --config .local/worker.json
+```
+
+守护启动后，在管理端选择这个 `worker.json`。前台运行时可在原终端按 Ctrl+C 停止，生命周期记录在 `.local/bridge-service/logs/lifecycle.jsonl`。
 
 ## 查看运行状态
 
@@ -57,6 +86,8 @@ Windows 打包命令要求在 Windows x64 环境下使用 Node.js 24。默认输
 在 Windows 管理端的「运行概览 → 后台服务」中可以切换「开机启动」。开启后，Windows 随系统启动托管服务，桥接在指定用户登录后连接中转。关闭后，Windows 将服务设为手动启动。
 
 切换时按 Windows 提示确认管理员授权。管理端会读取系统服务确认后的启动类型。切换期间正在运行的服务继续工作。此设置由 Windows 保存，更新托管服务时沿用现有启动类型。选择手动启动后，下次开机可在 Windows「服务」中启动 `CodexMobileBridge`。
+
+在 macOS 上，同一开关管理当前账号的登录启动。开启会在 `~/Library/LaunchAgents` 登记当前守护，登录后由 macOS 启动。关闭会移除下次登录的登记，当前会话中的服务继续运行。手动启动时可复用上面的守护命令。系统设置若提示允许后台运行，按 macOS 提示确认。
 
 ## 编辑与应用配置
 

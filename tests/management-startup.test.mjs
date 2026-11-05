@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createWindowsStartupControl} from '../apps/bridge/management-startup.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createMacStartupControl, createWindowsStartupControl} from '../apps/bridge/management-startup.mjs';
 
 function fixture() {
   const root = 'C:/example/project';
@@ -88,4 +91,42 @@ test('等待 Windows 确认时仍可读取状态且拒绝第二次写入，取�
   await assert.rejects(control.set(false), {code: 'MANAGEMENT_STARTUP_FAILED'});
   change.run = original;
   assert.deepEqual(await control.set(false), {startupEnabled: false});
+});
+
+test('macOS 开关只登记当前用户的守护，保留同名外部登录项', {skip: process.platform === 'win32'}, t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'coderoam-startup-'));
+  t.after(() => fs.rmSync(home, {recursive: true, force: true}));
+  const owner = process.getuid() || 501;
+  // 测试容器以 root 运行，模拟普通 Mac 用户拥有这个测试目录。
+  if (process.getuid() === 0) {
+    const stat = fs.lstatSync;
+    t.mock.method(fs, 'lstatSync', (file, ...args) => {
+      const result = stat(file, ...args);
+      if (typeof file === 'string' && file.startsWith(home + path.sep)) result.uid = owner;
+      return result;
+    });
+  }
+  const runtime = {platform: 'darwin', execPath: '/example/Node 24/node'};
+  const projectRoot = '/example/CodeRoam & Work';
+  const options = {workerConfigPath: projectRoot + '/.local/worker.json', projectRoot};
+  const context = {runtime, supervisor: projectRoot + '/apps/bridge/service-supervisor.mjs', user: () => ({uid: owner, homedir: home})};
+  const control = createMacStartupControl(options, context);
+  const file = path.join(home, 'Library', 'LaunchAgents', 'com.coderoam.bridge.plist');
+  assert.equal(control.read(), false);
+  assert.deepEqual(control.set(false), {startupEnabled: false});
+  assert.deepEqual(control.set(true), {startupEnabled: true});
+  assert.equal(createMacStartupControl(options, context).read(), true);
+  assert.match(fs.readFileSync(file, 'utf8'), /CodeRoam &amp; Work/);
+  assert.match(fs.readFileSync(file, 'utf8'), /<key>RunAtLoad<\/key><true\/>/);
+  const other = createMacStartupControl({...options, workerConfigPath: '/example/other/worker.json'}, context);
+  assert.equal(other.read(), undefined);
+  assert.throws(() => other.set(false), {code: 'MANAGEMENT_STARTUP_UNAVAILABLE'});
+  assert.deepEqual(control.set(false), {startupEnabled: false});
+  assert.equal(control.read(), false);
+  const external = path.join(home, 'other.plist');
+  fs.writeFileSync(external, '外部登录项');
+  fs.symlinkSync(external, file);
+  assert.equal(control.read(), undefined);
+  assert.throws(() => control.set(true), {code: 'MANAGEMENT_STARTUP_UNAVAILABLE'});
+  assert.equal(fs.readFileSync(external, 'utf8'), '外部登录项');
 });

@@ -37,8 +37,12 @@ const version = computed(() => context.value?.version || '—')
 const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value || changingSetting.value !== null)
 const serviceSettings: { key: ServiceSetting; descriptionId: string; title: string; description: string; offLabel: string }[] = [
   { key: 'backgroundSyncEnabled', descriptionId: 'background-sync-description', title: '后台数据同步', description: '暂停后仍可手动打开聊天、发送消息和处理审批。', offLabel: '已暂停' },
-  { key: 'startupEnabled', descriptionId: 'startup-description', title: '开机启动', description: '开启后，守护随 Windows 启动，登录后启动桥接。关闭后改为手动启动，当前服务继续运行。切换时需确认 Windows 管理员授权。', offLabel: '已关闭' },
+  { key: 'startupEnabled', descriptionId: 'startup-description', title: '开机启动', description: '', offLabel: '已关闭' },
 ]
+const startupDescription = computed(() => {
+  if (context.value?.platform === 'win32') return '开启后，守护随 Windows 启动，登录后启动桥接。关闭后改为手动启动，当前服务继续运行。切换时需确认 Windows 管理员授权。'
+  return '开启后，守护在登录 macOS 时自动启动。关闭后，下次登录需手动启动，当前服务继续运行。'
+})
 const serviceSettingsLocked = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || !status.value?.running)
 
 function serviceSettingDisabled(key: ServiceSetting): boolean {
@@ -46,7 +50,7 @@ function serviceSettingDisabled(key: ServiceSetting): boolean {
 }
 
 function serviceSettingLabel(key: ServiceSetting, offLabel: string): string {
-  if (changingSetting.value === key) return key === 'startupEnabled' ? '等待 Windows 确认…' : '正在应用…'
+  if (changingSetting.value === key) return key === 'startupEnabled' && context.value?.platform === 'win32' ? '等待 Windows 确认…' : '正在应用…'
   if (restarting.value || restartPreviousPid.value !== null) return '等待后台重启'
   if (!status.value?.running) return '等待后台就绪'
   const enabled = status.value[key]
@@ -288,7 +292,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
           <div v-for="setting in serviceSettings" :key="setting.key" class="setting-row service-setting">
             <div>
               <strong>{{ setting.title }}</strong>
-              <p :id="setting.descriptionId">{{ setting.description }}</p>
+              <p :id="setting.descriptionId">{{ setting.key === 'startupEnabled' ? startupDescription : setting.description }}</p>
             </div>
             <div class="service-setting-control">
               <span role="status">{{ serviceSettingLabel(setting.key, setting.offLabel) }}</span>

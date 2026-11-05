@@ -6,7 +6,9 @@ import {fileURLToPath} from 'node:url';
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), repository = path.resolve(project, '../..');
 const output = path.join(project, '.runtime');
-if (process.platform !== 'win32' || process.arch !== 'x64' || !process.version.startsWith('v24.')) throw new Error('Windows 首版打包需要 x64 Node.js 24');
+const windows = process.platform === 'win32' && process.arch === 'x64';
+const mac = process.platform === 'darwin' && ['arm64', 'x64'].includes(process.arch);
+if ((!windows && !mac) || !process.version.startsWith('v24.')) throw new Error('打包需要 Windows x64 或 macOS 原生架构的 Node.js 24');
 fs.mkdirSync(output, {recursive: true});
 // 输出目录固定归本桌面工程所有；打包前清理，避免把旧配置或运行数据混入产物。
 if (fs.realpathSync(output) !== path.join(fs.realpathSync(project), '.runtime')) throw new Error('打包目录归属不符');
@@ -17,7 +19,7 @@ for (const file of tracked) {
 }
 // 新增管理模块在首次提交前也参与本机打包；交付时再核对整个源码快照。
 for (const file of fs.readdirSync(path.join(repository, 'apps/bridge')).filter(name => name.startsWith('management-') && name.endsWith('.mjs'))) fs.copyFileSync(path.join(repository, 'apps/bridge', file), path.join(output, 'apps/bridge', file));
-fs.copyFileSync(process.execPath, path.join(output, 'node.exe'));
+fs.copyFileSync(process.execPath, path.join(output, windows ? 'node.exe' : 'node'));
 fs.cpSync(path.join(repository, 'node_modules/ws'), path.join(output, 'node_modules/ws'), {recursive: true});
 fs.copyFileSync(path.join(repository, 'package.json'), path.join(output, 'package.json'));
 fs.writeFileSync(path.join(output, 'runtime-version.json'), JSON.stringify({nodeVersion: process.version, nodeSha256: createHash('sha256').update(fs.readFileSync(process.execPath)).digest('hex'), builtAt: new Date().toISOString()}));

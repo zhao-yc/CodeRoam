@@ -82,7 +82,9 @@ else {
     handle('manager:set-background-sync', value => controller.request('sync.set', value));
     handle('manager:set-startup', value => controller.request('startup.set', value));
     handle('manager:restart', () => controller.request('service.restart'));
-    tray = new Tray(nativeImage.createFromPath(path.join(directory, 'tray.png')));
+    const brand = nativeImage.createFromPath(path.join(directory, 'tray.png'));
+    if (process.platform === 'darwin') app.dock.setIcon(brand);
+    tray = new Tray(process.platform === 'darwin' ? brand.resize({width: 18, height: 18}) : brand);
     tray.setToolTip('CodeRoam 电脑管理');
     tray.setContextMenu(Menu.buildFromTemplate([
       {label: '打开管理界面', click: showWindow}, {type: 'separator'},

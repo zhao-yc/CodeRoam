@@ -15,6 +15,7 @@
     "desktop:build": "npm --prefix apps/desktop-manager run build",
     "desktop:start": "npm --prefix apps/desktop-manager start",
     "desktop:pack:win": "npm --prefix apps/desktop-manager run pack:win",
+    "desktop:pack:mac": "npm --prefix apps/desktop-manager run pack:mac",
     "provision": "node scripts/provision.mjs",
     "check:privacy": "node scripts/check-public-files.mjs",
     "setup:hooks": "node scripts/install-privacy-hooks.mjs",

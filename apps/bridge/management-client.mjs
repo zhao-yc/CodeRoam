@@ -77,7 +77,7 @@ export function connectManagement(workerConfigPath) {
         const socket = net.createConnection(connection.address); let buffer = Buffer.alloc(0), settled = false;
         const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); socket.destroy(); error ? reject(error) : resolve(value); };
         const timer = method === 'startup.set'
-          ? setTimeout(() => finish(failure('等待 Windows 开机启动确认超时，请刷新以核对实际状态')), 120000)
+          ? setTimeout(() => finish(failure('等待系统确认开机启动超时，请刷新以核对实际状态')), 120000)
           : setTimeout(() => finish(failure('本机管理服务响应超时')), method === 'service.restart' ? 20000 : 15000);
         socket.once('connect', () => socket.write(body));
         socket.on('data', chunk => {
