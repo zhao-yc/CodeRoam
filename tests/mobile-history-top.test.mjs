@@ -13,7 +13,7 @@ function fixture(){
  const helpers=fs.readFileSync('apps/mobile/services/history.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,'');
  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
  // 加载实际展示依赖，保留历史布局和异步回执的完整验收路径。
- for (const module of ['turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
+ for (const module of ['executions','turn-failure','annotations','message-attachments','message-presentations']) vm.runInContext(stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/'+module+'.uts','utf8').replace(/^import .*\r?\n/gm,'').replace(/\bexport /g,''),{mode:'transform'}),context);
  vm.runInContext(stripTypeScriptTypes(helpers+'\n'+page,{mode:'transform'})+';globalThis.subject={loadOlder,onHistoryTop,beginTimelineTouch,historyPage,loadingHistory,historyError,historyScrollTop,displayConversation,pageHostId,pageThreadId,pageVisible,following,scrollTarget,setScroll:(top)=>{lastScrollTop=top;}};',context);
  const p=context.subject;p.pageHostId.value='pc';p.pageThreadId.value='thread';p.pageVisible.value=true;
  return {p,requests,connection,geometry,unloads};
@@ -43,7 +43,34 @@ test('中间空页继续推进游标，保留请求期间到达的实时消息�
 
 test('游标无进展和连续空页均有限停止，不能误判已显示全部对话',async()=>{
  const f=fixture();f.p.loadOlder();f.requests[0].resolve({messages:[],turns:[],cursor:'same',hasMore:true});await settle();f.requests[1].resolve({messages:[],turns:[],cursor:'same',hasMore:true});await settle();assert.equal(f.requests.length,2);assert.equal(f.p.loadingHistory.value,false);assert.equal(f.p.historyPage.value.hasMore,true);assert.notEqual(f.p.historyError.value,'');
- const g=fixture();g.p.loadOlder();for(let i=0;i<8;i++){g.requests[i].resolve({messages:[],turns:[],cursor:'cursor-'+i,hasMore:true});await settle();}assert.equal(g.requests.length,8);assert.equal(g.p.loadingHistory.value,false);assert.equal(g.p.historyPage.value.hasMore,true);
+ const g=fixture();g.p.loadOlder();for(let i=0;i<32;i++){g.requests[i].resolve({messages:[],turns:[],cursor:'cursor-'+i,hasMore:true});await settle();}assert.equal(g.requests.length,32);assert.equal(g.p.loadingHistory.value,false);assert.equal(g.p.historyPage.value.hasMore,true);
+});
+
+test('连续十页折叠过程只需一次加载，直到更早的问答出现且全部过程仍可展开',async()=>{
+ const f=fixture();
+ f.connection.snapshot.status='idle';f.connection.snapshot.activeTurnId='';
+ f.connection.snapshot.turns=[{turnId:'turn',status:'completed'}];
+ f.connection.snapshot.messages=[{...message('current'),kind:'agentMessage',phase:'final_answer'}];
+ f.p.loadOlder();
+ for(let index=0;index<10;index++){
+  assert.equal(f.requests.length,index+1);
+  f.requests[index].resolve({messages:[{...message('command-'+index),role:'tool',kind:'commandExecution'}],turns:[],cursor:'page-'+index,hasMore:true});
+  await settle();
+ }
+ assert.equal(f.requests.length,11);
+ f.requests[10].resolve({messages:[{...message('earlier-question'),role:'user'}],turns:[],cursor:'earlier',hasMore:true});await settle();
+ assert.equal(f.requests.length,11);assert.equal(f.p.loadingHistory.value,false);
+ assert.equal(f.p.displayConversation.value.messages[0].id,'earlier-question');
+ assert.equal(f.p.displayConversation.value.messages.filter(item=>item.role==='tool').length,10);
+});
+
+test('加载失败仍保留按钮，点击可继续使用原游标重试',async()=>{
+ const f=fixture();f.p.loadOlder();f.requests[0].reject(new Error('合成读取失败'));await settle();
+ const template=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').split('<script setup')[0];
+ assert.match(template,/button v-else-if="historyError.length > 0"[^>]*@click="loadOlder\(\)"/);
+ f.p.loadOlder();assert.equal(f.requests.length,2);assert.equal(f.p.historyError.value,'');
+ f.requests[1].resolve({messages:[message('old')],turns:[],cursor:'',hasMore:false});await settle();
+ assert.equal(f.p.displayConversation.value.messages[0].id,'old');
 });
 
 test('前插历史保持可见消息的像素位置，离页后的回执不再改变历史',async()=>{

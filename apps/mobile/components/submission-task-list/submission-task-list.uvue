@@ -11,7 +11,7 @@
           <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'reconcile')">核对</button>
           <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="skip(row.hostId, row.task)">已核对并跳过</button>
           <button v-if="canResume(row.hostId, row.task)" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'resume')">继续队列</button>
-          <button v-if="row.task.state == 'failed' || row.task.localOnly != true && (row.task.state == 'unknown' || row.task.state == 'waiting_resume')" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'dismiss')">关闭</button>
+          <button v-if="row.task.localOnly != true && (row.task.state == 'failed' || row.task.state == 'unknown' || row.task.state == 'waiting_resume')" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'dismiss')">关闭</button>
         </view>
       </view>
     </scroll-view>
@@ -33,7 +33,7 @@ import { computed, ref, watch } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import SubmissionTaskStatus from '../submission-task-status/submission-task-status.uvue'
 import { connection, Computer } from '../../services/bridge.uts'
-import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, localSubmissionTask, submissionVisible } from '../../services/submission-task-state.uts'
+import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTasks, PendingSubmission, submissionVisible } from '../../services/submission-task-state.uts'
 import { submissionCardMeta, submissionCardError, submissionNeedsPauseNotice, submissionFloatingState, submissionFloatingLabel } from '../../services/submission-task-presentation.uts'
 import { controlSubmissionTask, readSubmissionTasks, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
 type TaskRow = { hostId: string, task: SubmissionTask }
@@ -41,14 +41,13 @@ const props = withDefaults(defineProps<{ hostId?: string, active?: boolean, obsc
 const emit = defineEmits<{ open: [hostId: string, threadId: string, title: string] }>()
 const opened = ref(false), expanded = ref(false), error = ref(''), working = ref('')
 const instances = computed((): InstanceSubmissionTasks[] => submissionTasks.instances.filter((instance: InstanceSubmissionTasks): boolean => props.hostId.length == 0 || instance.hostId == props.hostId))
-const available = computed((): boolean => instances.value.some((instance: InstanceSubmissionTasks): boolean => instance.supported) || submissionTasks.pending.some((record: PendingSubmission): boolean => (record.unknown || record.localState != null) && !record.accepted && (props.hostId.length == 0 || record.hostId == props.hostId)))
+const available = computed((): boolean => instances.value.some((instance: InstanceSubmissionTasks): boolean => instance.supported) || submissionTasks.pending.some((record: PendingSubmission): boolean => record.unknown && !record.accepted && (props.hostId.length == 0 || record.hostId == props.hostId)))
 const rows = computed((): TaskRow[] => {
   const result = [] as TaskRow[]
   instances.value.forEach((instance: InstanceSubmissionTasks) => { instance.snapshot?.tasks.forEach((task: SubmissionTask) => { if (submissionVisible(task, submissionTasks.clock + instance.clockOffset)) result.push({ hostId: instance.hostId, task } as TaskRow) }) })
   submissionTasks.pending.forEach((record: PendingSubmission) => {
-    if (props.hostId.length > 0 && record.hostId != props.hostId || result.some((row: TaskRow): boolean => row.hostId == record.hostId && row.task.id == record.id)) return
-    const task = localSubmissionTask(record)
-    if (task != null) result.push({ hostId: record.hostId, task } as TaskRow)
+    if (record.accepted || !record.unknown || props.hostId.length > 0 && record.hostId != props.hostId || result.some((row: TaskRow): boolean => row.hostId == record.hostId && row.task.id == record.id)) return
+    result.push({ hostId: record.hostId, task: { id: record.id, position: 0, kind: record.kind, method: '', title: '提交入队待核对', threadId: '', projectId: '', state: 'unknown', stage: '请先查询原提交编号', error: '手机未收到有效入队回执，请勿重复提交', createdAt: record.createdAt, startedAt: 0, completedAt: 0, updatedAt: record.createdAt, dismissed: false, steps: [] as SubmissionStep[], localOnly: true } as SubmissionTask } as TaskRow)
   })
   // UTS 条件必须为布尔值，不能用数字短路表达排序回退。
   return result.sort((a: TaskRow, b: TaskRow): number => { const timeOrder = a.task.createdAt - b.task.createdAt; return timeOrder != 0 ? timeOrder : a.task.position - b.task.position })
@@ -79,7 +78,7 @@ function openTask(hostId: string, task: SubmissionTask) { if (task.threadId.leng
 async function act(hostId: string, task: SubmissionTask, action: string, confirmed: boolean = false) {
   if (working.value.length > 0) return
   working.value = task.id; error.value = ''
-  try { if (task.localOnly == true) { if (action == 'reconcile') await checkPendingSubmission(hostId, task.id); else if (action == 'dismiss' && task.state == 'failed' || action == 'skip' && confirmed) acknowledgePendingSubmission(hostId, task.id); else throw new Error('请先核对，或确认已在电脑核对后清除保护') } else await controlSubmissionTask(hostId, task.id, action, confirmed, task.attempt ?? 0) }
+  try { if (task.localOnly == true) { if (action == 'reconcile') await checkPendingSubmission(hostId, task.id); else if (action == 'skip' && confirmed) acknowledgePendingSubmission(hostId, task.id); else throw new Error('请先核对，或确认已在电脑核对后清除保护') } else await controlSubmissionTask(hostId, task.id, action, confirmed, task.attempt ?? 0) }
   catch (reason) { error.value = (reason as Error).message }
   finally { working.value = '' }
 }

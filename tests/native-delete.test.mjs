@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NativeDeleteController } from '../apps/bridge/native-delete.mjs';
 import { BridgeError } from '../packages/protocol/contracts.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /** 合成索引同时保留归档和未归档记录，模拟原桌面持有者与官方删除连接。 */
 function fixture(mode = {}) {
@@ -80,4 +82,27 @@ test('归档后新增附属会话或被重新打开时停止永久删除', async
     await assert.rejects(f.controller.delete(f.params, f.verify), { code: 'DELETE_OUTCOME_UNKNOWN', outcomeUnknown: true });
     assert.equal(f.calls.some(([method]) => method === 'thread/delete'), false);
   }
+});
+
+test('旧单实例 CLI 入口也沿用统一原生删除控制器', async () => {
+  const source = fs.readFileSync(new URL('../apps/bridge/cli.mjs', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '');
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  let options;
+  class Empty {}
+  class Adapter { async connect() {} }
+  class Agent {
+    constructor(value) { options = value; this.predictions = { async start() {} }; }
+    on() {} start() {}
+  }
+  const context = {
+    fs: { readFileSync: () => JSON.stringify({ multiInstance: false, dataPath: '/synthetic' }), mkdirSync() {} }, path,
+    parseArgs: () => ({ values: { config: 'synthetic-config.json' } }), acquireBridgeLock: async () => () => {},
+    process: { platform: 'win32', pid: 1, on() {} }, console: { log() {}, error(message) { throw Error(message); } },
+    createRequestDiagnostics: () => ({}), defaultIpcSocketPath: () => 'synthetic-pipe', IpcClient: Empty,
+    DesktopAdapter: Adapter, StateReader: Empty, ModelCatalog: Empty, AttachmentStore: Empty, DesktopGoalController: Empty,
+    Journal: Empty, BridgeAgent: Agent, installManagementChild() {},
+  };
+  await new AsyncFunction(...Object.keys(context), source)(...Object.values(context));
+  assert.ok(options);
+  assert.equal(options.deleteController, undefined);
 });

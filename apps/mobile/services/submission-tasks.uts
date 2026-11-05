@@ -67,7 +67,7 @@ function findTask(raw: UTSJSONObject, id: string): SubmissionTask | null {
 export async function submitTask(hostId: string, id: string, kind: string, payload: UTSJSONObject): Promise<UTSJSONObject> {
   const namespace = connection.cacheNamespace, generation = generationFor(hostId)
   if (!supportsSubmissionTasks(hostId)) throw new Error('请更新电脑连接服务后使用提交任务')
-  const previous = pending.find((item: PendingSubmission): boolean => item.hostId == hostId && item.kind == kind && !item.accepted && item.id != id && item.localState != 'failed')
+  const previous = pending.find((item: PendingSubmission): boolean => item.hostId == hostId && item.kind == kind && !item.accepted)
   if (previous != null && previous.id != id) throw new Error('上次提交是否入队尚未确认，请先在提交任务中核对，勿重复发送')
   if (!pending.some((item: PendingSubmission): boolean => item.id == id)) { pending.push({ hostId, id, kind, generation, accepted: false, unknown: false, createdAt: Date.now() } as PendingSubmission); savePending() }
   let result: UTSJSONObject
@@ -81,15 +81,10 @@ export async function submitTask(hostId: string, id: string, kind: string, paylo
       result = { accepted: true, taskId: id, task }
     } catch (_) { const record = pending.find((item: PendingSubmission): boolean => item.id == id); if (record != null) { record.unknown = true; savePending() }; throw new Error('提交是否入队尚未确认，请在提交任务中核对，勿重复发送') }
   }
-  if (result.getBoolean('accepted') != true || result.getString('taskId') != id) {
-    const record = pending.find((item: PendingSubmission): boolean => item.id == id)
-    if (record != null) { record.unknown = true; savePending() }
-    throw new Error('未取得有效入队回执，请核对原任务')
-  }
+  if (result.getBoolean('accepted') != true || result.getString('taskId') != id) throw new Error('未取得有效入队回执，请核对原任务')
   if (connection.cacheNamespace == namespace) {
     const record = pending.find((item: PendingSubmission): boolean => item.id == id)
-    // 电脑已接管后，本地存储失败不能把成功入队误判为可重发的失败。
-    if (record != null) { record.accepted = true; try { savePending() } catch (_) {} }
+    if (record != null) { record.accepted = true; savePending() }
     const task = findTask(result, id)
     const commandParams = payload['params'] as UTSJSONObject | null
     submissionTasks.accepted = { revision: submissionTasks.accepted.revision + 1, hostId, taskId: id, threadId: task?.threadId ?? commandParams?.getString('threadId') ?? '', method: task?.method ?? payload.getString('method') ?? '' } as AcceptedSubmission
@@ -147,8 +142,8 @@ export async function checkPendingSubmission(hostId: string, id: string): Promis
 export function acknowledgePendingSubmission(hostId: string, id: string) { removePending(id); bridge.clearCommand(id, hostId) }
 
 // 文件先完整写入任务作用域；只有守护进程确认接管后才消费手机草稿。
-export async function submitNewConversationTask(draft: NewDraft, mode: string, progress: (message: string) => void, taskId: string = ''): Promise<string> {
-  const hostId = draft.hostId, namespace = draft.cacheNamespace, id = taskId.length > 0 ? taskId : newSubmissionId()
+export async function submitNewConversationTask(draft: NewDraft, mode: string, progress: (message: string) => void): Promise<string> {
+  const hostId = draft.hostId, namespace = draft.cacheNamespace, id = newSubmissionId()
   const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), choices = { ...draft.choices } as NewDraftChoices
   const plugins = draft.plugins.slice(), mentions = copyThreadMentions(draft.threadMentions), mentionRevision = draft.threadMentionRevision
   if (draft.projectId.length == 0) throw new Error('请先选择项目')
@@ -176,7 +171,6 @@ export async function submitNewConversationTask(draft: NewDraft, mode: string, p
       file.status = 'ready'; file.progress = 100
     } catch (reason) { file.status = 'paused'; file.error = (reason as Error).message; throw reason }
   }
-  if (connection.cacheNamespace != namespace) throw new Error('配对已变化，输入已保留，请在原连接核对')
   progress('正在保存提交任务…')
   const taskChoices: UTSJSONObject = {}
   if (choices.model != null) taskChoices['model'] = choices.model
@@ -195,36 +189,13 @@ export async function submitNewConversationTask(draft: NewDraft, mode: string, p
   return id
 }
 
-// 同步接管原草稿后立即允许页面返回。后台只提交一次，未知回执继续沿用原编号核对。
-export function startNewConversationTask(draft: NewDraft, mode: string): void {
-  if (draft.pendingAction.length > 0) throw new Error('原消息正在后台提交，请在执行记录中查看')
-  if (pending.some((item: PendingSubmission): boolean => item.hostId == draft.hostId && item.kind == 'newConversation' && !item.accepted && item.localState != 'failed')) throw new Error('上次提交尚未确认，请先在执行记录中核对')
-  const id = newSubmissionId(), namespace = draft.cacheNamespace
-  const record: PendingSubmission = { hostId: draft.hostId, id, kind: 'newConversation', generation: generationFor(draft.hostId), accepted: false, unknown: false, createdAt: Date.now(), localState: 'running', stage: '正在准备提交', error: '' }
-  pending.push(record)
-  try { savePending() } catch (reason) { pending.splice(pending.length - 1, 1); throw reason }
-  draft.pendingAction = 'send'; draft.pendingCommandId = id
-  // 正文留在原草稿内存中，持久化记录只包含编号和进度，不写入正文、附件或令牌。
-  submitNewConversationTask(draft, mode, (message: string) => {
-    if (connection.cacheNamespace != namespace) return
-    const current = pending.find((item: PendingSubmission): boolean => item.id == id)
-    if (current != null) current.stage = message
-  }, id).catch((reason) => {
-    if (connection.cacheNamespace != namespace) return
-    const current = pending.find((item: PendingSubmission): boolean => item.id == id)
-    if (current != null) { current.localState = current.unknown ? 'unknown' : 'failed'; current.stage = current.unknown ? '提交结果待核对' : '提交失败，输入已保留在原项目草稿'; current.error = (reason as Error).message; savePending() }
-  }).finally(() => {
-    if (draft.pendingCommandId == id) { draft.pendingAction = ''; draft.pendingCommandId = '' }
-  })
-}
-
 // 配对或实例代次改变只重建只读订阅，绝不重发提交。
 export function startSubmissionTasks() {
   if (installed) return
   installed = true
   watch((): string => connection.cacheNamespace, (namespace: string) => {
     submissionTasks.namespace = namespace; submissionTasks.instances = [] as InstanceSubmissionTasks[]; pending.splice(0, pending.length)
-    try { const saved = uni.getStorageSync(pendingKey()); if (typeof saved == 'string' && saved.length > 0) { const records = JSON.parse<PendingSubmission[]>(saved) ?? [] as PendingSubmission[]; records.forEach((record: PendingSubmission) => { if (record.id.length >= 16 && record.hostId.length > 0) { if (!record.accepted && record.localState != 'failed') { record.unknown = true; record.stage = '提交中断，请核对原任务'; record.error = '页面已重新加载，请先核对原编号，勿重复发送' }; pending.push(record) } }) } } catch (_) {}
+    try { const saved = uni.getStorageSync(pendingKey()); if (typeof saved == 'string' && saved.length > 0) { const records = JSON.parse<PendingSubmission[]>(saved) ?? [] as PendingSubmission[]; records.forEach((record: PendingSubmission) => { if (record.id.length >= 16 && record.hostId.length > 0) { if (!record.accepted) record.unknown = true; pending.push(record) } }) } } catch (_) {}
   }, { immediate: true })
   watch((): string => connection.connected.toString() + ':' + connection.computers.map((computer: Computer): string => computer.id + ':' + computer.online.toString() + ':' + (computer.instanceGeneration ?? '')).join('|'), () => {
     submissionTasks.instances = submissionTasks.instances.filter((item: InstanceSubmissionTasks): boolean => connection.computers.some((computer: Computer): boolean => computer.id == item.hostId))

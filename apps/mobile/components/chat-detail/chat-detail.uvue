@@ -26,7 +26,7 @@
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch" @wheel="onTimelineWheel">
         <view id="timeline-content" class="timeline-content" :style="{ minHeight: readingFloor + 'px' }">
         <!-- 历史提示预留固定高度，骨架出现和移除时不改变现有消息的位置。 -->
-        <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><text v-else-if="historyError.length > 0" class="history-note">暂时无法读取更早的聊天，请再次下拉重试</text><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部聊天</text><button v-else class="history-more" @click="loadOlder()">加载更早消息</button></view>
+        <view v-if="connection.snapshot?.supportsHistoryPages == true" class="history-controls"><loading-skeleton v-if="loadingHistory" kind="history" :visible="pageVisible" /><button v-else-if="historyError.length > 0" class="history-more" @click="loadOlder()">加载未完成，点此重试</button><text v-else-if="historyPage?.hasMore == false" class="history-note">已显示全部聊天</text><button v-else class="history-more" @click="loadOlder()">加载更早消息</button></view>
         <!-- 首次同步仅替换正文占位，导航、输入区和失败重试继续沿用真实状态。 -->
         <loading-skeleton v-if="displayConversation == null && connection.connected && detailError.length == 0" kind="conversation" :visible="pageVisible" />
         <view v-else-if="displayConversation == null" class="empty"><text class="empty-title">{{ openingTitle }}</text><text class="empty-detail">{{ detailError.length > 0 ? '未能取得聊天内容，可以重新同步；草稿已保留。' : '连接恢复后会重新同步聊天。' }}</text><button v-if="detailError.length > 0" class="retry-opening button-secondary" @click="refresh">重新同步</button></view>
@@ -878,10 +878,12 @@ function readOlderPage(request: number, preserveFollowing: boolean, remaining: n
     const page = JSON.parse<HistoryPage>(JSON.stringify(result))
     if (page == null || page.messages == null || page.turns == null || (page.hasMore && (page.cursor.length == 0 || page.cursor == cursor))) { historyError.value = '历史游标未推进'; loadingHistory.value = false; return }
     const current = displayConversation.value ?? base
-    const added = page.messages.some((message: ChatMessage): boolean => !current.messages.some((item: ChatMessage): boolean => item.id == message.id))
+    const previousEntries = new Set<string>(timeline.value.map((entry: TimelineEntry): string => entry.id))
     beforeMarkdownLayout()
     const merged = conversationWithHistory(current, page)!
     historyPage.value = { messages: merged.messages, turns: merged.turns ?? [], cursor: page.cursor, hasMore: page.hasMore } as HistoryPage
+    // 完成轮次的工具与说明会折叠进同一过程，只有更早的可见正文出现才结束本次加载。
+    const added = timeline.value.some((entry: TimelineEntry): boolean => entry.role != 'process' && entry.role != 'execution' && !previousEntries.has(entry.id))
     if (!added && page.hasMore) {
       if (remaining > 1) { readOlderPage(request, preserveFollowing, remaining - 1); return }
       historyError.value = '本次历史读取已达上限'; loadingHistory.value = false; return
@@ -895,12 +897,12 @@ function readOlderPage(request: number, preserveFollowing: boolean, remaining: n
   }, (error: Error) => { if (request == historyRequest && isCurrentPage()) { loadingHistory.value = false; historyError.value = error.message } })
 }
 
-// 一个触顶手势只发起一个读取链；空块最多连续推进八页，失败后等新手势重试。
+// 一个手势或点击只发起一个读取链；连续跨过折叠过程页，保留边界和失败后的重试入口。
 function loadOlder(preserveFollowing: boolean = false) {
   if (loadingHistory.value || !isCurrentPage() || !connection.connected || connection.snapshot?.supportsHistoryPages != true || historyPage.value?.hasMore == false || displayConversation.value == null) return
   if (!preserveFollowing) pauseFollowing()
   loadingHistory.value = true; historyError.value = ''
-  readOlderPage(++historyRequest, preserveFollowing, 8)
+  readOlderPage(++historyRequest, preserveFollowing, 32)
 }
 // 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
 function scheduleTimelineFill() {
