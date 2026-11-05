@@ -26,6 +26,7 @@ export type RuntimeStatus = {
   instances: { label: string; ready: boolean }[]
   configPath: string
   backgroundSyncEnabled?: boolean
+  startupEnabled?: boolean
 }
 
 export type LogEntry = { time: number | string; level: string; message: string }
@@ -37,5 +38,6 @@ export type DesktopManager = {
   saveConfig(input: { expectedRevision: string; values: ConfigValues }): Promise<ConfigSnapshot>
   readLogs(input: { limit?: number }): Promise<{ entries: LogEntry[] }>
   setBackgroundSync(input: { enabled: boolean }): Promise<{ backgroundSyncEnabled: boolean }>
+  setStartup(input: { enabled: boolean }): Promise<{ startupEnabled: boolean }>
   restart(): Promise<unknown>
 }

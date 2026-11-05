@@ -80,6 +80,7 @@ else {
     handle('manager:save-config', value => controller.request('config.save', value));
     handle('manager:read-logs', value => controller.request('logs.read', value));
     handle('manager:set-background-sync', value => controller.request('sync.set', value));
+    handle('manager:set-startup', value => controller.request('startup.set', value));
     handle('manager:restart', () => controller.request('service.restart'));
     tray = new Tray(nativeImage.createFromPath(path.join(directory, 'tray.png')));
     tray.setToolTip('CodeRoam 电脑管理');

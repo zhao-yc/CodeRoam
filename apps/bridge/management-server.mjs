@@ -45,14 +45,14 @@ function localAddress() {
 }
 
 /** 固定 worker 的本机能力接口，短连接一条请求，令牌仅在私有端点文件中存放。 */
-export async function startManagementServer({worker, workerConfigPath = null, status, restart, setBackgroundSync}) {
+export async function startManagementServer({worker, workerConfigPath = null, status, restart, setBackgroundSync, setStartup}) {
   const address = localAddress(), token = randomBytes(32).toString('hex'), identity = managementWorkerIdentity(worker);
   const revision = workerConfigPath ? createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') : null;
   const file = path.join(worker.runDirectory, 'management.json'), sockets = new Set(); let closed = false;
   const current = () => {
     if (workerConfigPath && createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') !== revision) throw fail('托管配置已经变化，请重新连接管理服务', 'MANAGEMENT_CONFIG_CHANGED');
   };
-  const dispatch = async (method, params) => {
+  const dispatch = async (method, params, socket) => {
     current();
     if (!object(params)) throw fail('管理操作参数无效', 'MANAGEMENT_REQUEST_INVALID');
     if (['status', 'config.read', 'service.restart'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
@@ -74,6 +74,15 @@ export async function startManagementServer({worker, workerConfigPath = null, st
       if (!setBackgroundSync) throw fail('此守护版本暂不支持切换后台数据同步', 'MANAGEMENT_METHOD_INVALID');
       return setBackgroundSync(params.enabled);
     }
+    if (method === 'startup.set') {
+      if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
+        throw fail('开机启动开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
+      }
+      if (!setStartup) throw fail('此守护暂不支持切换开机启动', 'MANAGEMENT_METHOD_INVALID');
+      // 只有已认证且参数有效的开机启动请求可以等待 Windows 管理员确认。
+      socket.setTimeout(125000);
+      return setStartup(params.enabled);
+    }
     throw fail('不支持的管理方法', 'MANAGEMENT_METHOD_INVALID');
   };
   const server = net.createServer(socket => {
@@ -91,7 +100,7 @@ export async function startManagementServer({worker, workerConfigPath = null, st
         request = JSON.parse(buffer.subarray(0, newline).toString('utf8'));
         if (!object(request) || request.version !== 1 || typeof request.id !== 'string' || !/^[a-f0-9-]{36}$/.test(request.id) || typeof request.token !== 'string' || !/^[a-f0-9]{64}$/.test(request.token) || !timingSafeEqual(Buffer.from(request.token), Buffer.from(token))) return socket.destroy();
         if (Object.keys(request).some(key => !['version', 'id', 'token', 'method', 'params'].includes(key))) throw fail('管理请求包含不支持的字段', 'MANAGEMENT_REQUEST_INVALID');
-        const result = await dispatch(request.method, request.params ?? {});
+        const result = await dispatch(request.method, request.params ?? {}, socket);
         socket.end(JSON.stringify({version: 1, id: request.id, pid: process.pid, result}) + '\n');
       } catch (error) {
         if (!request?.id) return socket.destroy();

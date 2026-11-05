@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('desktopManager', Object.freeze({
   saveConfig: value => invoke('manager:save-config', value),
   readLogs: value => invoke('manager:read-logs', value ?? {}),
   setBackgroundSync: value => invoke('manager:set-background-sync', value),
+  setStartup: value => invoke('manager:set-startup', value),
   restart: () => invoke('manager:restart'),
 }));

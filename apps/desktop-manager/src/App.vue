@@ -4,6 +4,7 @@ import Icon from './Icon.vue'
 import type { ConfigSnapshot, ConfigValues, LogEntry, ManagerContext, RuntimeStatus } from './types'
 
 type Page = 'overview' | 'config' | 'logs' | 'about'
+type ServiceSetting = 'backgroundSyncEnabled' | 'startupEnabled'
 const api = window.desktopManager
 const page = ref<Page>('overview')
 const context = ref<ManagerContext | null>(null)
@@ -11,7 +12,7 @@ const status = ref<RuntimeStatus | null>(null)
 const config = ref<ConfigSnapshot | null>(null)
 const logs = ref<LogEntry[]>([])
 const loading = ref(true), refreshing = ref(false), choosing = ref(false), saving = ref(false), restarting = ref(false), reloadingConfig = ref(false), configLoading = ref(false), logsLoading = ref(false)
-const changingSync = ref(false), restartPreviousPid = ref<number | null>(null)
+const changingSetting = ref<ServiceSetting | null>(null), restartPreviousPid = ref<number | null>(null)
 const error = ref(''), statusError = ref(''), configError = ref(''), feedback = ref(''), logError = ref(''), confirmRestart = ref(false), lastUpdated = ref<Date | null>(null)
 const form = reactive({ label: '', relayUrl: '', multiInstance: true, cacheHours: 2, maxEntries: 64 })
 let timer: ReturnType<typeof setInterval> | undefined
@@ -32,16 +33,25 @@ const statusTone = computed(() => status.value?.running && status.value.connecte
 const latestLogs = computed(() => logs.value.slice(-5).reverse())
 const logRows = computed(() => logs.value.slice().reverse())
 const version = computed(() => context.value?.version || '—')
-const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value || changingSync.value)
-const backgroundSyncEnabled = computed(() => status.value?.backgroundSyncEnabled)
-const syncDisabled = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || !status.value?.running || typeof backgroundSyncEnabled.value !== 'boolean')
-const syncLabel = computed(() => {
-  if (changingSync.value) return '正在应用…'
+const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value || changingSetting.value !== null)
+const serviceSettings: { key: ServiceSetting; descriptionId: string; title: string; description: string; offLabel: string }[] = [
+  { key: 'backgroundSyncEnabled', descriptionId: 'background-sync-description', title: '后台数据同步', description: '暂停后仍可手动打开聊天、发送消息和处理审批。', offLabel: '已暂停' },
+  { key: 'startupEnabled', descriptionId: 'startup-description', title: '开机启动', description: '开启后，守护随 Windows 启动，登录后启动桥接。关闭后改为手动启动，当前服务继续运行。切换时需确认 Windows 管理员授权。', offLabel: '已关闭' },
+]
+const serviceSettingsLocked = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || !status.value?.running)
+
+function serviceSettingDisabled(key: ServiceSetting): boolean {
+  return serviceSettingsLocked.value || typeof status.value?.[key] !== 'boolean'
+}
+
+function serviceSettingLabel(key: ServiceSetting, offLabel: string): string {
+  if (changingSetting.value === key) return key === 'startupEnabled' ? '等待 Windows 确认…' : '正在应用…'
   if (restarting.value || restartPreviousPid.value !== null) return '等待后台重启'
   if (!status.value?.running) return '等待后台就绪'
-  if (typeof backgroundSyncEnabled.value !== 'boolean') return '当前服务版本暂不支持'
-  return backgroundSyncEnabled.value ? '已开启' : '已暂停'
-})
+  const enabled = status.value[key]
+  if (typeof enabled !== 'boolean') return key === 'startupEnabled' ? '当前服务暂不支持' : '当前服务版本暂不支持'
+  return enabled ? '已开启' : offLabel
+}
 
 function message(reason: unknown): string { return reason instanceof Error ? reason.message : '操作未完成，请重试' }
 function current(requestGeneration: number): boolean { return alive && requestGeneration === generation }
@@ -79,7 +89,7 @@ async function loadMissingConfig(requestGeneration = generation) {
 
 // 每次选择服务都会推进代次，旧服务的异步回执不会污染新界面。
 async function refreshStatus(showFeedback = false) {
-  if (!api || !ready.value || refreshing.value || changingSync.value || restarting.value) return
+  if (!api || !ready.value || refreshing.value || changingSetting.value !== null || restarting.value) return
   refreshing.value = true
   const requestGeneration = generation
   const request = ++statusRequest
@@ -133,24 +143,27 @@ async function chooseWorker() {
 }
 
 // 开关保持守护上次确认的值，写入失败时由新的状态读取核对实际结果。
-async function toggleBackgroundSync() {
-  const enabled = backgroundSyncEnabled.value
-  if (!api || syncDisabled.value || typeof enabled !== 'boolean') return
+async function toggleServiceSetting(key: ServiceSetting) {
+  const enabled = status.value?.[key]
+  if (!api || serviceSettingDisabled(key) || typeof enabled !== 'boolean') return
   const requestGeneration = generation
-  changingSync.value = true
+  changingSetting.value = key
   error.value = ''
   invalidateStatus()
   let confirmed = false
   try {
-    const result = await api.setBackgroundSync({ enabled: !enabled })
+    const input = { enabled: !enabled }
+    const actual = key === 'startupEnabled'
+      ? (await api.setStartup(input))?.startupEnabled
+      : (await api.setBackgroundSync(input))?.backgroundSyncEnabled
     if (!current(requestGeneration)) return
-    if (typeof result?.backgroundSyncEnabled !== 'boolean' || status.value === null) throw new Error('守护进程未确认后台数据同步状态')
-    status.value = { ...status.value, backgroundSyncEnabled: result.backgroundSyncEnabled }
+    if (typeof actual !== 'boolean' || status.value === null) throw new Error('守护进程未确认开关状态')
+    status.value = { ...status.value, [key]: actual }
     confirmed = true
   } catch (reason) { if (current(requestGeneration)) error.value = message(reason) }
   finally {
     if (current(requestGeneration)) {
-      changingSync.value = false
+      changingSetting.value = null
       if (!confirmed) void refreshStatus()
     }
   }
@@ -247,7 +260,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
     </aside>
 
     <main class="main-pane">
-      <header class="page-header"><div><div class="page-eyebrow">电脑连接管理</div><h1>{{ currentPage.title }}</h1><p>{{ currentPage.subtitle }}</p></div><div v-if="ready" class="header-actions"><button class="button secondary icon-button" :disabled="refreshing || restarting || changingSync" aria-label="刷新运行状态" title="刷新运行状态" @click="refreshStatus(true)"><Icon name="refresh" :class="{ spinning: refreshing }" :size="18" /></button><button class="button secondary" :disabled="!status?.running || operationBusy || restartPreviousPid !== null" @click="confirmRestart = true"><Icon name="power" :size="17" />{{ restarting || restartPreviousPid !== null ? '正在重启…' : '重启服务' }}</button></div></header>
+      <header class="page-header"><div><div class="page-eyebrow">电脑连接管理</div><h1>{{ currentPage.title }}</h1><p>{{ currentPage.subtitle }}</p></div><div v-if="ready" class="header-actions"><button class="button secondary icon-button" :disabled="refreshing || restarting || changingSetting !== null" aria-label="刷新运行状态" title="刷新运行状态" @click="refreshStatus(true)"><Icon name="refresh" :class="{ spinning: refreshing }" :size="18" /></button><button class="button secondary" :disabled="!status?.running || operationBusy || restartPreviousPid !== null" @click="confirmRestart = true"><Icon name="power" :size="17" />{{ restarting || restartPreviousPid !== null ? '正在重启…' : '重启服务' }}</button></div></header>
 
       <div v-if="error" class="notice error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span><button class="notice-close" aria-label="关闭错误提示" @click="error = ''"><Icon name="close" :size="16" /></button></div>
       <div v-if="statusError" class="notice error" role="alert"><Icon name="signal" :size="18" /><span>运行状态：{{ statusError }}</span><button class="notice-close" aria-label="关闭状态提示" @click="statusError = ''"><Icon name="close" :size="16" /></button></div>
@@ -271,16 +284,16 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
             <div><dt>配置文件</dt><dd class="path-value" :title="status?.configPath">{{ status?.configPath || '—' }}</dd></div>
             <div><dt>生效版本</dt><dd class="mono">{{ shortRevision(status?.activeRevision) }}<span v-if="status?.restartRequired" class="sub-value">已保存 {{ shortRevision(status.savedRevision) }}</span></dd></div>
           </dl>
-          <div class="setting-row background-sync-setting">
+          <div v-for="setting in serviceSettings" :key="setting.key" class="setting-row service-setting">
             <div>
-              <strong>后台数据同步</strong>
-              <p id="background-sync-description">暂停后仍可手动打开聊天、发送消息和处理审批。</p>
+              <strong>{{ setting.title }}</strong>
+              <p :id="setting.descriptionId">{{ setting.description }}</p>
             </div>
-            <div class="background-sync-control">
-              <span role="status">{{ syncLabel }}</span>
+            <div class="service-setting-control">
+              <span role="status">{{ serviceSettingLabel(setting.key, setting.offLabel) }}</span>
               <label class="toggle">
-                <input type="checkbox" role="switch" aria-label="后台数据同步" aria-describedby="background-sync-description"
-                  :checked="backgroundSyncEnabled === true" :disabled="syncDisabled" @click.prevent="toggleBackgroundSync" />
+                <input type="checkbox" role="switch" :aria-label="setting.title" :aria-describedby="setting.descriptionId"
+                  :checked="status?.[setting.key] === true" :disabled="serviceSettingDisabled(setting.key)" @click.prevent="toggleServiceSetting(setting.key)" />
                 <span></span>
               </label>
             </div>
@@ -322,12 +335,12 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
 </template>
 
 <style scoped>
-.background-sync-setting {
+.service-setting {
   margin: 0 23px 19px;
   padding-top: 15px;
 }
 
-.background-sync-control {
+.service-setting-control {
   display: flex;
   align-items: center;
   gap: 10px;

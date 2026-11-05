@@ -41,14 +41,21 @@ test('真实本机管道仅返回配置投影，保存后保留敏感字段并�
 
 test('伪造能力令牌、超限请求和未授权方法均不能执行服务动作',async t=>{
   const f=fixture(t);let actions=0;
-  const server=await startManagementServer({...f,status:async()=>({}),restart:async()=>{actions++;return {};}});f.after.push(()=>server.close());
+  const server=await startManagementServer({...f,status:async()=>({}),restart:async()=>{actions++;return {};},setStartup:async enabled=>{actions++;return {startupEnabled:enabled};}});f.after.push(()=>server.close());
   const connection=readManagementConnection(f.workerConfigPath);
   const raw=body=>new Promise(resolve=>{let output='';const socket=net.createConnection(connection.address);socket.on('error',()=>{});socket.on('data',data=>output+=data);socket.once('connect',()=>socket.write(body));socket.once('close',()=>resolve(output));});
   assert.equal(await raw(JSON.stringify({version:1,id:randomUUID(),token:'0'.repeat(64),method:'service.restart',params:{}})+'\n'),'');
+  assert.equal(await raw(JSON.stringify({version:1,id:randomUUID(),token:'0'.repeat(64),method:'startup.set',params:{enabled:false}})+'\n'),'');
   assert.equal(await raw('x'.repeat(65537)),'');
   await assert.rejects(connectManagement(f.workerConfigPath).request('shell.exec',{}),{code:'MANAGEMENT_METHOD_INVALID'});
   const error=JSON.parse(await raw(JSON.stringify({version:1,id:randomUUID(),token:connection.token,method:'shell.exec',params:{}})+'\n'));
   assert.equal(error.error.code,'MANAGEMENT_METHOD_INVALID');assert.equal(actions,0);
+  const client=connectManagement(f.workerConfigPath);
+  await assert.rejects(client.request('startup.set',{enabled:'false'}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  await assert.rejects(client.request('startup.set',{enabled:false,service:'synthetic-service'}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  assert.equal(actions,0);
+  assert.deepEqual(await client.request('startup.set',{enabled:false}),{startupEnabled:false});
+  assert.equal(actions,1);
 });
 
 test('托管文件换源后拒绝旧管道，另一服务端点不能串用',async t=>{

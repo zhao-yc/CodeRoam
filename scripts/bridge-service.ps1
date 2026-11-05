@@ -61,7 +61,7 @@ function Prepare-Install {
   $node=& node -p "require('node:fs').realpathSync(process.execPath)"
   if((& $node --version) -notmatch '^v24\.'){throw '服务要求 Node.js 24'}
   New-Item -ItemType Directory -Force -Path (Join-Path $releaseRoot 'supervisor') | Out-Null
-  foreach($name in @('service-supervisor.mjs','service-lifecycle.mjs','runtime-lock.mjs','management-server.mjs','management-client.mjs','management-config.mjs','management-files.mjs')){Copy-Item -LiteralPath (Join-Path $project "apps/bridge/$name") -Destination (Join-Path $releaseRoot "supervisor/$name")}
+  foreach($name in @('service-supervisor.mjs','service-lifecycle.mjs','runtime-lock.mjs','management-server.mjs','management-client.mjs','management-config.mjs','management-files.mjs','management-startup.mjs')){Copy-Item -LiteralPath (Join-Path $project "apps/bridge/$name") -Destination (Join-Path $releaseRoot "supervisor/$name")}
   $config=Read-Json (Join-Path $project '.local/bridge.json')
   $data=if($config.PSObject.Properties.Name -contains 'dataPath'){$config.dataPath}else{'.local/bridge'}
   $worker=@{entry=$target;bridgeConfig=(Join-Path $project '.local/bridge.json');projectRoot=$project;runDirectory=(Join-Path $project '.local/run');statusFile=([IO.Path]::GetFullPath((Join-Path $project (Join-Path $data 'runtime-status.json'))));logDirectory=(Join-Path $local 'logs')}
@@ -112,7 +112,6 @@ if($Action -eq 'install') {
   Copy-Item -LiteralPath (Join-Path $local 'service.json') -Destination (Join-Path $systemRoot 'service.json')
   foreach($protectedFile in @($installed,(Join-Path $systemRoot 'service.json'))){$fileAcl=Get-Acl -LiteralPath $protectedFile;$fileAcl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')));Set-Acl -LiteralPath $protectedFile -AclObject $fileAcl}
   if($null -eq $existing){New-Service -Name $serviceName -DisplayName 'CodeRoam 桥接托管服务' -BinaryPathName ('"'+$installed+'"') -StartupType Automatic -Description '开机启动托管器；登录后以原账号运行桥接，异常退出自动恢复，不改变 Codex 审批与沙箱。'|Out-Null}
-  Native-Service @('config',$serviceName,'start=','auto')
   Native-Service @('failure',$serviceName,'reset=','86400','actions=','restart/5000/restart/15000/restart/30000')
   Native-Service @('failureflag',$serviceName,'1')
   # 目标用户可查询、启停服务，不能修改服务程序或系统账户。
