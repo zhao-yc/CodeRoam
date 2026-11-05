@@ -143,6 +143,18 @@ test('模型目录不能确认默认强度时明确读取失败，有具体强�
   await assert.rejects(adapter.readSettings('thread', 'phone'), { code: 'SETTINGS_UNAVAILABLE' });
 });
 
+test('协作模式已选强度时回读不能被旧保存档位覆盖', async t => {
+  for (const effort of ['low', 'medium', null]) {
+    const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } });
+    t.after(() => adapter.close());
+    client.state.latestReasoningEffort = effort;
+    await adapter.watch('thread', 'phone');
+    assert.equal((await adapter.readSettings('thread', 'phone')).settings.effort, current.effort);
+    assert.equal(adapter.snapshot(client.state).executionSettings.effort, current.effort);
+    assert.deepEqual(client.calls.map(call => call.method), ['thread-follower-read-model-settings']);
+  }
+});
+
 test('读取回执模型发生变化时不继承旧模型强度', async t => {
   const client = new SettingsDesktop(), adapter = new DesktopAdapter({ client, modelCatalog: { read: () => models } });
   t.after(() => adapter.close()); await adapter.watch('thread', 'phone');

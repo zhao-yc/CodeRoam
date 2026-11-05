@@ -68,6 +68,36 @@ test('入队回执丢失只查询原编号，确认存在后继续，不再次�
   assert.equal(f.submissionTasks.pending[0].accepted, true);
 });
 
+test('新聊天提交固定界面默认强度，不能因未重复点选而丢失，也不推断权限确认', async () => {
+  for (const mode of ['desktopIpc', 'nativeDraft']) {
+    const f = fixture(); f.draft.choices = {};
+    const execution = { model: 'model-a', effort: 'xhigh', serviceTier: '', mode: 'default' };
+    await f.submitNewConversationTask(f.draft, mode, () => {
+      // 附件上传与入队异步期间刷新了电脑默认值，原提交仍须保持点击时的档位。
+      execution.effort = 'low';
+    }, execution);
+    const sent = f.calls.find(call => call.method === 'tasks.submit');
+    assert.deepEqual(sent.params.payload.choices, { model: 'model-a', effort: 'xhigh', serviceTier: '', mode: 'default' });
+    assert.deepEqual(plain(f.draft.choices), {});
+  }
+});
+
+test('补全默认执行设置后仍消费原选择快照，保留上传期间新选项', async () => {
+  const f = fixture(); f.draft.choices = { effort: 'xhigh' };
+  await f.submitNewConversationTask(f.draft, 'desktopIpc', () => { f.draft.choices = { effort: 'high' }; },
+    { model: 'model-a', effort: 'xhigh', serviceTier: '', mode: 'default' });
+  assert.equal(f.calls.find(call => call.method === 'tasks.submit').params.payload.choices.effort, 'xhigh');
+  assert.equal(f.draft.choices.effort, 'high');
+});
+
+test('未解析的默认强度不能开始上传或提交', async () => {
+  const f = fixture();
+  await assert.rejects(f.submitNewConversationTask(f.draft, 'desktopIpc', () => {},
+    { model: 'model-a', effort: '', serviceTier: '', mode: 'default' }), /执行设置尚未读取完成/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.draft.text, '合成首条消息');
+});
+
 test('未找到的丢失回执保留本地保护和输入；重复提交被阻止直到人工核对', async () => {
   const f = fixture(); f.loseReceipt({ missing: true });
   await assert.rejects(f.submitNewConversationTask(f.draft, 'nativeDraft', () => {}), /入队尚未确认/);

@@ -63,6 +63,29 @@ test('首条 IPC 固定已核验沙箱和审查设置，完整访问须独立确
   assert.equal(f.requests[1][1].turnStart.request.permissions,full.permissions);
 });
 
+test('普通启动与多实例的空聊天首轮均保留手机显示的极高，原空值不覆盖所选档位',async context=>{
+  for(const directIpc of [true,false]) {
+    const f=adapterFixture(context),client=f.adapter.client;
+    client.instance={platform:'win32',directIpc,routerManaged:!directIpc,ready:true,alive:true,generation};
+    client.allowedClients=new Set(['example-desktop']);
+    Object.assign(f.state,{latestModel:'model-a',latestReasoningEffort:null,
+      latestCollaborationMode:{mode:'default',settings:{model:'model-a',reasoning_effort:null}}});
+    f.adapter.modelCatalog={read:()=>[{id:'model-a',defaultEffort:'low',efforts:['low','xhigh'],speeds:[{id:''}]}]};
+    const request=client.request;
+    client.request=async(...args)=>args[0]==='thread-follower-read-model-settings'
+      ? {resultType:'success',result:{settings:{model:'model-a',reasoningEffort:null}}}
+      : request(...args);
+    await f.adapter.operate('turn.send',{...params,choices:{model:'model-a',effort:'xhigh',serviceTier:'',mode:'default'}},command,phone,()=>{},f.guard);
+    const [method,payload,,routing]=f.requests[0];
+    assert.equal(method,'thread-follower-start-turn');
+    assert.equal(payload.turnStart.request.effort,'xhigh');
+    assert.equal(payload.turnStart.request.collaborationMode.settings.reasoning_effort,'xhigh');
+    assert.equal(routing.targetClientId,'example-desktop');
+    assert.equal(f.state.latestReasoningEffort,null);
+    assert.equal(f.requests.length,1);
+  }
+});
+
 test('外层首条保护参与账本去重且只接纳就绪的普通单实例',async context=>{
   const adapter=new EventEmitter(), journal=new Journal();
   adapter.client={instance:{directIpc:true,ready:true,alive:true,generation},assertCurrent(){}};
