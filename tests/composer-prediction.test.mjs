@@ -12,6 +12,23 @@ import {validateRequest} from '../packages/protocol/contracts.mjs';
 function adapter(){const entry={owner:{hostId:'local',clientId:'desktop-1'},watchers:new Set(['phone']),state:{turns:[{turnId:'turn-1',status:'completed'}]}};return {entry,conversations:new Map([['thread-1',entry]]),subscribed(id,device){assert.equal(id,'thread-1');assert.ok(entry.watchers.has(device));return entry;},snapshot(state){return {activeTurnId:state.active??'',status:state.active?'active':'idle'};}};}
 function reader(evaluate){return new ComposerPredictionReader({discover:async()=>[{port:12345}],fetcher:async()=>({ok:true,text:async()=>JSON.stringify([{type:'page',url:'app://-/index.html',id:'ABC',webSocketDebuggerUrl:'ws://attacker.invalid/'}])}),evaluate});}
 const prediction={threadId:'thread-1',sourceTurnId:'turn-1',text:'中文“原文”  保留\n下一行'};
+test('无调试端口时通过已绑定桌面的原生缓存返回预测',async t=>{
+  let closed=false;
+  const r=new ComposerPredictionReader({discover:async()=>assert.fail('原生缓存成功时无需扫描页面'),memoryReader:{
+    async read(a,hostId,threadId,turnId){assert.equal(hostId,'local');assert.equal(threadId,'thread-1');assert.equal(turnId,'turn-1');return {available:true,prediction};},
+    close(){closed=true;}
+  }});
+  t.after(()=>r.close());assert.deepEqual(await r.read(adapter(),'thread-1','phone'),{prediction});r.close();assert.equal(closed,true);
+});
+test('原生缓存读取中取消订阅后不显示迟到预测',async t=>{
+  const a=adapter();
+  const r=new ComposerPredictionReader({memoryReader:{async read(){a.entry.watchers.clear();return {available:true,prediction};},close(){}}});
+  t.after(()=>r.close());assert.deepEqual(await r.read(a,'thread-1','phone'),{prediction:null});
+});
+test('原生缓存明确为空时不使用其他窗口的旧页面预测补齐',async t=>{
+  const r=new ComposerPredictionReader({discover:async()=>assert.fail('空缓存不能跨路径猜测'),memoryReader:{async read(){return {available:true,prediction:null};},close(){}}});
+  t.after(()=>r.close());assert.deepEqual(await r.read(adapter(),'thread-1','phone'),{prediction:null});
+});
 test('原文无损读取，忽略目标返回的任意调试URL',async()=>{const r=reader(async(url,expression)=>{assert.equal(url,'ws://127.0.0.1:12345/devtools/page/ABC');assert.ok(expression.includes('thread-1'));return [prediction];});assert.deepEqual(await r.read(adapter(),'thread-1','phone'),{prediction});});
 test('读取期间换轮次、取消订阅或更换所有者均丢弃回执',async()=>{for(const change of [a=>a.entry.state.turns[0].turnId='turn-2',a=>a.entry.watchers.clear(),a=>a.entry.owner={hostId:'local',clientId:'desktop-2'}]){const a=adapter();const r=reader(async()=>{change(a);return [prediction];});assert.deepEqual(await r.read(a,'thread-1','phone'),{prediction:null});}});
 test('桌面真实历史分片只读取最新端已完成轮次，分页缺口与新轮次不回退旧预测',()=>{
