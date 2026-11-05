@@ -3,6 +3,7 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawn} from 'node:child_process';
 import {parseArgs} from 'node:util';
+import {once} from 'node:events';
 import {lifecycleEvent} from './service-lifecycle.mjs';
 import {acquireRuntimeLock} from './runtime-lock.mjs';
 import {readManagedConfig} from './management-config.mjs';
@@ -20,7 +21,7 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
   const startupOptions={workerConfigPath,projectRoot};
   const startup=createWindowsStartupControl(startupOptions)??createMacStartupControl(startupOptions);
   let child=null,timer=null,stopping=false,attempt=0,startedAt=0,activeRevision='',management=null,restarting=false,manualRestart=false,changingSync=false;
-  let bridgePaused=false;
+  let bridgePaused=false, quitting=false, quitTimer=null;
   const pending=new Map();
   const save=extra=>fs.writeFileSync(stateFile,JSON.stringify({supervisorPid:process.pid,childPid:child?.pid??null,entry,updatedAt:Date.now(),...extra}));
   const event=(name,data={})=>lifecycleEvent(log,name,data);
@@ -91,12 +92,33 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
     finally{restarting=false;}
   }
   function startBridge() {
-    if(restarting||changingSync||stopping||(bridgePaused&&child))throw Object.assign(new Error('服务正在处理管理操作，请稍后再试'),{code:'MANAGEMENT_BUSY'});
+    if(quitting||restarting||changingSync||stopping||(bridgePaused&&child))throw Object.assign(new Error('服务正在处理管理操作，请稍后再试'),{code:'MANAGEMENT_BUSY'});
     if(!bridgePaused)return {accepted:true};
     bridgePaused=false;attempt=0;
     try {start();}
     catch(error){bridgePaused=true;throw error;}
     event('management_start_requested');
+    return {accepted:true};
+  }
+  /** 先确认桥接已退出，再锁住启动入口，交给管理端关闭当前托管会话。 */
+  async function prepareQuit() {
+    if(quitting)throw Object.assign(new Error('服务正在退出，请稍后再试'),{code:'MANAGEMENT_BUSY'});
+    quitting=true;
+    try {
+      const wasRunning=!bridgePaused;
+      await stopOrRestart(true);
+      if(child)await once(child,'close',{signal:AbortSignal.timeout(5000)});
+      // 客户端意外退出时，托管器仍可恢复手动启动入口。
+      quitTimer=setTimeout(cancelQuit,45000);quitTimer.unref();
+      return {pid:process.pid,node:process.execPath,supervisor:fileURLToPath(import.meta.url),wasRunning};
+    }catch(error){quitting=false;throw error;}
+  }
+  function cancelQuit() {
+    clearTimeout(quitTimer);quitTimer=null;quitting=false;
+    return {canceled:true};
+  }
+  function confirmQuit() {
+    if(!quitting||child||!bridgePaused)throw Object.assign(new Error('服务尚未准备退出'),{code:'MANAGEMENT_NOT_READY'});
     return {accepted:true};
   }
   /** 只在下次启动时轮换本项目日志，防止长期运行无限增长。 */
@@ -137,6 +159,7 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
   try{management=await startManagementServer({
     worker:config,workerConfigPath,status,restart:()=>stopOrRestart(false),stopBridge:()=>stopOrRestart(true),startBridge,
     setBackgroundSync,setStartup:startup?.set,
+    prepareQuit, cancelQuit, confirmQuit, onQuit:stop,
   });}
   catch(error){release();throw error;}
   try{event('supervisor_started',{parentPid:process.ppid});start();}

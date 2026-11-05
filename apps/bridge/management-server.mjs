@@ -48,7 +48,7 @@ function localAddress() {
 }
 
 /** 固定 worker 的本机能力接口，短连接一条请求，令牌仅在私有端点文件中存放。 */
-export async function startManagementServer({worker, workerConfigPath = null, status, restart, startBridge, stopBridge, setBackgroundSync, setStartup}) {
+export async function startManagementServer({worker, workerConfigPath = null, status, restart, startBridge, stopBridge, setBackgroundSync, setStartup, prepareQuit, cancelQuit, confirmQuit, onQuit}) {
   const address = localAddress(), token = randomBytes(32).toString('hex'), identity = managementWorkerIdentity(worker);
   const revision = workerConfigPath ? createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') : null;
   const file = path.join(worker.runDirectory, 'management.json'), sockets = new Set(); let closed = false;
@@ -58,7 +58,7 @@ export async function startManagementServer({worker, workerConfigPath = null, st
   const dispatch = async (method, params, socket) => {
     current();
     if (!object(params)) throw fail('管理操作参数无效', 'MANAGEMENT_REQUEST_INVALID');
-    if (['status', 'config.read', 'service.restart', 'service.start', 'service.stop'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
+    if (['status', 'config.read', 'service.restart', 'service.start', 'service.stop', 'service.prepareQuit', 'service.cancelQuit', 'service.quit'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
     if (method === 'status') return status();
     if (method === 'config.read') return readManagedConfig(worker.bridgeConfig);
     if (method === 'config.save') {
@@ -72,6 +72,12 @@ export async function startManagementServer({worker, workerConfigPath = null, st
     if (method === 'service.restart') return restart();
     if (method === 'service.start' && startBridge) return startBridge();
     if (method === 'service.stop' && stopBridge) return stopBridge();
+    if (method === 'service.prepareQuit' && prepareQuit) {
+      socket.setTimeout(25000);
+      return prepareQuit();
+    }
+    if (method === 'service.cancelQuit' && cancelQuit) return cancelQuit();
+    if (method === 'service.quit' && confirmQuit) return confirmQuit();
     if (method === 'sync.set') {
       if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
         throw fail('后台数据同步开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
@@ -106,7 +112,7 @@ export async function startManagementServer({worker, workerConfigPath = null, st
         if (!object(request) || request.version !== 1 || typeof request.id !== 'string' || !/^[a-f0-9-]{36}$/.test(request.id) || typeof request.token !== 'string' || !/^[a-f0-9]{64}$/.test(request.token) || !timingSafeEqual(Buffer.from(request.token), Buffer.from(token))) return socket.destroy();
         if (Object.keys(request).some(key => !['version', 'id', 'token', 'method', 'params'].includes(key))) throw fail('管理请求包含不支持的字段', 'MANAGEMENT_REQUEST_INVALID');
         const result = await dispatch(request.method, request.params ?? {}, socket);
-        socket.end(JSON.stringify({version: 1, id: request.id, pid: process.pid, result}) + '\n');
+        socket.end(JSON.stringify({version: 1, id: request.id, pid: process.pid, result}) + '\n', request.method === 'service.quit' ? onQuit : undefined);
       } catch (error) {
         if (!request?.id) return socket.destroy();
         const safe = typeof error?.code === 'string' && /^MANAGEMENT_[A-Z_]+$/.test(error.code);

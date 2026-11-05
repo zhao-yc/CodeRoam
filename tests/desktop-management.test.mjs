@@ -13,6 +13,7 @@ import {connectManagement, readManagementConnection} from '../apps/bridge/manage
 import {installManagementChild} from '../apps/bridge/management-child.mjs';
 import {BridgeAgent} from '../apps/bridge/agent.mjs';
 import {Journal} from '../apps/bridge/journal.mjs';
+import {createServiceSession} from '../apps/desktop-manager/electron/service-session.mjs';
 
 /** 每例只创建合成托管配置，所有路径和进程均属于本测试。 */
 function fixture(t) {
@@ -171,4 +172,60 @@ test('真实托管管理重启只关闭合成子进程，保存配置要等重�
   assert.equal(resumed.supervisorPid,before.supervisorPid);
   assert.deepEqual(await client.request('service.start'),{accepted:true});
   assert.equal((await client.request('status')).pid,resumed.pid);
+});
+
+for(const multiInstance of [false,true])test(`退出和重新打开托盘会收尾并恢复${multiInstance?'多实例模式':'普通启动'}的同一服务`,async t=>{
+  const f=fixture(t);
+  const helper=pathToFileURL(path.resolve('apps/bridge/management-child.mjs')).href;
+  const config=JSON.parse(fs.readFileSync(f.worker.bridgeConfig,'utf8'));
+  fs.writeFileSync(f.worker.bridgeConfig,JSON.stringify({...config,multiInstance}));
+  fs.writeFileSync(f.worker.entry,`
+    import fs from 'node:fs';
+    import {installManagementChild} from ${JSON.stringify(helper)};
+    const config=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+    const instances=(config.multiInstance?['合成实例一','合成实例二']:['合成普通实例']).map(label=>({label,ready:true}));
+    const agents=instances.map(({label})=>({setManagementDraining(){},managementIdle:()=>!fs.existsSync(label)}));
+    const timer=setInterval(()=>{},1000);
+    installManagementChild({
+      agents:()=>agents,drain:()=>{},
+      status:()=>({pid:process.pid,connected:true,instances}),
+      close:async()=>clearInterval(timer),
+    });
+  `);
+  const supervisor=spawn(process.execPath,['apps/bridge/service-supervisor.mjs','--config',f.workerConfigPath],{windowsHide:true,stdio:'ignore'});
+  f.after.push(()=>{
+    try{
+      const {supervisorPid,childPid}=JSON.parse(fs.readFileSync(path.join(f.worker.logDirectory,'supervisor.json'),'utf8'));
+      for(const pid of [childPid,supervisorPid])if(pid)try{process.kill(pid);}catch{}
+    }catch{}
+    if(supervisor.exitCode===null&&supervisor.signalCode===null)supervisor.kill();
+  });
+  const client=connectManagement(f.workerConfigPath);
+  const file=path.join(f.root,'resume.json');
+  // 使用真实本机 IPC 和合成托管进程。平台托管命令留给各系统的真实验收。
+  const session=createServiceSession({file,connect:connectManagement,platform:'linux'});
+  let before;
+  for(let attempt=0;attempt<75;attempt++){
+    try{before=await client.request('status');if(before.connected)break;}catch{}
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.equal(before?.connected,true);
+  const labels=before.instances.map(instance=>instance.label);
+  assert.equal(labels.length,multiInstance?2:1);
+  const busy=path.join(f.root,labels.at(-1));
+  fs.writeFileSync(busy,'');
+  await assert.rejects(session.close(f.workerConfigPath),{code:'MANAGEMENT_BUSY'});
+  assert.equal((await client.request('status')).pid,before.pid);
+  assert.equal(fs.existsSync(file),false);
+  fs.unlinkSync(busy);
+  await session.close(f.workerConfigPath);
+  for(const pid of [before.pid,before.supervisorPid])assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
+  assert.equal(fs.existsSync(file),true);
+  await session.resume(f.workerConfigPath);
+  const after=await client.request('status');
+  assert.notEqual(after.supervisorPid,before.supervisorPid);
+  assert.notEqual(after.pid,before.pid);
+  assert.deepEqual(after.instances.map(instance=>instance.label),labels);
+  assert.equal(fs.existsSync(file),false);
+  await session.close(f.workerConfigPath);
 });
