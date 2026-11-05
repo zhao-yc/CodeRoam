@@ -1,9 +1,9 @@
 {
-  "name": "codex-mobile-desktop-manager",
+  "name": "coderoam-desktop-manager",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "掌上 Codex 电脑连接服务管理客户端",
+  "description": "码随行 CodeRoam 电脑连接服务管理客户端",
   "author": { "name": "zhao-yc", "email": "zhao-yc@users.noreply.github.com" },
   "license": "MIT",
   "main": "electron/main.mjs",
@@ -24,12 +24,12 @@
   },
   "build": {
     "appId": "com.codexmobile.manager",
-    "productName": "Codex Mobile Manager",
+    "productName": "CodeRoam Manager",
     "asar": true,
     "directories": { "output": "out" },
     "files": ["dist/**/*", "electron/**/*", "package.json"],
     "extraResources": [{ "from": ".runtime", "to": "bridge-runtime" }],
     "win": { "target": "zip", "signAndEditExecutable": false },
-    "artifactName": "codex-mobile-manager-${version}-${os}-${arch}.${ext}"
+    "artifactName": "coderoam-manager-${version}-${os}-${arch}.${ext}"
   }
 }

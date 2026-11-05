@@ -108,7 +108,7 @@ export class ThreadCreationClient {
       child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
     try {
-      await request('initialize', { clientInfo: { name: 'codex_mobile_bridge', title: '掌上 Codex', version: '0.1.0' } });
+      await request('initialize', { clientInfo: { name: 'codex_mobile_bridge', title: '码随行 CodeRoam', version: '0.1.0' } });
       child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
       return await action(request);
     } finally {

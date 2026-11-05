@@ -1,5 +1,5 @@
 {
-  "name": "掌上 Codex",
+  "name": "码随行 CodeRoam",
   "appid": "__UNI__B2E10E4",
   "description": "连接自己的 Codex 桌面聊天",
   "versionName": "0.1.8",
@@ -27,7 +27,7 @@
     }
   },
   "web": {
-    "title": "掌上 Codex",
+    "title": "码随行 CodeRoam",
     "router": {
       "mode": "hash"
     }

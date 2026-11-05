@@ -1,9 +1,9 @@
 {
-  "name": "codex-mobile-bridge",
+  "name": "coderoam-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "使用 uni-app x 连接自己 Codex 桌面会话的非官方手机客户端",
+  "description": "码随行 CodeRoam：使用 uni-app x 连接自己 Codex 桌面会话的非官方手机客户端",
   "engines": {
     "node": ">=24.0.0"
   },

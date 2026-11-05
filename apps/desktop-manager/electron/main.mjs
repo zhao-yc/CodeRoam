@@ -7,13 +7,14 @@ import {createManagerController, trustedSender} from './manager-controller.mjs';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererFile = path.resolve(directory, '../dist/index.html'), rendererUrl = pathToFileURL(rendererFile).href;
 let window = null, tray = null, controller;
-app.setName('掌上 Codex 电脑管理');
+app.setName('码随行 CodeRoam 电脑管理');
 if (process.platform === 'win32') app.setAppUserModelId('com.codexmobile.manager');
-const userData = process.env.CODEX_MOBILE_MANAGER_USER_DATA;
-if (userData && path.isAbsolute(userData)) {
-  fs.mkdirSync(userData, {recursive: true, mode: 0o700});
-  app.setPath('userData', userData);
-}
+// 沿用旧数据目录及自定义配置；首次安装先创建目录，改名后仍能关联原服务。
+const requestedUserData = process.env.CODEX_MOBILE_MANAGER_USER_DATA;
+const userData = requestedUserData && path.isAbsolute(requestedUserData)
+  ? requestedUserData : path.join(app.getPath('appData'), '掌上 Codex 电脑管理');
+fs.mkdirSync(userData, {recursive: true, mode: 0o700});
+app.setPath('userData', userData);
 
 /** 默认只发现标准安装位置；旧安装可通过原生文件选择器关联，避免猜测私人目录。 */
 function initialWorker() {
@@ -30,7 +31,7 @@ function initialWorker() {
 function showWindow() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
   window = new BrowserWindow({
-    title: '掌上 Codex · 电脑管理', icon: path.join(directory, 'tray.png'), width: 1080, height: 780, minWidth: 860, minHeight: 640,
+    title: '码随行 CodeRoam · 电脑管理', icon: path.join(directory, 'tray.png'), width: 1080, height: 780, minWidth: 860, minHeight: 640,
     backgroundColor: '#f6f7fb', autoHideMenuBar: true, show: false,
     webPreferences: {preload: path.join(directory, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true},
   });
@@ -80,7 +81,7 @@ else {
     handle('manager:read-logs', value => controller.request('logs.read', value));
     handle('manager:restart', () => controller.request('service.restart'));
     tray = new Tray(nativeImage.createFromPath(path.join(directory, 'tray.png')));
-    tray.setToolTip('掌上 Codex 电脑管理');
+    tray.setToolTip('码随行 CodeRoam 电脑管理');
     tray.setContextMenu(Menu.buildFromTemplate([
       {label: '打开管理界面', click: showWindow}, {type: 'separator'},
       {label: '退出管理客户端（守护继续运行）', click: () => app.quit()},

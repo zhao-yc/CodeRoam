@@ -1,6 +1,6 @@
 {
   "pages": [
-    { "path": "pages/index/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "掌上 Codex" } },
+    { "path": "pages/index/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "码随行 CodeRoam" } },
     { "path": "pages/conversation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "聊天" } },
     { "path": "pages/connection/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "电脑连接" } },
     { "path": "pages/settings/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "设置" } },
