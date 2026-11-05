@@ -79,13 +79,17 @@ export class InstanceHub extends EventEmitter {
       if (!this.stopped && code !== 4001) this.reconnect = setTimeout(() => this.connect(), Math.min(15000, 500 * 2 ** Math.min(this.retries++, 5)));
     });
   }
+  /** 周期发现与请求复核共用在途扫描，完成后即释放，后续写入重新核对当前身份。 */
+  discoverCurrent() {
+    return this.discovery ??= Promise.resolve().then(() => this.discover()).finally(() => { this.discovery = null; });
+  }
   /** 周期发现只改变本服务的上下文，不启动、关闭或重启任何 Codex 桌面。 */
   async refresh() {
     if (this.stopped || this.managementDraining) return;
     if (this.scan) return this.scan;
     this.scan = (async () => {
       let rows;
-      try { rows = await this.discover(); }
+      try { rows = await this.discoverCurrent(); }
       catch { for (const runtime of this.runtimes.values()) runtime.instance.ready = false; this.publish(); this.emit('warning', { code: 'INSTANCE_DISCOVERY_FAILED', message: '实例身份核对暂时失败，已暂停操作' }); return; }
       if (this.stopped || this.managementDraining) return;
       const seen = new Set();
@@ -142,7 +146,7 @@ export class InstanceHub extends EventEmitter {
   async verifyWindowsInstance(instance) {
     try {
       if (instance.directIpc) {
-        const rows = await (this.singleVerification ??= this.discover().finally(() => { this.singleVerification = null; }));
+        const rows = await this.discoverCurrent();
         const [row] = rows;
         if (rows.length !== 1 || row.soleIpc !== true || row.port || row.pid !== instance.pid || row.startedAt !== instance.startedAt || row.nativePipe !== instance.nativePipe) throw new Error();
       }
@@ -159,7 +163,7 @@ export class InstanceHub extends EventEmitter {
     try {
       if (this.stopped || !instance.alive) throw new Error();
       // 同一轮并发请求共享系统快照，完成后即丢弃，不缓存过期进程身份。
-      const rows = await (this.macVerification ??= this.discover().finally(() => { this.macVerification = null; }));
+      const rows = await this.discoverCurrent();
       const matches = rows.filter(row => row.ipcSocketPath === instance.ipcSocketPath);
       const current = matches[0];
       if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData', 'port'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
