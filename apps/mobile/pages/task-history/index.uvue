@@ -2,9 +2,9 @@
   <view class="page history-page">
     <view class="history-header"><view class="history-back action-frame"><app-icon name="back" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="返回上一页" @click="goBack"></button></view><text class="history-heading">执行记录</text></view>
     <view class="history-filters">
-      <!-- 分类与实例、状态使用同一组下拉入口，首次进入默认展示提交任务。 -->
-      <view class="history-filter history-category-filter" :class="category == 'operation' ? 'history-filter-active' : ''">
-        <view class="history-filter-content"><text class="history-filter-label" :class="category == 'operation' ? 'history-filter-label-active' : ''">{{ selectedCategoryLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
+      <!-- 分类与实例、状态使用同一组下拉入口，首次进入默认展示全部记录。 -->
+      <view class="history-filter history-category-filter" :class="category != 'all' ? 'history-filter-active' : ''">
+        <view class="history-filter-content"><text class="history-filter-label" :class="category != 'all' ? 'history-filter-label-active' : ''">{{ selectedCategoryLabel }}</text><view class="history-filter-chevron"><app-icon name="chevron-down" tone="muted" :size="14" /></view></view>
         <button class="action-hitbox" hover-class="history-filter-pressed" aria-label="筛选记录分类" @click="chooseCategoryMenu"></button>
       </view>
       <view class="history-filter history-host-filter" :class="hostId.length > 0 ? 'history-filter-active' : ''">
@@ -59,11 +59,11 @@ import { SubmissionTask, submissionStageDetail, submissionInstance } from '../..
 import { readSubmissionTasks, controlSubmissionTask } from '../../services/submission-tasks.uts'
 import { submissionHistoryOrder } from '../../services/submission-task-presentation.uts'
 type HistoryRow = { hostId: string, task: SubmissionTask }
-type HistoryCursor = { hostId: string, before: number, more: boolean }
+type HistoryCursor = { hostId: string, category: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
-const category = ref('submission')
-const categoryValues = ['submission', 'operation'], categoryLabels = ['提交任务', '状态操作']
-const selectedCategoryLabel = computed((): string => categoryLabels[categoryValues.indexOf(category.value)] ?? '提交任务')
+const category = ref('all')
+const categoryValues = ['all', 'submission', 'operation'], categoryLabels = ['全部', '提交任务', '状态操作']
+const selectedCategoryLabel = computed((): string => categoryLabels[categoryValues.indexOf(category.value)] ?? '全部')
 const cursors = ref<HistoryCursor[]>([])
 const refreshing = ref(false)
 const hostPickerOpen = ref(false), hostPickerWindowHeight = ref(640)
@@ -71,8 +71,8 @@ const hostPickerHeight = computed((): number => Math.max(60, Math.min((connectio
 let request = 0
 const pageVisible = ref(false)
 const onlineHosts = computed((): string => connection.computers.filter((computer: Computer): boolean => computer.online).map((computer: Computer): string => computer.id).sort().join(','))
-const stateValues = computed((): string[] => category.value == 'operation' ? ['', 'running', 'succeeded', 'failed', 'unknown'] : ['', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped'])
-const stateLabels = computed((): string[] => category.value == 'operation' ? ['全部状态', '执行中', '已完成', '执行失败', '结果待核对'] : ['全部状态', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过'])
+const stateValues = computed((): string[] => category.value == 'operation' ? ['', 'running', 'succeeded', 'failed', 'unknown'] : ['', 'running', 'queued', 'succeeded', 'failed', 'unknown', 'waiting_resume', 'canceled', 'skipped'])
+const stateLabels = computed((): string[] => category.value == 'operation' ? ['全部状态', '执行中', '已完成', '执行失败', '结果待核对'] : ['全部状态', '执行中', '等待执行', '已完成', '执行失败', '结果待核对', '等待继续', '已取消', '已人工跳过'])
 // 原生模板通过本地方法调用导入函数，避免 UTS 将其解析为函数对象。
 function computerIcon(computer: Computer | null): string { return resolveComputerIcon(computer) }
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原实例' }
@@ -113,13 +113,13 @@ async function loadMore() {
       // 各实例分别结算；旧版或离线实例不能阻断其他记录及聊天标题的读取。
       try {
       const params: UTSJSONObject = { view: 'history', limit: 30 }
-      if (category.value == 'operation') params['category'] = 'operation'
+      if (cursor.category == 'operation') params['category'] = 'operation'
       if (cursor.before > 0) params['before'] = cursor.before
       if (state.value.length > 0) params['state'] = state.value
       const result = await readSubmissionTasks(cursor.hostId, params)
       if (revision != request || namespace != connection.cacheNamespace) return
       // 旧服务可能忽略新筛选字段，不能将提交任务误显示为状态操作。
-      if (category.value == 'operation' && result.getBoolean('supportsOperationHistory') != true) throw new Error('请更新电脑连接服务后查看状态操作记录')
+      if (cursor.category == 'operation' && result.getBoolean('supportsOperationHistory') != true) throw new Error('请更新电脑连接服务后查看状态操作记录')
       const tasks = JSON.parse<SubmissionTask[]>(JSON.stringify(result['tasks'] ?? [] as SubmissionTask[])) ?? [] as SubmissionTask[]
       tasks.forEach((task: SubmissionTask) => { if (!rows.value.some((row: HistoryRow): boolean => row.hostId == cursor.hostId && row.task.id == task.id)) rows.value.push({ hostId: cursor.hostId, task } as HistoryRow) })
       const next = result.getNumber('nextCursor') ?? 0
@@ -137,7 +137,13 @@ async function loadMore() {
 }
 function reload() {
   request++; loading.value = false; error.value = ''; rows.value = [] as HistoryRow[]
-  cursors.value = connection.computers.filter((computer: Computer): boolean => computer.online && (hostId.value.length == 0 || computer.id == hostId.value)).map((computer: Computer): HistoryCursor => ({ hostId: computer.id, before: 0, more: true } as HistoryCursor))
+  // 全部分类按实例和类别分别翻页，避免两张历史表的游标相互覆盖。
+  cursors.value = [] as HistoryCursor[]
+  connection.computers.forEach((computer: Computer) => {
+    if (!computer.online || hostId.value.length > 0 && computer.id != hostId.value) return
+    const categories = category.value == 'all' ? ['submission', 'operation'] : [category.value]
+    categories.forEach((value: string) => { cursors.value.push({ hostId: computer.id, category: value, before: 0, more: true } as HistoryCursor) })
+  })
   if (!connection.connected) { refreshing.value = false; bridge.resume(); return }
   loadMore()
 }

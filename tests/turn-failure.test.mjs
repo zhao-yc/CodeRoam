@@ -10,9 +10,45 @@ import {historicalSnapshot} from '../apps/bridge/history-reader.mjs';
 import {readHistoricalPage} from '../apps/bridge/history-pager.mjs';
 import {readProjectedHistory} from '../apps/bridge/projected-history.mjs';
 import {conversationUpdate, applyConversationUpdate} from '../apps/bridge/updates.mjs';
+import {DesktopAdapter} from '../apps/bridge/desktop-adapter.mjs';
+import {InstanceRuntime} from '../apps/bridge/instance-runtime.mjs';
 
 const capacity = 'Selected model is at capacity. Please try a different model.';
 const event = payload => ({type:'event_msg', payload});
+
+test('普通启动和多实例装配均保留审查终止，另一实例同号聊天独立', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'review-status-'));
+  const normal=new DesktopAdapter();
+  const runtimes=['one','two'].map(id=>{
+    const dataPath=path.join(root,id);fs.mkdirSync(dataPath);
+    return new InstanceRuntime({instance:{id,platform:'win32',pid:42,codexHome:root,alive:true,ready:true,verify:async()=>{}},config:{},dataPath,send:()=>{}});
+  });
+  t.after(async()=>{normal.close();for(const runtime of runtimes)await runtime.close();fs.rmSync(root,{recursive:true,force:true});});
+  const state={id:'thread',turns:[{turnId:'turn',status:'interrupted',items:[{id:'warning',type:'autoReviewInterruptionWarning'}]}]};
+  for(const adapter of [normal,runtimes[0].adapter]) {
+    const snapshot=adapter.snapshot(state);
+    assert.equal(snapshot.latestTurn.status,'reviewStopped');
+    assert.equal(snapshot.notificationState.latestTurnStatus,'reviewStopped');
+    assert.equal(snapshot.turns[0].errorMessage,'本轮操作已被自动审查终止');
+  }
+  assert.equal(runtimes[1].adapter.snapshot({id:'thread',turns:[{turnId:'turn',status:'completed',items:[]}]}).latestTurn.status,'completed');
+});
+
+test('自动审查终止只认专用标记，拒绝记录和工具正文不能冒充终止', () => {
+  const review = {id:'review',type:'automaticApprovalReview',status:'denied',rationale:'合成审查原因'};
+  const warning = {id:'warning',type:'autoReviewInterruptionWarning'};
+  const snapshot = normalizeConversation({id:'thread',turns:[{turnId:'turn',status:'interrupted',items:[review,warning]}]});
+  assert.equal(snapshot.latestTurn.status,'reviewStopped');
+  assert.equal(snapshot.notificationState.latestTurnStatus,'reviewStopped');
+  assert.equal(snapshot.turns[0].errorMessage,'本轮操作已被自动审查终止\n\n合成审查原因');
+  assert.equal(snapshot.messages.length,0);
+  for (const [status,items,expected] of [['interrupted',[review],'interrupted'],['inProgress',[review],'inProgress'],['completed',[warning],'completed']]) {
+    assert.equal(normalizeConversation({id:'thread',turns:[{turnId:'turn',status,items}]}).latestTurn.status,expected);
+  }
+  const history=historicalSnapshot({id:'thread'},[event({type:'task_started',turn_id:'turn'}),event({type:'item_completed',turn_id:'turn',item:{id:'warning',type:'AutoReviewInterruptionWarning'}}),event({type:'turn_aborted',turn_id:'turn'})]);
+  assert.equal(history.turns[0].status,'interrupted');
+  assert.equal(history.readOnly,true);
+});
 
 test('仅结构化轮次错误或失败状态提供错误原文，其余正文和工具失败不会误报', () => {
   for (const [error, expected] of [[capacity, capacity], [{message:'Rate limit exceeded.'}, 'Rate limit exceeded.'], [{message:'Internal server error.\nTry again.'}, 'Internal server error.\nTry again.'], [{stack:'内部堆栈'}, TURN_FAILURE_FALLBACK], [{message:'  '}, TURN_FAILURE_FALLBACK], [undefined, TURN_FAILURE_FALLBACK]]) {

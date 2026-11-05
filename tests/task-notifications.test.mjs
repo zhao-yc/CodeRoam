@@ -13,6 +13,14 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 const action=(kind='question',id='q1',turnId='turn')=>({kind,id,turnId});
 const row=(status='inProgress',pending=[],id='thread',turn='turn')=>({id,title:'合成测试会话',notificationState:{latestTurnId:turn,latestTurnStatus:status,pending}});
 
+test('自动审查终止跨页提醒一次，当前聊天和首次历史快照不补提醒',()=>{
+ const c=fixture();c.observe('host','g',[row('inProgress')],0);
+ c.observe('host','g',[row('reviewStopped')],1);assert.equal(c.current.kind,'reviewStopped');
+ c.observe('host','g',[row('reviewStopped')],2);assert.equal(c.queue.length,0);
+ c.reset();c.observe('host','g',[row('reviewStopped')],0);assert.equal(c.current,null);
+ c.reset();c.setVisibleThread('host','thread',0);c.observe('host','g',[row('inProgress')],0);c.observe('host','g',[row('reviewStopped')],1);assert.equal(c.current,null);
+});
+
 test('结构化结果独立于正文窗口，异常为失败，停止不变为成功，列表不含私密内容',()=>{
  const questions=[{id:'q',turnId:'t',state:'pending',questions:[{answer:'不应广播'}]}],approvals=[{id:'a',turnId:'t',detail:'不应广播'}];
  assert.deepEqual(taskNotificationState([{turnId:'t',status:'completed',error:{message:'不应广播'}}],questions,approvals,{id:'p',turnId:'t',text:'不应广播'}),{latestTurnId:'t',latestTurnStatus:'failed',pending:[action('question','q','t'),action('approval','a','t'),action('plan','p','t')]});

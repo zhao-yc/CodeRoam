@@ -1,11 +1,11 @@
 <template>
   <view v-if="available && active && !obscured" class="submission-dock" :class="{ 'submission-dock-glass': glass }">
     <view v-if="opened" class="submission-panel">
-    <view class="submission-heading"><text class="submission-title">{{ rows.length > 0 ? '提交任务 · ' + rows.length : '提交任务' }}</text><view class="submission-collapse"><text class="submission-collapse-label">收起</text><app-icon name="chevron-down" :size="16" tone="muted" /><button class="submission-hit" aria-label="收起提交任务" @click="closePanel"></button></view></view>
+    <view class="submission-heading"><text class="submission-title">{{ rows.length > 0 ? '执行记录 · ' + rows.length : '执行记录' }}</text><view class="submission-collapse"><text class="submission-collapse-label">收起</text><app-icon name="chevron-down" :size="16" tone="muted" /><button class="submission-hit" aria-label="收起执行记录" @click="closePanel"></button></view></view>
     <scroll-view v-if="shownRows.length > 0" direction="vertical" class="submission-rows" :show-scrollbar="false" :style="{ maxHeight: expanded ? '280px' : '222px' }">
       <view v-for="row in shownRows" :key="row.hostId + ':' + row.task.id" class="submission-row">
         <view class="submission-main" @click="openTask(row.hostId, row.task)"><text class="submission-row-title">{{ row.task.title.length > 0 ? row.task.title : taskTitle(row.task) }}</text><view class="submission-meta"><text class="submission-description">{{ hostName(row.hostId) }} · {{ cardMeta(row.hostId, row.task) }}</text><submission-task-status :state="row.task.state" /></view><text v-if="row.task.error.length > 0" class="submission-error submission-error-summary" @click.stop="showError(row.task)">{{ cardError(row.task) }}</text></view>
-        <view class="submission-actions">
+        <view v-if="row.task.kind != 'operation'" class="submission-actions">
           <button v-if="row.task.state == 'failed' && row.task.canRetry == true" class="submission-action" :disabled="working.length > 0" @click="retry(row.hostId, row.task)">重试</button>
           <button v-if="row.task.state == 'queued'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'cancel')">取消</button>
           <button v-if="row.task.state == 'unknown'" class="submission-action" :disabled="working.length > 0" @click="act(row.hostId, row.task, 'reconcile')">核对</button>
@@ -23,7 +23,7 @@
     <view v-else class="submission-capsule" :class="{ 'submission-capsule-alert': summaryState == 'unknown' || summaryState == 'waiting_resume' }" role="status" aria-live="polite">
       <app-icon v-if="summaryState == 'idle'" name="history" :size="16" tone="muted" /><submission-task-status v-else :state="summaryState" />
       <text class="submission-capsule-label">{{ summaryLabel }}</text><app-icon v-if="hasCurrent" class="submission-capsule-chevron" name="chevron-down" :size="15" tone="muted" />
-      <button class="submission-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开提交任务' : '，查看历史')" @click="openPanel"></button>
+      <button class="submission-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开执行记录' : '，查看历史')" @click="openPanel"></button>
     </view>
   </view>
 </template>

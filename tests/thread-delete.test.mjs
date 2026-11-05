@@ -34,6 +34,15 @@ test('永久删除为严格白名单写接口，拒绝目录、子对话列表�
   for (const extra of [{ cwd: '/synthetic' }, { deletedThreadIds: ['other'] }, { method: 'thread/delete' }, { force: true }]) assert.throws(() => validateRequest(request({ threadId: 'root', ...extra })));
 });
 
+test('附属会话属于其他实例时在归档及永久删除前拒绝，保留原会话', async () => {
+  const f = fixture();
+  f.adapter.discoverOwner = async id => id === 'child' ? null : f.adapter.conversations.get(id)?.owner ?? null;
+  f.adapter.client = { ownedElsewhere: async id => id === 'child' };
+  await assert.rejects(deleteThread(f.adapter, f.controller, 'root', 'phone'), { code: 'THREAD_OWNED_BY_OTHER_INSTANCE' });
+  assert.equal(f.calls.includes('prepare'), false);
+  assert.equal(f.calls.includes('delete'), false);
+});
+
 test('主对话与子对话都停止并回读后才删除，成功后清理订阅', async () => {
   const f = fixture({ running: true }); let receipt;
   const result = await deleteThread(f.adapter, f.controller, 'root', 'phone', value => { receipt = value; });

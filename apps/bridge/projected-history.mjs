@@ -153,7 +153,7 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
       // 只附带当前翻页范围内的失败，不能把游标之后的轮次混进早期历史。
       for(const saved of failureQuery.all(source.id,rows.length===81||hasMore?ordinal:0,upper,source.limit)){
         const metadata=projectedTurnMetadata(saved,saved.turn_id,source.limit);
-        if(metadata.status==='failed'){turnInfo.set(saved.turn_id,metadata);turnPositions.set(saved.turn_id,[sourceIndex,saved.position]);}
+        if(['failed','interrupted'].includes(metadata.status)){turnInfo.set(saved.turn_id,metadata);turnPositions.set(saved.turn_id,[sourceIndex,saved.position]);}
       }
       if(hasMore)break;
       if(rows.length===81)continue;

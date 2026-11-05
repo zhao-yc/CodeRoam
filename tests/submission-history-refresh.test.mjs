@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 
 // 执行页面脚本，模拟刷新时握手晚到以及离开页面后的电脑上线。
-function fixture(read = async () => ({ tasks: [], getNumber: () => 0 }), tick = async () => {}) {
+function fixture(read = async () => ({ tasks: [], getNumber: () => 0 }), tick = async () => {}, categoryFilter = 'submission') {
   const page = fs.readFileSync('apps/mobile/pages/task-history/index.uvue', 'utf8');
   const source = page.split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\r?\n/gm, '');
   let changed, show, hide, back, resize;
@@ -22,7 +22,8 @@ function fixture(read = async () => ({ tasks: [], getNumber: () => 0 }), tick = 
     readSubmissionTasks: async (id, params) => { calls.push(id); return read(id, params); },
     submissionHistoryOrder: () => 0,
   });
-  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={error,loading,reload,refreshHistory,refreshing,cursors,hostId,state,chooseHost,selectHost,hostPickerOpen,hostPickerHeight};', scope);
+  vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={error,loading,reload,refreshHistory,refreshing,cursors,hostId,state,chooseHost,selectHost,hostPickerOpen,hostPickerHeight,category};', scope);
+  if (categoryFilter != null) scope.subject.category.value = categoryFilter;
   return { scope, calls, show: () => show(), hide: () => hide(), changed: () => changed(), back: () => back(), resize: () => resize() };
 }
 
@@ -146,4 +147,22 @@ test('实例面板按可视高度限制长列表，并在离页时关闭', () =>
   f.scope.uni.getWindowInfo = () => ({ windowHeight: 240 }); f.resize();
   assert.equal(page.hostPickerHeight.value, 80);
   f.hide(); assert.equal(page.hostPickerOpen.value, false);
+});
+
+ test('全部分类默认合并两类记录，分页游标互相独立', async () => {
+  const queries = [];
+  const f = fixture(async (id, params) => {
+    queries.push({ ...params });
+    return { tasks: [], getBoolean: () => true, getNumber: () => params.before ? 0 : params.category === 'operation' ? 22 : 11 };
+  }, undefined, null);
+  assert.equal(f.scope.subject.category.value, 'all');
+  f.scope.connection.connected = true;
+  f.scope.connection.computers = [{ id: 'synthetic-instance', online: true }];
+  f.scope.subject.reload();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(queries.map(query => query.category ?? 'submission'), ['submission', 'operation']);
+  assert.deepEqual(Array.from(f.scope.subject.cursors.value, cursor => cursor.before), [11, 22]);
+  await f.scope.subject.refreshHistory();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(queries.every(query => query.before === undefined));
 });

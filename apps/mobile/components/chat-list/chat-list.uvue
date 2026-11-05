@@ -9,7 +9,7 @@
       <template v-else>
         <view class="list-title">
           <view class="list-title-trigger action-frame" hover-class="action-pressed" @click="toggleMenu">
-            <text class="list-title-text">CodeRoam</text><view class="list-menu-arrow" :class="{ 'list-menu-arrow-open': menuVisible }"><app-icon name="chevron-down" :size="18" /></view>
+            <image class="list-brand-logo" src="/static/brand/logo-128.png" mode="aspectFit" aria-label="CodeRoam 标志" /><text class="list-title-text">CodeRoam</text><view class="list-menu-arrow" :class="{ 'list-menu-arrow-open': menuVisible }"><app-icon name="chevron-down" :size="18" /></view>
             <!-- iOS 由可见的标题和箭头所在容器接收点击，避免透明按钮的触摸范围塌陷。 -->
             <!-- #ifndef APP-IOS -->
             <button class="action-hitbox" aria-label="CodeRoam 列表菜单" :aria-expanded="menuVisible" hover-class="action-pressed" @click="toggleMenu"></button>
@@ -474,6 +474,7 @@ watch((): boolean => props.active, (active: boolean) => { (active ? paneShowCall
 .list-title { flex: 1; flex-direction: row; align-items: center; }
 /* 让标题和展开箭头整体居中，两侧与按下背景保持相同留白。 */
 .list-title-trigger { flex-direction: row; align-items: center; min-height: 44px; padding: 0 8px; border-radius: 12px; }
+.list-brand-logo { flex-shrink: 0; width: 26px; height: 26px; margin-right: 8px; border-radius: 7px; }
 .list-title-text { flex-shrink: 0; margin-right: 6px; color: #1a2135; font-size: 20px; line-height: 28px; font-weight: bold; }
 .computer-loading-indicator { flex-shrink: 0; width: 17px; height: 17px; align-items: center; justify-content: center; }
 .list-menu-arrow { flex-shrink: 0; width: 18px; height: 18px; transform: rotate(0deg); transition-property: transform; transition-duration: 140ms; transition-timing-function: ease-in; }

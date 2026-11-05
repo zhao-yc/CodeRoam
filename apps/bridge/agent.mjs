@@ -16,7 +16,7 @@ import { NativeDraftService } from './native-draft-service.mjs';
 import { archiveThread } from './thread-archive.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
 import { deleteThread, deletionCommandStatus, retainDeletionTarget } from './thread-delete.mjs';
-import { DesktopDeleteController } from './desktop-delete.mjs';
+import { NativeDeleteController } from './native-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
 import { conversationContentRevision, conversationProjection, prefetchConversation } from './conversation-prefetch.mjs';
 import { CACHE_WATCHER, ThreadCacheFeed } from './thread-cache.mjs';
@@ -45,7 +45,7 @@ function hasDetailWatcher(adapter, threadId) {
 
 /** 电脑主动连接中转，断线只恢复读订阅，所有写操作通过持久化账本去重。 */
 export class BridgeAgent extends EventEmitter {
-  constructor({ config, adapter, journal, nativeDrafts, diagnostics = null, archiveController = new DesktopArchiveController(), deleteController = new DesktopDeleteController(), newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog, settingsCache: config.newConversationSettingsCache }) }) {
+  constructor({ config, adapter, journal, nativeDrafts, diagnostics = null, archiveController = new DesktopArchiveController(), deleteController = null, newThreads = new NewThreadService({ codexHome: config.codexHome, codexCliPath: config.codexCliPath, catalog: adapter.modelCatalog, settingsCache: config.newConversationSettingsCache }) }) {
     super(); this.config=config;this.adapter=adapter;this.journal=journal;this.socket=null;this.stopped=false;this.retries=0;this.reconnectTimer=null;this.threadLocks=new Map();
     this.published=new Map();
     this.diagnostics=diagnostics;this.diagnosticInFlight=0;
@@ -58,10 +58,10 @@ export class BridgeAgent extends EventEmitter {
     this.archiveController=archiveController;this.predictions=new ComposerPredictionReader();this.fileReports=new DesktopFileReportReader();
     // 能力由当前文件汇总读取器决定，普通启动也可使用已核验的原生离线算法。
     this.adapter.nativeFileReportAvailable=()=>this.fileReports.supports(this.adapter);
-    this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
+    this.deleteController=deleteController??new NativeDeleteController({adapter,archiveController,creation:newThreads.creation});this.deletingIds=new Set();this.deletionRequests=new Map();
     this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
-    this.operationHistory=journal.db?new StateOperationHistory({db:journal.db,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true})}):null;
-    this.taskQueue=journal.db?new TaskQueue({journal,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true}),
+    this.operationHistory=journal.db?new StateOperationHistory({db:journal.db,changed:()=>this.taskQueue?.notify(),readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true})}):null;
+    this.taskQueue=journal.db?new TaskQueue({journal,readOperations:deviceId=>this.operationHistory.list(deviceId,{view:'active',limit:100}).tasks,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true}),
       ready:()=>!this.taskClosed&&!this.managementDraining&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
       execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.commandId,task.payload.firstMessageGuard),
       reconcile:task=>this.readTaskCommandStatus(task.deviceId,task.pendingCommandId,task.threadId),
@@ -226,8 +226,6 @@ export class BridgeAgent extends EventEmitter {
   async runTaskCommand(method,params,deviceId,commandId,firstMessageGuard) {
     if(!WRITE_METHODS.has(method))throw new BridgeError('METHOD_NOT_ALLOWED','此操作不在任务白名单中');
     const instance=this.adapter.client?.instance;
-    // 组合入口也保留普通启动的能力边界，必须在删除前的停止任务等步骤之前拒绝。
-    if(method==='thread.delete'&&usesWindowsIpcWithoutPage(instance))throw new BridgeError('DELETE_UNSUPPORTED','普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
     if(instance){await instance.verify?.();if(instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','原实例连接已变化，请核对后继续');}
     const release=params.threadId?await this.retainTaskThread(params.threadId,deviceId,commandId):()=>{};
     try {

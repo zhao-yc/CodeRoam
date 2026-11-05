@@ -10,20 +10,28 @@ export function latestFailureTurnId(snapshot: Conversation | null): string {
   return notification?.latestTurnStatus == 'failed' ? notification.latestTurnId : ''
 }
 
-// 在每轮最后一项后插入失败卡片；没有消息的失败也按轮次顺序独立显示。
+// 失败与中断均在对应轮次末尾展示；中断卡片独立于失败重试目标。
 export function failureTimeline(snapshot: Conversation | null, entries: TimelineEntry[]): TimelineEntry[] {
   if (snapshot == null) return entries
   const result = entries.slice()
   const turns = snapshot.turns ?? [] as ConversationTurn[]
   turns.forEach((turn: ConversationTurn, turnIndex: number) => {
-    if (turn.status != 'failed' || turn.turnId.length == 0) return
+    if (['failed', 'reviewStopped', 'interrupted'].indexOf(turn.status) < 0 || turn.turnId.length == 0) return
     let insertion = -1
     result.forEach((entry: TimelineEntry, index: number) => { if (entry.turnId == turn.turnId) insertion = index + 1 })
     if (insertion < 0) {
       insertion = result.findIndex((entry: TimelineEntry): boolean => turns.slice(turnIndex + 1).some((next: ConversationTurn): boolean => next.turnId == entry.turnId))
       if (insertion < 0) insertion = result.length
     }
-    result.splice(insertion, 0, { id: 'failure:' + turn.turnId, role: 'failure', text: (turn.errorMessage ?? '').trim().length > 0 ? turn.errorMessage! : '任务执行失败，未提供具体原因', turnId: turn.turnId, executions: [], label: '任务失败' } as TimelineEntry)
+    let label = '任务失败'
+    let fallback = '任务执行失败，未提供具体原因'
+    if (turn.status == 'reviewStopped') { label = '自动审查终止'; fallback = '本轮操作已被自动审查终止' }
+    if (turn.status == 'interrupted') { label = '任务已中断'; fallback = '本轮操作已中断' }
+    result.splice(insertion, 0, {
+      id: 'failure:' + turn.turnId, role: turn.status == 'failed' ? 'failure' : 'interruption',
+      text: (turn.errorMessage ?? '').trim().length > 0 ? turn.errorMessage! : fallback,
+      turnId: turn.turnId, executions: [], label
+    } as TimelineEntry)
   })
   return result
 }

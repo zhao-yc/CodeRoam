@@ -12,19 +12,23 @@ function boundedErrorMessage(message) {
   return prefix + TURN_ERROR_TRUNCATED;
 }
 
-/** 失败只认轮次的结构化错误和状态，工具输出或普通正文不能改变任务结果。 */
+/** 审查终止必须同时具备中断状态和专用标记，单次工具拒绝不能改变整轮结果。 */
 export function turnStatus(turn) {
+  if (turn?.status === 'interrupted' && turn.items?.some(item => item.type === 'autoReviewInterruptionWarning')) return 'reviewStopped';
   return turn?.error || turn?.status === 'failed' ? 'failed' : turn?.status ?? '';
 }
 
-/** 错误原文仅提取字符串或 message，不把内部错误对象、堆栈和参数序列化给手机。 */
+/** 仅同步错误原文与可见审查理由，禁止序列化审查动作、工具参数和内部堆栈。 */
 export function turnMetadata(turn) {
   const status = turnStatus(turn);
-  const message = typeof turn.error === 'string' ? turn.error : turn.error?.message;
+  const review = status === 'reviewStopped' ? [...(turn.items ?? [])].reverse().find(item => item.type === 'automaticApprovalReview' && item.status === 'denied') : null;
+  const rationale = typeof review?.rationale === 'string' ? review.rationale.trim() : '';
+  let message = typeof turn.error === 'string' ? turn.error : turn.error?.message;
+  if (status === 'reviewStopped') message = ['本轮操作已被自动审查终止', rationale].filter(Boolean).join('\n\n');
   return {
     turnId: turn.turnId, status,
     ...(Number.isFinite(turn.durationMs) && turn.durationMs >= 0 ? {durationMs: turn.durationMs} : {}),
-    ...(status === 'failed' ? {errorMessage: typeof message === 'string' && message.trim() ? boundedErrorMessage(message) : TURN_FAILURE_FALLBACK} : {})
+    ...(['failed', 'reviewStopped'].includes(status) ? {errorMessage: typeof message === 'string' && message.trim() ? boundedErrorMessage(message) : TURN_FAILURE_FALLBACK} : {})
   };
 }
 
@@ -38,7 +42,7 @@ export function boundedTurnMetadata(turns, latestTurnId, selectedTurnIds) {
   const cost = turn => Buffer.byteLength(JSON.stringify(turn)) + 1;
   let bytes = 2;
   for (const turn of priority) {
-    const base = turn === latest || turn.status !== 'failed' ? turn : {...turn, errorMessage:BUDGET_OMISSION};
+    const base = turn === latest || !['failed', 'reviewStopped'].includes(turn.status) ? turn : {...turn, errorMessage:BUDGET_OMISSION};
     const size = cost(base);
     if (bytes + size > TURN_METADATA_BUDGET_BYTES) continue;
     kept.set(turn.turnId, base); bytes += size;

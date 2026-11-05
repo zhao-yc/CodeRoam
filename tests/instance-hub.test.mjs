@@ -92,16 +92,16 @@ test('Windows 普通启动可直连，第二个实例或 IPC 归属变化立即�
   assert.equal(hub.manifest()[0].online, true);
 });
 
-test('普通启动时永久删除在进入操作队列前被拒绝，带端口的实例仍走原删除流程', async () => {
+test('普通启动和多实例均进入永久删除流程，仍保留实例核验', async () => {
   const instance = { directIpc: true, generation: 'current', alive: true, verify: async () => {} };
   const handled = [];
   const runtime = { instance, client: { assertCurrent() {} }, agent: { handleRequest(message) { handled.push(message.method); } } };
   const request = method => InstanceRuntime.prototype.request.call(runtime, { generation: instance.generation, method });
-  await assert.rejects(request('thread.delete'), { code: 'DELETE_UNSUPPORTED' });
+  await request('thread.delete');
   await request('threads.list');
   instance.directIpc = false;
   await request('thread.delete');
-  assert.deepEqual(handled, ['threads.list', 'thread.delete']);
+  assert.deepEqual(handled, ['thread.delete', 'threads.list', 'thread.delete']);
 });
 
 test('两个无端口实例仅接受本路由验证的连接，旧进程身份撤销不影响另一个实例', async t => {

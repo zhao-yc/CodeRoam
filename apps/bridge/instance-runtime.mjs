@@ -8,7 +8,6 @@ import { AttachmentStore } from './attachment-store.mjs';
 import { Journal } from './journal.mjs';
 import { DesktopGoalController } from './desktop-goals.mjs';
 import { DesktopArchiveController } from './desktop-archive.mjs';
-import { DesktopDeleteController, createInstanceDeletionDiscovery } from './desktop-delete.mjs';
 import { ComposerPredictionReader } from './composer-prediction.mjs';
 import { DesktopFileReportReader } from './file-reports.mjs';
 import { InstanceIpcClient, bindInstanceClients } from './instance-binding.mjs';
@@ -19,7 +18,6 @@ import { readInstanceActivity } from './instance-activity.mjs';
 import { NewThreadService } from './new-thread-service.mjs';
 import { NativeDraftController } from './native-draft-controller.mjs';
 import { ThreadCreationClient, instanceCodexPath } from './thread-creation.mjs';
-import { usesWindowsIpcWithoutPage } from './windows-ipc-mode.mjs';
 
 /** 固定到本次已核验进程和随机管道；管道丢失后不能选择另一个桌面代替。 */
 class InstanceNativeDesktop extends NativeDesktop {
@@ -73,7 +71,7 @@ export class InstanceRuntime {
     const desktopIdentity = { platform: instance.platform, executable: instance.executable };
     const newThreads = new NewThreadService({ codexHome: instance.codexHome, catalog: this.adapter.modelCatalog, settingsCache: config.newConversationSettingsCache, creation: new ThreadCreationClient({ codexHome: instance.codexHome, resolveCli: () => instanceCodexPath(desktopIdentity) }) });
     // 删除与草稿、文件汇总共用同一个已绑定实例，桌面升级不依赖旧版本的全局端口发现。
-    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), deleteController: new DesktopDeleteController({ discover: createInstanceDeletionDiscovery(instance, this.client), diagnosticPath: path.join(dataPath, 'delete-ui-diagnostics.jsonl') }), diagnostics });
+    this.agent = new BridgeAgent({ config: { ...config, codexHome: instance.codexHome }, newThreads, adapter: this.adapter, journal: new Journal(path.join(dataPath, 'journal.sqlite')), archiveController: new InstanceArchiveController(instance, this.client), diagnostics });
     this.agent.nativeDrafts.controller.close();
     this.agent.nativeDrafts.controller=new NativeDraftController({adapter:this.adapter,instance,discover:async()=>instance.alive&&instance.port?[{pid:instance.pid,port:instance.port,executable:instance.executable}]:[]});
     this.agent.predictions.close();
@@ -119,10 +117,6 @@ export class InstanceRuntime {
     if (message.generation !== this.instance.generation || !this.instance.alive ||
         (message.expectedGeneration !== undefined && message.expectedGeneration !== this.instance.generation)) {
       throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
-    }
-    // 永久删除依赖页面确认，普通启动时在停止任务等删除前置步骤之前拒绝。
-    if (usesWindowsIpcWithoutPage(this.instance) && message.method === 'thread.delete') {
-      throw new BridgeError('DELETE_UNSUPPORTED', '普通启动的 Codex 不支持手机永久删除，请使用原桌面删除');
     }
     // 项目清单沿用 Windows 的已绑定身份；Mac 其他请求及写入仍实时复核，所有者接纳和导航也保持原核验。
     if (this.isMac && message.method !== 'projects.list' || this.instance.directIpc && !READ_METHODS.has(message.method)) await this.instance.verify();

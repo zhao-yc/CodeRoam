@@ -10,8 +10,8 @@ const parse = (value, fallback = null) => value ? JSON.parse(value) : fallback;
 
 /** 每个实例使用自己的 SQLite 任务队列；传输回执与桌面执行彼此独立。 */
 export class TaskQueue {
-  constructor({ journal, execute, changed = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, readTitle = () => '', now = Date.now }) {
-    this.readTitle = readTitle; this.db = journal.db; this.execute = execute; this.changed = changed; this.reconcile = reconcile; this.ready = ready; this.now = now;
+  constructor({ journal, execute, changed = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, readTitle = () => '', readOperations = () => [], now = Date.now }) {
+    this.readOperations = readOperations; this.readTitle = readTitle; this.db = journal.db; this.execute = execute; this.changed = changed; this.reconcile = reconcile; this.ready = ready; this.now = now;
     this.watchers = new Set(); this.waiters = new Map(); this.closed = false; this.running = null;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS submission_tasks (
@@ -156,6 +156,8 @@ export class TaskQueue {
       const tombstone = this.db.prepare('SELECT display_metadata FROM submission_task_keys WHERE device_id=? AND id=?').get(deviceId, taskId);
       if (tombstone?.display_metadata) tasks.push(parse(tombstone.display_metadata));
     }
+    // 状态操作只并入实时展示，不参与任务领取、暂停及控制。
+    if (view === 'active' && !taskId) tasks.push(...this.readOperations(deviceId));
     return { supportsTaskQueue: true, revision: queue.revision, paused: !!queue.paused, blockerId: blocker?.device_id === deviceId ? blocker.id : '', tasks, now: this.now(), ...(rows.length > count ? { nextCursor: selected.at(-1).position } : {}) };
   }
 

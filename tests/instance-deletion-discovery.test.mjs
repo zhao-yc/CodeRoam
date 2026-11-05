@@ -105,15 +105,18 @@ test('其他进程不能借用原实例端口，目标弹窗或最终回读变�
   assert.equal(changed.phases.includes('commit'), false); assert.ok(changed.phases.includes('cancel'));
 });
 
-test('InstanceRuntime 为删除控制器注入同一实例发现器，不再依赖旧版本全局端口扫描', async t => {
+test('InstanceRuntime 的永久删除固定同一实例归档器与官方连接，不依赖页面端口', async t => {
   const temporaryRoot = path.join(process.cwd(), '.cache'); fs.mkdirSync(temporaryRoot, { recursive: true });
   const directory = fs.mkdtempSync(path.join(temporaryRoot, 'instance-deletion-'));
   const f = fixture(); Object.assign(f.instance, { platform: 'win32', codexHome: path.join(directory, 'synthetic-home'), nativePipe: 'synthetic-pipe' });
   const runtime = new InstanceRuntime({ instance: f.instance, config: {}, dataPath: directory, send: () => {} });
   t.after(async () => { await runtime.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   runtime.client.allowedClients.add(randomUUID());
-  assert.deepEqual(await runtime.agent.deleteController.discover(), [{ pid: 42, port: 12345, executable: f.instance.executable }]);
-  assert.deepEqual(f.calls, ['verify']);
+  const controller = runtime.agent.deleteController;
+  assert.equal(controller.adapter, runtime.adapter);
+  assert.equal(controller.archiveController.instance, f.instance);
+  assert.equal(controller.creation, runtime.agent.newThreads.creation);
   f.instance.port = null;
-  await assert.rejects(runtime.agent.deleteController.discover(), { code: 'INSTANCE_CHANGED' });
+  assert.equal(controller.archiveController.instance, f.instance);
+  assert.equal(controller.creation.codexHome, f.instance.codexHome);
 });

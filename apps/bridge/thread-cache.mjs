@@ -215,7 +215,7 @@ export class ThreadCacheFeed {
     // 终态即使仍被前台详情查看，也必须保存最终窗口；轻维护只在已确认历史终态时走到此处。
     try { this.deliver(record.snapshot, record.revision, record.baseRevision, record.baseSnapshot); }
     finally {
-      if (this.mode==='light'||!source.activeTurnId&&source.status!=='active'&&['completed','failed','interrupted'].includes(latest))this.cacheStore.flush([source.threadId]);
+      if (this.mode==='light'||!source.activeTurnId&&source.status!=='active'&&['completed','failed','interrupted','reviewStopped'].includes(latest))this.cacheStore.flush([source.threadId]);
     }
   }
 

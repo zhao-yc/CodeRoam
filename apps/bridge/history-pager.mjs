@@ -52,7 +52,7 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
     // 无消息失败按本页字节范围保留，但绝不把本页最后一轮标为整个会话的最新轮次。
     return {messages,turns:snapshot.turns.filter(turn=>{
       const bounds=turnOffsets.get(turn.turnId);
-      return turnIds.has(turn.turnId)||(turn.status==='failed'&&bounds&&bounds.last>=next&&bounds.first<(anchor>=0?anchor:end));
+      return turnIds.has(turn.turnId)||(['failed','reviewStopped','interrupted'].includes(turn.status)&&bounds&&bounds.last>=next&&bounds.first<(anchor>=0?anchor:end));
     }),hasMore,cursor:hasMore?encodeCursor(row.id,next,''):''};
   }catch(error){
     if(error instanceof BridgeError)throw error;

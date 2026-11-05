@@ -123,7 +123,7 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
   const messageTurnIds = new Set(messages.map(message => message.turnId));
   const windowIndexes = turns.flatMap((turn,index) => selectedTurnIds.has(turn.turnId) || turn.turnId === latestTurn?.turnId ? [index] : []);
   const firstTurn = windowIndexes[0] ?? -1, lastTurn = windowIndexes.at(-1) ?? -1;
-  const relevantTurns = turns.filter((turn,index) => selectedTurnIds.has(turn.turnId) || turn.turnId === latestTurn?.turnId || (index >= firstTurn && index <= lastTurn && !messageTurnIds.has(turn.turnId) && turnStatus(turn) === 'failed'));
+  const relevantTurns = turns.filter((turn,index) => selectedTurnIds.has(turn.turnId) || turn.turnId === latestTurn?.turnId || (index >= firstTurn && index <= lastTurn && !messageTurnIds.has(turn.turnId) && ['failed', 'reviewStopped', 'interrupted'].includes(turnStatus(turn))));
   const turnInfo = new Map(boundedTurnMetadata(relevantTurns,latestTurn?.turnId,selectedTurnIds).map(turn => [turn.turnId,turn]));
   // 只展示桌面明确等待确认的计划，不从普通回复猜测。
   const candidate=[...turns].reverse().flatMap(turn=>(turn.items??[]).filter(item=>item.type==='planImplementation').reverse().map(item=>({item,turn})))[0];
