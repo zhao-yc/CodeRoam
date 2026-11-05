@@ -16,9 +16,22 @@ Set-Location -LiteralPath $project
 function Save-Json([string]$File,$Value) { [IO.File]::WriteAllText($File,($Value|ConvertTo-Json -Depth 8),$utf8) }
 function Read-Json([string]$File) { Get-Content -LiteralPath $File -Raw -Encoding UTF8 | ConvertFrom-Json }
 function Assert-Idle {
-  $config=Read-Json (Join-Path $project '.local/bridge.json')
+  $configPath=Join-Path $project '.local/bridge.json'
+  $workingDirectory=$project
+  # 已安装服务可能保留独立运行目录；查询实际托管配置，避免迁移后误读新的空账本。
+  $registered=Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+  if($null -ne $registered){
+    $binaryPath=if($registered.PathName -match '^"([^"]+)"'){$Matches[1]}else{($registered.PathName -split '\s+')[0]}
+    $hostFile=Join-Path (Split-Path -Parent $binaryPath) 'service.json'
+    $hostSettings=Read-Json $hostFile
+    $worker=Read-Json $hostSettings.WorkerConfig
+    $configPath=$worker.bridgeConfig
+    $workingDirectory=$worker.projectRoot
+  }
+  $config=Read-Json $configPath
   $data=if($config.PSObject.Properties.Name -contains 'dataPath'){$config.dataPath}else{'.local/bridge'}
-  $database=[IO.Path]::GetFullPath((Join-Path $project (Join-Path $data 'journal.sqlite')))
+  $dataDirectory=if([IO.Path]::IsPathRooted($data)){$data}else{Join-Path $workingDirectory $data}
+  $database=[IO.Path]::GetFullPath((Join-Path $dataDirectory 'journal.sqlite'))
   $count=& node --input-type=module -e "import{DatabaseSync}from'node:sqlite';const d=new DatabaseSync(process.argv[1],{readOnly:true});console.log(d.prepare('SELECT count(*) AS n FROM commands WHERE state=char(112,101,110,100,105,110,103)').get().n);d.close();" $database
   if($LASTEXITCODE -ne 0 -or [int]$count -ne 0){throw '手机写操作尚未结束或账本不可读，保留原桥接'}
 }

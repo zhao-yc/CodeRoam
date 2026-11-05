@@ -33,6 +33,8 @@ npm run check:privacy
 npm test
 ```
 
+本地开发入口为 `scripts/dev.ps1`，VS Code 任务通过 `${workspaceFolder}` 跟随工程目录。可在忽略目录中创建 `.local/development.json`，用 `hbuilderxCli` 指定本机 CLI，并按需配置 `bridgeConfig`、`bridgeWorkingDirectory` 和 `runDirectory`，复用已有桥接配置和账本；相对路径以当前工程为基准。Codex App 的本机动作也应指向当前工程的同一脚本，包含个人绝对路径的配置不提交。
+
 以上检查不连接真实桌面或中转，不生成签名与配对凭据。`npm run diagnose` 会读取本机桌面状态，诊断输出只留在自己控制的环境。
 
 ## 配对并运行

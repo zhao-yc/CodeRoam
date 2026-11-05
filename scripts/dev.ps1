@@ -2,7 +2,22 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path -Parent $PSScriptRoot
-$runtimeDirectory=Join-Path $projectRoot '.local/run'
+$localSettings=@{}
+$settingsFile=Join-Path $projectRoot '.local/development.json'
+if(Test-Path -LiteralPath $settingsFile){
+  $document=Get-Content -LiteralPath $settingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
+  foreach($property in $document.PSObject.Properties){$localSettings[$property.Name]=$property.Value}
+}
+# 本机工具和既有运行配置留在忽略目录，公共脚本随工程迁移，不保存个人绝对路径。
+function Resolve-LocalPath([string]$Name,[string]$Fallback) {
+  if(!$localSettings.ContainsKey($Name) -or !($localSettings[$Name] -is [string]) -or [string]::IsNullOrWhiteSpace($localSettings[$Name])){return $Fallback}
+  $value=[string]$localSettings[$Name]
+  if([IO.Path]::IsPathRooted($value)){return [IO.Path]::GetFullPath($value)}
+  return [IO.Path]::GetFullPath((Join-Path $projectRoot $value))
+}
+$runtimeDirectory=Resolve-LocalPath 'runDirectory' (Join-Path $projectRoot '.local/run')
+$bridgeConfig=Resolve-LocalPath 'bridgeConfig' (Join-Path $projectRoot '.local/bridge.json')
+$bridgeWorkingDirectory=Resolve-LocalPath 'bridgeWorkingDirectory' $projectRoot
 New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
 Set-Location -LiteralPath $projectRoot
 
@@ -45,15 +60,18 @@ function Start-Bridge {
   }
   if($null -ne (Get-ManagedProcess 'bridge')){Write-Output '复用本项目的电脑连接服务';return}
   $entry=Join-Path $projectRoot 'apps/bridge/cli.mjs'
-  $config=Join-Path $projectRoot '.local/bridge.json'
+  $config=$bridgeConfig
   if(!(Test-Path -LiteralPath $config)){throw '请先执行 npm run provision 并完成凭据备份'}
   $node=(Get-Command node.exe).Source
   $node=& $node -p "require('node:fs').realpathSync(process.execPath)"
-  $process=Start-Process -FilePath $node -ArgumentList @("`"$entry`"",'--config',"`"$config`"") -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtimeDirectory 'bridge.stdout.log') -RedirectStandardError (Join-Path $runtimeDirectory 'bridge.stderr.log')
+  $process=Start-Process -FilePath $node -ArgumentList @("`"$entry`"",'--config',"`"$config`"") -WorkingDirectory $bridgeWorkingDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtimeDirectory 'bridge.stdout.log') -RedirectStandardError (Join-Path $runtimeDirectory 'bridge.stderr.log')
   Save-ManagedProcess 'bridge' $process.Id $entry
   $ready=$false
+  $bridgeSettings=Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
+  $dataPath=if($bridgeSettings.PSObject.Properties.Name -contains 'dataPath'){$bridgeSettings.dataPath}else{'.local/bridge'}
+  $dataDirectory=if([IO.Path]::IsPathRooted($dataPath)){$dataPath}else{Join-Path $bridgeWorkingDirectory $dataPath}
+  $statusFile=Join-Path $dataDirectory 'runtime-status.json'
   for($attempt=0;$attempt -lt 40;$attempt++) {
-    $statusFile=Join-Path $projectRoot '.local/bridge/runtime-status.json'
     if(Test-Path -LiteralPath $statusFile){try{$status=Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json;if($status.pid -eq $process.Id -and $status.connected){$ready=$true;break}}catch{}}
     if($process.HasExited){break};Start-Sleep -Milliseconds 250
   }
@@ -61,7 +79,8 @@ function Start-Bridge {
   Write-Output "电脑连接服务已启动，PID=$($process.Id)"
 }
 function Start-Mobile {
-  $cli=if($env:HBX_CLI){$env:HBX_CLI}else{(Get-Command cli.exe -ErrorAction Stop).Source}
+  $configuredCli=Resolve-LocalPath 'hbuilderxCli' ''
+  $cli=if($env:HBX_CLI){$env:HBX_CLI}elseif($configuredCli){$configuredCli}else{(Get-Command cli.exe -ErrorAction Stop).Source}
   $mobile=Join-Path $projectRoot 'apps/mobile'
   & $cli project open --path $mobile
   & $cli launch web --project $mobile --ui true --browser Built
@@ -79,9 +98,9 @@ function Stop-Managed {
   Write-Output '手机界面预览由 HBuilderX 运行面板的停止按钮管理。'
 }
 switch($Action){
-  'all'{if((Get-Content -LiteralPath '.local/bridge.json' -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel};Start-Bridge;Start-Mobile}
+  'all'{if((Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel};Start-Bridge;Start-Mobile}
   'tunnel'{Start-Tunnel}
-  'bridge'{if((Get-Content -LiteralPath '.local/bridge.json' -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel};Start-Bridge}
+  'bridge'{if((Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel};Start-Bridge}
   'mobile'{Start-Mobile}
   'stop'{Stop-Managed}
   'logs'{foreach($name in @('bridge.stdout.log','bridge.stderr.log','tunnel.stderr.log')){$file=Join-Path $runtimeDirectory $name;if(Test-Path -LiteralPath $file){Write-Output "日志：$name";Get-Content -LiteralPath $file -Tail 40 -Encoding UTF8}}}
