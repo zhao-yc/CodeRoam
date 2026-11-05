@@ -43,6 +43,10 @@
             <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? userMessageText(entry.text) : entry.text }}</text>
             <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
+            <template v-if="entry.kind == 'submittedMessage'">
+              <text v-if="(entry.summary ?? '').length > 0" class="message-submission-note">{{ entry.summary }}</text>
+              <text class="message-submission-note" role="status" aria-live="polite">{{ submittedMessageStatus(entry.label) }}</text>
+            </template>
             <file-change-summary v-if="(entry.reportId ?? '').length > 0 && ((connection.snapshot?.supportsFileReports == true) || showingPreview)" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected && !showingPreview" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
           </template>
           <view v-else-if="entry.role == 'failure' || entry.role == 'interruption'" class="turn-failure-card" :aria-label="entry.label">
@@ -1585,6 +1589,15 @@ function send() {
   rememberSubmission(hostId, threadId, commandId, text)
   request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(steer ? '已追加到当前任务' : result['queued'] == true ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
+// 状态来自守护进程入库任务，真实用户消息回显后由同编号正文替换占位。
+function submittedMessageStatus(state: string): string {
+  if (state == 'queued') return '已入库，等待发送'
+  if (state == 'running') return '发送中'
+  if (state == 'succeeded') return '已发送，正在同步'
+  if (state == 'failed') return '发送失败，请查看执行记录'
+  if (state == 'unknown' || state == 'waiting_resume') return '发送结果待核对，请查看执行记录'
+  return '已入库'
+}
 // 回车先采纳占位预测；已有草稿才提交，空输入不会触发停止任务。
 function applyComposerEnter() {
   if (!canWrite.value || imageBusy.value || !filesReady.value) return
@@ -1807,6 +1820,7 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 .message-file-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
 .message-text { color: #1a2135; font-size: 16px; line-height: 25px; }
+.message-submission-note { color: #737d91; font-size: 11px; line-height: 17px; margin-top: 4px; }
 .message-execution { margin-bottom: 4px; }
 .process-toggle { flex-direction: row; align-items: center; min-height: 44px; align-self: flex-start; border-bottom: 1px solid #e5e8f1; }
 .process-label { color: #596479; font-size: 14px; line-height: 22px; margin-right: 8px; flex-shrink: 1; }
