@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { PredictionConnections } from './prediction-connections.mjs';
 import { predictionExpression } from './prediction-expression.mjs';
 import { predictionTurnId } from './prediction-turn.mjs';
+import { DesktopPredictionMemory } from './prediction-memory.mjs';
 const execFileAsync=promisify(execFile);
 const REFRESH_MS=15000,MAX_IDENTITY_AGE_MS=60000;
 const identity=endpoint=>JSON.stringify([endpoint.port,endpoint.pid]);
@@ -25,10 +26,11 @@ export async function evaluatePrediction(url,expression){
 
 /** 后台复核身份，前台复用连接；预测正文每次重新读取，不缓存过期灰字。 */
 export class ComposerPredictionReader {
-  constructor({discover=discoverPredictionPorts,fetcher=fetch,evaluate,now=Date.now}={}){
+  constructor({discover=discoverPredictionPorts,fetcher=fetch,evaluate,now=Date.now,memoryReader=new DesktopPredictionMemory()}={}){
     this.discover=discover;this.fetcher=fetcher;this.now=now;this.ports=[];this.discoveredAt=null;this.discovery=null;this.inflight=new Map();this.timer=null;this.closed=false;this.refreshNeeded=false;
     this.connections=evaluate?null:new PredictionConnections({onDisconnect:id=>{this.ports=this.ports.filter(port=>identity(port)!==id);this.refreshNeeded=true;}});
     this.evaluate=evaluate??((url,expression,id)=>this.connections.evaluate(url,expression,id));
+    this.memoryReader=memoryReader;
   }
   /** 启动时预热，扫描与连接准备不阻塞桥接上线或会话打开。 */
   start(){
@@ -89,9 +91,13 @@ export class ComposerPredictionReader {
     const current=()=>{const item=adapter.conversations.get(threadId);return !this.closed&&item===entry&&item.watchers.has(deviceId)&&item.owner?.hostId===hostId&&item.owner?.clientId===clientId&&predictionTurnId(item.state)===turnId&&!adapter.snapshot(item.state).activeTurnId&&!['active','running','inProgress'].includes(adapter.snapshot(item.state).status);};
     if(typeof turnId!=='string'||!turnId||!current())return {prediction:null};
     const key=JSON.stringify([hostId,clientId,threadId,turnId]);
-    if(!this.inflight.has(key))this.inflight.set(key,this.scan(hostId,threadId,turnId).catch(()=>null).finally(()=>this.inflight.delete(key)));
+    if(!this.inflight.has(key))this.inflight.set(key,(async()=>{
+      // 普通启动和多实例先读取同一原生缓存；已有页面通道仍兼容旧桌面布局。
+      const cached=await this.memoryReader.read(adapter,hostId,threadId,turnId).catch(()=>({available:false}));
+      return cached.available?cached.prediction:await this.scan(hostId,threadId,turnId);
+    })().catch(()=>null).finally(()=>this.inflight.delete(key)));
     const prediction=await this.inflight.get(key);
     return {prediction:current()?prediction:null};
   }
-  close(){this.closed=true;clearInterval(this.timer);this.connections?.close();this.ports=[];}
+  close(){this.closed=true;clearInterval(this.timer);this.connections?.close();this.memoryReader.close();this.ports=[];}
 }
