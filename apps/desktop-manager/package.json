@@ -29,7 +29,7 @@
     "directories": { "output": "out" },
     "files": ["dist/**/*", "electron/**/*", "package.json"],
     "extraResources": [{ "from": ".runtime", "to": "bridge-runtime" }],
-    "win": { "target": "zip", "signAndEditExecutable": false },
+    "win": { "target": "zip", "icon": "electron/icon.ico", "signAndEditExecutable": true, "signExecutable": false },
     "artifactName": "coderoam-manager-${version}-${os}-${arch}.${ext}"
   }
 }

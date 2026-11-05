@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import Icon from './Icon.vue'
+import brandLogo from '../electron/tray.png'
 import type { ConfigSnapshot, ConfigValues, LogEntry, ManagerContext, RuntimeStatus } from './types'
 
 type Page = 'overview' | 'config' | 'logs' | 'about'
@@ -253,7 +254,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">C<span></span></div><div><strong>CodeRoam</strong><span>电脑连接管理</span></div></div>
+      <div class="brand"><img class="brand-mark" :src="brandLogo" alt="" /><div><strong>CodeRoam</strong><span>电脑连接管理</span></div></div>
       <div class="sidebar-label">工作空间</div>
       <nav aria-label="管理导航"><button v-for="item in pages" :key="item.id" :class="['nav-item', { active: page === item.id }]" :aria-current="page === item.id ? 'page' : undefined" @click="selectPage(item.id)"><Icon :name="item.icon" :size="19" /><span>{{ item.title }}</span><span v-if="item.id === 'config' && status?.restartRequired" class="nav-dot"></span></button></nav>
       <div class="sidebar-bottom"><div class="service-indicator"><span :class="['status-dot', statusTone]"></span><div><strong>{{ statusLabel }}</strong><span>后台独立运行</span></div></div><button class="switch-service" :disabled="!api || loading || operationBusy" @click="chooseWorker"><Icon name="folder" :size="16" /><span>{{ choosing ? '正在选择…' : '选择服务配置' }}</span><Icon name="chevron" :size="14" /></button><span class="sidebar-version">管理客户端 {{ version }}</span></div>
@@ -322,7 +323,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
       </template>
 
       <template v-else>
-        <section class="panel about-card"><div class="brand-mark large">C<span></span></div><h2>CodeRoam · 电脑连接管理</h2><p>让本机后台的状态与配置清晰可见。</p><span class="version-tag">管理客户端 {{ version }}</span></section>
+        <section class="panel about-card"><img class="brand-mark large" :src="brandLogo" alt="" /><h2>CodeRoam · 电脑连接管理</h2><p>让本机后台的状态与配置清晰可见。</p><span class="version-tag">管理客户端 {{ version }}</span></section>
         <section class="panel"><div class="panel-heading"><div><h2>独立运行，按需管理</h2><p>管理客户端与后台守护各自负责不同的工作。</p></div></div><div class="help-list"><article><div class="help-icon"><Icon name="monitor" :size="21" /></div><div><h3>窗口关闭，连接继续</h3><p>后台由独立守护托管。关闭或退出管理客户端不会停止手机连接。</p></div></article><article><div class="help-icon"><Icon name="sliders" :size="21" /></div><div><h3>保存配置，明确生效</h3><p>保存前检查配置格式与版本。修改后可在概览查看是否需要重启服务。</p></div></article><article><div class="help-icon"><Icon name="shield" :size="21" /></div><div><h3>有在途操作时保留现场</h3><p>重启前由后台检查手机操作。仍有任务处理时会拒绝重启，请等待结束后重试。</p></div></article></div></section>
         <section class="panel"><div class="panel-heading"><div><h2>当前管理目标</h2><p>管理客户端通过本机通道连接已有服务。</p></div><button class="text-button" :disabled="loading || operationBusy" @click="chooseWorker">更换配置<Icon name="arrow" :size="15" /></button></div><dl class="detail-list"><div><dt>托管配置</dt><dd class="path-value" :title="context?.workerConfigPath">{{ context?.workerConfigPath || '尚未选择' }}</dd></div><div><dt>后台版本</dt><dd>{{ status?.version || '暂不可获取' }}</dd></div><div><dt>运行平台</dt><dd>{{ context?.platform === 'win32' ? 'Windows' : context?.platform === 'darwin' ? 'macOS' : context?.platform || '—' }}</dd></div></dl></section>
       </template>
