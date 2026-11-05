@@ -21,7 +21,7 @@
 
 ## 开源仓库持续开发
 
-- 本项目唯一持续开发与交付仓库为 https://github.com/zhao-yc/codex-mobile，交付分支为 main。原私有仓库仅作备份，不再开发或交付。
+- 本项目唯一持续开发与交付仓库为 https://github.com/zhao-yc/CodeRoam，交付分支为 main。原私有仓库仅作备份，不再开发或交付。
 - 不使用 worktree；禁止将旧私有仓库的提交历史合并、变基或推送到开源仓库。迁移旧目录改动时只逐文件审查并导入必要差异。
 - 每次提交前必须检查实际暂存内容，每次推送前必须检查待推送的全部提交（含中间提交及提交说明），不能仅检查最终文件。
 - 克隆后运行 npm run setup:hooks；提交前运行 npm run check:privacy:staged，推送前运行 npm run check:privacy:history。不得使用 --no-verify、临时关闭钩子或替换规则绕过失败。
