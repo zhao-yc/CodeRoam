@@ -5,7 +5,7 @@ export type SubmissionTask = { id: string, position: number, kind: string, metho
 export type SubmissionSnapshot = { supportsTaskQueue: boolean, revision: number, paused: boolean, blockerId: string, tasks: SubmissionTask[], now: number, nextCursor?: number }
 export type InstanceSubmissionTasks = { hostId: string, generation: string, supported: boolean, loading: boolean, error: string, snapshot: SubmissionSnapshot | null, clockOffset: number }
 export type AcceptedSubmission = { revision: number, hostId: string, taskId: string, threadId: string, method: string }
-export type PendingSubmission = { hostId: string, id: string, kind: string, generation: string, accepted: boolean, unknown: boolean, createdAt: number, localState?: string, stage?: string, error?: string }
+export type PendingSubmission = { hostId: string, id: string, kind: string, generation: string, accepted: boolean, unknown: boolean, createdAt: number }
 type SubmissionTaskState = { namespace: string, instances: InstanceSubmissionTasks[], pending: PendingSubmission[], clock: number, accepted: AcceptedSubmission }
 
 // 只缓存用于展示的状态；任务正文与执行责任均属于守护进程。
@@ -13,12 +13,6 @@ export const submissionTasks = reactive<SubmissionTaskState>({ namespace: '', in
 
 export function submissionInstance(hostId: string): InstanceSubmissionTasks | null { return submissionTasks.instances.find((item: InstanceSubmissionTasks): boolean => item.hostId == hostId) ?? null }
 export function supportsSubmissionTasks(hostId: string): boolean { return submissionInstance(hostId)?.supported == true }
-
-// 上传与入队期间由应用持有任务，页面离开后仍可在浮窗和执行记录中查看。
-export function localSubmissionTask(record: PendingSubmission): SubmissionTask | null {
-  if (record.accepted || (!record.unknown && record.localState == null)) return null
-  return { id: record.id, position: 0, kind: record.kind, method: '', title: record.kind == 'newConversation' ? '新建聊天' : '提交入队待核对', threadId: '', projectId: '', state: record.unknown ? 'unknown' : record.localState ?? 'unknown', stage: record.stage ?? '请先查询原提交编号', error: record.error ?? (record.unknown ? '手机未收到有效入队回执，请勿重复提交' : ''), createdAt: record.createdAt, startedAt: record.createdAt, completedAt: 0, updatedAt: record.createdAt, dismissed: false, steps: [] as SubmissionStep[], localOnly: true } as SubmissionTask
-}
 
 // 服务端时间校准仅用于五秒展示期限，不把手机时间当作执行完成时间。
 export function acceptSubmissionSnapshot(hostId: string, generation: string, raw: UTSJSONObject): boolean {

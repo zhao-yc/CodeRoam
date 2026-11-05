@@ -18,8 +18,8 @@
     </view>
     <text v-if="error.length > 0" class="history-error">{{ error }}</text>
     <scroll-view direction="vertical" class="history-scroll" :show-scrollbar="false" :refresher-enabled="true" :refresher-triggered="refreshing" refresher-background="#ffffff" @refresherrefresh="refreshHistory" @scrolltolower="loadMore">
-      <view v-if="displayedRows.length == 0 && !loading" class="history-empty"><text>{{ !connection.connected ? '正在等待连接' : cursors.length == 0 ? '实例暂未在线' : error.length > 0 ? '记录读取失败' : '暂无执行记录' }}</text><text class="history-empty-note">{{ !connection.connected ? '连接恢复后会自动读取；尚未配对时请返回首页连接实例。' : cursors.length == 0 ? '请确认所选实例在线，上线后将自动读取。' : error.length > 0 ? '请稍后下拉刷新重试。' : '记录保存在原守护进程，可切换筛选条件查看。' }}</text></view>
-      <view v-for="row in displayedRows" :key="row.hostId + ':' + row.task.id" class="history-task">
+      <view v-if="rows.length == 0 && !loading" class="history-empty"><text>{{ !connection.connected ? '正在等待连接' : cursors.length == 0 ? '实例暂未在线' : error.length > 0 ? '记录读取失败' : '暂无执行记录' }}</text><text class="history-empty-note">{{ !connection.connected ? '连接恢复后会自动读取；尚未配对时请返回首页连接实例。' : cursors.length == 0 ? '请确认所选实例在线，上线后将自动读取。' : error.length > 0 ? '请稍后下拉刷新重试。' : '记录保存在原守护进程，可切换筛选条件查看。' }}</text></view>
+      <view v-for="row in rows" :key="row.hostId + ':' + row.task.id" class="history-task">
         <view class="history-task-heading"><text class="history-task-title">{{ row.task.title.length > 0 ? row.task.title : row.task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }}</text><submission-task-status class="history-state" :state="row.task.state" /></view>
         <template v-if="row.task.threadId.length > 0"><button v-if="row.task.method != 'thread.delete'" class="history-chat-title" hover-class="action-pressed" @click="openTask(row.hostId, row.task)">{{ chatTitle(row.hostId, row.task) }}</button><text v-else class="history-chat-title history-chat-unavailable">{{ chatTitle(row.hostId, row.task) }}</text></template>
         <text class="history-meta">{{ hostName(row.hostId) }} · #{{ row.task.position }} · {{ row.task.kind == 'operation' ? '操作时间' : '提交时间' }} {{ dateLabel(row.task.createdAt) }}</text>
@@ -55,34 +55,14 @@ import { computed, nextTick, ref, watch } from 'vue'
 import SubmissionTaskStatus from '../../components/submission-task-status/submission-task-status.uvue'
 import AppIcon from '../../components/app-icon/app-icon.uvue'
 import { bridge, connection, Computer, computerIcon as resolveComputerIcon } from '../../services/bridge.uts'
-import { SubmissionTask, PendingSubmission, InstanceSubmissionTasks, submissionTasks, localSubmissionTask, submissionStageDetail, submissionInstance } from '../../services/submission-task-state.uts'
-import { readSubmissionTasks, controlSubmissionTask, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
+import { SubmissionTask, submissionStageDetail, submissionInstance } from '../../services/submission-task-state.uts'
+import { readSubmissionTasks, controlSubmissionTask } from '../../services/submission-tasks.uts'
 import { submissionHistoryOrder } from '../../services/submission-task-presentation.uts'
 type HistoryRow = { hostId: string, task: SubmissionTask }
 type HistoryCursor = { hostId: string, category: string, before: number, more: boolean }
 const hostId = ref(''), state = ref(''), rows = ref<HistoryRow[]>([]), loading = ref(false), error = ref(''), working = ref('')
 const category = ref('all')
 const categoryValues = ['all', 'submission', 'operation'], categoryLabels = ['全部', '提交任务', '状态操作']
-// 后台提交尚未取得电脑回执时也展示本地进度，同编号的电脑记录优先。
-const displayedRows = computed((): HistoryRow[] => {
-  const result = rows.value.slice()
-  if (category.value != 'operation') {
-    submissionTasks.instances.forEach((instance: InstanceSubmissionTasks) => {
-      instance.snapshot?.tasks.forEach((task: SubmissionTask) => {
-        if (task.kind == 'operation') return
-        const index = result.findIndex((row: HistoryRow): boolean => row.hostId == instance.hostId && row.task.id == task.id)
-        const row: HistoryRow = { hostId: instance.hostId, task }
-        if (index >= 0) result[index] = row
-        else result.push(row)
-      })
-    })
-    submissionTasks.pending.forEach((record: PendingSubmission) => {
-      const task = localSubmissionTask(record)
-      if (task != null && !result.some((row: HistoryRow): boolean => row.hostId == record.hostId && row.task.id == record.id)) result.push({ hostId: record.hostId, task } as HistoryRow)
-    })
-  }
-  return result.filter((row: HistoryRow): boolean => (hostId.value.length == 0 || row.hostId == hostId.value) && (state.value.length == 0 || row.task.state == state.value)).sort((a: HistoryRow, b: HistoryRow): number => submissionHistoryOrder(a.task, b.task))
-})
 const selectedCategoryLabel = computed((): string => categoryLabels[categoryValues.indexOf(category.value)] ?? '全部')
 const cursors = ref<HistoryCursor[]>([])
 const refreshing = ref(false)
@@ -196,7 +176,7 @@ function openTask(id: string, task: SubmissionTask) {
   if (task.threadId.length == 0 || task.method == 'thread.delete') return
   try { bridge.selectComputer(id); uni.navigateTo({ url: '/pages/conversation/index?hostId=' + encodeURIComponent(id) + '&threadId=' + encodeURIComponent(task.threadId) + '&title=' + encodeURIComponent(chatTitle(id, task)) }) } catch (reason) { error.value = (reason as Error).message }
 }
-async function control(row: HistoryRow, action: string, confirmed: boolean = false) { if (working.value.length > 0) return; working.value = row.task.id; try { if (row.task.localOnly == true) { if (action == 'reconcile') await checkPendingSubmission(row.hostId, row.task.id); else if (action == 'skip' && confirmed) acknowledgePendingSubmission(row.hostId, row.task.id) } else await controlSubmissionTask(row.hostId, row.task.id, action, confirmed, row.task.attempt ?? 0); reload() } catch (reason) { error.value = (reason as Error).message } finally { working.value = '' } }
+async function control(row: HistoryRow, action: string, confirmed: boolean = false) { if (working.value.length > 0) return; working.value = row.task.id; try { await controlSubmissionTask(row.hostId, row.task.id, action, confirmed, row.task.attempt ?? 0); reload() } catch (reason) { error.value = (reason as Error).message } finally { working.value = '' } }
 // 历史入口与首页使用同一原任务和尝试编号，删除仍须再次确认。
 function retry(row: HistoryRow) { if (working.value.length > 0 || row.task.state != 'failed' || row.task.canRetry != true) return; if (row.task.method == 'thread.delete') { uni.showModal({ title: '重试永久删除聊天', content: '将再次删除原聊天及其附属聊天，删除后无法恢复。是否重试？', confirmText: '重试删除', cancelText: '取消', success: (answer) => { if (answer.confirm) control(row, 'retry', true) } }); return }; control(row, 'retry', true) }
 function skip(row: HistoryRow) { uni.showModal({ title: '跳过待核对任务', content: '请先在电脑核对。确认后不会重发原任务，并继续该实例队列。', confirmText: '已核对，继续', success: (answer) => { if (answer.confirm) control(row, 'skip', true) } }) }

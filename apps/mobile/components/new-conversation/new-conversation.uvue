@@ -67,7 +67,7 @@ import { prepareImage } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
 import { validateFile } from '../../services/files.uts'
 import { supportsSubmissionTasks } from '../../services/submission-task-state.uts'
-import { startNewConversationTask } from '../../services/submission-tasks.uts'
+import { submitNewConversationTask } from '../../services/submission-tasks.uts'
 
 const props = withDefaults(defineProps<{ expanded?: boolean, paneWidth?: number, paneLeft?: number }>(), { expanded: false, paneWidth: 0, paneLeft: 0 })
 const emit = defineEmits<{ expand: [], busy: [value: boolean], created: [threadId: string], queued: [], dismiss: [] }>()
@@ -98,7 +98,7 @@ const draft = computed((): NewDraft => newDraft(connection.hostId, projectId.val
 const native = computed(() => nativeDraftState(connection.hostId, projectId.value))
 const direct = computed(() => directNewConversationState(draft.value))
 const existingDraft = computed(() => newConversationMode.value == 'nativeDraft' && native.value.snapshot?.status == 'ready' ? native.value.snapshot : null)
-const operationBusy = computed((): boolean => busy.value || draft.value.pendingAction == 'send' || native.value.busy || direct.value.busy)
+const operationBusy = computed((): boolean => busy.value || native.value.busy || direct.value.busy)
 const outcomeUnknown = computed((): boolean => native.value.outcomeUnknown || direct.value.outcomeUnknown)
 const hasCompletedConversation = computed((): boolean => native.value.snapshot?.status == 'promoted' || direct.value.completedThreadId.length > 0)
 const editorError = computed((): string => {
@@ -428,7 +428,7 @@ async function send() {
   const updateProgress = (message: string): void => { progress.value = message }
   try {
     if (taskReady) {
-      startNewConversationTask(target, mode)
+      await submitNewConversationTask(target, mode, updateProgress)
       if (alive && props.expanded && draft.value == target && revision == connection.configurationRevision) { busy.value = false; emit('busy', false); uni.hideKeyboard(); emit('queued') }
     } else if (mode == 'desktopIpc') {
       const id = await sendDirectNewConversation(target, updateProgress)
