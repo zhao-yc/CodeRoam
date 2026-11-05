@@ -103,7 +103,8 @@ export class DesktopPredictionMemory {
   async read(adapter, hostId, threadId, turnId) {
     if (this.closed || this.platform !== 'win32') return { available: false };
     const instance = adapter.client?.instance;
-    if (instance && (instance.alive !== true || instance.ready !== true || instance.platform !== 'win32')) return { available: false };
+    // Windows 发现器的既有记录省略 platform，按当前宿主平台解释该兼容形态。
+    if (instance && (instance.alive !== true || instance.ready !== true || (instance.platform ?? this.platform) !== 'win32')) return { available: false };
     let pid = instance?.pid;
     const native = adapter.native;
     if (!instance) {

@@ -138,7 +138,8 @@ test('普通启动和无页面端口的多实例使用相同只读缓存路径',
   for (const mode of [{ directIpc: true }, { routerManaged: true }]) {
     const source = fixture(), opened = [];
     const reader = new DesktopPredictionMemory({ platform: 'win32', open: identity => { opened.push(identity); return source.memory; } });
-    const instance = { ...mode, port: null, platform: 'win32', alive: true, ready: true, pid: 10, startedAt: 20, generation: 'one' };
+    // 使用实际 Windows 发现器的记录形态，省略 platform 字段。
+    const instance = { ...mode, port: null, alive: true, ready: true, pid: 10, startedAt: 20, generation: 'one' };
     const result = await reader.read({ client: { instance, assertCurrent() {} } }, 'local', 'thread-1', 'turn-1');
     assert.equal(result.available, true); assert.equal(result.prediction.text, source.text);
     assert.deepEqual(opened, [{ pid: 10, startedAt: 20 }]);
