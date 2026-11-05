@@ -6,7 +6,7 @@ const paths: Record<string, string> = {
   sliders: 'M4 21v-7 M4 10V3 M12 21v-9 M12 8V3 M20 21v-5 M20 12V3 M1 10h6 M9 8h6 M17 16h6',
   logs: 'M7 3h10l4 4v14H3V3z M7 11h10 M7 15h10 M7 7h5',
   info: 'M12 11v6 M12 7h.01 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
-  refresh: 'M20 7v5h-5 M4 17v-5h5 M5.5 8a7 7 0 0 1 11.6-3L20 8 M4 16l2.9 3A7 7 0 0 0 18.5 16',
+  refresh: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5',
   power: 'M12 2v10 M6.3 5.3a9 9 0 1 0 11.4 0',
   folder: 'M3 20h18V6H11L9 3H3z',
   chevron: 'm9 5 7 7-7 7',
