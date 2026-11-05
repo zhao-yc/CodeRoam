@@ -42,14 +42,14 @@ export function existingConversationSnapshot(adapter, threadId) {
   if (!entry?.state) return undefined;
   // 与 adapter.snapshot(state, undefined) 使用相同的默认消息窗口和标题优先级。
   const source = recentConversationPage(normalizeConversation(entry.state, RECENT_CONVERSATION_OPTIONS));
-  let title = [entry.state.title, entry.state.fallbackSearchTitle].find(value => typeof value === 'string' && value.trim().length > 0);
+  let title = typeof entry.state.title === 'string' && entry.state.title.trim().length > 0 ? entry.state.title : undefined;
   if (!title) {
     let indexedTitle = entry.indexedTitle;
     if (!Object.hasOwn(entry, 'indexedTitle')) {
       try { indexedTitle = adapter.index?.readTitle?.(threadId) ?? ''; }
       catch { indexedTitle = ''; }
     }
-    title = entry.lastTitle || indexedTitle;
+    title = entry.lastTitle || indexedTitle || entry.state.fallbackSearchTitle;
   }
   if (typeof title === 'string' && title.trim().length > 0) source.title = title;
   return source;

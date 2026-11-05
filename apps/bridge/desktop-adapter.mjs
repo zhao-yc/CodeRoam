@@ -351,14 +351,14 @@ export class DesktopAdapter extends EventEmitter {
     // 侧边栏保存的未读独立于流式快照，不能用快照默认 false 提前清理桌面蓝点。
     if(this.native){if(this.native.unread.has(state.id))snapshot.hasUnreadTurn=this.native.unread.get(state.id);else delete snapshot.hasUnreadTurn;}
     const entry=this.conversations.get(state.id);
-    // 桌面实时状态可能没有标题；每次订阅最多查询一次索引，避免流式更新反复读取 SQLite。
-    let title=[state.title,state.fallbackSearchTitle].find(value=>typeof value==='string'&&value.trim().length>0);
+    // 搜索摘要可能带首条消息编号，缺少正式实时标题时先读桌面索引，订阅内复用结果。
+    let title=typeof state.title==='string'&&state.title.trim().length>0?state.title:undefined;
     if(!title) {
       if(entry&&!Object.hasOwn(entry,'indexedTitle')) {
         try {entry.indexedTitle=this.index?.readTitle?.(state.id) ?? '';}
         catch {entry.indexedTitle='';}
       }
-      title=entry?.lastTitle||entry?.indexedTitle;
+      title=entry?.lastTitle||entry?.indexedTitle||state.fallbackSearchTitle;
     }
     if(typeof title==='string'&&title.trim().length>0) {snapshot.title=title;if(entry)entry.lastTitle=title;}
     return snapshot;
