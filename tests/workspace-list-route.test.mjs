@@ -66,3 +66,27 @@ test('详情内归档或删除后由目标列表页显示提示', async () => {
     assert.equal(f.calls.some(([call]) => call === kind + '-notice'), false);
   }
 });
+
+
+test('新聊天后台提交返回列表后提示进度入口，窄屏和宽屏均只显示一次', async () => {
+  for (const windowWidth of [390, 1366]) {
+    const f = workspaceFixture({props:{windowWidth}, manualTicks:true});
+    f.mode.value = 'new';
+    f.context.onConversationQueued();
+    assert.equal(f.mode.value, 'list');
+    assert.equal(f.calls.some(([kind]) => kind === 'toast'), false);
+    await f.flush();
+    assert.deepEqual(f.calls.filter(([kind]) => kind === 'toast'), [['toast', '正在提交新聊天，可在执行记录中查看进度']]);
+  }
+});
+
+test('新聊天从详情路由提交后等待首页切换成功再提示', () => {
+  const f = workspaceFixture({props:{detailRoute:true}});
+  let navigation;
+  f.context.uni.reLaunch = value => { navigation = value; };
+  f.context.onConversationQueued();
+  assert.equal(navigation.url, '/pages/index/index');
+  assert.equal(f.calls.some(([kind]) => kind === 'toast'), false);
+  navigation.success();
+  assert.deepEqual(f.calls.filter(([kind]) => kind === 'toast'), [['toast', '正在提交新聊天，可在执行记录中查看进度']]);
+});
