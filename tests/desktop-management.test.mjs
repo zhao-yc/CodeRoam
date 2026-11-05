@@ -105,15 +105,38 @@ test('关闭已开始后失败会明确退出交由守护恢复，不永久保�
 
 test('真实托管管理重启只关闭合成子进程，保存配置要等重启后才标为生效',async t=>{
   const f=fixture(t),helper=pathToFileURL(path.resolve('apps/bridge/management-child.mjs')).href;
-  fs.writeFileSync(f.worker.entry,`import {installManagementChild} from ${JSON.stringify(helper)};const timer=setInterval(()=>{},1000);installManagementChild({agents:()=>[],drain:()=>{},status:()=>({pid:process.pid,connected:true,version:'synthetic'}),close:async()=>clearInterval(timer)});`);
+  const setting=pathToFileURL(path.resolve('apps/bridge/background-sync-setting.mjs')).href;
+  fs.writeFileSync(f.worker.entry,`
+    import {installManagementChild} from ${JSON.stringify(helper)};
+    import {applyBackgroundSyncSetting,readBackgroundSyncSetting} from ${JSON.stringify(setting)};
+    const file='background-sync.json',agents=()=>[];
+    const config={backgroundSyncEnabled:readBackgroundSyncSetting(file)};
+    const timer=setInterval(()=>{},1000);
+    installManagementChild({
+      agents,drain:()=>{},
+      status:()=>({pid:process.pid,connected:true,version:'synthetic',...config}),
+      setBackgroundSync:enabled=>applyBackgroundSyncSetting(file,config,agents,enabled),
+      close:async()=>clearInterval(timer),
+    });
+  `);
   const child=spawn(process.execPath,['apps/bridge/service-supervisor.mjs','--config',f.workerConfigPath],{windowsHide:true,stdio:'ignore'});
   f.after.push(async()=>{let pid;try{pid=JSON.parse(fs.readFileSync(path.join(f.worker.runDirectory,'bridge.json'))).pid;}catch{}child.kill();await new Promise(resolve=>{child.once('close',resolve);setTimeout(resolve,1000).unref();});if(pid)try{process.kill(pid);}catch{}});
   const client=connectManagement(f.workerConfigPath);
   const wait=async predicate=>{const until=Date.now()+15000;while(Date.now()<until){try{const value=await predicate();if(value)return value;}catch{}await new Promise(resolve=>setTimeout(resolve,100));}assert.fail('合成托管未在期限内达到目标状态');};
   const before=await wait(async()=>{const value=await client.request('status');return value.connected?value:null;});
+  assert.equal(before.backgroundSyncEnabled,true);
+  await assert.rejects(client.request('sync.set',{enabled:'false'}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  assert.deepEqual(await client.request('sync.set',{enabled:false}),{backgroundSyncEnabled:false});
+  const paused=await client.request('status');
+  assert.equal(paused.backgroundSyncEnabled,false);
+  assert.equal(paused.pid,before.pid);
+  assert.equal(paused.restartRequired,false);
   const config=await client.request('config.read');await client.request('config.save',{expectedRevision:config.revision,values:{label:'合成已保存'}});
   assert.equal((await client.request('status')).restartRequired,true);
   assert.equal((await client.request('service.restart')).accepted,true);
   const after=await wait(async()=>{const value=await client.request('status');return value.pid!==before.pid&&value.connected?value:null;});
   assert.equal(after.supervisorPid,before.supervisorPid);assert.equal(after.restartRequired,false);assert.equal(after.activeRevision,after.savedRevision);
+  assert.equal(after.backgroundSyncEnabled,false);
+  assert.deepEqual(await client.request('sync.set',{enabled:true}),{backgroundSyncEnabled:true});
+  assert.equal((await client.request('status')).pid,after.pid);
 });

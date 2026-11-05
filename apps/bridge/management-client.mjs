@@ -69,7 +69,7 @@ export function readManagementConnection(workerConfigPath) {
 export function connectManagement(workerConfigPath) {
   return {
     async request(method, params = {}) {
-      if (!['status', 'config.read', 'config.save', 'logs.read', 'service.restart'].includes(method)) throw failure('不支持的本机管理操作', 'MANAGEMENT_METHOD_INVALID');
+      if (!['status', 'config.read', 'config.save', 'logs.read', 'service.restart', 'sync.set'].includes(method)) throw failure('不支持的本机管理操作', 'MANAGEMENT_METHOD_INVALID');
       const connection = readManagementConnection(workerConfigPath), id = randomUUID();
       const body = JSON.stringify({version: 1, id, token: connection.token, method, params}) + '\n';
       if (Buffer.byteLength(body) > 65536) throw failure('本机管理请求过大', 'MANAGEMENT_REQUEST_INVALID');

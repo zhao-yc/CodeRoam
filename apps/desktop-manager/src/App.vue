@@ -11,10 +11,11 @@ const status = ref<RuntimeStatus | null>(null)
 const config = ref<ConfigSnapshot | null>(null)
 const logs = ref<LogEntry[]>([])
 const loading = ref(true), refreshing = ref(false), choosing = ref(false), saving = ref(false), restarting = ref(false), reloadingConfig = ref(false), configLoading = ref(false), logsLoading = ref(false)
+const changingSync = ref(false), restartPreviousPid = ref<number | null>(null)
 const error = ref(''), statusError = ref(''), configError = ref(''), feedback = ref(''), logError = ref(''), confirmRestart = ref(false), lastUpdated = ref<Date | null>(null)
 const form = reactive({ label: '', relayUrl: '', multiInstance: true, cacheHours: 2, maxEntries: 64 })
 let timer: ReturnType<typeof setInterval> | undefined
-let alive = true, statusInFlight = false, generation = 0, initialForm = ''
+let alive = true, statusRequest = 0, generation = 0, initialForm = ''
 
 const pages: { id: Page; title: string; icon: string; subtitle: string }[] = [
   { id: 'overview', title: '运行概览', icon: 'grid', subtitle: '查看电脑连接与后台运行状态' },
@@ -31,7 +32,16 @@ const statusTone = computed(() => status.value?.running && status.value.connecte
 const latestLogs = computed(() => logs.value.slice(-5).reverse())
 const logRows = computed(() => logs.value.slice().reverse())
 const version = computed(() => context.value?.version || '—')
-const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value)
+const operationBusy = computed(() => choosing.value || saving.value || restarting.value || reloadingConfig.value || configLoading.value || changingSync.value)
+const backgroundSyncEnabled = computed(() => status.value?.backgroundSyncEnabled)
+const syncDisabled = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || !status.value?.running || typeof backgroundSyncEnabled.value !== 'boolean')
+const syncLabel = computed(() => {
+  if (changingSync.value) return '正在应用…'
+  if (restarting.value || restartPreviousPid.value !== null) return '等待后台重启'
+  if (!status.value?.running) return '等待后台就绪'
+  if (typeof backgroundSyncEnabled.value !== 'boolean') return '当前服务版本暂不支持'
+  return backgroundSyncEnabled.value ? '已开启' : '已暂停'
+})
 
 function message(reason: unknown): string { return reason instanceof Error ? reason.message : '操作未完成，请重试' }
 function current(requestGeneration: number): boolean { return alive && requestGeneration === generation }
@@ -41,6 +51,12 @@ function time(value: string | number | Date): string {
   return Number.isNaN(date.getTime()) ? '时间未知' : date.toLocaleString('zh-CN', { hour12: false })
 }
 function clock(value: Date | null): string { return value?.toLocaleTimeString('zh-CN', { hour12: false }) ?? '尚未更新' }
+
+// 本机写操作使已经发出的状态读取失效，避免旧回执覆盖确认结果。
+function invalidateStatus() {
+  statusRequest++
+  refreshing.value = false
+}
 
 // 只有显式载入或保存成功才回填表单，定时状态刷新始终保留尚未保存的输入。
 function applyConfig(value: ConfigSnapshot) {
@@ -63,17 +79,20 @@ async function loadMissingConfig(requestGeneration = generation) {
 
 // 每次选择服务都会推进代次，旧服务的异步回执不会污染新界面。
 async function refreshStatus(showFeedback = false) {
-  if (!api || !ready.value || statusInFlight) return
-  statusInFlight = true; refreshing.value = true
+  if (!api || !ready.value || refreshing.value || changingSync.value || restarting.value) return
+  refreshing.value = true
   const requestGeneration = generation
+  const request = ++statusRequest
   try {
     const value = await api.status()
-    if (!current(requestGeneration)) return
+    if (!current(requestGeneration) || request !== statusRequest) return
+    if (restartPreviousPid.value !== null && value.running && value.pid !== null && value.pid !== restartPreviousPid.value) restartPreviousPid.value = null
     status.value = value; lastUpdated.value = new Date(); statusError.value = ''
     if (showFeedback) feedback.value = '运行状态已更新'
     if (config.value === null && !operationBusy.value) await loadMissingConfig(requestGeneration)
-  } catch (reason) { if (current(requestGeneration)) { statusError.value = message(reason); status.value = null } }
-  finally { if (current(requestGeneration)) { statusInFlight = false; refreshing.value = false } }
+  } catch (reason) {
+    if (current(requestGeneration) && request === statusRequest) { statusError.value = message(reason); status.value = null }
+  } finally { if (current(requestGeneration) && request === statusRequest) refreshing.value = false }
 }
 
 async function loadLogs() {
@@ -105,10 +124,36 @@ async function chooseWorker() {
     const result = await api.chooseWorker()
     if (!current(requestGeneration)) return
     if (result.workerConfigPath === context.value?.workerConfigPath) return
-    requestGeneration = ++generation; context.value = result; status.value = null; config.value = null; logs.value = []; initialForm = ''; statusInFlight = false; refreshing.value = false; configLoading.value = false; logsLoading.value = false; logError.value = ''
+    requestGeneration = ++generation
+    invalidateStatus()
+    context.value = result; status.value = null; restartPreviousPid.value = null; config.value = null; logs.value = []; initialForm = ''; configLoading.value = false; logsLoading.value = false; logError.value = ''
     await loadService()
   } catch (reason) { if (current(requestGeneration)) error.value = message(reason) }
   finally { if (current(requestGeneration)) choosing.value = false }
+}
+
+// 开关保持守护上次确认的值，写入失败时由新的状态读取核对实际结果。
+async function toggleBackgroundSync() {
+  const enabled = backgroundSyncEnabled.value
+  if (!api || syncDisabled.value || typeof enabled !== 'boolean') return
+  const requestGeneration = generation
+  changingSync.value = true
+  error.value = ''
+  invalidateStatus()
+  let confirmed = false
+  try {
+    const result = await api.setBackgroundSync({ enabled: !enabled })
+    if (!current(requestGeneration)) return
+    if (typeof result?.backgroundSyncEnabled !== 'boolean' || status.value === null) throw new Error('守护进程未确认后台数据同步状态')
+    status.value = { ...status.value, backgroundSyncEnabled: result.backgroundSyncEnabled }
+    confirmed = true
+  } catch (reason) { if (current(requestGeneration)) error.value = message(reason) }
+  finally {
+    if (current(requestGeneration)) {
+      changingSync.value = false
+      if (!confirmed) void refreshStatus()
+    }
+  }
 }
 
 // 界面仅提交允许调整的字段；令牌始终留在本机后台，不进入表单。
@@ -155,17 +200,25 @@ async function reloadConfig() {
 
 // 重启由后台核验在途任务后执行；前端不停止进程，也不创建另一份桥接。
 async function restart() {
-  if (!api || operationBusy.value) return
+  if (!api || operationBusy.value || restartPreviousPid.value !== null || !status.value?.running) return
   const requestGeneration = generation
+  const previousPid = status.value.pid
   confirmRestart.value = false; restarting.value = true; error.value = ''; feedback.value = ''
+  invalidateStatus()
   try {
     await api.restart()
     if (!current(requestGeneration)) return
+    restartPreviousPid.value = previousPid
+    status.value = null
     feedback.value = '后台已接受重启，请等待连接恢复'
-    await refreshStatus()
-    if (current(requestGeneration)) await loadLogs()
   } catch (reason) { if (current(requestGeneration)) error.value = message(reason) }
-  finally { if (current(requestGeneration)) restarting.value = false }
+  finally {
+    if (current(requestGeneration)) {
+      restarting.value = false
+      await refreshStatus()
+      if (current(requestGeneration)) await loadLogs()
+    }
+  }
 }
 
 function selectPage(value: Page) { page.value = value; feedback.value = ''; if (value === 'logs') void loadLogs() }
@@ -194,7 +247,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
     </aside>
 
     <main class="main-pane">
-      <header class="page-header"><div><div class="page-eyebrow">电脑连接管理</div><h1>{{ currentPage.title }}</h1><p>{{ currentPage.subtitle }}</p></div><div v-if="ready" class="header-actions"><button class="button secondary icon-button" :disabled="refreshing || restarting" aria-label="刷新运行状态" title="刷新运行状态" @click="refreshStatus(true)"><Icon name="refresh" :class="{ spinning: refreshing }" :size="18" /></button><button class="button secondary" :disabled="!status?.running || operationBusy" @click="confirmRestart = true"><Icon name="power" :size="17" />{{ restarting ? '正在重启…' : '重启服务' }}</button></div></header>
+      <header class="page-header"><div><div class="page-eyebrow">电脑连接管理</div><h1>{{ currentPage.title }}</h1><p>{{ currentPage.subtitle }}</p></div><div v-if="ready" class="header-actions"><button class="button secondary icon-button" :disabled="refreshing || restarting || changingSync" aria-label="刷新运行状态" title="刷新运行状态" @click="refreshStatus(true)"><Icon name="refresh" :class="{ spinning: refreshing }" :size="18" /></button><button class="button secondary" :disabled="!status?.running || operationBusy || restartPreviousPid !== null" @click="confirmRestart = true"><Icon name="power" :size="17" />{{ restarting || restartPreviousPid !== null ? '正在重启…' : '重启服务' }}</button></div></header>
 
       <div v-if="error" class="notice error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span><button class="notice-close" aria-label="关闭错误提示" @click="error = ''"><Icon name="close" :size="16" /></button></div>
       <div v-if="statusError" class="notice error" role="alert"><Icon name="signal" :size="18" /><span>运行状态：{{ statusError }}</span><button class="notice-close" aria-label="关闭状态提示" @click="statusError = ''"><Icon name="close" :size="16" /></button></div>
@@ -207,7 +260,37 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
 
       <template v-else-if="page === 'overview'">
         <section class="stat-grid" aria-label="运行摘要"><article class="stat-card"><div class="stat-caption"><span>中转连接</span><Icon name="signal" :size="18" /></div><strong class="stat-value" :class="{ 'text-online': status?.connected }">{{ status?.connected ? '已连接' : status?.running ? '连接中' : '未就绪' }}</strong><span class="stat-note"><span :class="['status-dot', statusTone]"></span>{{ status?.running ? '后台服务正在运行' : '等待后台服务就绪' }}</span></article><article class="stat-card"><div class="stat-caption"><span>可用桌面实例</span><Icon name="monitor" :size="19" /></div><strong class="stat-value">{{ status ? availableInstances : '—' }}<small v-if="status">个</small></strong><span class="stat-note">已检测 {{ status?.instances.length ?? 0 }} 个实例</span></article><article class="stat-card"><div class="stat-caption"><span>配置状态</span><Icon name="sliders" :size="18" /></div><strong class="stat-value compact" :class="{ 'text-waiting': status?.restartRequired }">{{ !status ? '待核验' : status.restartRequired ? '等待应用' : '已同步' }}</strong><span class="stat-note">{{ status?.restartRequired ? '保存的更改需要重启服务' : '按当前生效配置运行' }}</span></article></section>
-        <section class="panel"><div class="panel-heading"><div><h2>后台服务</h2><p>关闭管理窗口后，手机连接继续运行。</p></div><span :class="['status-pill', statusTone]"><span :class="['status-dot', statusTone]"></span>{{ statusLabel }}</span></div><dl class="detail-list"><div><dt>电脑名称</dt><dd>{{ config?.values.label || '—' }}</dd></div><div><dt>运行进程</dt><dd>{{ status?.pid ? 'PID ' + status.pid : '—' }}<span v-if="status?.supervisorPid" class="sub-value">守护 PID {{ status.supervisorPid }}</span></dd></div><div><dt>配置文件</dt><dd class="path-value" :title="status?.configPath">{{ status?.configPath || '—' }}</dd></div><div><dt>生效版本</dt><dd class="mono">{{ shortRevision(status?.activeRevision) }}<span v-if="status?.restartRequired" class="sub-value">已保存 {{ shortRevision(status.savedRevision) }}</span></dd></div></dl><div v-if="status?.restartRequired" class="panel-callout"><Icon name="clock" :size="18" /><span>新配置已保存，后台仍使用上一版配置。</span><button class="text-button" :disabled="operationBusy" @click="confirmRestart = true">重启并应用<Icon name="arrow" :size="15" /></button></div></section>
+        <section class="panel">
+          <div class="panel-heading">
+            <div><h2>后台服务</h2><p>关闭管理窗口后，手机连接继续运行。</p></div>
+            <span :class="['status-pill', statusTone]"><span :class="['status-dot', statusTone]"></span>{{ statusLabel }}</span>
+          </div>
+          <dl class="detail-list">
+            <div><dt>电脑名称</dt><dd>{{ config?.values.label || '—' }}</dd></div>
+            <div><dt>运行进程</dt><dd>{{ status?.pid ? 'PID ' + status.pid : '—' }}<span v-if="status?.supervisorPid" class="sub-value">守护 PID {{ status.supervisorPid }}</span></dd></div>
+            <div><dt>配置文件</dt><dd class="path-value" :title="status?.configPath">{{ status?.configPath || '—' }}</dd></div>
+            <div><dt>生效版本</dt><dd class="mono">{{ shortRevision(status?.activeRevision) }}<span v-if="status?.restartRequired" class="sub-value">已保存 {{ shortRevision(status.savedRevision) }}</span></dd></div>
+          </dl>
+          <div class="setting-row background-sync-setting">
+            <div>
+              <strong>后台数据同步</strong>
+              <p id="background-sync-description">暂停后仍可手动打开聊天、发送消息和处理审批。</p>
+            </div>
+            <div class="background-sync-control">
+              <span role="status">{{ syncLabel }}</span>
+              <label class="toggle">
+                <input type="checkbox" role="switch" aria-label="后台数据同步" aria-describedby="background-sync-description"
+                  :checked="backgroundSyncEnabled === true" :disabled="syncDisabled" @click.prevent="toggleBackgroundSync" />
+                <span></span>
+              </label>
+            </div>
+          </div>
+          <div v-if="status?.restartRequired" class="panel-callout">
+            <Icon name="clock" :size="18" />
+            <span>新配置已保存，后台仍使用上一版配置。</span>
+            <button class="text-button" :disabled="!status?.running || operationBusy || restartPreviousPid !== null" @click="confirmRestart = true">重启并应用<Icon name="arrow" :size="15" /></button>
+          </div>
+        </section>
         <section class="panel"><div class="panel-heading"><div><h2>桌面实例</h2><p>服务会自动发现并连接本机的 Codex 桌面。</p></div><span class="count-label">{{ status?.instances.length ?? 0 }} 个实例</span></div><div v-if="!status?.instances.length" class="inline-empty"><Icon name="monitor" :size="25" /><span>{{ status?.running ? '尚未检测到桌面实例，请确认 Codex 已打开。' : '服务恢复后将显示检测到的桌面实例。' }}</span></div><div v-for="(instance, index) in status?.instances ?? []" :key="index" class="instance-row"><div class="instance-icon"><Icon name="monitor" :size="21" /></div><div class="instance-copy"><strong>{{ instance.label || 'Codex 桌面实例' }}</strong><span>{{ instance.ready ? '已核验，可接受手机操作' : '正在等待实例就绪' }}</span></div><span :class="['status-pill', instance.ready ? 'online' : 'waiting']">{{ instance.ready ? '就绪' : '等待连接' }}</span></div></section>
         <section class="panel"><div class="panel-heading"><div><h2>最近运行记录</h2><p>只显示后台生命周期记录。</p></div><button class="text-button" @click="selectPage('logs')">全部日志<Icon name="arrow" :size="15" /></button></div><div v-if="!latestLogs.length" class="inline-empty">{{ logsLoading ? '正在读取记录…' : logError || '暂无运行记录' }}</div><div v-for="(entry, index) in latestLogs" :key="index" class="recent-log"><span class="timeline-dot"></span><span>{{ entry.message }}</span><time>{{ time(entry.time) }}</time></div></section>
       </template>
@@ -237,3 +320,19 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
     <div v-if="confirmRestart" class="modal-backdrop" @click.self="confirmRestart = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="restart-title" @keydown.esc="confirmRestart = false"><div class="modal-icon"><Icon name="power" :size="25" /></div><h2 id="restart-title">重启后台服务？</h2><p>手机连接会短暂中断，随后由守护自动恢复。后台会先核对在途操作，确认可以安全重启后才执行。</p><div v-if="dirty" class="modal-note">配置页仍有未保存的更改，本次重启只应用已保存的配置。</div><div class="modal-actions"><button class="button secondary" autofocus @click="confirmRestart = false">取消</button><button class="button primary" @click="restart">重启服务</button></div></section></div>
   </div>
 </template>
+
+<style scoped>
+.background-sync-setting {
+  margin: 0 23px 19px;
+  padding-top: 15px;
+}
+
+.background-sync-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+</style>

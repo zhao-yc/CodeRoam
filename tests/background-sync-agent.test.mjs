@@ -1,0 +1,60 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
+import {randomUUID} from 'node:crypto';
+import {BridgeAgent} from '../apps/bridge/agent.mjs';
+import {Journal} from '../apps/bridge/journal.mjs';
+
+test('初始关闭后台同步仍可按需读列表和详情并完成消息、审批及任务提交',async t=>{
+  const adapter=new EventEmitter(),sent=[],operations=[];
+  let indexReads=0;
+  const threadId='synthetic-thread',deviceId='synthetic-phone';
+  const snapshot={threadId,title:'合成聊天',cwd:'/workspace/example',status:'active',activeTurnId:'turn',messages:[],turns:[],approvals:[],questionGroups:[]};
+  adapter.index={list:()=>{indexReads++;return [{id:threadId,title:snapshot.title,cwd:snapshot.cwd,updatedAt:42}];},historyCacheSource:()=>''};
+  adapter.conversations=new Map();
+  adapter.snapshot=value=>value;
+  adapter.threadMentions={available:async()=>false,close(){}};
+  adapter.watch=async(id,watcher)=>{
+    let entry=adapter.conversations.get(id);
+    if(!entry){entry={state:snapshot,owner:{clientId:'synthetic-owner'},watchers:new Set()};adapter.conversations.set(id,entry);}
+    entry.watchers.add(watcher);
+    return entry.state;
+  };
+  adapter.unwatch=(id,watcher)=>{adapter.conversations.get(id)?.watchers.delete(watcher);return {ok:true};};
+  adapter.operate=async method=>{operations.push(method);return {ok:true};};
+  adapter.close=()=>{};
+  const agent=new BridgeAgent({config:{backgroundSyncEnabled:false},adapter,journal:new Journal()});
+  agent.send=event=>{sent.push(event);return true;};
+  t.after(()=>agent.close());
+  agent.threadListFeed.start();agent.threadCache.start();
+  assert.equal(indexReads,0);
+  assert.equal(agent.threadCache.interval,undefined);
+  const request=async(method,params={})=>{
+    const result=await agent.handleRequest({v:1,type:'request',requestId:randomUUID(),deviceId,method,params});
+    assert.equal(result.error,undefined,result.error?.message);
+    return result.result;
+  };
+  const listed=await request('threads.list'),watched=await request('threads.watch');
+  assert.equal(listed.threads[0].id,threadId);
+  assert.equal(watched.threads[0].id,threadId);
+  assert.ok(watched.revision>listed.revision);
+  assert.equal((await request('thread.watch',{threadId})).snapshot.threadId,threadId);
+  const entry=adapter.conversations.get(threadId);
+  entry.state={...snapshot,hasUnreadTurn:true};
+  const beforeDetail=sent.length;
+  adapter.emit('conversation',entry.state);
+  assert.ok(sent.length>beforeDetail);
+  assert.equal((await request('turn.send',{threadId,text:'合成消息'})).ok,true);
+  assert.equal((await request('approval.reply',{threadId,approvalId:'synthetic-approval',decision:'accept'})).ok,true);
+  const taskId='synthetic-task-0001';
+  const accepted=await request('tasks.submit',{taskId,kind:'command',payload:{method:'turn.stop',params:{threadId}}});
+  assert.equal(accepted.accepted,true);
+  assert.equal((await agent.taskQueue.wait(deviceId,taskId)).ok,true);
+  assert.deepEqual(operations,['turn.send','approval.reply','turn.stop']);
+  assert.deepEqual([...entry.watchers],[deviceId]);
+  assert.equal(indexReads,2);
+  assert.ok(sent.every(event=>!['threads.event','thread.cache.event'].includes(event.type)));
+  assert.equal(agent.setBackgroundSyncEnabled(false),false);
+  assert.equal(agent.threadListFeed.backgroundSyncEnabled,false);
+  assert.equal(agent.threadCache.backgroundSyncEnabled,false);
+});

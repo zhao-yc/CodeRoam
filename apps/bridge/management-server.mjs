@@ -45,7 +45,7 @@ function localAddress() {
 }
 
 /** 固定 worker 的本机能力接口，短连接一条请求，令牌仅在私有端点文件中存放。 */
-export async function startManagementServer({worker, workerConfigPath = null, status, restart}) {
+export async function startManagementServer({worker, workerConfigPath = null, status, restart, setBackgroundSync}) {
   const address = localAddress(), token = randomBytes(32).toString('hex'), identity = managementWorkerIdentity(worker);
   const revision = workerConfigPath ? createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') : null;
   const file = path.join(worker.runDirectory, 'management.json'), sockets = new Set(); let closed = false;
@@ -67,6 +67,13 @@ export async function startManagementServer({worker, workerConfigPath = null, st
       return readManagementLogs(path.join(worker.logDirectory, 'lifecycle.jsonl'), params.limit ?? 100);
     }
     if (method === 'service.restart') return restart();
+    if (method === 'sync.set') {
+      if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
+        throw fail('后台数据同步开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
+      }
+      if (!setBackgroundSync) throw fail('此守护版本暂不支持切换后台数据同步', 'MANAGEMENT_METHOD_INVALID');
+      return setBackgroundSync(params.enabled);
+    }
     throw fail('不支持的管理方法', 'MANAGEMENT_METHOD_INVALID');
   };
   const server = net.createServer(socket => {

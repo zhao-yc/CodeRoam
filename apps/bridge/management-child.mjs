@@ -1,5 +1,5 @@
 /** 只响应父进程的独立 IPC；手机协议与本机管理协议保持分离。 */
-export function installManagementChild({agents, drain, status, close, channel = process, exit = code => process.exit(code ?? 0)}) {
+export function installManagementChild({agents, drain, status, close, setBackgroundSync, channel = process, exit = code => process.exit(code ?? 0)}) {
   if (typeof channel.send !== 'function') return () => {};
   let prepared = false, shuttingDown = false;
   const setDraining = value => { drain(value); for (const agent of agents()) agent.setManagementDraining(value); };
@@ -9,7 +9,18 @@ export function installManagementChild({agents, drain, status, close, channel = 
     channel.send({type: 'codex-mobile-management', requestId, ...(error ? {error} : {result})}, callback);
   };
   const listener = async message => {
-    if (message?.type !== 'codex-mobile-management' || typeof message.requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.requestId) || !['status', 'prepare-restart', 'cancel-restart', 'shutdown'].includes(message.action)) return;
+    if (message?.type !== 'codex-mobile-management' || typeof message.requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.requestId) || !['status', 'prepare-restart', 'cancel-restart', 'shutdown', 'set-sync'].includes(message.action)) return;
+    if (message.action === 'set-sync') {
+      if (!setBackgroundSync || typeof message.enabled !== 'boolean') {
+        reply(message.requestId, null, {code: 'MANAGEMENT_METHOD_INVALID', message: '此桥接版本暂不支持切换后台数据同步'});
+      } else if (prepared || shuttingDown) {
+        reply(message.requestId, null, {code: 'MANAGEMENT_BUSY', message: '服务正在重启，请稍后切换后台数据同步'});
+      } else {
+        try { reply(message.requestId, setBackgroundSync(message.enabled)); }
+        catch { reply(message.requestId, null, {code: 'MANAGEMENT_SYNC_FAILED', message: '后台数据同步设置未能确认，请刷新状态后重试'}); }
+      }
+      return;
+    }
     try {
       if (message.action === 'status') { reply(message.requestId, status()); return; }
       if (message.action === 'cancel-restart') {

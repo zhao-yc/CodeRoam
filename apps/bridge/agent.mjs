@@ -69,10 +69,11 @@ export class BridgeAgent extends EventEmitter {
     if(adapter.attachments)adapter.attachments.retainScope=(deviceId,scope)=>this.taskQueue?.holdsScope(scope,deviceId)===true||!!this.messageQueue?.db.prepare('SELECT 1 FROM message_queue WHERE device_id=? AND thread_id=? LIMIT 1').get(deviceId,scope);
     this.messageQueue=journal.db?new MessageQueue({journal,adapter,exclusive:(id,operation)=>this.queueExclusive(id,operation),changed:id=>this.publishQueue(id),blocked:id=>this.deletingIds.has(id)||this.taskQueuePaused(),
       dispatch:async(method,params,commandId,deviceId)=>{const taskId=randomUUID();this.taskQueue.submit(deviceId,{taskId,kind:'command',payload:{method,params}});return this.taskQueue.wait(deviceId,taskId);}}):null;
-    this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event),{db:journal.db,
+    this.backgroundSyncEnabled=config.backgroundSyncEnabled!==false;
+    this.threadListFeed=new ThreadListFeed(adapter,event=>this.send(event),{db:journal.db,backgroundSyncEnabled:this.backgroundSyncEnabled,
       onActivity:inventory=>this.threadCache?.setActivityInventory(inventory),
       onSettled:snapshot=>this.threadCache?.settled(snapshot)});
-    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id),listRows:()=>this.threadListFeed.started&&this.threadListFeed.maintaining()?[...this.threadListFeed.indexRows.values()]:undefined,removed:id=>{
+    this.threadCache=new ThreadCacheFeed({adapter,db:journal.db,backgroundSyncEnabled:this.backgroundSyncEnabled,send:event=>this.send(event),blocked:id=>this.deletingIds.has(id),listRows:()=>this.threadListFeed.started&&this.threadListFeed.maintaining()?[...this.threadListFeed.indexRows.values()]:undefined,removed:id=>{
       this.threadListFeed.forget([id]);
       if(this.published.delete(id))this.send({v:1,type:'thread.removed',threadId:id});
     }});
@@ -82,6 +83,15 @@ export class BridgeAgent extends EventEmitter {
       if(hasDetailWatcher(adapter,snapshot.threadId))this.publish(snapshot,{dedupe:true});
     });
     adapter.on('adapterWarning',warning=>this.emit('warning',warning));
+  }
+  /** 开关仅作用于列表和正文后台维护，真实手机订阅及提交任务继续使用原通道。 */
+  setBackgroundSyncEnabled(enabled) {
+    enabled=enabled!==false;
+    if(this.stopped||this.backgroundSyncEnabled===enabled)return this.backgroundSyncEnabled;
+    this.backgroundSyncEnabled=enabled;
+    this.threadCache.setBackgroundSyncEnabled(enabled);
+    this.threadListFeed.setBackgroundSyncEnabled(enabled);
+    return enabled;
   }
   start() {
     const url=new URL(this.config.relayUrl);
