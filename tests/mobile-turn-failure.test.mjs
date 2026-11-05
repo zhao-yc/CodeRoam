@@ -24,7 +24,7 @@ function continueFixture() {
   let resolve,reject;const calls=[];
   const c=componentContext({submittedReviewContinueKey:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},reviewContinueTurnId:{value:'review'},canWrite:{value:true},operationError:{value:''},busy:{value:false},pendingAction:{value:''},draft:{value:'保留草稿'},draftImages:{value:['合成附件']},isCurrentPage:()=>true,resumeFollowing(){},refresh(){},bridge:{request:(method,params,write)=>{calls.push({method,params,write});return new Promise((ok,bad)=>{resolve=ok;reject=bad;});},pendingCommand:()=>''}});
   vm.runInContext(stripTypeScriptTypes(source.slice(start,end))+';globalThis.f={continueReviewTurn,canContinueReviewTurn}',c);
-  return {c,calls,...c.f,resolve:()=>resolve({ok:true}),reject:()=>reject(new Error('合成失败'))};
+  return {c,calls,...c.f,resolve:()=>resolve({ok:true}),reject:(name='Error')=>{const error=new Error('合成失败');error.name=name;reject(error);}};
 }
 
 test('继续按钮发送当前聊天一次，成功前后保留占位及草稿附件',async()=>{
@@ -39,6 +39,7 @@ test('继续按钮发送当前聊天一次，成功前后保留占位及草稿�
 test('继续失败可重试，未知结果保持锁定，旧聊天回执不改新聊天错误',async()=>{
   const failed=continueFixture();failed.continueReviewTurn('review');failed.reject();await new Promise(setImmediate);assert.equal(failed.canContinueReviewTurn('review'),true);
   const unknown=continueFixture();unknown.c.bridge.pendingCommand=()=> 'original-command';unknown.continueReviewTurn('review');unknown.reject();await new Promise(setImmediate);assert.equal(unknown.canContinueReviewTurn('review'),false);
+  const queuedUnknown=continueFixture();queuedUnknown.continueReviewTurn('review');queuedUnknown.reject('OUTCOME_UNKNOWN');await new Promise(setImmediate);assert.equal(queuedUnknown.canContinueReviewTurn('review'),false);
   const switched=continueFixture();switched.continueReviewTurn('review');switched.c.pageThreadId.value='other';switched.c.operationError.value='新聊天提示';switched.reject();await new Promise(setImmediate);assert.equal(switched.c.operationError.value,'新聊天提示');
 });
 

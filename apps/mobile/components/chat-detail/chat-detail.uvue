@@ -1514,7 +1514,7 @@ function continueReviewTurn(turnId: string) {
     busy.value = false; pendingAction.value = ''
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { resumeFollowing(); refresh() }
   }, (error: Error) => {
-    if (bridge.pendingCommand(hostId, threadId).length == 0 && submittedReviewContinueKey.value == key) submittedReviewContinueKey.value = ''
+    if (error.name != 'OUTCOME_UNKNOWN' && bridge.pendingCommand(hostId, threadId).length == 0 && submittedReviewContinueKey.value == key) submittedReviewContinueKey.value = ''
     if (pageHostId.value != hostId || pageThreadId.value != threadId) return
     busy.value = false; pendingAction.value = ''
     if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message
