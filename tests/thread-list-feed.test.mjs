@@ -267,3 +267,23 @@ test('持续输出导致的索引时间更新只发普通增量，不反复转�
   assert.ok(updates.every(event=>event.syncing!==true&&event.catchup!==true));
   assert.equal(f.feed.syncing,false);
 });
+
+test('索引标题不被实时摘要、延迟尾帧或关闭持久化覆盖',async t=>{
+  const {adapter,feed,value,setRows}=fixture(t,{live:true});
+  value.title='1. 合成会话';
+  await ready(feed);
+  assert.equal(feed.list().threads[0].title,'合成会话');
+  adapter.emit('conversation',{...value,title:'1. 合成会话',status:'active'});
+  feed.publishRows(feed.pendingRows??feed.rows);
+  assert.equal(feed.list().threads[0].title,'合成会话');
+  setRows([{id:'a',title:'改名后的合成会话',cwd:'/workspace/demo',updatedAt:43}]);
+  feed.readIndex();
+  adapter.emit('conversation',{...value,title:'1. 合成会话'});
+  feed.publishRows(feed.pendingRows??feed.rows);
+  assert.equal(feed.list().threads[0].title,'改名后的合成会话');
+  let saved;
+  feed.store.save=rows=>{saved=rows;};
+  feed.pendingSnapshots.set('a',{...value,title:'1. 合成会话'});
+  feed.close();
+  assert.equal(saved[0].title,'改名后的合成会话');
+});

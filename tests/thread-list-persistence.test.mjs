@@ -112,9 +112,9 @@ test('明确终态立即保存展示并释放内部订阅，写失败仍推送�
   t.mock.method(f.db,'prepare',function(sql,...args){if(busy&&sql.startsWith('INSERT INTO thread_list_index'))throw Error('合成终态写入失败');return prepare.call(this,sql,...args);});
   f.adapter.emit('conversation',{...f.snapshot,title:'合成完成标题',status:'idle',activeTurnId:'',latestTurn:{turnId:'turn',status:'completed'}});
   assert.equal(f.events.at(-1).threads[0].status,'idle');assert.equal(settled,1);assert.equal(f.feed.owned.has('a'),false);assert.deepEqual(f.read(),[]);
-  busy=false;t.mock.timers.tick(1500);assert.equal(f.read()[0].title,'合成完成标题');
+  busy=false;t.mock.timers.tick(1500);assert.equal(f.read()[0].title,'合成会话');
   f.adapter.emit('conversation',{...f.snapshot,title:'再次完成',status:'idle',activeTurnId:'',latestTurn:{turnId:'next',status:'completed'}});
-  assert.equal(f.read()[0].title,'再次完成');
+  assert.equal(f.read()[0].title,'合成会话');
 });
 
 test('确认删除取消探测与待写，迟到快照不能复活列表、磁盘或内部所有者',async t=>{
@@ -130,11 +130,11 @@ test('确认删除取消探测与待写，迟到快照不能复活列表、磁�
 test('轮次终态即使仍有待回答事项也立即保存，但保留待交互订阅',async t=>{
   let settled=0;const f=feedFixture(t,{live:true,onSettled:()=>{settled++;}});await f.feed.watch('phone');await drain();
   f.adapter.emit('conversation',{...f.snapshot,title:'轮次完成仍待回答',status:'idle',activeTurnId:'',latestTurn:{turnId:'turn',status:'completed'},questionGroups:[{kind:'native',state:'pending'}]});
-  assert.equal(f.read()[0].title,'轮次完成仍待回答');assert.equal(f.feed.owned.has('a'),true);assert.equal(settled,0);
+  assert.equal(f.read()[0].title,'合成会话');assert.equal(f.feed.owned.has('a'),true);assert.equal(settled,0);
 });
 
-test('正常关闭保存尚未发出的最新展示标题，不额外推送关闭尾帧',async t=>{
+test('正常关闭保留索引标题，实时摘要不覆盖展示缓存且不额外推送尾帧',async t=>{
   const f=feedFixture(t,{live:true});await f.feed.watch('phone');await drain();
   f.adapter.emit('conversation',{...f.snapshot,title:'关闭前最新标题'});const events=f.events.length;
-  f.feed.close();assert.equal(f.read()[0].title,'关闭前最新标题');assert.equal(f.events.length,events);assert.equal(f.feed.store.timer,null);
+  f.feed.close();assert.equal(f.read()[0].title,'合成会话');assert.equal(f.events.length,events);assert.equal(f.feed.store.timer,null);
 });
