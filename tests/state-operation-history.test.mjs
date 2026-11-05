@@ -100,6 +100,10 @@ test('真实 Agent 只记录主动同步和已读，队列暂停仍可独立执�
   const nativeDrafts = new EventEmitter(); nativeDrafts.close = () => {};
   const agent = new BridgeAgent({ config: {}, adapter, journal, nativeDrafts, newThreads: {} });
   t.after(() => agent.close());
+  const events = [];
+  agent.send = event => { if (event.type === 'tasks.changed') events.push(event); };
+  await agent.handleRequest({ v: 1, type: 'request', requestId: randomUUID(), method: 'tasks.watch', params: {}, deviceId: 'synthetic-phone' });
+  await agent.handleRequest({ v: 1, type: 'request', requestId: randomUUID(), method: 'tasks.watch', params: {}, deviceId: 'another-phone' });
   agent.taskQueue.db.prepare('UPDATE submission_queue_state SET paused=1 WHERE singleton=1').run();
   const request = (method, params, requestId = randomUUID()) => agent.handleRequest({ v: 1, type: 'request', requestId, method, params, deviceId: 'synthetic-phone' });
   await request('thread.watch', { threadId: 'synthetic-thread' });
@@ -111,4 +115,12 @@ test('真实 Agent 只记录主动同步和已读，队列暂停仍可独立执�
   assert.equal(result.result.tasks.length, 2); assert.equal(navigated, 1); assert.equal(read, 2);
   const tasks = (await request('tasks.list', { view: 'history' })).result;
   assert.equal(tasks.tasks.length, 0); assert.equal(tasks.paused, true);
+  const own = events.filter(event => event.deviceId === 'synthetic-phone');
+  assert.ok(own.some(event => event.snapshot.tasks.some(task => task.method === 'thread.read' && task.state === 'running')));
+  assert.ok(own.some(event => event.snapshot.tasks.some(task => task.method === 'thread.read' && task.state === 'succeeded')));
+  assert.ok(own.every(event => validTaskSnapshot(event.snapshot) && event.snapshot.paused));
+  assert.ok(events.filter(event => event.deviceId === 'another-phone').every(event => event.snapshot.tasks.length === 0));
+  assert.ok(own.every((event, index) => index === 0 || event.snapshot.revision > own[index - 1].snapshot.revision));
+  const active = (await request('tasks.watch', {})).result;
+  assert.equal(active.tasks.length, 2, '重连订阅应补齐近期状态操作');
 });
