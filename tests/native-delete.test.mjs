@@ -18,7 +18,7 @@ function fixture(mode = {}) {
   return { controller, adapter, archiveController, creation, calls, rows, instance, params, verify };
 }
 
-for (const mode of [{ directIpc: true }, { routerManaged: true }, { routerManaged: true, port: 12345 }]) {
+for (const mode of [{ directIpc: true }, { routerManaged: true }, { routerManaged: true, port: 12345 }, { platform: 'darwin', port: null }, { platform: 'darwin', port: 12345 }]) {
   test('原生永久删除兼容启动方式 ' + JSON.stringify(mode), async () => {
     const f = fixture(mode);
     await f.controller.delete(f.params, f.verify);
@@ -39,6 +39,17 @@ test('官方删除回执丢失时仅核对原编号，已消失继续收口且�
   await f.controller.delete(f.params, f.verify);
   assert.equal(f.rows.size, 0);
   assert.equal(f.calls.filter(([method]) => method === 'thread/delete').length, 3);
+});
+
+test('原生归档固定到官方删除连接的配置目录，调用方不能替换目录', async () => {
+  const f = fixture(), archive = f.archiveController.archive;
+  f.params.codexHome = '/untrusted-home';
+  f.archiveController.archive = async (params, verify) => {
+    assert.equal(params.codexHome, f.creation.codexHome);
+    return archive(params, verify);
+  };
+  await f.controller.delete(f.params, f.verify);
+  assert.equal(f.rows.size, 0);
 });
 
 test('部分删除或归档失败保留未知状态，不把归档当删除且不自动重放', async () => {
@@ -102,7 +113,11 @@ test('旧单实例 CLI 入口也沿用统一原生删除控制器', async () => 
     DesktopAdapter: Adapter, StateReader: Empty, ModelCatalog: Empty, AttachmentStore: Empty, DesktopGoalController: Empty,
     Journal: Empty, BridgeAgent: Agent, installManagementChild() {},
   };
-  await new AsyncFunction(...Object.keys(context), source)(...Object.values(context));
-  assert.ok(options);
-  assert.equal(options.deleteController, undefined);
+  for (const platform of ['win32', 'darwin']) {
+    context.process.platform = platform;
+    options = null;
+    await new AsyncFunction(...Object.keys(context), source)(...Object.values(context));
+    assert.ok(options);
+    assert.equal(options.deleteController, undefined);
+  }
 });

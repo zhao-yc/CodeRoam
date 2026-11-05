@@ -38,7 +38,7 @@ function fixture({ reply = 'success', refreshed = () => {}, subscribed = true, e
     } });
     child.stdin.on('finish', () => child.emit('exit', 0)); return child;
   };
-  const native = new DesktopArchiveController({ launch }); native.available = true;
+  const native = new DesktopArchiveController({ platform: 'win32', launch }); native.available = true;
   return { adapter, desktop, calls, native };
 }
 

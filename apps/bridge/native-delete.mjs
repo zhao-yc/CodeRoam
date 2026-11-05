@@ -33,7 +33,7 @@ export class NativeDeleteController {
         await beforeCommit();
         for (const item of [...deletionTree].reverse()) {
           if (item.archived) continue;
-          await this.archiveController.archive({ threadId: item.id, hostId, commandId: commandId + '-archive-' + item.id, deadline }, async () => {
+          await this.archiveController.archive({ threadId: item.id, hostId, commandId: commandId + '-archive-' + item.id, deadline, codexHome: this.creation.codexHome }, async () => {
             await assertCurrent();
             await verifyArchive(item);
             committed = true;

@@ -39,8 +39,12 @@ class InstanceNativeDesktop extends NativeDesktop {
 
 /** 原生帮助程序只接收连接服务生成的实例约束，手机不能指定 PID 或管道。 */
 class InstanceArchiveController extends DesktopArchiveController {
-  constructor(instance, client) { super(); this.instance = instance; this.client = client; }
-  archive(params, verify) { this.client.assertCurrent(); return super.archive({ ...params, processId: this.instance.pid, nativePipe: this.instance.nativePipe }, async () => { this.client.assertCurrent(); await verify(); }); }
+  constructor(instance, client) { super({ platform: instance.platform }); this.instance = instance; this.client = client; }
+  /** 实例身份与配置目录取自电脑发现器，覆盖调用参数，避免跨实例释放其他会话的写入者。 */
+  archive(params, verify) {
+    this.client.assertCurrent();
+    return super.archive({ ...params, processId: this.instance.pid, processStartedAt: this.instance.startedAt, nativePipe: this.instance.nativePipe, codexHome: this.instance.codexHome }, async () => { this.client.assertCurrent(); await verify(); });
+  }
 }
 class InstanceGoalController extends DesktopGoalController {
   constructor(instance, client, options) { super(options); this.instance = instance; this.client = client; }

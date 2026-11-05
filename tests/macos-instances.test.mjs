@@ -9,6 +9,7 @@ import { MacInstanceIpcClient, navigateMacInstance } from '../apps/bridge/macos-
 import { InstanceHub } from '../apps/bridge/instance-hub.mjs';
 import { InstanceRegistry } from '../apps/bridge/instance-registry.mjs';
 import { InstanceRuntime } from '../apps/bridge/instance-runtime.mjs';
+import { DesktopArchiveController } from '../apps/bridge/desktop-archive.mjs';
 
 /** 合成 IPC 保留真实帧及响应分发，只替换系统通道。 */
 function fixture() {
@@ -91,4 +92,21 @@ test('实例离线时先关闭 IPC，已有实时订阅不会阻止账本和上�
   await runtime.close();
   assert.equal(runtime.client.socket.writable, false); assert.equal(runtime.adapter.stopped, true); assert.equal(runtime.adapter.conversations.size, 0);
   assert.throws(() => runtime.agent.journal.db.prepare('SELECT 1'), /not open|closed|关闭/i);
+});
+
+test('Mac 归档传递原实例的 PID、启动代次及配置目录，并覆盖外部同名参数', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mac-instance-archive-'));
+  const instance = { platform: 'darwin', pid: 101, startedAt: 100, nativePipe: '/private/tmp/codex-app-tools/' + randomUUID() + '.sock', codexHome: root, ipcSocketPath: root + '/ipc/ipc.sock', alive: true, ready: true, verify: async () => {} };
+  const runtime = new InstanceRuntime({ instance, config: {}, dataPath: root, send: () => {} });
+  t.after(async () => { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  let verified = false;
+  t.mock.method(DesktopArchiveController.prototype, 'archive', async (params, beforeCommit) => { await beforeCommit(); return params; });
+  const params = await runtime.agent.archiveController.archive({ threadId: randomUUID(), processId: 202, processStartedAt: 200, nativePipe: '/untrusted.sock', codexHome: '/untrusted' }, async () => { verified = true; });
+  assert.equal(verified, true);
+  assert.equal(params.processId, instance.pid);
+  assert.equal(params.processStartedAt, instance.startedAt);
+  assert.equal(params.nativePipe, instance.nativePipe);
+  assert.equal(params.codexHome, instance.codexHome);
+  instance.ready = false;
+  assert.throws(() => runtime.agent.archiveController.archive({}, async () => {}), { code: 'INSTANCE_NOT_READY' });
 });
