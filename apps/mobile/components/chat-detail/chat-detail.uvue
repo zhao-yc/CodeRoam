@@ -47,7 +47,15 @@
           </template>
           <view v-else-if="entry.role == 'failure' || entry.role == 'interruption'" class="turn-failure-card" :aria-label="entry.label">
             <app-icon class="turn-failure-icon" name="alert-circle" :size="16" tone="warning" />
-            <view class="turn-failure-copy"><text class="turn-failure-text" selectable>{{ entry.text }}</text><text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingPreview" class="turn-failure-hint">更新电脑连接服务后可重试</text></view>
+            <view class="turn-failure-copy">
+              <text class="turn-failure-text" selectable>{{ entry.text }}</text>
+              <text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingPreview" class="turn-failure-hint">更新电脑连接服务后可重试</text>
+              <view v-if="entry.kind == 'reviewStopped' && entry.turnId == displayReviewTurnId" class="turn-continue inline-progress-button">
+                <action-progress :busy="pendingAction == 'continue:review' && reviewContinueSubmitted(entry.turnId)" />
+                <text class="inline-progress-caption" style="color: #68534c; font-size: 13px;">{{ reviewContinueSubmitted(entry.turnId) && pendingAction != 'continue:review' ? '已提交' : '继续' }}</text>
+                <button class="inline-progress-hitbox" :disabled="!canContinueReviewTurn(entry.turnId)" aria-label="继续当前聊天" @click="continueReviewTurn(entry.turnId)"></button>
+              </view>
+            </view>
             <view v-if="entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
           </view>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame">
@@ -167,7 +175,7 @@ import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletio
 import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
-import { failureTimeline, retryTarget, latestFailureTurnId } from '../../services/turn-failure.uts'
+import { failureTimeline, retryTarget, latestFailureTurnId, latestReviewStoppedTurnId, reviewContinueTarget } from '../../services/turn-failure.uts'
 import { HistoryPage, conversationWithHistory, retainHistoryWindow } from '../../services/history.uts'
 import type { Conversation } from '../../services/bridge.uts'
 import { MessageAnnotation, MessagePresentation, annotationPresentationsForTimeline } from '../../services/annotations.uts'
@@ -493,7 +501,10 @@ const openingTitle = computed((): string => conversationOpeningTitle(connection.
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
 const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : previewConversation.value?.title ?? '', openingTitle.value))
 const submittedRetryKey = ref('')
+const submittedReviewContinueKey = ref('')
 const displayFailureTurnId = computed((): string => latestFailureTurnId(displayConversation.value))
+const displayReviewTurnId = computed((): string => latestReviewStoppedTurnId(displayConversation.value))
+const reviewContinueTurnId = computed((): string => reviewContinueTarget(liveConversation.value))
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && subscriptionReady.value && goalHostOnline.value && !busy.value && connection.pendingCommandId.length == 0)
@@ -1491,6 +1502,25 @@ function submitAnswers(questionGroupId: string, turnId: string, answers: Questio
     if (isCurrentPage()) { submittedGroupIds.value.push(questionGroupId); refresh() }
   }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
+// 继续指令与输入框草稿独立，已提交和未知结果都保留轮次占位，避免重复发送。
+function reviewContinueSubmitted(turnId: string): boolean { return submittedReviewContinueKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
+function canContinueReviewTurn(turnId: string): boolean { return turnId.length > 0 && reviewContinueTurnId.value == turnId && canWrite.value && isCurrentPage() && !reviewContinueSubmitted(turnId) }
+function continueReviewTurn(turnId: string) {
+  if (!canContinueReviewTurn(turnId)) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value, key = hostId + ':' + threadId + ':' + turnId
+  submittedReviewContinueKey.value = key; operationError.value = ''; busy.value = true; pendingAction.value = 'continue:review'
+  bridge.request('turn.send', { threadId, text: '继续完成当前聊天中尚未完成的任务。' }, true).then((_: UTSJSONObject) => {
+    if (pageHostId.value != hostId || pageThreadId.value != threadId) return
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { resumeFollowing(); refresh() }
+  }, (error: Error) => {
+    if (bridge.pendingCommand(hostId, threadId).length == 0 && submittedReviewContinueKey.value == key) submittedReviewContinueKey.value = ''
+    if (pageHostId.value != hostId || pageThreadId.value != threadId) return
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message
+  })
+}
+
 // 两个重试入口共享轮次占位，成功回执到新轮次广播之间也不能重复点击。
 function retrySubmitting(turnId: string): boolean { return submittedRetryKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
 function canRetryTurn(turnId: string): boolean { return turnId.length > 0 && retryTurnId.value == turnId && canWrite.value && goalHostOnline.value && liveConversation.value?.supportsTurnRetry == true && !retrySubmitting(turnId) }
@@ -1707,6 +1737,7 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 .turn-failure-copy { flex: 1; min-width: 0; margin-left: 9px; }
 .turn-failure-text { font-size: 13px; line-height: 22px; color: #795c57; }
 .turn-failure-hint { font-size: 11px; line-height: 18px; color: #8c7972; margin-top: 4px; }
+.turn-continue { align-self: flex-start; margin-top: 8px; min-width: 64px; min-height: 44px; padding: 0 16px; border-width: 1px; border-style: solid; border-color: #e4d8d4; border-radius: 8px; background-color: #ffffff; }
 .turn-retry { flex-shrink: 0; margin-left: 8px; min-width: 48px; min-height: 44px; padding: 0 8px; font-size: 12px; line-height: 44px; color: #68534c; background-color: transparent; }
 /* #ifdef WEB */
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
