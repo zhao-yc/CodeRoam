@@ -19,7 +19,10 @@ const event = payload => ({type:'event_msg', payload});
 test('普通启动和多实例装配均保留审查终止，另一实例同号聊天独立', async t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'review-status-'));
   const normal=new DesktopAdapter();
-  const runtimes=['one','two'].map(id=>new InstanceRuntime({instance:{id,platform:'win32',pid:42,codexHome:root,alive:true,ready:true,verify:async()=>{}},config:{},dataPath:path.join(root,id),send:()=>{}}));
+  const runtimes=['one','two'].map(id=>{
+    const dataPath=path.join(root,id);fs.mkdirSync(dataPath);
+    return new InstanceRuntime({instance:{id,platform:'win32',pid:42,codexHome:root,alive:true,ready:true,verify:async()=>{}},config:{},dataPath,send:()=>{}});
+  });
   t.after(async()=>{normal.close();for(const runtime of runtimes)await runtime.close();fs.rmSync(root,{recursive:true,force:true});});
   const state={id:'thread',turns:[{turnId:'turn',status:'interrupted',items:[{id:'warning',type:'autoReviewInterruptionWarning'}]}]};
   for(const adapter of [normal,runtimes[0].adapter]) {
