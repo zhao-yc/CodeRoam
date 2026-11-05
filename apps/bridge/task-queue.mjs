@@ -10,8 +10,10 @@ const parse = (value, fallback = null) => value ? JSON.parse(value) : fallback;
 
 /** 每个实例使用自己的 SQLite 任务队列；传输回执与桌面执行彼此独立。 */
 export class TaskQueue {
-  constructor({ journal, execute, changed = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, readTitle = () => '', readOperations = () => [], now = Date.now }) {
+  constructor({ journal, execute, changed = () => {}, messagesChanged = () => {}, reconcile = async () => ({ state: 'unknown' }), ready = () => true, readTitle = () => '', readOperations = () => [], readConversation = () => null, now = Date.now }) {
     this.readOperations = readOperations; this.readTitle = readTitle; this.db = journal.db; this.execute = execute; this.changed = changed; this.reconcile = reconcile; this.ready = ready; this.now = now;
+    this.readConversation = readConversation;
+    this.messagesChanged = messagesChanged;
     this.watchers = new Set(); this.waiters = new Map(); this.closed = false; this.running = null;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS submission_tasks (
@@ -44,6 +46,7 @@ export class TaskQueue {
     migrateHistoryTitles(this.db, 'submission_tasks', readTitle);
     if (!this.db.prepare('PRAGMA table_info(submission_task_keys)').all().some(column => column.name === 'display_metadata')) this.db.exec('ALTER TABLE submission_task_keys ADD COLUMN display_metadata TEXT');
     if (!this.db.prepare('PRAGMA table_info(submission_tasks)').all().some(column => column.name === 'attempt')) this.db.exec('ALTER TABLE submission_tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0');
+    if (!this.db.prepare('PRAGMA table_info(submission_tasks)').all().some(column => column.name === 'message_display')) this.db.exec('ALTER TABLE submission_tasks ADD COLUMN message_display TEXT');
     // 任务、去重状态与暂停标记一并恢复，不能留下 wait 永久等待的旧 running 状态。
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -85,10 +88,12 @@ export class TaskQueue {
     const threadId = kind === 'command' ? payload.params.threadId ?? '' : '';
     const projectId = kind === 'newConversation' ? payload.projectId ?? '' : payload.params.projectId ?? '';
     const title = kind === 'newConversation' ? String(payload.text ?? '').trim().split('\n')[0].slice(0, 60) || '新聊天' : this.commandTitle(method);
+    const display = kind === 'command' && method === 'turn.send' ? this.messageDisplay(payload.params) : null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('INSERT INTO submission_task_keys(device_id,id,fingerprint,state) VALUES (?,?,?,?)').run(deviceId, taskId, fingerprint, 'queued');
       const inserted = this.db.prepare("INSERT INTO submission_tasks(id,device_id,kind,method,payload,title,thread_id,project_id,thread_title,state,stage,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'queued','等待执行',?,?)").run(taskId, deviceId, kind, method, encoded, title, threadId, projectId, historyThreadTitle(this.readTitle, threadId), time, time);
+      if (display) this.db.prepare('UPDATE submission_tasks SET message_display=? WHERE position=?').run(JSON.stringify(display), Number(inserted.lastInsertRowid));
       const scope = kind === 'newConversation' ? 'task:' + taskId : payload.params.draftId ? 'draft:' + payload.params.draftId : threadId;
       if (scope) this.db.prepare('INSERT INTO submission_task_scopes(task_position,scope) VALUES (?,?)').run(Number(inserted.lastInsertRowid), scope);
       this.db.exec('COMMIT');
@@ -97,6 +102,33 @@ export class TaskQueue {
     this.notify(); this.cleanup();
     queueMicrotask(() => { this.pump().catch(() => {}); });
     return { accepted: true, taskId, task };
+  }
+
+  /** 入库展示与提交任务同事务保存；忙时排队仍使用原有队列卡片，正文只进入聊天通道。 */
+  messageDisplay(params) {
+    if (params.queueAction && params.queueAction !== 'enqueue') return null;
+    const snapshot = this.readConversation(params.threadId);
+    if (!snapshot || snapshot.status !== 'idle' || snapshot.activeTurnId || snapshot.queuedMessages?.length || snapshot.approvals?.length || snapshot.pendingPlan || snapshot.questionGroups?.some(group => group.state === 'pending')) return null;
+    const captions = [];
+    if (params.images?.length) captions.push(`${params.images.length} 张图片`);
+    if (params.attachments?.length) captions.push(`${params.attachments.length} 个附件`);
+    return { text: params.text ?? '', summary: captions.join(' · ') };
+  }
+
+  /** 原生消息沿用执行编号；观察到真实正文后永久收口占位，翻页或重连不能再次补出。 */
+  decorateMessages(snapshot) {
+    const rows = this.db.prepare('SELECT * FROM submission_tasks WHERE thread_id=? AND message_display IS NOT NULL ORDER BY position').all(snapshot.threadId);
+    const messages = snapshot.messages.filter(message => message.kind !== 'submittedMessage');
+    for (const row of rows) {
+      const id = this.executionId(row);
+      if (messages.some(message => message.role === 'user' && message.id === id) || ['canceled', 'skipped'].includes(row.state)) {
+        this.db.prepare('UPDATE submission_tasks SET message_display=NULL WHERE position=?').run(row.position);
+        continue;
+      }
+      const display = parse(row.message_display);
+      messages.push({ id, role: 'user', kind: 'submittedMessage', text: display.text, summary: display.summary, turnId: '', status: row.state });
+    }
+    return { ...snapshot, messages };
   }
 
   /** 展示标题仅描述动作，不把消息正文、路径或设备身份放入执行日志。 */
@@ -166,8 +198,9 @@ export class TaskQueue {
   /** 页面退订仅停止展示事件，不撤销数据库中已经接纳的任务。 */
   unwatch(deviceId) { this.watchers.delete(deviceId); return { ok: true }; }
   /** 修订号先落盘，通知异常不改变已经保存的执行事实。 */
-  notify() {
+  notify(threadId) {
     this.db.prepare('UPDATE submission_queue_state SET revision=revision+1 WHERE singleton=1').run();
+    try { this.messagesChanged(threadId); } catch { /* 聊天订阅恢复后仍可从入库记录补齐展示。 */ }
     for (const deviceId of this.watchers) { try { this.changed(deviceId, this.list(deviceId)); } catch { /* 展示通知失败不能回滚已持久化任务。 */ } }
   }
 
@@ -259,6 +292,7 @@ export class TaskQueue {
     try {
       this.db.prepare('UPDATE submission_tasks SET state=?,stage=?,error=?,result=?,completed_at=?,updated_at=?,payload=CASE WHEN ? THEN NULL ELSE payload END WHERE position=?').run(state, stage, error?.message ?? '', null, final ? time : 0, time, release ? 1 : 0, row.position);
       this.db.prepare('UPDATE submission_task_keys SET state=?,result=?,error=? WHERE device_id=? AND id=?').run(state, JSON.stringify(result ?? null), error ? JSON.stringify(error) : '', row.device_id, row.id);
+      if (result?.queued === true) this.db.prepare('UPDATE submission_tasks SET message_display=NULL WHERE position=?').run(row.position);
       if (resolvedStep) this.db.prepare("UPDATE submission_task_steps SET state='succeeded',updated_at=? WHERE task_position=? AND name=?").run(time, row.position, resolvedStep.name);
       if (release) {
         this.db.prepare('UPDATE submission_task_steps SET result=NULL WHERE task_position=?').run(row.position);
@@ -271,7 +305,7 @@ export class TaskQueue {
       if (state === 'failed' || state === 'unknown') this.db.prepare('UPDATE submission_queue_state SET paused=1,blocker_position=? WHERE singleton=1').run(row.position);
       this.db.exec('COMMIT');
     } catch (failure) { this.db.exec('ROLLBACK'); throw failure; }
-    this.notify(); this.settle(row); this.cleanup();
+    this.notify(row.thread_id); this.settle(row); this.cleanup();
   }
 
   /** 取消、核对和恢复是数据库管理动作，不会排在已暂停的桌面业务队列后面。 */
