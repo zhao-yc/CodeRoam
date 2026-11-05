@@ -96,7 +96,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
     selectComputer(id) { connection.hostId = id; },
   };
   const props = { expanded: false };
-  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, submitNewConversationTask: async (draft, mode) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), text: draft.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
+  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, startNewConversationTask: (draft, mode) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), text: draft.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
     computed: run => ({ get value() { return run(); } }),
     watch: (get, run, options) => { watches.push({ get, run }); if (options?.immediate) run(get()); },
     nextTick: run => Promise.resolve().then(run), onMounted() {}, onUnmounted: run => unmounts.push(run),
@@ -702,6 +702,7 @@ test('新版新聊天把所有选择交给一条消息任务，不进入逐项�
   f.draft.value.text='合成汇总正文';f.selectSetting('model','model-b');f.selectPermission('read-only',false);f.composerAction('plan');
   await f.send();
   assert.deepEqual(f.calls.filter(c=>c.write).map(c=>c.method),['tasks.submit']);
+  assert.equal(f.emitted.some(event=>event[0]==='queued'),true);
   const sent=f.calls.find(c=>c.method==='tasks.submit');assert.equal(sent.params.choices.model,'model-b');assert.equal(sent.params.choices.mode,'plan');assert.equal(sent.params.choices.permissionMode,'read-only');
 });
 test('旧连接只声明汇总但不声明原生一次发送时保留新聊天选择和正文',async()=>{

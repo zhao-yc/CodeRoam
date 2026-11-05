@@ -31,12 +31,53 @@ function fixture() {
     async requestTaskUpload(hostId, method, params) { calls.push({ hostId, method, params: plain(params) }); return json(method === 'attachment.chunk' ? { nextChunk: params.index + 1, received: 3 } : { nextChunk: 0, complete: method === 'attachment.finish' }); },
   };
   const context = vm.createContext({ reactive: value => value, settleSubmission: (hostId,id,success) => calls.push({method:'消费草稿',hostId,id,success}), watch() {}, bridge, connection, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value) }, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', copyThreadMentions: items => items.map(item => ({ ...item })), setTimeout, clearTimeout, setInterval });
-  vm.runInContext("for (const suffix of ['String','Number','Boolean']) Object.defineProperty(Object.prototype,'get'+suffix,{value:function(key){return this[key]??null;},configurable:true});\n" + stripTypeScriptTypes(code, { mode: 'transform' }) + '\nglobalThis.subject={submissionTasks,submissionVisible,acceptSubmissionSnapshot,submitTask,submitTaskCommand,submitNewConversationTask,awaitSubmissionResult,checkPendingSubmission,acknowledgePendingSubmission,refreshSubmissionTasks};', context);
+  vm.runInContext("for (const suffix of ['String','Number','Boolean']) Object.defineProperty(Object.prototype,'get'+suffix,{value:function(key){return this[key]??null;},configurable:true});\n" + stripTypeScriptTypes(code, { mode: 'transform' }) + '\nglobalThis.subject={submissionTasks,submissionVisible,localSubmissionTask,acceptSubmissionSnapshot,submitTask,submitTaskCommand,submitNewConversationTask,startNewConversationTask,awaitSubmissionResult,checkPendingSubmission,acknowledgePendingSubmission,refreshSubmissionTasks};', context);
   context.subject.submissionTasks.instances.push({ hostId: 'pc-a', generation: 'generation-a', supported: true, loading: false, error: '', snapshot: null, clockOffset: 0 });
   context.subject.submissionTasks.namespace = connection.cacheNamespace;
   const draft = { hostId: 'pc-a', cacheNamespace: 'pair-a', projectId: 'project-a', choices: { model: 'model-a', effort: null }, text: '合成首条消息', images: [], files: [{ id: 'synthetic-upload-0001', name: 'example.txt', size: 3, source: 'synthetic', data: '', status: 'local', progress: 0, error: '' }], plugins: [], threadMentions: [], threadMentionRevision: 0 };
-  return { ...context.subject, calls, storage, tasks, connection, draft, loseReceipt({ missing = false } = {}) { failSubmit = true; omitTask = missing; }, failReadOnce() { failReads = 1; } };
+  draft.pendingAction = ''; draft.pendingCommandId = '';
+  return { ...context.subject, bridge, calls, storage, tasks, connection, draft, loseReceipt({ missing = false } = {}) { failSubmit = true; omitTask = missing; }, failReadOnce() { failReads = 1; } };
 }
+
+test('后台接管立即返回，上传未完成即可离开页面；同一任务只提交一次', async () => {
+  const f = fixture(), upload = f.bridge.requestTaskUpload;
+  let release;
+  f.bridge.requestTaskUpload = async (...args) => { await new Promise(resolve => { release = resolve; }); return upload(...args); };
+  assert.equal(f.startNewConversationTask(f.draft, 'desktopIpc'), undefined);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.draft.pendingAction, 'send');
+  assert.equal(f.localSubmissionTask(f.submissionTasks.pending[0]).state, 'running');
+  assert.equal(f.calls.some(call => call.method === 'tasks.submit'), false);
+  assert.throws(() => f.startNewConversationTask(f.draft, 'desktopIpc'), /正在后台提交/);
+  f.bridge.requestTaskUpload = upload;
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
+  assert.equal(f.draft.text, '');
+  assert.equal(f.draft.pendingAction, '');
+  assert.equal(f.submissionTasks.pending[0].accepted, true);
+  assert.equal(f.localSubmissionTask(f.submissionTasks.pending[0]), null);
+});
+
+test('后台上传失败在执行记录展示并保留草稿，允许重新提交；未知回执继续阻止重发', async () => {
+  const f = fixture(), upload = f.bridge.requestTaskUpload;
+  f.bridge.requestTaskUpload = async () => { throw Error('合成上传失败'); };
+  f.startNewConversationTask(f.draft, 'desktopIpc');
+  await new Promise(resolve => setImmediate(resolve));
+  const failed = f.localSubmissionTask(f.submissionTasks.pending[0]);
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.error, '合成上传失败');
+  assert.equal(f.draft.text, '合成首条消息');
+  assert.equal(f.draft.pendingAction, '');
+  f.bridge.requestTaskUpload = upload;
+  f.loseReceipt({ missing: true });
+  f.startNewConversationTask(f.draft, 'desktopIpc');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.localSubmissionTask(f.submissionTasks.pending[1]).state, 'unknown');
+  assert.throws(() => f.startNewConversationTask(f.draft, 'desktopIpc'), /上次提交/);
+  assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
+  for (const value of f.storage.values()) assert.equal(value.includes('合成首条消息'), false);
+});
 
 test('完成五秒后移出，刷新不会延长计时；异常和等待继续任务保留', () => {
   const f = fixture(), item = task('synthetic-task-0001', { state: 'succeeded', completedAt: 10000 });
@@ -66,6 +107,24 @@ test('入队回执丢失只查询原编号，确认存在后继续，不再次�
   assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
   assert.equal(f.calls.find(call => call.method === 'tasks.list').params.taskId, id);
   assert.equal(f.submissionTasks.pending[0].accepted, true);
+});
+
+test('无效入队回执仍保留未知保护，电脑确认接管后本地存储失败不开放重发', async () => {
+  const f = fixture(), request = f.bridge.requestTaskChannel;
+  f.bridge.requestTaskChannel = async (...args) => {
+    const result = await request(...args);
+    return args[1] === 'tasks.submit' ? json({ accepted: false }) : result;
+  };
+  await assert.rejects(f.submitTask('pc-a', 'synthetic-invalid-receipt', 'newConversation', json({})), /有效入队回执/);
+  assert.equal(f.submissionTasks.pending[0].unknown, true);
+  assert.throws(() => f.startNewConversationTask(f.draft, 'desktopIpc'), /上次提交/);
+
+  const accepted = fixture(), set = accepted.storage.set.bind(accepted.storage);
+  let writes = 0;
+  accepted.storage.set = (...args) => { if (++writes > 1) throw Error('合成存储已满'); return set(...args); };
+  const result = await accepted.submitTask('pc-a', 'synthetic-accepted-receipt', 'newConversation', json({}));
+  assert.equal(result.accepted, true);
+  assert.equal(accepted.submissionTasks.pending[0].accepted, true);
 });
 
 test('未找到的丢失回执保留本地保护和输入；重复提交被阻止直到人工核对', async () => {
