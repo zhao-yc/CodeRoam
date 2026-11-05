@@ -9,6 +9,40 @@ const uts = name => fs.readFileSync(`apps/mobile/services/${name}.uts`, 'utf8').
 const plain = value => JSON.parse(JSON.stringify(value));
 const state = () => ({threadId:'thread', status:'idle', activeTurnId:'', latestTurn:{turnId:'failed', status:'failed'}, supportsTurnRetry:true, turns:[{turnId:'failed', status:'failed', errorMessage:'Selected model is at capacity. Please try a different model.'}], messages:[], approvals:[], questionGroups:[]});
 
+test('继续入口只使用最新实时审查终止，历史、运行和待交互状态均不可发送',()=>{
+  const c=componentContext({});
+  vm.runInContext(stripTypeScriptTypes(uts('turn-failure'))+';globalThis.f={reviewContinueTarget,latestReviewStoppedTurnId,failureTimeline}',c);
+  const stopped={...state(),latestTurn:{turnId:'review',status:'reviewStopped'},turns:[{turnId:'review',status:'reviewStopped'}]};
+  assert.equal(c.f.reviewContinueTarget(stopped),'review');
+  assert.equal(c.f.failureTimeline(stopped,[])[0].kind,'reviewStopped');
+  for(const change of [{readOnly:true},{status:'active'},{activeTurnId:'next'},{approvals:[{id:'a'}]},{questionGroups:[{state:'pending'}]},{pendingPlan:{id:'p'}},{activeFlags:['waitingOnApproval']},{latestTurn:{turnId:'next',status:'completed'}},{latestTurn:{turnId:'review',status:'interrupted'}}]) assert.equal(c.f.reviewContinueTarget({...stopped,...change}),'');
+});
+
+function continueFixture() {
+  const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
+  const start=source.indexOf('function reviewContinueSubmitted('),end=source.indexOf('// 两个重试入口共享轮次占位',start);
+  let resolve,reject;const calls=[];
+  const c=componentContext({submittedReviewContinueKey:{value:''},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},reviewContinueTurnId:{value:'review'},canWrite:{value:true},operationError:{value:''},busy:{value:false},pendingAction:{value:''},draft:{value:'保留草稿'},draftImages:{value:['合成附件']},isCurrentPage:()=>true,resumeFollowing(){},refresh(){},bridge:{request:(method,params,write)=>{calls.push({method,params,write});return new Promise((ok,bad)=>{resolve=ok;reject=bad;});},pendingCommand:()=>''}});
+  vm.runInContext(stripTypeScriptTypes(source.slice(start,end))+';globalThis.f={continueReviewTurn,canContinueReviewTurn}',c);
+  return {c,calls,...c.f,resolve:()=>resolve({ok:true}),reject:(name='Error')=>{const error=new Error('合成失败');error.name=name;reject(error);}};
+}
+
+test('继续按钮发送当前聊天一次，成功前后保留占位及草稿附件',async()=>{
+  const f=continueFixture();f.continueReviewTurn('review');f.continueReviewTurn('review');
+  assert.deepEqual(plain(f.calls),[{method:'turn.send',params:{threadId:'thread',text:'继续完成当前聊天中尚未完成的任务。'},write:true}]);
+  f.resolve();await new Promise(setImmediate);f.continueReviewTurn('review');assert.equal(f.calls.length,1);
+  assert.equal(f.c.draft.value,'保留草稿');assert.deepEqual(plain(f.c.draftImages.value),['合成附件']);
+  f.c.pageHostId.value='another-instance';assert.equal(f.canContinueReviewTurn('review'),true);
+  f.c.reviewContinueTurnId.value='next';assert.equal(f.canContinueReviewTurn('review'),false);
+});
+
+test('继续失败可重试，未知结果保持锁定，旧聊天回执不改新聊天错误',async()=>{
+  const failed=continueFixture();failed.continueReviewTurn('review');failed.reject();await new Promise(setImmediate);assert.equal(failed.canContinueReviewTurn('review'),true);
+  const unknown=continueFixture();unknown.c.bridge.pendingCommand=()=> 'original-command';unknown.continueReviewTurn('review');unknown.reject();await new Promise(setImmediate);assert.equal(unknown.canContinueReviewTurn('review'),false);
+  const queuedUnknown=continueFixture();queuedUnknown.continueReviewTurn('review');queuedUnknown.reject('OUTCOME_UNKNOWN');await new Promise(setImmediate);assert.equal(queuedUnknown.canContinueReviewTurn('review'),false);
+  const switched=continueFixture();switched.continueReviewTurn('review');switched.c.pageThreadId.value='other';switched.c.operationError.value='新聊天提示';switched.reject();await new Promise(setImmediate);assert.equal(switched.c.operationError.value,'新聊天提示');
+});
+
 /** 使用真实 UTS 组装时间线，覆盖空轮次、历史顺序和不可重试边界。 */
 test('失败和中断提示插在对应轮次末尾，无消息轮次仍显示', () => {
   const c = componentContext({});

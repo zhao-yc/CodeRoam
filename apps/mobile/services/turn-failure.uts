@@ -10,6 +10,22 @@ export function latestFailureTurnId(snapshot: Conversation | null): string {
   return notification?.latestTurnStatus == 'failed' ? notification.latestTurnId : ''
 }
 
+// 仅最新的审查终止轮次可继续，历史提示不能成为发送目标。
+export function latestReviewStoppedTurnId(snapshot: Conversation | null): string {
+  if (snapshot == null) return ''
+  const latest = snapshot.latestTurn
+  if (latest != null) return latest.status == 'reviewStopped' ? latest.turnId : ''
+  const notification = snapshot.notificationState
+  return notification?.latestTurnStatus == 'reviewStopped' ? notification.latestTurnId : ''
+}
+
+// 发送前必须已有实时空闲状态；审批、问题和计划待确认时先保留原交互入口。
+export function reviewContinueTarget(snapshot: Conversation | null): string {
+  if (snapshot == null || snapshot.readOnly == true || snapshot.status == 'active' || snapshot.activeTurnId.length > 0) return ''
+  if (snapshot.approvals.length > 0 || snapshot.questionGroups.some((group: QuestionGroup): boolean => group.state == 'pending') || snapshot.pendingPlan != null || (snapshot.activeFlags ?? []).length > 0) return ''
+  return latestReviewStoppedTurnId(snapshot)
+}
+
 // 失败与中断均在对应轮次末尾展示；中断卡片独立于失败重试目标。
 export function failureTimeline(snapshot: Conversation | null, entries: TimelineEntry[]): TimelineEntry[] {
   if (snapshot == null) return entries
@@ -28,7 +44,7 @@ export function failureTimeline(snapshot: Conversation | null, entries: Timeline
     if (turn.status == 'reviewStopped') { label = '自动审查终止'; fallback = '本轮操作已被自动审查终止' }
     if (turn.status == 'interrupted') { label = '任务已中断'; fallback = '本轮操作已中断' }
     result.splice(insertion, 0, {
-      id: 'failure:' + turn.turnId, role: turn.status == 'failed' ? 'failure' : 'interruption',
+      id: 'failure:' + turn.turnId, role: turn.status == 'failed' ? 'failure' : 'interruption', kind: turn.status,
       text: (turn.errorMessage ?? '').trim().length > 0 ? turn.errorMessage! : fallback,
       turnId: turn.turnId, executions: [], label
     } as TimelineEntry)
