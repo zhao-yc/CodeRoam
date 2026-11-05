@@ -41,6 +41,7 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
         if (previous?.clientId !== found?.clientId || previous?.hostId !== found?.hostId) throw new BridgeError('THREAD_CHANGED', '关联聊天的连接已变化，已停止删除');
       } else observed.set(item.id, found);
       if (!found) {
+        if (await adapter.client?.ownedElsewhere?.(item.id)) throw new BridgeError('THREAD_OWNED_BY_OTHER_INSTANCE', '关联聊天正在另一个实例中打开，已停止删除');
         if (item.id === threadId) throw new BridgeError('OWNER_UNAVAILABLE', '目标聊天的原桌面连接已不可用');
         return null;
       }
@@ -77,8 +78,16 @@ export async function deleteThread(adapter, controller, threadId, deviceId, chec
       // 在真正删除前保存范围；进程中断后仍能只读核对全部目标是否已消失。
       checkpoint({ deletionPending: true, threadId, deletedThreadIds: ids });
     };
-    // 控制器负责区分“尚未点击”与“提交后未知”；仅保存核对范围不代表删除已经发生。
-    await controller.delete({ threadId, hostId: owner.hostId, commandId, deadline, native: adapter.native }, verify);
+    // 归档前逐项核对仍未释放的原持有者；先前归档的条目允许状态变化，删除范围必须保持不变。
+    const verifyArchive = async item => {
+      assertTime(); rootCurrent();
+      const current = adapter.index.readDeletionTree(threadId);
+      if (JSON.stringify(current.map(row => row.id)) !== JSON.stringify(ids)) throw new BridgeError('THREAD_CHANGED', '关联聊天已变化，请重新确认删除范围');
+      const snapshot = await refresh(item);
+      if (snapshot && !idle(snapshot)) throw new BridgeError('THREAD_BUSY', '任务状态已变化，已停止删除');
+    };
+    // 控制器区分首次副作用前的失败与提交后未知；账本保存范围不代表永久删除已经发生。
+    await controller.delete({ threadId, hostId: owner.hostId, commandId, deadline, native: adapter.native, deletionTree: tree, verifyArchive }, verify);
     committed = true;
     if (adapter.index.existingThreadIds(ids).length) throw new BridgeError('DELETE_OUTCOME_UNKNOWN', '删除尚未全部确认，请核对原操作结果，勿重复提交', true);
     const result = { threadId, deleted: true, deletedThreadIds: ids };
