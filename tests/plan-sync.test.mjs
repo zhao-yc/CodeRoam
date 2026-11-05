@@ -80,12 +80,12 @@ test('实际历史读取与投影分页都保留方案，分叉边界排除后�
     assert.equal(snapshot.messages.find(message => message.id === 'plan').text, text);
     assert.equal(snapshot.pendingPlan, null);
     const page = reader.readHistory('child', { page:true });
-    assert.deepEqual(page.messages.map(message => message.id), ['native-plan']);
+    assert.deepEqual(page.messages.map(message => message.id), ['intro','plan','native-plan']);
     const earlier = reader.readHistory('child', { page:true, beforeMessageId:'native-plan' });
-    assert.deepEqual(earlier.messages.map(message => message.id), ['plan']);
-    assert.equal(earlier.messages[0].text,text);assert.equal(earlier.messages[0].kind,'planImplementation');
-    const oldest=reader.readHistory('child',{page:true,before:earlier.cursor});
-    assert.deepEqual(oldest.messages.map(message=>message.id),['intro']);
+    assert.deepEqual(earlier.messages.map(message => message.id), ['intro','plan']);
+    assert.equal(earlier.messages[1].text,text);assert.equal(earlier.messages[1].kind,'planImplementation');
+    const oldest=reader.readHistory('child',{page:true,beforeMessageId:'intro'});
+    assert.deepEqual(oldest.messages,[]);assert.equal(oldest.hasMore,false);
   } finally {
     projection.close();index.close();fs.rmSync(home, { recursive:true });
   }

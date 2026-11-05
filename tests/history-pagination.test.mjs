@@ -32,7 +32,7 @@ test('保存历史逐页向前覆盖全部可见消息，游标递减、去重�
    if(hasMore){const offset=JSON.parse(Buffer.from(cursor,'base64url')).offset;assert.ok(offset<last);last=offset;}
   }
   assert.equal(hasMore,false);assert.deepEqual(pages.flat(),expected);assert.equal(new Set(pages.flat()).size,expected.length);assert.equal(fs.readFileSync(file,'utf8'),content);
-  const latest=readHistoricalPage(row,sessions);assert.equal(latest.messages.length,20);assert.equal(latest.messages.at(-1).id,expected.at(-1));
+  const latest=readHistoricalPage(row,sessions);assert.equal(latest.messages.length,60);assert.equal(latest.messages.at(-1).id,expected.at(-1));
   const before=readHistoricalPage(row,sessions,{beforeMessageId:'0-10'});assert.deepEqual(before.messages.map(item=>item.id),expected.slice(0,10));
   const bad=Buffer.from(JSON.stringify({threadId:'other',offset:100,seek:''})).toString('base64url');assert.throws(()=>readHistoricalPage(row,sessions,{before:bad}),error=>error.code==='BAD_HISTORY_CURSOR');
   assert.throws(()=>readHistoricalPage(row,sessions,{before:'*坏游标'}),error=>error.code==='BAD_HISTORY_CURSOR');
