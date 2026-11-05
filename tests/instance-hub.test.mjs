@@ -164,6 +164,66 @@ test('单实例只读请求和不可用的原生页面能力不扫描进程，�
   }
 });
 
+test('两种 Windows 启动方式和 Mac 的任务只读接口复用绑定，提交与控制仍复核', async () => {
+  for (const mode of ['direct', 'multi', 'mac']) {
+    let scans = 0, handled = 0, finish;
+    const instance = { directIpc: mode === 'direct', generation: 'current', alive: true, ready: true, verify: async () => { scans++; } };
+    const runtime = {
+      isMac: mode === 'mac', instance,
+      client: { assertCurrent() { if (!instance.ready) throw Object.assign(new Error('合成断线'), {code: 'INSTANCE_NOT_READY'}); } },
+      agent: { async handleRequest(message) { handled++; if (finish) await new Promise(resolve => { finish = resolve; }); return message.method; } },
+    };
+    const request = (method, generation = 'current') => InstanceRuntime.prototype.request.call(runtime, {generation, method});
+    for (const method of ['tasks.list', 'tasks.watch', 'tasks.unwatch']) assert.equal(await request(method), method);
+    assert.equal(scans, 0, mode);
+    for (const method of ['tasks.submit', 'tasks.control']) assert.equal(await request(method), method);
+    assert.equal(scans, mode === 'multi' ? 0 : 2, mode);
+    await assert.rejects(request('tasks.list', 'old'), {code: 'INSTANCE_CHANGED'});
+    assert.equal(handled, 5);
+    finish = true;
+    const pending = request('tasks.list');
+    await Promise.resolve(); instance.ready = false; finish();
+    await assert.rejects(pending, {code: 'INSTANCE_NOT_READY'});
+    await assert.rejects(request('tasks.watch'), {code: 'INSTANCE_NOT_READY'});
+    instance.alive = false;
+    await assert.rejects(request('tasks.unwatch'), {code: 'INSTANCE_CHANGED'});
+  }
+});
+
+test('周期发现与并发写入共用在途扫描，后续复核不沿用已完成快照', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-discovery-sharing-'));
+  const first = {pid: 101, startedAt: 1, nativePipe: 'pipe-one', codexHome: root, soleIpc: true};
+  let discoveries = 0, scan = Promise.resolve([{...first}]);
+  const hub = new InstanceHub({
+    config: {hostId: 'computer', codexHome: root}, dataPath: root,
+    discover: () => { discoveries++; return scan; }, bindOwners: async () => {},
+    createRuntime: ({instance}) => ({instance, agent: new EventEmitter(), ready: async () => { instance.ready = true; }, close: async () => { instance.alive = instance.ready = false; }}),
+  });
+  t.after(async () => { await hub.close(); fs.rmSync(root, {recursive: true, force: true}); });
+  await hub.refresh();
+  const instance = hub.runtimes.get('computer').instance;
+  let release;
+  scan = new Promise(resolve => { release = resolve; });
+  const refreshing = hub.refresh(), firstWrite = instance.verify(), secondWrite = instance.verify();
+  await Promise.resolve();
+  assert.equal(discoveries, 2);
+  release([{...first}]);
+  await Promise.all([refreshing, firstWrite, secondWrite]);
+  scan = Promise.resolve([{...first, soleIpc: false}]);
+  await assert.rejects(instance.verify(), {code: 'INSTANCE_NOT_READY'});
+  assert.equal(discoveries, 3, '新的请求必须重新发现第二实例、PID或管道变化');
+  assert.equal(instance.ready, false);
+  scan = Promise.resolve([{...first}]);
+  await hub.refresh();
+  scan = Promise.reject(new Error('合成发现失败'));
+  await assert.rejects(instance.verify(), {code: 'INSTANCE_NOT_READY'});
+  assert.equal(instance.ready, false);
+  scan = Promise.resolve([{...first}]);
+  await hub.refresh();
+  await instance.verify();
+  assert.equal(instance.ready, true, '失败的在途扫描必须释放，允许重新核验恢复');
+});
+
 test('Mac 项目读取复用当前绑定，其他读写继续核验；断线或旧代次均不返回缓存结果',async()=>{
   let scans=0,handled=0,release;
   const instance={generation:'current',alive:true,ready:true,verify:async()=>{scans++;}};

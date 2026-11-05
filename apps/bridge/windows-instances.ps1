@@ -32,7 +32,7 @@ public static class InstanceEnvironment {
 '@
 $native=& (Join-Path $PSScriptRoot 'windows-native-pipe.ps1') -AsObject
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$listeners=@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)
+$listeners=$null
 $failedIdentity=$false
 $result=@(foreach($candidate in $native.candidates){
  try {
@@ -47,7 +47,10 @@ $result=@(foreach($candidate in $native.candidates){
   if(!$userData -and $process.CommandLine -match '--user-data-dir(?:=|\s+)(?:"([^"]+)"|(\S+))'){$userData=if($Matches[1]){$Matches[1]}else{$Matches[2]}}
   $port=$null
   if($process.CommandLine -match '--remote-debugging-port[= ](\d+)'){
-   $number=[int]$Matches[1];$bindings=@($listeners|Where-Object {$_.LocalPort -eq $number})
+   $number=[int]$Matches[1]
+   # 仅带调试端口的实例需要监听表，本轮多实例共用一次查询；查询失败时拒绝不完整身份。
+   if($null -eq $listeners){$listeners=@(Get-NetTCPConnection -State Listen -ErrorAction Stop)}
+   $bindings=@($listeners|Where-Object {$_.LocalPort -eq $number})
    if($bindings.Count -eq 1 -and $bindings[0].LocalAddress -eq '127.0.0.1' -and $bindings[0].OwningProcess -eq $candidate.pid){$port=$number}
   }
   [pscustomobject]@{pid=[int]$candidate.pid;startedAt=([DateTimeOffset]$process.CreationDate).ToUnixTimeMilliseconds();nativePipe=$candidate.path;codexHome=[IO.Path]::GetFullPath($instanceHome);userData=$userData;port=$port;executable=$process.ExecutablePath}

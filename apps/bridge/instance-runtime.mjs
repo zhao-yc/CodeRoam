@@ -118,11 +118,12 @@ export class InstanceRuntime {
         (message.expectedGeneration !== undefined && message.expectedGeneration !== this.instance.generation)) {
       throw new BridgeError('INSTANCE_CHANGED', '实例已重启，请重新连接后核对原操作');
     }
-    // 项目清单沿用 Windows 的已绑定身份；Mac 其他请求及写入仍实时复核，所有者接纳和导航也保持原核验。
-    if (this.isMac && message.method !== 'projects.list' || this.instance.directIpc && !READ_METHODS.has(message.method)) await this.instance.verify();
+    // 任务查询与订阅仅访问实例账本，复用绑定校验；提交和控制仍实时复核进程及管道身份。
+    const readOnlyTask = ['tasks.list', 'tasks.watch', 'tasks.unwatch'].includes(message.method);
+    if (!readOnlyTask && (this.isMac && message.method !== 'projects.list' || this.instance.directIpc && !READ_METHODS.has(message.method))) await this.instance.verify();
     this.client.assertCurrent();
     const response = await this.agent.handleRequest(message);
-    if (message.method === 'projects.list') this.client.assertCurrent();
+    if (message.method === 'projects.list' || readOnlyTask) this.client.assertCurrent();
     return response;
   }
   /** 先断开传输，停止时不再向已撤销身份的客户端发送退订，也不会遗留账本和连接。 */
