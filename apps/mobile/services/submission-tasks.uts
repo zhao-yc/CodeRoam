@@ -2,6 +2,7 @@ import { watch } from 'vue'
 import { bridge, connection, Computer } from './bridge.uts'
 import { submissionTasks, submissionInstance, supportsSubmissionTasks, acceptSubmissionSnapshot, SubmissionTask, SubmissionSnapshot, InstanceSubmissionTasks, PendingSubmission, AcceptedSubmission } from './submission-task-state.uts'
 import { NewDraft, NewDraftChoices } from './new-conversation.uts'
+import { ExecutionSettings } from './execution-settings.uts'
 import { DraftImage, DraftFile, settleSubmission } from './composer.uts'
 import { readFileBase64, FILE_CHUNK_BYTES } from './files.uts'
 import { SelectedPlugin } from './plugins.uts'
@@ -142,9 +143,16 @@ export async function checkPendingSubmission(hostId: string, id: string): Promis
 export function acknowledgePendingSubmission(hostId: string, id: string) { removePending(id); bridge.clearCommand(id, hostId) }
 
 // 文件先完整写入任务作用域；只有守护进程确认接管后才消费手机草稿。
-export async function submitNewConversationTask(draft: NewDraft, mode: string, progress: (message: string) => void): Promise<string> {
+export async function submitNewConversationTask(draft: NewDraft, mode: string, progress: (message: string) => void, execution: ExecutionSettings | null = null): Promise<string> {
   const hostId = draft.hostId, namespace = draft.cacheNamespace, id = newSubmissionId()
-  const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), choices = { ...draft.choices } as NewDraftChoices
+  const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), originalChoices = { ...draft.choices } as NewDraftChoices
+  const choices = { ...originalChoices } as NewDraftChoices
+  // 新建空聊天的默认值可能不同于编辑器。发送时固定界面已显示的四项配置，权限仍只取显式确认。
+  if (execution != null) {
+    if (execution.model.length == 0 || execution.effort.length == 0) throw new Error('执行设置尚未读取完成，请稍后发送')
+    choices.model = execution.model; choices.effort = execution.effort
+    choices.serviceTier = execution.serviceTier; choices.mode = execution.mode
+  }
   const plugins = draft.plugins.slice(), mentions = copyThreadMentions(draft.threadMentions), mentionRevision = draft.threadMentionRevision
   if (draft.projectId.length == 0) throw new Error('请先选择项目')
   if (mode != 'desktopIpc' && mode != 'nativeDraft') throw new Error('电脑的新建聊天方式尚未就绪，请重新读取')
@@ -185,7 +193,7 @@ export async function submitNewConversationTask(draft: NewDraft, mode: string, p
   draft.images = draft.images.filter((image: DraftImage): boolean => !images.some((sent: DraftImage): boolean => sent.id == image.id))
   draft.files = draft.files.filter((file: DraftFile): boolean => !files.some((sent: DraftFile): boolean => sent.id == file.id))
   if (draft.threadMentionRevision == mentionRevision) { draft.threadMentions = [] as SelectedThreadMention[]; draft.threadMentionRevision++ }
-  if (JSON.stringify(draft.choices) == JSON.stringify(choices)) draft.choices = {} as NewDraftChoices
+  if (JSON.stringify(draft.choices) == JSON.stringify(originalChoices)) draft.choices = {} as NewDraftChoices
   return id
 }
 

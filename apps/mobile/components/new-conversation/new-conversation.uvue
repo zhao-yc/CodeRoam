@@ -129,7 +129,7 @@ const modelLabel = computed((): string => settingsLoading.value ? '正在读取�
 const canSend = computed((): boolean => props.expanded && projectReady.value && !operationBusy.value && !outcomeUnknown.value &&
   !hasCompletedConversation.value && !(newConversationMode.value == 'nativeDraft' && direct.value.threadId.length > 0) &&
   (draft.value.threadMentions.length == 0 || mentionsAvailable.value) &&
-  existingDraft.value?.hasDesktopText != true && !imageBusy.value && !settingsLoading.value &&
+  existingDraft.value?.hasDesktopText != true && !imageBusy.value && !settingsLoading.value && settings.value != null && settings.value!.effort.length > 0 &&
   (draft.value.text.trim().length > 0 || draft.value.images.length > 0 || draft.value.files.length > 0) &&
   (draft.value.images.length == 0 || modelSupportsImages.value))
 const pickerHeight = computed((): number => Math.max(100, Math.min(340, currentWindowHeight.value - keyboardInset.value - 270)))
@@ -428,7 +428,7 @@ async function send() {
   const updateProgress = (message: string): void => { progress.value = message }
   try {
     if (taskReady) {
-      await submitNewConversationTask(target, mode, updateProgress)
+      await submitNewConversationTask(target, mode, updateProgress, settings.value)
       if (alive && props.expanded && draft.value == target && revision == connection.configurationRevision) { busy.value = false; emit('busy', false); uni.hideKeyboard(); emit('queued') }
     } else if (mode == 'desktopIpc') {
       const id = await sendDirectNewConversation(target, updateProgress)
