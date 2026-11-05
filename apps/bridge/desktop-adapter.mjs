@@ -335,7 +335,10 @@ export class DesktopAdapter extends EventEmitter {
     const current=executionSettings(entry.state)??{model:settings.model,effort:settings.reasoningEffort??'',serviceTier:'',mode:'default'};
     // 回执切换了模型时，不能把旧模型的强度套到新模型；缺省档位按桌面目录解析。
     if(current.model!==settings.model)current.effort='';
-    current.model=settings.model;current.effort=settings.reasoningEffort??current.effort;
+    // 原生回读只返回旧的保存强度；显式协作模式与输入框共用配置，不能被旧字段覆盖。
+    const collaboration=entry.state.latestCollaborationMode??entry.state.latestThreadSettings?.collaborationMode;
+    const collaborationEffort=collaboration?.settings?.model===settings.model?collaboration.settings.reasoning_effort:null;
+    current.model=settings.model;current.effort=collaborationEffort||settings.reasoningEffort||current.effort;
     const models=this.modelCatalog.read(settings.modelProvider??entry.state.modelProvider??'openai');
     return {settings:resolveExecutionEffort(current,models),models};
   }
