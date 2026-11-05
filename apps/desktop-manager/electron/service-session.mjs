@@ -106,7 +106,7 @@ function confirmedOffline(file) {
 
 /** 托盘退出只控制已认证的当前守护。恢复记录绑定原托管文件，自动启动前重新核对。 */
 export function createServiceSession({file, connect, platform = process.platform}) {
-  const request = (worker, method) => connect(worker).request(method);
+  const request = (worker, method, params) => connect(worker).request(method, params);
   function remember(record) {
     const temporary = file + '.' + randomUUID() + '.tmp';
     try {
@@ -119,11 +119,11 @@ export function createServiceSession({file, connect, platform = process.platform
   }
 
   return {
-    async close(worker) {
+    async close(worker, confirmed = false) {
       if (!worker) return;
       let launch;
       try {
-        launch = await request(worker, 'service.prepareQuit');
+        launch = await request(worker, 'service.prepareQuit', confirmed ? {confirmed: true} : undefined);
         if (!validLaunch(launch)) throw problem('守护未确认安全退出，请重试');
         const record = {worker, revision: revision(worker), launch};
         remember(record);

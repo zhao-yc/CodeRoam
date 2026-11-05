@@ -189,7 +189,11 @@ for(const multiInstance of [false,true])test(`退出和重新打开托盘会收�
     installManagementChild({
       agents:()=>agents,drain:()=>{},
       status:()=>({pid:process.pid,connected:true,instances}),
-      close:async()=>clearInterval(timer),
+      close:async()=>{
+        // 模拟多实例中有请求无法在退出时限内收尾。
+        if(config.multiInstance&&fs.existsSync(instances.at(-1).label))await new Promise(()=>{});
+        clearInterval(timer);
+      },
     });
   `);
   const supervisor=spawn(process.execPath,['apps/bridge/service-supervisor.mjs','--config',f.workerConfigPath],{windowsHide:true,stdio:'ignore'});
@@ -214,12 +218,14 @@ for(const multiInstance of [false,true])test(`退出和重新打开托盘会收�
   assert.equal(labels.length,multiInstance?2:1);
   const busy=path.join(f.root,labels.at(-1));
   fs.writeFileSync(busy,'');
-  await assert.rejects(session.close(f.workerConfigPath),{code:'MANAGEMENT_BUSY'});
+  await assert.rejects(session.close(f.workerConfigPath),{code:'MANAGEMENT_IN_FLIGHT'});
   assert.equal((await client.request('status')).pid,before.pid);
   assert.equal(fs.existsSync(file),false);
-  fs.unlinkSync(busy);
-  await session.close(f.workerConfigPath);
+  await assert.rejects(client.request('service.prepareQuit',{confirmed:'true'}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  await assert.rejects(client.request('service.stop',{confirmed:true}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  await session.close(f.workerConfigPath,true);
   for(const pid of [before.pid,before.supervisorPid])assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
+  fs.unlinkSync(busy);
   assert.equal(fs.existsSync(file),true);
   await session.resume(f.workerConfigPath);
   const after=await client.request('status');

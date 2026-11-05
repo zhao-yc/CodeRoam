@@ -59,7 +59,7 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
     finally { changingSync = false; }
   }
   /** 停止和重启共用排空检查。停止只关闭桥接，守护留在本机等待再次启动。 */
-  async function stopOrRestart(keepStopped) {
+  async function stopOrRestart(keepStopped, quitOptions) {
     if(restarting||changingSync||manualRestart||stopping)throw Object.assign(new Error('服务正在处理管理操作，请稍后再试'),{code:'MANAGEMENT_BUSY'});
     if(bridgePaused){
       if(keepStopped)return {accepted:true};
@@ -74,13 +74,18 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
     const accepted=keepStopped?{accepted:true}:{accepted:true,restarting:true};
     try {
       event(keepStopped?'management_stop_requested':'management_restart_requested');
-      await askChild('prepare-restart');
+      if (quitOptions) await askChild('prepare-quit', 5000, quitOptions);
+      else await askChild('prepare-restart');
       bridgePaused=keepStopped;manualRestart=!keepStopped;
       await askChild('shutdown',10000);
       return accepted;
     }catch(error){
       if(error.code==='MANAGEMENT_RESTARTING')return {...accepted,warning:'桥接关闭过程未完整确认，请核对运行状态'};
       if(keepStopped&&bridgePaused&&child!==target)return accepted;
+      if(quitOptions?.confirmed&&bridgePaused&&child===target&&error.code==='MANAGEMENT_TIMEOUT'){
+        // 已确认退出且常规收尾超时，只结束当前桥接。持久化的未完成操作由原账本恢复流程核对。
+        if(target.kill('SIGKILL'))return accepted;
+      }
       manualRestart=false;
       if(child&&child===target)try{
         const result=await askChild('cancel-restart',2000);
@@ -101,12 +106,12 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
     return {accepted:true};
   }
   /** 先确认桥接已退出，再锁住启动入口，交给管理端关闭当前托管会话。 */
-  async function prepareQuit() {
+  async function prepareQuit(confirmed = false) {
     if(quitting)throw Object.assign(new Error('服务正在退出，请稍后再试'),{code:'MANAGEMENT_BUSY'});
     quitting=true;
     try {
       const wasRunning=!bridgePaused;
-      await stopOrRestart(true);
+      await stopOrRestart(true, {confirmed});
       if(child)await once(child,'close',{signal:AbortSignal.timeout(5000)});
       // 客户端意外退出时，托管器仍可恢复手动启动入口。
       quitTimer=setTimeout(cancelQuit,45000);quitTimer.unref();

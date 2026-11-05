@@ -58,7 +58,7 @@ export async function startManagementServer({worker, workerConfigPath = null, st
   const dispatch = async (method, params, socket) => {
     current();
     if (!object(params)) throw fail('管理操作参数无效', 'MANAGEMENT_REQUEST_INVALID');
-    if (['status', 'config.read', 'service.restart', 'service.start', 'service.stop', 'service.prepareQuit', 'service.cancelQuit', 'service.quit'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
+    if (['status', 'config.read', 'service.restart', 'service.start', 'service.stop', 'service.cancelQuit', 'service.quit'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
     if (method === 'status') return status();
     if (method === 'config.read') return readManagedConfig(worker.bridgeConfig);
     if (method === 'config.save') {
@@ -73,8 +73,12 @@ export async function startManagementServer({worker, workerConfigPath = null, st
     if (method === 'service.start' && startBridge) return startBridge();
     if (method === 'service.stop' && stopBridge) return stopBridge();
     if (method === 'service.prepareQuit' && prepareQuit) {
+      if (Object.keys(params).some(key => key !== 'confirmed') ||
+          (Object.hasOwn(params, 'confirmed') && typeof params.confirmed !== 'boolean')) {
+        throw fail('退出确认参数无效', 'MANAGEMENT_REQUEST_INVALID');
+      }
       socket.setTimeout(25000);
-      return prepareQuit();
+      return prepareQuit(params.confirmed === true);
     }
     if (method === 'service.cancelQuit' && cancelQuit) return cancelQuit();
     if (method === 'service.quit' && confirmQuit) return confirmQuit();

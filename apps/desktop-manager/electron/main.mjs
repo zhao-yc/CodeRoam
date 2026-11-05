@@ -58,6 +58,17 @@ function handle(channel, action) {
   });
 }
 
+/** 用户从托盘退出时窗口可能已关，系统确认框也要能独立显示。 */
+async function confirmPendingExit() {
+  const options = {
+    type: 'warning', title: '手机操作尚未完成', message: '仍然退出 CodeRoam？',
+    detail: '退出会中断手机连接，正在处理的操作结果可能需要重新核对。',
+    buttons: ['继续运行', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true,
+  };
+  const result = window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  return result.response === 1;
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', showWindow);
@@ -72,14 +83,23 @@ else {
     void (async () => {
       try {
         await restoring;
-        await session.close(controller.context().workerConfigPath);
+        const worker = controller.context().workerConfigPath;
+        try { await session.close(worker); }
+        catch (error) {
+          if (error?.code !== 'MANAGEMENT_IN_FLIGHT') throw error;
+          if (!await confirmPendingExit()) return;
+          await session.close(worker, true);
+        }
         quitReady = true;
         app.quit();
       } catch (error) {
-        quitting = false;
-        tray?.setToolTip('CodeRoam 电脑管理');
         const message = error?.code?.startsWith('MANAGEMENT_') ? error.message : '暂未确认守护安全退出，请检查运行状态后重试。';
         dialog.showErrorBox('连接服务尚未停止', message);
+      } finally {
+        if (!quitReady) {
+          quitting = false;
+          tray?.setToolTip('CodeRoam 电脑管理');
+        }
       }
     })();
   });
