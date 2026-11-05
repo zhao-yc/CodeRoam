@@ -60,8 +60,8 @@ export class BridgeAgent extends EventEmitter {
     this.adapter.nativeFileReportAvailable=()=>this.fileReports.supports(this.adapter);
     this.deleteController=deleteController;this.deletingIds=new Set();this.deletionRequests=new Map();
     this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
-    this.operationHistory=journal.db?new StateOperationHistory({db:journal.db,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true})}):null;
-    this.taskQueue=journal.db?new TaskQueue({journal,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true}),
+    this.operationHistory=journal.db?new StateOperationHistory({db:journal.db,changed:()=>this.taskQueue?.notify(),readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true})}):null;
+    this.taskQueue=journal.db?new TaskQueue({journal,readOperations:deviceId=>this.operationHistory.list(deviceId,{view:'active',limit:100}).tasks,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true}),
       ready:()=>!this.taskClosed&&!this.managementDraining&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
       execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.commandId,task.payload.firstMessageGuard),
       reconcile:task=>this.readTaskCommandStatus(task.deviceId,task.pendingCommandId,task.threadId),

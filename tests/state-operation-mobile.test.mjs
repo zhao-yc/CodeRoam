@@ -8,7 +8,7 @@ import { stripTypeScriptTypes } from 'node:module';
 test('执行记录按实例隔离错误，失败实例不继续翻页，成功实例仍解析聊天标题', async () => {
   const page = fs.readFileSync('apps/mobile/pages/task-history/index.uvue', 'utf8');
   const body = page.slice(page.indexOf('async function loadMore()'), page.indexOf('function reload()'));
-  const calls = [], titles = [], cursors = { value: [{ hostId: 'legacy-host', more: true, before: 0 }, { hostId: 'current-host', more: true, before: 0 }] };
+  const calls = [], titles = [], cursors = { value: [{ hostId: 'legacy-host', category: 'operation', more: true, before: 0 }, { hostId: 'current-host', category: 'operation', more: true, before: 0 }] };
   const rows = { value: [] }, error = { value: '' }, loading = { value: false };
   const context = vm.createContext({
     request: 1, connection: { connected: true, cacheNamespace: 'synthetic-pair' }, category: { value: 'operation' }, state: { value: '' },

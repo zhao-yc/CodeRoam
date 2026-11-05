@@ -7,8 +7,8 @@ const DAY = 86400000;
 
 /** 状态操作独立留痕，不领取提交队列执行槽，也不改变其暂停状态。 */
 export class StateOperationHistory {
-  constructor({ db, readTitle = () => '', now = Date.now }) {
-    this.readTitle = readTitle; this.db = db; this.now = now; this.pending = new Map(); this.reads = new Map();
+  constructor({ db, readTitle = () => '', changed = () => {}, now = Date.now }) {
+    this.changed = changed; this.readTitle = readTitle; this.db = db; this.now = now; this.pending = new Map(); this.reads = new Map();
     db.exec(`CREATE TABLE IF NOT EXISTS state_operation_history (
       position INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
       device_id TEXT NOT NULL, request_id TEXT NOT NULL, method TEXT NOT NULL,
@@ -41,9 +41,10 @@ export class StateOperationHistory {
     const coalesced = method === 'thread.read' && alreadyRead && this.db.prepare('SELECT state FROM state_operation_history WHERE device_id=? AND thread_id=? AND method=? ORDER BY completed_at DESC,position DESC LIMIT 1').get(deviceId, threadId, method)?.state === 'succeeded';
     const time = this.now(), id = randomUUID();
     const insert = () => this.db.prepare('INSERT INTO state_operation_history(id,device_id,request_id,method,thread_id,thread_title,state,created_at) VALUES (?,?,?,?,?,?,?,?)').run(id, deviceId, requestId, method, threadId, historyThreadTitle(this.readTitle, threadId), 'running', time);
-    if (!coalesced) insert();
+    if (!coalesced) { insert(); this.notify(); }
     const operation = Promise.resolve().then(execute).then(result => {
       if (!coalesced) this.db.prepare("UPDATE state_operation_history SET state='succeeded',completed_at=? WHERE id=?").run(this.now(), id);
+      if (!coalesced) this.notify();
       return result;
     }, error => {
       if (coalesced) insert();
@@ -51,6 +52,7 @@ export class StateOperationHistory {
       const unknown = error?.outcomeUnknown === true || /TIMEOUT|UNAVAILABLE|CLOSED/.test(error?.code ?? '');
       const message = unknown ? '电脑未确认操作结果，请核对后重新操作' : error?.code === 'SUBSCRIPTION_CANCELED' ? '聊天已切换，操作已取消' : '状态操作未完成，请检查电脑连接后重试';
       this.db.prepare('UPDATE state_operation_history SET state=?,error=?,completed_at=? WHERE id=?').run(unknown ? 'unknown' : 'failed', message, this.now(), id);
+      this.notify();
       throw error;
     }).finally(() => { this.pending.delete(key); if (readKey) this.reads.delete(readKey); });
     this.pending.set(key, operation);
@@ -59,9 +61,10 @@ export class StateOperationHistory {
   }
 
   /** 两类历史分别分页，游标只能引用当前设备的状态操作记录。 */
-  list(deviceId, { before, limit = 30, state } = {}) {
+  list(deviceId, { before, limit = 30, state, view = 'history' } = {}) {
     this.cleanup();
     const conditions = ['device_id=?'], values = [deviceId];
+    if (view === 'active') { conditions.push("(state='running' OR completed_at>?)"); values.push(this.now() - 5000); }
     if (before !== undefined) {
       const anchor = this.db.prepare('SELECT completed_at FROM state_operation_history WHERE device_id=? AND position=?').get(deviceId, before);
       if (!anchor) throw new BridgeError('TASK_HISTORY_CHANGED', '状态操作记录已变化，请刷新后继续查看');
@@ -73,6 +76,9 @@ export class StateOperationHistory {
     const tasks = rows.slice(0, count).map(row => ({ id: row.id, position: row.position, kind: 'operation', method: row.method, title: TITLES[row.method], threadTitle: row.thread_title ?? '', threadId: row.thread_id, projectId: '', state: row.state, stage: row.state === 'running' ? '等待电脑确认' : '', error: row.error, createdAt: row.created_at, startedAt: row.created_at, completedAt: row.completed_at, updatedAt: row.completed_at || row.created_at, dismissed: false, steps: [], canRetry: false }));
     return { supportsTaskQueue: true, supportsOperationHistory: true, revision: 0, paused: false, blockerId: '', tasks, now: this.now(), ...(rows.length > count ? { nextCursor: tasks.at(-1).position } : {}) };
   }
+
+  /** 展示通知失败不能改变已持久化的操作结果。 */
+  notify() { try { this.changed(); } catch { /* 下次订阅会读取持久化结果。 */ } }
 
   /** 状态操作保留最近三十天、每设备最多一千条结果，运行中的操作不清理。 */
   cleanup() {
