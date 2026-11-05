@@ -130,6 +130,20 @@ test('多指、触点变化与系统取消撤销未完成手势，并屏蔽后�
   }
 });
 
+test('任务进度刷新不打断拖动，页面隐藏取消手势，极小窗格不产生无效坐标', () => {
+  const f = fixture();
+  begin(f); move(f, 200, 400); f.watchers[1](); finish(f, 200, 400);
+  assert.equal(f.saved.length, 1); assert.ok(f.positionX.value < 1);
+  const savedX = f.positionX.value;
+  begin(f); move(f, 100, 300); f.props.active = false; f.watchers[1]();
+  assert.equal(f.positionX.value, savedX); assert.equal(f.saved.length, 1);
+  f.props.active = true;
+  f.rects['submission-task-area'] = { width: 120, height: 60 }; f.measureDock();
+  begin(f); finish(f, 100, 100);
+  assert.equal(f.horizontalRange.value, 0); assert.equal(f.verticalRange.value, 0);
+  assert.ok(Number.isFinite(f.positionX.value)); assert.ok(Number.isFinite(f.positionY.value));
+});
+
 test('鼠标移出胶囊后继续跟随，松手保存并移除全局监听', () => {
   const f = fixture(); f.beginMouse(mouse(300, 500));
   assert.equal(f.listeners.size, 4);
