@@ -11,7 +11,7 @@ function fixture(states) {
   let reads = 0;
   const instance = { hostId: 'synthetic-host', snapshot: { paused: true, blockerId: 'synthetic-blocker' } };
   const scope = vm.createContext({
-    computed: getter => ({ get value() { return getter(); } }), ref: value => ({ value }), watch: () => {}, defineProps: () => ({}), withDefaults: (props, defaults) => ({ ...defaults, ...props }), defineEmits: () => () => {},
+    computed: getter => ({ get value() { return getter(); } }), ref: value => ({ value }), watch: () => {}, onMounted: () => {}, onUnmounted: () => {}, defineProps: () => ({}), withDefaults: (props, defaults) => ({ ...defaults, ...props }), defineEmits: () => () => {},
     submissionTasks: { instances: [], pending: [] }, connection: { computers: [] },
     readSubmissionTasks: async (hostId, params) => {
       calls.push({ hostId, method: 'list', taskId: params.taskId });
