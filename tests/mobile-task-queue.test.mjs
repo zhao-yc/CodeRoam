@@ -13,7 +13,7 @@ const task = (id, overrides = {}) => ({ id, position: 1, kind: 'newConversation'
 function fixture() {
   const calls = [], storage = new Map(), tasks = new Map();
   const connection = { cacheNamespace: 'pair-a', hostId: 'pc-a', connected: true, computers: [{ id: 'pc-a', online: true, instanceGeneration: 'generation-a' }] };
-  let failSubmit = false, omitTask = false, failReads = 0;
+  let failSubmit = false, omitTask = false, failReads = 0, invalidReceipt = false, failAcceptedSave = false;
   const bridge = {
     foreground: true,
     clearCommand(id, host) { calls.push({ method: '清理手机保护', id, host }); },
@@ -22,6 +22,7 @@ function fixture() {
       if (method === 'tasks.submit') {
         if (!omitTask) tasks.set(params.taskId, task(params.taskId));
         if (failSubmit) throw new Error('合成回执丢失');
+        if (invalidReceipt) return json({ accepted: true, taskId: 'synthetic-other-task' });
         return json({ accepted: true, taskId: params.taskId, task: tasks.get(params.taskId) });
       }
       if (method === 'tasks.list' && params.taskId) { if (failReads > 0) { failReads--; throw new Error('合成读取暂时超时'); } return json({ tasks: tasks.has(params.taskId) ? [tasks.get(params.taskId)] : [] }); }
@@ -30,12 +31,15 @@ function fixture() {
     },
     async requestTaskUpload(hostId, method, params) { calls.push({ hostId, method, params: plain(params) }); return json(method === 'attachment.chunk' ? { nextChunk: params.index + 1, received: 3 } : { nextChunk: 0, complete: method === 'attachment.finish' }); },
   };
-  const context = vm.createContext({ reactive: value => value, settleSubmission: (hostId,id,success) => calls.push({method:'消费草稿',hostId,id,success}), watch() {}, bridge, connection, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value) }, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', copyThreadMentions: items => items.map(item => ({ ...item })), setTimeout, clearTimeout, setInterval });
+  const context = vm.createContext({ reactive: value => value, settleSubmission: (hostId,id,success) => calls.push({method:'消费草稿',hostId,id,success}), watch() {}, bridge, connection, uni: { getStorageSync: key => storage.get(key) ?? '', setStorageSync(key, value) {
+    if (failAcceptedSave && JSON.parse(value).some(record => record.accepted)) throw Error('合成存储失败');
+    storage.set(key, value);
+  } }, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', copyThreadMentions: items => items.map(item => ({ ...item })), setTimeout, clearTimeout, setInterval });
   vm.runInContext("for (const suffix of ['String','Number','Boolean']) Object.defineProperty(Object.prototype,'get'+suffix,{value:function(key){return this[key]??null;},configurable:true});\n" + stripTypeScriptTypes(code, { mode: 'transform' }) + '\nglobalThis.subject={submissionTasks,submissionVisible,acceptSubmissionSnapshot,submitTask,submitTaskCommand,submitNewConversationTask,awaitSubmissionResult,checkPendingSubmission,acknowledgePendingSubmission,refreshSubmissionTasks};', context);
   context.subject.submissionTasks.instances.push({ hostId: 'pc-a', generation: 'generation-a', supported: true, loading: false, error: '', snapshot: null, clockOffset: 0 });
   context.subject.submissionTasks.namespace = connection.cacheNamespace;
   const draft = { hostId: 'pc-a', cacheNamespace: 'pair-a', projectId: 'project-a', choices: { model: 'model-a', effort: null }, text: '合成首条消息', images: [], files: [{ id: 'synthetic-upload-0001', name: 'example.txt', size: 3, source: 'synthetic', data: '', status: 'local', progress: 0, error: '' }], plugins: [], threadMentions: [], threadMentionRevision: 0 };
-  return { ...context.subject, calls, storage, tasks, connection, draft, loseReceipt({ missing = false } = {}) { failSubmit = true; omitTask = missing; }, failReadOnce() { failReads = 1; } };
+  return { ...context.subject, bridge, calls, storage, tasks, connection, draft, loseReceipt({ missing = false } = {}) { failSubmit = true; omitTask = missing; }, failReadOnce() { failReads = 1; }, returnInvalidReceipt() { invalidReceipt = true; }, failSavingAccepted() { failAcceptedSave = true; } };
 }
 
 test('完成五秒后移出，刷新不会延长计时；异常和等待继续任务保留', () => {
@@ -66,6 +70,43 @@ test('入队回执丢失只查询原编号，确认存在后继续，不再次�
   assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
   assert.equal(f.calls.find(call => call.method === 'tasks.list').params.taskId, id);
   assert.equal(f.submissionTasks.pending[0].accepted, true);
+});
+
+test('无效入队回执保留原编号并标记结果待核对', async () => {
+  const f = fixture();
+  f.returnInvalidReceipt();
+  const id = 'synthetic-invalid-receipt';
+  await assert.rejects(f.submitTask('pc-a', id, 'newConversation', json({})), {name:'OUTCOME_UNKNOWN'});
+  const record = JSON.parse([...f.storage.values()][0])[0];
+  assert.equal(record.id, id);
+  assert.equal(record.unknown, true);
+  assert.equal(record.accepted, false);
+  await assert.rejects(f.submitTask('pc-a', 'synthetic-another-task', 'newConversation', json({})), /尚未确认/);
+  assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
+});
+
+test('有效入队回执不因后续本地存储失败而丢失', async () => {
+  const f = fixture();
+  f.failSavingAccepted();
+  const id = await f.submitNewConversationTask(f.draft, 'desktopIpc', () => {});
+  assert.equal(f.submissionTasks.pending[0].accepted, true);
+  assert.equal(JSON.parse([...f.storage.values()][0])[0].id, id);
+  assert.equal(f.draft.text, '');
+  assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
+});
+
+test('最后一个附件完成时切换连接，原草稿保留且不会入队', async () => {
+  const f = fixture();
+  const upload = f.bridge.requestTaskUpload;
+  f.bridge.requestTaskUpload = async (...args) => {
+    const result = await upload(...args);
+    if (args[1] === 'attachment.finish') f.connection.cacheNamespace = 'pair-b';
+    return result;
+  };
+  await assert.rejects(f.submitNewConversationTask(f.draft, 'desktopIpc', () => {}), /连接目标已变化/);
+  assert.equal(f.calls.some(call => call.method === 'tasks.submit'), false);
+  assert.equal(f.draft.text, '合成首条消息');
+  assert.equal(f.draft.files.length, 1);
 });
 
 test('新聊天提交固定界面默认强度，不能因未重复点选而丢失，也不推断权限确认', async () => {
