@@ -11,7 +11,7 @@ import { applyPatches, normalizeConversation } from './conversation.mjs';
 import { formatQuestionReply, validateQuestionAnswers, questionCounts } from './questions.mjs';
 import { DesktopNavigation } from './desktop-navigation.mjs';
 import { NativeDesktop } from './native-desktop.mjs';
-import { NativeMessageQueue } from './native-message-queue.mjs';
+import { NativeServerMessageQueue } from './native-server-message-queue.mjs';
 import { openDesktopThread } from './desktop-launcher.mjs';
 import { validateImages } from '../../packages/protocol/images.mjs';
 import { resetPlanAfterSend, preparePlanForSend } from './plan-reset.mjs';
@@ -36,7 +36,7 @@ export class DesktopAdapter extends EventEmitter {
     this.conversations=new Map(); this.connecting=null; this.reconnectTimer=null; this.stopped=false;
     this.activityHistory=new Map();this.backgroundRotation={startedAt:0,count:0};
     this.native=native??(client instanceof IpcClient?new NativeDesktop({stateDirectory:index?.filePath?path.dirname(index.filePath):null,ipcSocketPath:client.socketPath}):null);
-    this.nativeQueue=nativeQueue??(client instanceof IpcClient?new NativeMessageQueue({adapter:this}):null);
+    this.nativeQueue=nativeQueue??(client instanceof IpcClient?new NativeServerMessageQueue({adapter:this}):null);
     this.native?.on('changed',ids=>{if(this.stopped)return;for(const id of ids){const entry=this.conversations.get(id);if(entry?.state)this.emit('conversation',this.snapshot(entry.state));else this.emit('readState',{threadId:id,hasUnreadTurn:this.native.unread.get(id)});}});
     this.activateThread=(id,options)=>activateThread(id,{...options,nativeApi:this.native??undefined});this.loadTimeoutMs=loadTimeoutMs;this.loadingThreads=new Map();this.navigation=new DesktopNavigation();
     client.on('broadcast', message => this.onBroadcast(message));

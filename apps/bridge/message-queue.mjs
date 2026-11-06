@@ -68,7 +68,8 @@ export class MessageQueue {
           if (error.code !== 'TURN_ACTIVE' || error.outcomeUnknown) { this.release(threadId); throw error; }
         }
       }
-      if (snapshot.supportsNativeMessageQueue && choices.permissionMode === undefined) {
+      const needsSettings = ['model', 'effort', 'serviceTier', 'mode'].some(key => choices[key] !== undefined);
+      if (snapshot.supportsNativeMessageQueue && choices.permissionMode === undefined && (!needsSettings || this.adapter.nativeQueue.supportsSubmissionOptions !== false)) {
         try { return await this.enqueueNative(params, commandId, deviceId, snapshot, choices); }
         finally { this.release(threadId); }
       }
@@ -91,7 +92,7 @@ export class MessageQueue {
       const result = await this.adapter.nativeQueue.operate(queueAction, params, commandId, deviceId);
       if (result.edited) {
         // 原生撤回结果落入私有账本后才回传手机；回执丢失或手机退出仍可继续恢复草稿。
-        this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'editing')").run(params.queueId, threadId, deviceId, commandId, JSON.stringify({threadId,...result.draft}));
+        this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'editing') ON CONFLICT(id) DO UPDATE SET state='editing',payload=excluded.payload").run(params.queueId, threadId, deviceId, commandId, JSON.stringify({threadId,...result.draft}));
         this.changed(threadId);
       }
       return {...result,queueId:params.queueId};
@@ -128,7 +129,7 @@ export class MessageQueue {
     }
     selection?.check();mentions?.check();
     const files=this.adapter.attachments.materialize(deviceId,threadId,params.attachments,cwd,images.length);
-    const message={id:commandId,text:prompt,cwd,createdAt:Date.now(),context:{prompt:prompt+(mentions?.contextText??''),addedFiles:[],fileAttachments:files.map(file=>({label:file.label,path:file.path,fsPath:file.path})),imageAttachments:images.map((src,index)=>({id:commandId+':image:'+index,src})),ideContext:null,workspaceRoots:[cwd],...(mentions?.references?.length&&mentions.mode!=='savedContext'?{threadReferences:mentions.references}:{})},...(submissionOptions?{submissionOptions}:{})};
+    const message={id:commandId,text:prompt,cwd,createdAt:Date.now(),context:{prompt:prompt+(mentions?.contextText??''),addedFiles:[],fileAttachments:files.map(file=>({label:file.label,path:file.path,fsPath:file.path})),imageAttachments:images.map((src,index)=>({id:commandId+':image:'+index,src})),ideContext:null,workspaceRoots:[cwd],...(mentions?.references?.length&&mentions.mode!=='savedContext'?{threadReferences:mentions.references}:{})},...(selection?.plugins.length?{pluginInputs:selection.plugins.map(plugin=>({type:'mention',name:plugin.name,path:'plugin://'+plugin.id}))}:{}),...(submissionOptions?{submissionOptions}:{})};
     selection?.check();mentions?.check();
     const current=this.adapter.subscribed(threadId,deviceId);
     if(current!==entry||current.owner.clientId!==owner.clientId||current.owner.hostId!==owner.hostId)throw new BridgeError('OWNER_UNAVAILABLE','电脑聊天归属已变化，请重新同步');

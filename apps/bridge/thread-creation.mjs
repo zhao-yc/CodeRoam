@@ -67,13 +67,13 @@ export class ThreadCreationClient {
     this.codexHome = codexHome; this.codexCliPath = codexCliPath; this.launch = launch; this.resolveCli = resolveCli; this.timeoutMs = timeoutMs;
   }
 
-  async run(cwd, action) {
+  async run(cwd, action, { experimentalApi = false } = {}) {
     const executable = this.resolveCli(this.codexCliPath);
     const child = this.launch(executable, ['app-server', '--listen', 'stdio://'], { cwd, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, CODEX_HOME: this.codexHome } });
     const pending = new Map(), decoder = new StringDecoder('utf8'); let nextId = 0, buffer = '', closed = false;
     const fail = () => {
       closed = true;
-      for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new BridgeError('CREATION_CONNECTION_LOST', 'Codex 创建连接已中断，请先核对操作结果', entry.method === 'thread/start')); }
+      for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new BridgeError('CREATION_CONNECTION_LOST', 'Codex 创建连接已中断，请先核对操作结果', entry.writing)); }
       pending.clear();
     };
     child.on('error', fail); child.on('exit', fail);
@@ -99,16 +99,17 @@ export class ThreadCreationClient {
     const request = (method, params) => new Promise((resolve, reject) => {
       if (closed) { reject(new BridgeError('CREATION_UNAVAILABLE', 'Codex 创建连接暂不可用')); return; }
       const id = ++nextId;
+      // 队列短连接同样要保留不确定写入结果，连接中断后不能换通道补发。
+      const writing = method === 'thread/start' || ['thread/queue/add', 'thread/queue/update', 'thread/queue/delete'].includes(method);
       const timer = setTimeout(() => {
         pending.delete(id);
-        const creating = method === 'thread/start';
-        reject(new BridgeError(creating ? 'CREATION_TIMEOUT' : 'CREATION_NOT_READY', creating ? 'Codex 创建响应超时，请先核对操作结果' : 'Codex 创建连接未就绪，请重新连接后重试', creating));
+        reject(new BridgeError(writing ? 'CREATION_TIMEOUT' : 'CREATION_NOT_READY', writing ? 'Codex 写入响应超时，请先核对操作结果' : 'Codex 创建连接未就绪，请重新连接后重试', writing));
       }, this.timeoutMs);
-      pending.set(id, { resolve, reject, timer, method });
+      pending.set(id, { resolve, reject, timer, method, writing });
       child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
     try {
-      await request('initialize', { clientInfo: { name: 'codex_mobile_bridge', title: 'CodeRoam', version: '0.1.0' } });
+      await request('initialize', { clientInfo: { name: 'codex_mobile_bridge', title: 'CodeRoam', version: '0.1.0' }, ...(experimentalApi ? { capabilities: { experimentalApi: true } } : {}) });
       child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
       return await action(request);
     } finally {
