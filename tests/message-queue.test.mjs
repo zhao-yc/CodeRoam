@@ -39,6 +39,8 @@ for (const [mode, binding] of [['普通启动', { directIpc: true }], ['多实�
   test(mode + '发送占位在客户端确认成功时清除，实例核验和重复提交保护有效', async t => {
     const f = fixture(t);
     let verified = 0;
+    const reads = [], watch = f.adapter.watch.bind(f.adapter);
+    f.adapter.watch = (threadId, deviceId, options = {}) => { reads.push({deviceId, fresh:options.fresh}); return watch(threadId, deviceId, options); };
     f.client.instance = { ...binding, platform: 'win32', generation: randomUUID(), alive: true, ready: true, verify: async () => { verified++; } };
     f.client.idle();
     await f.adapter.watch('thread', 'phone');
@@ -68,8 +70,22 @@ for (const [mode, binding] of [['普通启动', { directIpc: true }], ['多实�
     assert.equal(f.client.calls[0].method, 'thread-follower-start-turn');
     assert.equal(f.client.calls[0].params.turnStart.request.clientUserMessageId, taskId);
     assert.ok(verified > 0);
+    assert.ok(reads.some(read => read.deviceId.startsWith('submission:') && read.fresh === false));
+    assert.ok(reads.some(read => read.deviceId === 'message-queue' && read.fresh === true), '实际发送必须保留强制刷新，不能仅依赖租约中的旧快照');
   });
 }
+
+test('排队租约复用旧快照后仍按发送时的实时状态决定入队，不误发到已运行聊天', async t => {
+  const f = fixture(t);
+  f.client.idle();
+  await f.adapter.watch('thread', 'phone');
+  assert.equal(f.adapter.snapshot(f.adapter.conversations.get('thread').state).status, 'idle');
+  f.client.next();
+  const result = await f.agent.runTaskCommand('turn.send', {threadId:'thread', text:'合成状态竞争', queueAction:'enqueue'}, 'phone', randomUUID());
+  assert.equal(result.queued, true);
+  assert.equal(f.client.calls.length, 0);
+  assert.equal(f.queue.rows('thread').length, 1);
+});
 
 test('运行中发送只入队，重复请求不重复保存，手机退订后仍按顺序开始下一轮', async t => {
   const f = fixture(t), id = randomUUID();

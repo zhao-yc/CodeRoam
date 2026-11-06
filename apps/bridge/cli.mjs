@@ -15,6 +15,7 @@ import { WindowsIpcHost } from './windows-ipc-host.mjs';
 import { createRequestDiagnostics } from '../../packages/protocol/request-diagnostics.mjs';
 import { installManagementChild } from './management-child.mjs';
 import { applyBackgroundSyncSetting, readBackgroundSyncSetting } from './background-sync-setting.mjs';
+import { closeInstanceDiscovery } from './instance-discovery.mjs';
 
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
 let releaseBridgeLock=()=>{};
@@ -38,7 +39,7 @@ try {
     hub.on('connected',()=>{status(true);console.log('电脑多实例连接已就绪');});
     hub.on('disconnected',detail=>{status(false);console.log(`中转连接已断开（代码 ${detail.code}）`);});
     hub.on('warning',warning=>console.log(`${warning.code}：${warning.message}`));
-    let closing=false;const close=async()=>{if(closing)return;closing=true;try{await hub.close();}finally{releaseBridgeLock();}};
+    let closing=false;const close=async()=>{if(closing)return;closing=true;try{await hub.close();}finally{closeInstanceDiscovery();releaseBridgeLock();}};
     const agents = () => [...hub.runtimes.values()].map(runtime => runtime.agent);
     installManagementChild({
       agents, drain:value=>{hub.managementDraining=value;}, status:managementStatus, close,

@@ -212,7 +212,7 @@ export class BridgeAgent extends EventEmitter {
   }
 
   /** 后台租约独立于手机详情订阅，仍使用原提交设备核验附件和业务权限。 */
-  async retainTaskThread(threadId,deviceId,taskId) {
+  async retainTaskThread(threadId,deviceId,taskId,{fresh=true}={}) {
     if(!this.adapter.watch)return ()=>{};
     const watcher='submission:'+taskId+':'+randomUUID(),key=JSON.stringify([threadId,deviceId]);
     // 兼容已经建立的真实/旧客户端订阅；嵌套步骤不能把后台观察者误认成手机页面。
@@ -230,7 +230,7 @@ export class BridgeAgent extends EventEmitter {
       else {this.taskLeaseCounts.delete(key);devices.delete(deviceId);if(!devices.size)leases.delete(threadId);if(!this.detailDevices.get(threadId)?.has(deviceId))this.adapter.unwatch?.(threadId,deviceId);}
       this.adapter.unwatch?.(threadId,watcher);
     };
-    try{await this.adapter.watch(threadId,watcher,{fresh:true,history:false});return release;}
+    try{await this.adapter.watch(threadId,watcher,{fresh,history:false});return release;}
     catch(error){release();throw error;}
   }
 
@@ -239,7 +239,9 @@ export class BridgeAgent extends EventEmitter {
     if(!WRITE_METHODS.has(method))throw new BridgeError('METHOD_NOT_ALLOWED','此操作不在任务白名单中');
     const instance=this.adapter.client?.instance;
     if(instance){await instance.verify?.();if(instance.alive!==true||instance.ready!==true)throw new BridgeError('INSTANCE_CHANGED','原实例连接已变化，请核对后继续');}
-    const release=params.threadId?await this.retainTaskThread(params.threadId,deviceId,commandId):()=>{};
+    // 默认排队发送会在 MessageQueue 中强制刷新，租约只确保归属和订阅，避免连续读取两份快照。
+    const fresh=!(method==='turn.send'&&params.queueAction==='enqueue');
+    const release=params.threadId?await this.retainTaskThread(params.threadId,deviceId,commandId,{fresh}):()=>{};
     try {
       const response=await this.handleRequest({v:1,type:'request',requestId:commandId,deviceId,method,params,...(instance?{expectedGeneration:instance.generation}:{}),...(firstMessageGuard?{firstMessageGuard}:{})},{taskExecution:true});
       if(response.error)throw new BridgeError(response.error.code,response.error.message,response.error.outcomeUnknown);

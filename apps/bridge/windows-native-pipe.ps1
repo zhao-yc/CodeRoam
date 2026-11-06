@@ -2,13 +2,14 @@
 param([ValidatePattern('^[A-Za-z0-9._-]+$')][string]$IpcPipeName='codex-ipc',[switch]$AsObject)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
-Add-Type -TypeDefinition @'
+if (-not ('NativePipeIdentity' -as [type])) { Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativePipeIdentity {
  [DllImport("kernel32.dll",SetLastError=true)] public static extern bool GetNamedPipeServerProcessId(IntPtr pipe,out uint pid);
 }
 '@
+}
 $found=New-Object 'System.Collections.Generic.List[object]'
 foreach($file in [IO.Directory]::GetFiles('\\.\pipe\')) {
  $name=[IO.Path]::GetFileName($file)
