@@ -19,7 +19,7 @@ public sealed class BridgeService : ServiceBase {
     DateTime retryAt = DateTime.MinValue;
     bool stopping;
     public class Settings { public string UserSid, NodePath, SupervisorPath, WorkerConfig, ProjectRoot; }
-    public BridgeService() { ServiceName="CodexMobileBridge"; CanStop=true; CanShutdown=true; CanHandleSessionChangeEvent=true; AutoLog=true; }
+    public BridgeService() { ServiceName="CodeRoamBridge"; CanStop=true; CanShutdown=true; CanHandleSessionChangeEvent=true; AutoLog=true; }
     public static void Main() { ServiceBase.Run(new BridgeService()); }
 
     // 记录服务层可观测的退出码；不会把未知强制终止误报为应用崩溃。
