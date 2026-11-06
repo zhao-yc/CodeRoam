@@ -24,7 +24,7 @@ function snapshot(projectId = 'project-a', draftId = 'draft-a') {
   return { draftId, projectId, revision: 1, status: 'ready', settings: { model: 'model-a', effort: 'medium', serviceTier: '', mode: 'default' }, models: [
     { id: 'model-a', label: '模型 A', defaultEffort: 'medium', efforts: ['medium', 'high'], speeds: [{ id: '', label: '常速' }, { id: 'fast', label: '快速' }], supportsImages: true },
     { id: 'model-b', label: '模型 B', defaultEffort: 'high', efforts: ['high'], speeds: [{ id: '', label: '常速' }], supportsImages: true },
-  ], permissions: { mode: 'default', revision: 'permission-1', options: ['default', 'read-only', 'full-access'].map(id => ({ id, label: id, enabled: true })) }, hasDesktopText: false };
+  ], permissions: { mode: 'default', revision: 'permission-1', options: ['default', 'auto-review', 'read-only', 'full-access'].map(id => ({ id, label: id, enabled: true })) }, hasDesktopText: false };
 }
 
 /** 实际执行状态层、新建编排和正式聊天本地草稿，仅替换传输与系统 API。 */
@@ -447,7 +447,7 @@ test('完整访问弹窗期间切电脑或权限版本变化取消旧确认，�
     assert.equal(f.emitted.some(event => event[0] === 'select'), false); assert.equal(f.calls.length, 0);
   }
   const existing = permissionFixture({ threadId: 'thread-a', projectId: '', draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '' });
-  await existing.load(); await existing.choose('read-only');
+  await existing.load(); await existing.choose('auto-review');
   assert.deepEqual(existing.calls.map(call => call.method), ['thread.permissions.read', 'thread.permissions.update']); assert.equal(existing.calls[1].write, true);
 });
 
