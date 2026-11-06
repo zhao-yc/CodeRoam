@@ -120,6 +120,7 @@ test('选择器旧服务无确认，上限20条仍可取消已有选择', async 
 /** 运行会话页真实输入与发送函数，复用真实草稿和撤回服务。 */
 function pageFixture() {
   const c = helpers(service('queue-edit')), calls = [], pending = [], notices = [];
+  Object.assign(c,{composerBlurTimer:0,inputFocused:ref(true),clearTimeout(){}});
   Object.assign(c, { ref, computed, pageHostId: ref('pc'), pageThreadId: ref('current'), pageVisible: ref(true), canWrite: ref(true), busy: ref(false), imageBusy: ref(false), filesReady: ref(true), modelSupportsImages: ref(true), pendingAction: ref(''), operationError: ref(''), predictionFocus: ref(false), pluginOpen: ref(false), mentionOpen: ref(false), mentionCursor: ref(-1), mentionTrigger: ref(null), mentionDraftRevision: 0, mentionSourceRevision: 0, mentionContext: '', mentionSelection: '',
     connection: { hostId: 'pc', configurationRevision: 1, connected: true, pendingCommandId: '', snapshot: { supportsThreadMentions: true, supportsImages: true, supportsMessageQueue: true, supportsQueueEditing: true, status: 'idle' } },
     activeTurnId: ref(''), messageSendingPreferences: { behavior: 'queue' }, following: ref(false),

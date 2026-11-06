@@ -14,6 +14,7 @@ function fixture(){
   const c={composerInstanceId:'example-composer',computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
   Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
   Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([]),mentionOpen:ref(false),draftMentions:ref([])});
+  Object.assign(c,{pendingAction:ref(''),connection:{pendingCommands:[]}});
   const layout=page.slice(page.indexOf('function updateComposerGeometry()'),page.indexOf('// 键盘由输入区处理'));
   const blur=page.slice(page.indexOf('function onDraftBlur()'),page.indexOf('function updateMenuHeight()'));
   const focus=page.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0];
@@ -32,6 +33,42 @@ test('草稿、预测、附件、工具菜单、权限菜单和选择附件期�
   for(const [key,value] of [['draft','草稿'],['visiblePrediction','预测'],['draftImages',[{}]],['draftFiles',[{}]],['draftPlugins',[{id:'sample@example',displayName:'示例插件'}]],['pluginOpen',true],['draftMentions',[{id:'synthetic',title:'合成聊天'}]],['mentionOpen',true],['composerMenu','add'],['permissionMenuOpen',true],['imageBusy',true]]){
     const f=fixture();f.ui.onComposerFocus();f.c[key].value=value;f.ui.onDraftBlur();f.blur();assert.equal(f.ui.composerExpanded.value,true,key);
     f.c[key].value=Array.isArray(value)?[]:typeof value==='boolean'?false:'';assert.equal(f.ui.composerExpanded.value,false,key);
+  }
+});
+
+test('发送中的多行草稿与附件保持单行，入队及迟到焦点不展开，失败恢复编辑高度',()=>{
+  const f=fixture();
+  f.c.draft.value='第一行\n第二行\n第三行';
+  f.c.draftImages.value=[{id:'synthetic-image'}];
+  f.c.draftHeight.value=120;
+  f.ui.onComposerFocus();
+  f.c.pendingAction.value='send';
+  f.c.inputFocused.value=false;
+  assert.equal(f.ui.composerExpanded.value,false);
+  assert.equal(f.ui.composerHeight.value,24);
+  assert.equal(f.ui.composerStageHeight.value,44);
+  f.c.connection.pendingCommands.push({hostId:'host',threadId:'thread',method:'turn.send'});
+  f.c.pendingAction.value='';
+  f.ui.onComposerFocus();f.ui.onDraftLineChange({detail:{height:120}});f.flush();
+  assert.equal(f.ui.composerExpanded.value,false);
+  assert.equal(f.c.draft.value,'第一行\n第二行\n第三行');
+  assert.equal(f.c.draftImages.value.length,1);
+  assert.equal(f.c.inputFocused.value,false);
+  f.c.connection.pendingCommands.length=0;
+  assert.equal(f.ui.composerExpanded.value,true);
+  assert.equal(f.ui.composerHeight.value,120);
+});
+
+test('普通启动和多实例按实例及聊天匹配发送，其他操作不触发收起',()=>{
+  for(const method of ['turn.send','turn.steer']){
+    const f=fixture();f.c.draft.value='合成草稿';
+    const command={hostId:'other-host',threadId:'thread',method};
+    f.c.connection.pendingCommands.push(command);
+    assert.equal(f.ui.composerExpanded.value,true);
+    command.hostId='host';command.threadId='other-thread';
+    assert.equal(f.ui.composerExpanded.value,true);
+    command.threadId='thread';assert.equal(f.ui.composerExpanded.value,false);
+    command.method='thread.settings.update';assert.equal(f.ui.composerExpanded.value,true);
   }
 });
 

@@ -1563,7 +1563,9 @@ function onDraftLineChange(event: UniTextareaLineChangeEvent) {
   if (draft.value.length > 0) draftHeight.value = Math.max(64, Math.min(144, event.detail.height))
   updateComposerGeometry()
 }
-const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || mentionOpen.value || draftPlugins.value.length > 0 || draftMentions.value.length > 0, attachmentBusy: imageBusy.value }))
+// 发送回执到达前仍保留原草稿，但发送态优先收起；只匹配本实例、本聊天的消息提交。
+const composerSending = computed((): boolean => pendingAction.value == 'send' || connection.pendingCommands.some((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && (entry.method == 'turn.send' || entry.method == 'turn.steer')))
+const composerExpanded = computed((): boolean => !composerSending.value && shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || mentionOpen.value || draftPlugins.value.length > 0 || draftMentions.value.length > 0, attachmentBusy: imageBusy.value }))
 const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
 // 高度由一行工具栏及编辑空间组成，数值过渡期间两端按钮始终贴住底边。
 const composerStageHeight = computed((): number => composerExpanded.value ? composerHeight.value + 58 : 44)
@@ -1780,6 +1782,9 @@ function send() {
   if (hasMessageChoices(choices)) params['choices'] = messageChoicesParams(choices)
   if (queue) params['queueAction'] = 'enqueue'
   if (steer) params['expectedTurnId'] = activeTurnId.value
+  // 提交时结束本次编辑，成功清稿后继续保持单行；失败仍可展示保留的草稿。
+  clearTimeout(composerBlurTimer); inputFocused.value = false; predictionFocus.value = false
+  closeComposerMenu(); uni.hideKeyboard()
   const request = bridge.request(method, params, true)
   const commandId = connection.pendingCommandId
   rememberSubmission(hostId, threadId, commandId, text)
@@ -1862,7 +1867,7 @@ function reply(id: string, turnId: string, decision: string) {
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
 // 聚焦只展开编辑面板并收起目标表单，不采纳或发送预测。
-function onComposerFocus() { clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
+function onComposerFocus() { if (composerSending.value) return; clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
 function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
 function operateGoal(action: string, objective: string, revision: string) {
   if (!canWrite.value || !goalHostOnline.value || goalBusy.value || connection.snapshot?.supportsGoalControl != true) return
