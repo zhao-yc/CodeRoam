@@ -125,8 +125,17 @@ test('已读后出现新的未读结果可再次确认；首屏挂载前切到�
   f.confirm();f.snapshot.hasUnreadTurn=true;f.confirm();f.flush();assert.equal(f.requests.length,2);
 });
 
-test('目录未返回未读标记时仍确认查看，成功后新的未读结果不被旧去重标记阻挡',async()=>{
-  const f=visibleReadFixture();delete f.snapshot.hasUnreadTurn;f.confirm();f.flush();assert.equal(f.requests.length,1);
-  f.requests[0].resolve(f.result);await new Promise(setImmediate);assert.equal(f.snapshot.hasUnreadTurn,false);
-  f.snapshot.hasUnreadTurn=true;f.confirm();f.flush();assert.equal(f.requests.length,2);
+test('明确已读和缺少未读字段时不提交，收到明确未读后只提交一次',()=>{
+  const f=visibleReadFixture();
+  f.snapshot.hasUnreadTurn=false;f.confirm();f.flush();assert.equal(f.requests.length,0);
+  delete f.snapshot.hasUnreadTurn;f.confirm();f.flush();assert.equal(f.requests.length,0);
+  f.snapshot.hasUnreadTurn=true;f.confirm();f.flush();f.confirm();f.flush();
+  assert.deepEqual(f.requests.map(request=>request.method),['thread.read']);
+});
+
+test('发送前未读状态变为已读或未知时跳过，后续明确未读仍可确认',()=>{
+  const f=visibleReadFixture();
+  f.confirm();f.snapshot.hasUnreadTurn=false;f.flush();assert.equal(f.requests.length,0);
+  f.snapshot.hasUnreadTurn=true;f.confirm();delete f.snapshot.hasUnreadTurn;f.flush();assert.equal(f.requests.length,0);
+  f.snapshot.hasUnreadTurn=true;f.confirm();f.flush();assert.equal(f.requests.length,1);
 });
