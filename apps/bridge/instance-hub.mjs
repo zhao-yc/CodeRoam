@@ -18,6 +18,25 @@ const sessionPipeFailures = new Map([
   ['owner_mismatch', 'SESSION_PIPE_OWNER_MISMATCH'],
   ['probe_failed', 'SESSION_PIPE_PROBE_FAILED'],
 ]);
+// 执行记录直接展示固定文案，手机侧无需读取本机诊断或识别原始异常。
+const windowsVerificationMessages = new Map([
+  ['SESSION_PIPE_TIMEOUT', 'Windows 会话管道探测超时'],
+  ['TOOL_PIPE_TIMEOUT', 'Windows 工具管道探测超时'],
+  ['SESSION_PIPE_OWNER_MISMATCH', 'Windows 会话管道归属不匹配'],
+  ['SESSION_PIPE_PROBE_FAILED', 'Windows 会话管道探测失败'],
+  ['INSTANCE_NOT_READY', 'Windows 实例未就绪'],
+  ['ROUTER_CLIENT_MISSING', 'Windows 实例未就绪，本机管道尚未连接'],
+  ['DESKTOP_NOT_FOUND', '未找到所选 Windows 实例'],
+  ['DESKTOP_NOT_EXCLUSIVE', '未能确认所选 Windows 实例独占会话管道'],
+  ['PROCESS_CHANGED', 'Windows 桌面进程已变化'],
+  ['TOOL_PIPE_CHANGED', 'Windows 工具管道已变化'],
+  ['DEBUG_PORT_PRESENT', 'Windows 实例检测到调试端口'],
+  ['SERVICE_STOPPED', 'Windows 桥接服务已停止'],
+  ['INSTANCE_EXITED', 'Windows 实例连接已失效'],
+  ['INSTANCE_REPLACED', 'Windows 实例已重新绑定'],
+  ['DISCOVERY_TIMEOUT', 'Windows 实例扫描超时'],
+  ['DISCOVERY_FAILED', 'Windows 实例扫描失败'],
+]);
 
 /** 只有当前实例的工具管道出现在超时列表中，才能将实例缺失归因于该管道。 */
 function windowsDirectFailure(instance, { rows, windowsProbe }) {
@@ -189,7 +208,7 @@ export class InstanceHub extends EventEmitter {
     });
     instance.ready = false;
     this.publish();
-    throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连');
+    throw new BridgeError('INSTANCE_NOT_READY', windowsVerificationMessages.get(reason) ?? 'Windows 实例核验失败');
   }
   /** Mac 不借用全局调试页面；操作前复核专属 IPC，目录共用或 PID 换代立即暂停。 */
   async verifyMacInstance(instance) {

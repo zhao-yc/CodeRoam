@@ -5,6 +5,12 @@ import { BridgeError, requestFingerprint } from '../../packages/protocol/contrac
 const EVENT_COUNT_LIMIT = 2000;
 const EVENT_BYTES_LIMIT = 4 * 1024 * 1024;
 
+/** 实例核验明确拒绝时，文案里的超时属于探测阶段，不能覆盖执行结果。 */
+export function isCommandOutcomeUnknown(error) {
+  if (error?.code === 'INSTANCE_NOT_READY' && error.outcomeUnknown === false) return false;
+  return error?.outcomeUnknown === true || /超时|连接已关闭|not-connected|timeout/i.test(error?.message ?? '');
+}
+
 /** 展示事件只驻留内存，操作结果及时写入自有账本，绝不向 Codex 数据库写入。 */
 export class Journal {
   constructor(filePath = ':memory:') {
@@ -138,7 +144,7 @@ export class Journal {
       this.db.prepare("UPDATE commands SET state='done',payload=? WHERE device_id=? AND command_id=?").run(JSON.stringify({ result }), deviceId, commandId);
       return result;
     } catch (error) {
-      const unknown = error.outcomeUnknown || /超时|连接已关闭|not-connected|timeout/i.test(error.message);
+      const unknown = isCommandOutcomeUnknown(error);
       if(claimed&&!unknown)this.db.prepare('DELETE FROM question_submissions WHERE thread_id=? AND group_id=?').run(params.threadId,params.questionGroupId);
       const partial = this.db.prepare('SELECT payload FROM commands WHERE device_id=? AND command_id=?').get(deviceId, commandId)?.payload;
       const payload = { ...(partial ? JSON.parse(partial) : {}), error: { code: unknown ? 'OUTCOME_UNKNOWN' : error.code ?? 'OPERATION_FAILED', message: unknown ? '连接中断，操作结果需要核对' : error.message, outcomeUnknown: !!unknown } };
