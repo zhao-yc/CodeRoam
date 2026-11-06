@@ -1,5 +1,7 @@
 import { reactive } from 'vue'
 
+export type QuestionSubmissionDraft = { questionId: string, text: string, custom: boolean }
+
 export type InteractionSubmission = {
   scope: string
   kind: string
@@ -9,9 +11,11 @@ export type InteractionSubmission = {
   commandId: string
   state: string
   checking: boolean
+  questionDrafts?: QuestionSubmissionDraft[]
 }
 
-// 只记原操作编号和界面状态。切走再回到同一会话仍能核对，草稿和秘密答案不进入记录。
+// 仅在内存中保留原操作和非保密答案的展示副本，支持切走后恢复只读卡片；不写入存储或日志。
+// 保密题只保留自定义选择状态，答案原文始终留在请求和当前表单内。
 export const interactionSubmissions = reactive<InteractionSubmission[]>([])
 
 // 计划操作结束后收起提示，仍保留原记录，防止延迟快照重新开放提交入口。

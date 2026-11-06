@@ -6,8 +6,8 @@ import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 
 /** 直接执行实际组件脚本，验证选中、同步保留及统一提交，不复制实现逻辑。 */
-function fixture() {
-  const props={group:{id:'g',turnId:'t',state:'pending',questions:[{id:'a',title:'题一',options:[{label:'甲'},{label:'乙'}],answer:''},{id:'b',title:'题二',options:[],answer:''}]},disabled:false};
+function fixture(overrides={}) {
+  const props={group:{id:'g',turnId:'t',state:'pending',questions:[{id:'a',title:'题一',options:[{label:'甲'},{label:'乙'}],answer:''},{id:'b',title:'题二',options:[],answer:''}]},disabled:false,...overrides};
   const emitted=[],watches=[];
   const context=componentContext({props,defineProps:()=>props,defineEmits:()=> (...args)=>emitted.push(args),ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(_source,callback)=>{watches.push(callback);callback(props.group);}});
   let source=fs.readFileSync(new URL('../apps/mobile/components/question-card/question-card.uvue',import.meta.url),'utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
@@ -18,7 +18,7 @@ function fixture() {
 test('选项默认不代选，多题完成后统一提交；快照替换保留草稿且支持改选和自定义答案',()=>{
   const f=fixture();assert.equal(f.complete.value,false);f.submit();assert.equal(f.emitted.length,0);
   f.choose('a','乙');assert.equal(f.emitted.length,0);f.drafts.value[1].text='自由回答';f.props.group=structuredClone(f.props.group);f.sync();assert.equal(f.drafts.value[0].text,'乙');assert.equal(f.drafts.value[1].text,'自由回答');assert.equal(f.complete.value,true);
-  f.chooseOther('a');assert.equal(f.complete.value,false);f.drafts.value[0].text='其他内容';f.submit();assert.deepEqual(JSON.parse(JSON.stringify(f.emitted[0])),['submit','g','t',[{questionId:'a',text:'其他内容'},{questionId:'b',text:'自由回答'}]]);
+  f.chooseOther('a');assert.equal(f.complete.value,false);f.drafts.value[0].text='其他内容';f.submit();assert.deepEqual(JSON.parse(JSON.stringify(f.emitted[0])),['submit','g','t',[{questionId:'a',text:'其他内容'},{questionId:'b',text:'自由回答'}],['a','b']]);
 });
 
 test('离线、提交中、结果未知和已提交均阻止修改选择与重复提交，桌面已答子题更新结果',()=>{
@@ -53,10 +53,25 @@ test('问答提交状态位于可见正文之后，只读长答案完整显示�
   assert.match(questions,/:read-only="interactionFor\('question', group.id, group.turnId\) != null"/);
   assert.ok(questions.indexOf('<question-card')<questions.indexOf('<interaction-status'));
   const card=fs.readFileSync('apps/mobile/components/question-card/question-card.uvue','utf8');
-  assert.match(card,/<text v-if="readOnly && \(item.custom \|\| item.question.options.length == 0\)" class="custom-answer" selectable>\{\{ item.question.isSecret \? '已填写' : item.text \}\}<\/text>/);
+  assert.match(card,/<text v-if="item.question.answer.length > 0 \|\| \(readOnly && item.question.isSecret\)" class="answer">\{\{ item.question.isSecret \? '已填写' : item.question.answer \}\}<\/text>/);
+  assert.match(card,/<text v-if="readOnly && \(item.custom \|\| item.question.options.length == 0\)" class="custom-answer" selectable>\{\{ item.text \}\}<\/text>/);
   assert.match(card,/group.state == 'pending' && !readOnly/);
   const style=card.match(/\.custom-answer \{([^}]+)\}/)[1];
   assert.match(style,/color: #1a2135/);assert.doesNotMatch(style,/(?:^|;)\s*(?:height|max-height|opacity|overflow):/);
+});
+
+test('卡片重新挂载从原提交恢复选项和长答案，其他实例不接收展示副本',()=>{
+  const answer='切回后保留的合成长答案\n'.repeat(80);
+  const submittedDrafts=[{questionId:'a',text:'乙',custom:false},{questionId:'b',text:answer,custom:true}];
+  const restored=fixture({readOnly:true,submittedDrafts});
+  assert.equal(restored.drafts.value[0].text,'乙');assert.equal(restored.drafts.value[0].custom,false);
+  assert.equal(restored.drafts.value[1].text,answer);restored.choose('a','甲');restored.submit();
+  assert.equal(restored.drafts.value[0].text,'乙');assert.equal(restored.emitted.length,0);
+  const other=fixture();assert.equal(other.drafts.value[0].text,'');assert.equal(other.drafts.value[1].text,'');
+  const custom=fixture({readOnly:true,submittedDrafts:[{questionId:'a',text:'乙',custom:true}]});
+  assert.equal(custom.drafts.value[0].custom,true);
+  restored.props.readOnly=false;restored.props.submittedDrafts=undefined;restored.sync();
+  assert.equal(restored.drafts.value[1].text,answer);restored.choose('a','甲');assert.equal(restored.drafts.value[0].text,'甲');
 });
 
 /** 执行页面实际计算与监听，供问题提醒及状态清理回归共用。 */

@@ -20,7 +20,7 @@ function fixture() {
   const snapshot = {
     threadId: 'thread', pendingPlan: { id: 'plan', turnId: 'turn', text: '合成计划' },
     approvals: [{ id: 'approval', turnId: 'turn' }],
-    questionGroups: [{ id: 'question', turnId: 'turn', state: 'pending' }]
+    questionGroups: [{ id: 'question', turnId: 'turn', state: 'pending', questions: [{id:'sub',options:[],isSecret:false}] }]
   };
   const context = componentContext({
     ref, computed, reactive: value => value, watch: (read, changed) => watchers.push({ read, changed, previous: read() }),
@@ -48,7 +48,7 @@ function fixture() {
     slice('// 取消只收起编辑区', 'function copyText('),
     slice('function interactionFor(', '// 继续指令与输入框草稿独立'),
     slice('function reply(id: string', '// 目标表单与聊天草稿独立'),
-    'globalThis.api={replyPlan,reply,submitAnswers,checkInteraction,interactionFor,detachedInteractions,planFeedback,planEditing,editPlan,cancelPlanFeedback,hidePlan,interactionCoolingDown,planNoticeVisible:()=>(' + planNoticeCondition + ')}'
+    'globalThis.api={replyPlan,reply,submitAnswers,checkInteraction,interactionFor,detachedInteractions,planFeedback,planEditing,editPlan,cancelPlanFeedback,hidePlan,interactionCoolingDown,interactionSubmissions,planNoticeVisible:()=>(' + planNoticeCondition + ')}'
   ].join('\n');
   vm.runInContext(stripTypeScriptTypes(code), context);
   return {
@@ -126,6 +126,31 @@ test('问题提交状态持续绑定原题组，成功延迟同步及未知结�
       assert.equal(f.detachedInteractions('question')[0].commandId,entry.commandId);
     }
   }
+});
+
+test('切换实例后展示副本按原题组恢复，仅请求携带保密答案，实时确认结束后清理副本',async()=>{
+  const f=fixture(),answer='原实例的合成长答案\n'.repeat(40);
+  f.snapshot.questionGroups[0].questions=[
+    {id:'choice',options:[{label:'乙'}],isSecret:false},
+    {id:'long',options:[],isSecret:false},
+    {id:'secret',options:[],isSecret:true}
+  ];
+  const answers=[{questionId:'choice',text:'乙'},{questionId:'long',text:answer},{questionId:'secret',text:'合成保密原文'}];
+  f.context.api.submitAnswers('question','turn',answers,['choice','long','secret']);
+  const first=f.interactionFor('question','question','turn');
+  assert.deepEqual(JSON.parse(JSON.stringify(first.questionDrafts)),[
+    {questionId:'choice',text:'乙',custom:true},{questionId:'long',text:answer,custom:true},{questionId:'secret',text:'',custom:true}
+  ]);
+  assert.doesNotMatch(JSON.stringify(f.interactionSubmissions),/合成保密原文/);
+  assert.equal(f.calls[0].request[1].answers[2].text,'合成保密原文');
+  f.calls[0].reject(Object.assign(new Error('合成断线'),{name:'OUTCOME_UNKNOWN'}));await Promise.resolve();f.tick(600);
+  f.context.pageHostId.value='other';f.context.connection.hostId='other';
+  assert.equal(f.interactionFor('question','question','turn'),null);f.sync();
+  assert.equal(first.questionDrafts[1].text,answer);
+  f.context.pageHostId.value='host';f.context.connection.hostId='host';f.sync();
+  assert.equal(f.interactionFor('question','question','turn').questionDrafts[1].text,answer);
+  f.answer();assert.equal(f.calls.length,1);
+  f.snapshot.questionGroups=[];f.sync();assert.equal(first.questionDrafts.length,0);
 });
 
 test('审批决策不能被连点改写，明确失败后可重试，离页回执隔离', async () => {

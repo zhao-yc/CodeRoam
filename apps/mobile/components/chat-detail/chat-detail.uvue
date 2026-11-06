@@ -117,7 +117,7 @@
           <view class="interaction-shell">
             <!-- 提交及待核对期间保留原卡片草稿，只锁定编辑，状态提示放在正文之后。 -->
             <view v-show="expandedQuestionIds.indexOf(group.id) >= 0">
-              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview'" :read-only="interactionFor('question', group.id, group.turnId) != null" @submit="submitAnswers" />
+              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview'" :read-only="interactionFor('question', group.id, group.turnId) != null" :submitted-drafts="interactionFor('question', group.id, group.turnId)?.questionDrafts" @submit="submitAnswers" />
             </view>
             <view v-if="interactionFor('question', group.id, group.turnId) != null">
               <interaction-status :entry="interactionFor('question', group.id, group.turnId)!" :disabled="!canCheckInteraction" @check="checkInteraction(interactionFor('question', group.id, group.turnId)!)" />
@@ -212,12 +212,12 @@ import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, rea
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
-import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, QuestionPreview, QuestionPreviewItem, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
+import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, QuestionOption, QuestionPreview, QuestionPreviewItem, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { clearFileReportCache } from '../../services/file-report-cache.uts'
 import { submissionTasks, supportsSubmissionTasks } from '../../services/submission-task-state.uts'
 import { newSubmissionId, submitTask, awaitSubmissionResult, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
-import { InteractionSubmission, interactionSubmissions, interactionStatusVisible } from '../../services/interaction-submissions.uts'
+import { InteractionSubmission, QuestionSubmissionDraft, interactionSubmissions, interactionStatusVisible } from '../../services/interaction-submissions.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
@@ -1637,6 +1637,10 @@ function holdInteractionLayout() {
   interactionUnlockTimer = setTimeout(() => { interactionCoolingDown.value = false }, 550)
 }
 watch((): string => conversationInteractions.value.map((entry: InteractionSubmission): string => entry.commandId + ':' + interactionAttached(entry)).join('|'), (value: string, previous: string) => {
+  // 只有原会话的实时快照确认题组结束时才清理展示副本，断线和切换实例不能误删。
+  if (liveConversation.value != null) conversationInteractions.value.forEach((entry: InteractionSubmission) => {
+    if (entry.kind == 'question' && !interactionAttached(entry)) entry.questionDrafts = [] as QuestionSubmissionDraft[]
+  })
   if (value != previous && (value.length > 0 || previous.length > 0)) holdInteractionLayout()
 })
 
@@ -1660,7 +1664,7 @@ function settleInteraction(entry: InteractionSubmission, hostId: string, state: 
 }
 
 // 先同步登记操作再发请求，旧 DOM 中已经排队的点击也会在入口被拦住。
-function sendInteraction(kind: string, id: string, turnId: string, action: string, method: string, params: UTSJSONObject) {
+function sendInteraction(kind: string, id: string, turnId: string, action: string, method: string, params: UTSJSONObject, questionDrafts: QuestionSubmissionDraft[] = []) {
   if (!isCurrentPage() || interactionDisabled.value || Date.now() < interactionUnlockAt || interactionFor(kind, id, turnId) != null) return
   const hostId = pageHostId.value
   const commandId = newSubmissionId()
@@ -1669,7 +1673,7 @@ function sendInteraction(kind: string, id: string, turnId: string, action: strin
     const previous = interactionSubmissions[index]
     if (previous.scope == scope && previous.kind == kind && (previous.state == 'done' || previous.state == 'resolved') && !interactionAttached(previous)) interactionSubmissions.splice(index, 1)
   }
-  interactionSubmissions.push({ scope, kind, id, turnId, action, commandId, state: 'sending', checking: false } as InteractionSubmission)
+  interactionSubmissions.push({ scope, kind, id, turnId, action, commandId, state: 'sending', checking: false, questionDrafts } as InteractionSubmission)
   const entry = interactionSubmissions[interactionSubmissions.length - 1]
   busy.value = true; pendingAction.value = 'interaction:' + commandId; operationError.value = ''
   pauseFollowing(); holdInteractionLayout(); uni.hideKeyboard()
@@ -1703,9 +1707,15 @@ async function checkInteraction(entry: InteractionSubmission) {
 }
 
 // 缓存只用于展示，写入目标必须是当前实时快照中仍待回答的原题组。
-function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[]) {
-  if (!liveConversation.value?.questionGroups.some((group: QuestionGroup): boolean => group.id == questionGroupId && group.turnId == turnId && group.state == 'pending')) return
-  sendInteraction('question', questionGroupId, turnId, '', 'question.reply', { threadId: pageThreadId.value, questionGroupId, turnId, answers })
+function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[], customQuestionIds: string[] = []) {
+  const group = liveConversation.value?.questionGroups.find((item: QuestionGroup): boolean => item.id == questionGroupId && item.turnId == turnId && item.state == 'pending')
+  if (group == null) return
+  // 用实时题目的保密标记过滤展示副本；自定义答案即使与选项同文，也保留“其他答案”选中态。
+  const questionDrafts = group.questions.map((question: Question): QuestionSubmissionDraft => {
+    const text = answers.find((answer: QuestionAnswer): boolean => answer.questionId == question.id)?.text ?? ''
+    return { questionId: question.id, text: question.isSecret ? '' : text, custom: customQuestionIds.indexOf(question.id) >= 0 || !question.options.some((option: QuestionOption): boolean => option.label == text) } as QuestionSubmissionDraft
+  })
+  sendInteraction('question', questionGroupId, turnId, '', 'question.reply', { threadId: pageThreadId.value, questionGroupId, turnId, answers }, questionDrafts)
 }
 // 继续指令与输入框草稿独立，已提交和未知结果都保留轮次占位，避免重复发送。
 function reviewContinueSubmitted(turnId: string): boolean { return submittedReviewContinueKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
