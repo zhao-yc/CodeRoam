@@ -1,20 +1,128 @@
-import {componentContext, componentScope} from './helpers/component-context.mjs';
-import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import {stripTypeScriptTypes} from 'node:module';
-/** 执行真实页面处理方法，确认独立草稿、重复点击和离页回执。 */
-function fixture(){const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8'),calls=[],pending=[],watchers=[];const c=componentContext({cacheOnly:false,ref:value=>({value}),computed:read=>({get value(){return read();}}),watch(read,change){watchers.push({read,change});},canWrite:{value:true},busy:{value:false},pendingAction:{value:''},operationError:{value:''},pageHostId:{value:'host'},pageThreadId:{value:'thread'},connection:{hostId:'host',snapshot:{threadId:'thread',pendingPlan:{id:'plan',text:'合成计划'}}},isCurrentPage:()=>true,notify(){},refresh(){},bridge:{request:(method,params)=>{calls.push({method,params});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}});vm.runInContext(stripTypeScriptTypes(source.slice(source.indexOf('const hiddenPlanId ='),source.indexOf('// 运行中显示电脑确认值'))+'\n'+source.slice(source.indexOf('// 取消只收起编辑区'),source.indexOf('function copyText(')),{mode:'transform'})+'\nglobalThis.api={replyPlan,hidePlan,hiddenPlanId,planFeedback,planEditing,editPlan,cancelPlanFeedback};',c);return {c,calls,pending,watchers,...c.api};}
-test('连续点击只提交一次，计划确认不使用聊天草稿，成功后收起',async()=>{const f=fixture();f.replyPlan('implement');f.replyPlan('implement');assert.equal(f.calls.length,1);assert.equal(f.calls[0].params.planAction,'implement');assert.equal(f.calls[0].params.planId,'plan');f.pending[0].resolve({});await Promise.resolve();assert.equal(f.hiddenPlanId.value,'plan');});
-test('失败保留修改意见，离页成功回执不清空新会话反馈',async()=>{const f=fixture();f.planFeedback.value='保留建议';f.replyPlan('feedback');f.pending[0].reject(Error('待核对'));await Promise.resolve();assert.equal(f.planFeedback.value,'保留建议');assert.equal(f.c.operationError.value,'待核对');f.replyPlan('feedback');f.c.pageThreadId.value='other';f.planFeedback.value='新会话';f.pending[1].resolve({});await Promise.resolve();assert.equal(f.planFeedback.value,'新会话');});
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { stripTypeScriptTypes } from 'node:module';
+import test from 'node:test';
+import vm from 'node:vm';
+import { componentContext } from './helpers/component-context.mjs';
 
-test('默认不展开修改区，取消后保留独立意见，空意见和只读状态均不能提交',()=>{
-  const f=fixture();assert.equal(f.planEditing.value,false);f.replyPlan('feedback');assert.equal(f.calls.length,0);
-  f.editPlan();assert.equal(f.planEditing.value,true);f.planFeedback.value='保留这条意见';f.cancelPlanFeedback();assert.equal(f.planEditing.value,false);f.editPlan();assert.equal(f.planFeedback.value,'保留这条意见');
-  f.c.canWrite.value=false;f.replyPlan('implement');f.replyPlan('feedback');assert.equal(f.calls.length,0);
-  f.c.canWrite.value=true;f.c.connection.hostId='other-host';f.replyPlan('implement');assert.equal(f.calls.length,0);
+const source = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
+const ref = value => ({ value });
+const computed = read => ({ get value() { return read(); } });
+const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
+
+/** 执行详情页真实入口，手动控制回执、快照顺序和连点间隔。 */
+function fixture() {
+  let now = 10_000, timer, status = { state: 'unknown' };
+  const calls = [], checks = [], watchers = [];
+  const snapshot = {
+    threadId: 'thread', pendingPlan: { id: 'plan', turnId: 'turn', text: '合成计划' },
+    approvals: [{ id: 'approval', turnId: 'turn' }],
+    questionGroups: [{ id: 'question', turnId: 'turn', state: 'pending' }]
+  };
+  const context = componentContext({
+    ref, computed, watch: (read, changed) => watchers.push({ read, changed, previous: read() }),
+    Date: { now: () => now }, setTimeout: callback => { timer = callback; return 1; }, clearTimeout() {},
+    busy: ref(false), pendingAction: ref(''), operationError: ref(''), goalHostOnline: ref(true),
+    pageHostId: ref('host'), pageThreadId: ref('thread'),
+    connection: { hostId: 'host', activeThreadId: 'thread', connected: true, snapshot },
+    liveConversation: ref(snapshot), pendingQuestionGroups: computed(() => snapshot.questionGroups),
+    liveApprovals: computed(() => snapshot.approvals), uni: { hideKeyboard() {} },
+    newSubmissionId: () => 'interaction-' + calls.length,
+    canWrite: computed(() => !context.busy.value),
+    isCurrentPage: () => context.connection.hostId === context.pageHostId.value && context.connection.activeThreadId === context.pageThreadId.value,
+    pauseFollowing() {}, notify() {}, refresh() {}, supportsSubmissionTasks: () => false,
+    bridge: {
+      submitInteraction: (...request) => new Promise((resolve, reject) => calls.push({ request, resolve, reject })),
+      readCommandStatus: async (...request) => { checks.push(request); return { ...status, getString: key => status[key] }; },
+      watch: async () => {}, clearCommand() {}
+    }
+  });
+  const code = [
+    'const interactionCoolingDown = ref(false); let interactionUnlockAt = 0, interactionUnlockTimer = 0, layoutUntil = 0',
+    slice('const hiddenPlanId =', '// 运行中显示电脑确认值'),
+    slice('const interactionScope =', '\nfunction isCurrentPage'),
+    slice('// 取消只收起编辑区', 'function copyText('),
+    slice('function interactionFor(', '// 继续指令与输入框草稿独立'),
+    slice('function reply(id: string', '// 目标表单与聊天草稿独立'),
+    'globalThis.api={replyPlan,reply,submitAnswers,checkInteraction,interactionFor,detachedInteractions,planFeedback,planEditing,editPlan,cancelPlanFeedback,hidePlan,interactionCoolingDown}'
+  ].join('\n');
+  vm.runInContext(stripTypeScriptTypes(code), context);
+  return {
+    ...context.api, context, snapshot, calls, checks,
+    answer: () => context.api.submitAnswers('question', 'turn', [{ questionId: 'sub', text: '合成回答' }]),
+    approve: (decision = 'accept') => context.api.reply('approval', 'turn', decision),
+    tick: (ms, unlock = true) => { now += ms; if (unlock) timer?.(); },
+    sync: () => { for (const watcher of watchers) { const value = watcher.read(); if (value !== watcher.previous) { const previous = watcher.previous; watcher.previous = value; watcher.changed(value, previous); } } },
+    setStatus: value => { status = value; }
+  };
+}
+
+test('三种交互都拦截同卡连点、下一张卡，以及桌面晚到的卡片移除', async () => {
+  for (const kind of ['plan', 'question', 'approval']) {
+    const f = fixture();
+    const send = kind === 'plan' ? () => f.replyPlan('implement') : kind === 'question' ? f.answer : f.approve;
+    const next = kind === 'approval' ? f.answer : f.approve;
+    send(); send(); next();
+    assert.equal(f.calls.length, 1, kind);
+    assert.equal(f.interactionFor(kind, kind, 'turn').state, 'sending');
+    f.tick(900);
+    f.calls[0].resolve({}); await Promise.resolve();
+    assert.equal(f.interactionFor(kind, kind, 'turn').state, 'done');
+    send(); next();
+    assert.equal(f.calls.length, 1, '回执收起时相邻卡片仍锁定');
+    f.sync(); f.tick(600);
+    send(); assert.equal(f.calls.length, 1, '旧目标仍在快照也不能重复提交');
+    if (kind === 'plan') f.snapshot.pendingPlan = null;
+    if (kind === 'question') f.snapshot.questionGroups = [];
+    if (kind === 'approval') f.snapshot.approvals = [];
+    f.sync();
+    next(); assert.equal(f.calls.length, 1, '快照移除旧卡时不能点到下一张');
+    f.tick(600);
+    next(); assert.equal(f.calls.length, 2, '等界面稳定后允许新的操作');
+  }
 });
 
-test('方案切换重置编辑状态，旧方案回执不能清空同一聊天中新方案的修改意见',async()=>{
-  const f=fixture();f.editPlan();f.planFeedback.value='旧意见';f.replyPlan('feedback');
-  f.c.connection.snapshot.pendingPlan={id:'new-plan',text:'新方案'};f.watchers[0].change();
-  assert.equal(f.planEditing.value,false);assert.equal(f.planFeedback.value,'');f.planFeedback.value='新方案意见';
-  f.pending[0].resolve({});await Promise.resolve();assert.equal(f.planFeedback.value,'新方案意见');assert.equal(f.hiddenPlanId.value,'');f.editPlan();assert.equal(f.planEditing.value,true);
+test('未知结果只核对原编号，明确失败才恢复方案编辑并保留意见', async () => {
+  const f = fixture();
+  f.editPlan(); f.planFeedback.value = '保留合成意见'; f.replyPlan('feedback');
+  assert.equal(f.calls[0].request[1].planAction, 'feedback');
+  assert.equal(f.calls[0].request[1].text, '保留合成意见');
+  f.calls[0].reject(Object.assign(new Error('合成断线'), { name: 'OUTCOME_UNKNOWN' }));
+  await Promise.resolve(); f.tick(600);
+  const entry = f.interactionFor('plan', 'plan', 'turn');
+  assert.equal(entry.state, 'unknown');
+  f.replyPlan('feedback'); await f.checkInteraction(entry);
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.checks, [['host', f.calls[0].request[2]]]);
+  const error = { getBoolean: () => false, getString: () => '明确拒绝' };
+  f.setStatus({ state: 'done', error }); await f.checkInteraction(entry);
+  assert.equal(f.interactionFor('plan', 'plan', 'turn'), null);
+  assert.equal(f.planFeedback.value, '保留合成意见');
+  assert.equal(f.planEditing.value, true);
+  assert.equal(f.context.operationError.value, '明确拒绝');
+});
+
+test('审批决策不能被连点改写，明确失败后可重试，离页回执隔离', async () => {
+  const f = fixture();
+  f.approve('decline'); f.approve('accept');
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].request[1].decision, 'decline');
+  f.calls[0].reject(new Error('明确失败')); await Promise.resolve(); f.tick(600);
+  assert.equal(f.interactionFor('approval', 'approval', 'turn'), null);
+  f.approve('accept'); f.context.pageHostId.value = 'other'; f.context.connection.hostId = 'other';
+  f.calls[1].resolve({}); await Promise.resolve();
+  assert.equal(f.interactionFor('approval', 'approval', 'turn'), null);
+});
+
+test('方案取消编辑保留草稿，旧回执不清空新方案，空反馈和只读都不提交', async () => {
+  const f = fixture();
+  f.replyPlan('feedback'); assert.equal(f.calls.length, 0);
+  f.editPlan(); f.planFeedback.value = '旧意见'; f.cancelPlanFeedback();
+  assert.equal(f.planEditing.value, false); f.editPlan(); assert.equal(f.planFeedback.value, '旧意见');
+  f.context.busy.value = true; f.replyPlan('implement'); assert.equal(f.calls.length, 0);
+  f.context.busy.value = false; f.replyPlan('feedback');
+  f.snapshot.pendingPlan = { id: 'new-plan', turnId: 'new-turn', text: '新方案' }; f.sync();
+  f.planFeedback.value = '新方案意见';
+  f.calls[0].resolve({}); await Promise.resolve();
+  assert.equal(f.planFeedback.value, '新方案意见');
 });

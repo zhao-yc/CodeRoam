@@ -76,28 +76,70 @@
         </view>
             <!-- 方案可能不在当前消息窗口，仍使用桌面提供的原文显示独立预览。 -->
         <view v-if="pendingPlanOutsideTimeline && pendingPlan != null" class="plan-fallback"><plan-preview :source="pendingPlan!.text" @open="openPlan(pendingPlan!.id, pendingPlan!.text)" /></view>
-        <!-- 确认操作与方案预览分成两张卡；修改意见不使用聊天草稿。 -->
-        <view v-if="pendingPlan != null && hiddenPlanId != pendingPlan.id" id="notice-plan" class="plan-confirm">
-          <view class="plan-confirm-header"><text class="plan-confirm-title">{{ planEditing ? '修改方案' : '确认方案' }}</text><button v-if="planEditing" class="plan-cancel" :disabled="busy" @click="cancelPlanFeedback">取消</button></view>
-          <view class="plan-confirm-body">
-            <template v-if="!planEditing">
-              <text class="plan-confirm-note">同意后开始实施，也可以先提出修改。</text>
-              <view class="plan-confirm-actions"><button class="plan-action button-secondary" :disabled="!canWrite || busy" @click="editPlan">修改方案</button><view class="plan-action plan-implement button-primary inline-progress-button"><action-progress :busy="pendingAction == 'plan:implement'" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">同意并实施</text><button class="inline-progress-hitbox" :disabled="!canWrite || busy" @click="replyPlan('implement')" :aria-label="(pendingAction == 'plan:implement') ? '正在处理' : '同意并实施'"></button></view></view>
-              <button class="plan-defer" :disabled="busy" @click="hidePlan">稍后处理</button>
-            </template>
-            <template v-else>
-              <text class="plan-confirm-note">补充调整意见，我会据此更新方案。</text>
-              <textarea class="plan-feedback" v-model="planFeedback" :disabled="!canWrite || busy" placeholder="告诉我你希望如何调整…" aria-label="方案修改意见" :maxlength="32000"></textarea>
-              <view class="plan-send button-primary inline-progress-button"><action-progress :busy="pendingAction == 'plan:feedback'" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">发送修改意见</text><button class="inline-progress-hitbox" :disabled="!canWrite || busy || planFeedback.trim().length == 0" @click="replyPlan('feedback')" :aria-label="(pendingAction == 'plan:feedback') ? '正在处理' : '发送修改意见'"></button></view>
-              <text class="plan-feedback-note">更新方案后，仍需你确认实施。</text>
-            </template>
+        <!-- 提交中保留原布局，状态层覆盖失去操作能力的表单。 -->
+        <view v-if="pendingPlan != null && (hiddenPlanId != pendingPlan.id || planInteraction != null)" id="notice-plan" class="plan-confirm">
+          <view class="plan-confirm-header">
+            <text class="plan-confirm-title">{{ planEditing && planInteraction == null ? '修改方案' : '确认方案' }}</text>
+            <button v-if="planEditing && planInteraction == null" class="plan-cancel" :disabled="busy || interactionCoolingDown" @click="cancelPlanFeedback">取消</button>
+          </view>
+          <view class="interaction-shell">
+            <view v-if="planInteraction == null || planInteraction.state == 'sending'" class="plan-confirm-body" :class="planInteraction != null ? 'interaction-underlay' : ''" :aria-hidden="planInteraction != null">
+              <template v-if="!planEditing">
+                <text class="plan-confirm-note">同意后开始实施，也可以先提出修改。</text>
+                <view class="plan-confirm-actions">
+                  <button class="plan-action button-secondary" :disabled="interactionDisabled" @click="editPlan">修改方案</button>
+                  <button class="plan-action plan-implement button-primary" :disabled="interactionDisabled" @click="replyPlan('implement')">同意并实施</button>
+                </view>
+                <button class="plan-defer" :disabled="busy || interactionCoolingDown" @click="hidePlan">稍后处理</button>
+              </template>
+              <template v-else>
+                <text class="plan-confirm-note">补充调整意见，我会据此更新方案。</text>
+                <textarea class="plan-feedback" v-model="planFeedback" :disabled="interactionDisabled" placeholder="告诉我你希望如何调整…" aria-label="方案修改意见" :maxlength="32000"></textarea>
+                <button class="plan-send button-primary" :disabled="interactionDisabled || planFeedback.trim().length == 0" @click="replyPlan('feedback')">发送修改意见</button>
+                <text class="plan-feedback-note">更新方案后，仍需你确认实施。</text>
+              </template>
+            </view>
+            <view v-if="planInteraction != null" :class="planInteraction.state == 'sending' ? 'interaction-cover' : ''">
+              <interaction-status :entry="planInteraction!" :disabled="!canCheckInteraction" @check="checkInteraction(planInteraction!)" />
+            </view>
           </view>
         </view>
+        <interaction-status v-for="entry in detachedInteractions('plan')" :key="entry.commandId" :entry="entry" :disabled="!canCheckInteraction" @check="checkInteraction(entry)" />
         <view id="questions-anchor"></view>
-        <!-- 问答在消息区内独立成卡，白底与边界突出当前需要处理的内容。 -->
-        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section"><view class="question-entry action-frame"><text class="question-label">回答问题</text><text v-if="submittedGroupIds.indexOf(group.id) >= 0" class="question-state">已提交</text><text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text><button class="action-hitbox" hover-class="question-pressed" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button></view><question-card v-show="expandedQuestionIds.indexOf(group.id) >= 0" :group="group" :busy="pendingAction == 'question:' + group.id" :disabled="!canWrite || group.kind == 'preview'" :submitted="submittedGroupIds.indexOf(group.id) >= 0" @submit="submitAnswers" /></view>
+        <view v-for="group in pendingQuestionGroups" :key="group.id" :id="questionNoticeAnchor(group.id)" class="question-section">
+          <view class="question-entry action-frame">
+            <text class="question-label">回答问题</text>
+            <template v-if="interactionFor('question', group.id, group.turnId) == null">
+              <text class="question-collapse-label">{{ expandedQuestionIds.indexOf(group.id) >= 0 ? '收起' : '展开' }}</text>
+              <button class="action-hitbox" hover-class="question-pressed" :disabled="interactionCoolingDown" :aria-label="expandedQuestionIds.indexOf(group.id) >= 0 ? '收起问题' : '展开问题'" :aria-expanded="expandedQuestionIds.indexOf(group.id) >= 0" @click="toggleQuestion(group.id)"></button>
+            </template>
+          </view>
+          <view class="interaction-shell">
+            <view v-show="expandedQuestionIds.indexOf(group.id) >= 0 && showInteractionForm('question', group.id, group.turnId)" :class="interactionSending('question', group.id, group.turnId) ? 'interaction-underlay' : ''" :aria-hidden="interactionSending('question', group.id, group.turnId)">
+              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview' || interactionFor('question', group.id, group.turnId) != null" @submit="submitAnswers" />
+            </view>
+            <view v-if="interactionFor('question', group.id, group.turnId) != null" :class="interactionSending('question', group.id, group.turnId) ? 'interaction-cover' : ''">
+              <interaction-status :entry="interactionFor('question', group.id, group.turnId)!" :disabled="!canCheckInteraction" @check="checkInteraction(interactionFor('question', group.id, group.turnId)!)" />
+            </view>
+          </view>
+        </view>
+        <interaction-status v-for="entry in detachedInteractions('question')" :key="entry.commandId" :entry="entry" :disabled="!canCheckInteraction" @check="checkInteraction(entry)" />
         <view id="approvals-anchor"></view>
-        <view v-for="approval in connection.snapshot?.approvals ?? []" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval"><text class="approval-title">{{ approval.title }}</text><text class="approval-detail" selectable>{{ approval.detail }}</text><text class="approval-cwd">{{ approval.cwd }}</text><text v-if="handledApprovalIds.indexOf(approval.id) >= 0" class="approval-feedback">处理结果已提交</text><view v-else class="approval-actions"><view class="approval-button button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'approval:decline:' + approval.id" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 14px;">拒绝</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'decline')" :aria-label="(pendingAction == 'approval:decline:' + approval.id) ? '正在提交拒绝' : '拒绝'"></button></view><view class="approval-button button-primary inline-progress-button"><action-progress :busy="pendingAction == 'approval:accept:' + approval.id" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 14px;">本次允许</text><button class="inline-progress-hitbox" :disabled="!canWrite" @click="reply(approval.id, approval.turnId, 'accept')" :aria-label="(pendingAction == 'approval:accept:' + approval.id) ? '正在提交本次允许' : '本次允许'"></button></view></view></view>
+        <view v-for="approval in liveApprovals" :key="approval.id" :id="approvalNoticeAnchor(approval.id)" class="approval">
+          <text class="approval-title">{{ approval.title }}</text>
+          <text class="approval-detail" selectable>{{ approval.detail }}</text>
+          <text class="approval-cwd">{{ approval.cwd }}</text>
+          <view class="interaction-shell">
+            <view v-if="showInteractionForm('approval', approval.id, approval.turnId)" class="approval-actions" :class="interactionSending('approval', approval.id, approval.turnId) ? 'interaction-underlay' : ''" :aria-hidden="interactionSending('approval', approval.id, approval.turnId)">
+              <button class="approval-button button-secondary" :disabled="interactionDisabled" @click="reply(approval.id, approval.turnId, 'decline')">拒绝</button>
+              <button class="approval-button button-primary" :disabled="interactionDisabled" @click="reply(approval.id, approval.turnId, 'accept')">本次允许</button>
+            </view>
+            <view v-if="interactionFor('approval', approval.id, approval.turnId) != null" :class="interactionSending('approval', approval.id, approval.turnId) ? 'interaction-cover' : ''">
+              <interaction-status :entry="interactionFor('approval', approval.id, approval.turnId)!" :disabled="!canCheckInteraction" @check="checkInteraction(interactionFor('approval', approval.id, approval.turnId)!)" />
+            </view>
+          </view>
+        </view>
+        <interaction-status v-for="entry in detachedInteractions('approval')" :key="entry.commandId" :entry="entry" :disabled="!canCheckInteraction" @check="checkInteraction(entry)" />
         <!-- 等待回答时由问答卡片和顶部状态提示，隐藏底部重复状态。 -->
         <view v-if="currentTaskState != 'question' && (activeTurnId.length > 0 || currentTaskState == 'running' || pendingQuestionCount > 0 || approvalCount > 0)" class="working"><task-status :state="currentTaskState" :visible="pageVisible" :detail="connection.snapshot?.activity ?? ''" /></view>
         <message-queue :messages="queuedMessages" :pending-action="pendingAction" :disabled="!canWrite" :running="activeTurnId.length > 0" @steer="steerQueuedMessage" :editable="connection.snapshot?.supportsQueueEditing == true" @cancel="cancelQueuedMessage" @edit="editQueuedMessage" />
@@ -140,7 +182,7 @@
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view>
-        <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+        <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="unansweredQuestionGroups.length > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ unansweredQuestionGroups.length }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="unansweredApprovalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ unansweredApprovalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
     <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected && !showingPreview" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
@@ -173,7 +215,8 @@ import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, Que
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { clearFileReportCache } from '../../services/file-report-cache.uts'
 import { submissionTasks, supportsSubmissionTasks } from '../../services/submission-task-state.uts'
-import { newSubmissionId, submitTask, awaitSubmissionResult } from '../../services/submission-tasks.uts'
+import { newSubmissionId, submitTask, awaitSubmissionResult, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
+import { InteractionSubmission, interactionSubmissions } from '../../services/interaction-submissions.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
@@ -190,6 +233,7 @@ import FileChangeSheet from '../../components/file-change-sheet/file-change-shee
 import DeleteConfirmation from '../../components/delete-confirmation/delete-confirmation.uvue'
 import AnnotationSheet from '../../components/annotation-sheet/annotation-sheet.uvue'
 import QuestionCard from '../../components/question-card/question-card.uvue'
+import InteractionStatus from '../interaction-status/interaction-status.uvue'
 import MarkdownBody from '../../components/markdown-body/markdown-body.uvue'
 import PlanPreview from '../../components/plan-preview/plan-preview.uvue'
 import PlanSheet from '../../components/plan-sheet/plan-sheet.uvue'
@@ -454,8 +498,10 @@ onPaneHide(() => { closePlan() })
 onUnmounted(() => { closePlan() })
 watch((): string => [pageHostId.value, pageThreadId.value, connection.hostId, connection.activeThreadId].join(':'), () => { closePlan() })
 const expandedQuestionIds = ref<string[]>([])
-const handledApprovalIds = ref<string[]>([])
-const submittedGroupIds = ref<string[]>([])
+const interactionCoolingDown = ref(false)
+let interactionUnlockAt = 0
+let interactionUnlockTimer = 0
+onUnmounted(() => { clearTimeout(interactionUnlockTimer) })
 const draftHeight = ref(64)
 const keyboardInset = ref(0)
 const goalViewportHeight = ref(uni.getWindowInfo().windowHeight)
@@ -471,7 +517,8 @@ let touchingTimeline = false
 let pageAlive = true
 const activeTurnId = computed((): string => liveConversation.value?.activeTurnId ?? '')
 const queuedMessages = computed((): QueuedMessage[] => connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.queuedMessages ?? [] as QueuedMessage[] : [] as QueuedMessage[])
-const approvalCount = computed((): number => liveConversation.value?.approvals.length ?? 0)
+const liveApprovals = computed((): Approval[] => liveConversation.value?.approvals ?? [] as Approval[])
+const approvalCount = computed((): number => liveApprovals.value.length)
 // 展示副本不拥有桌面的题组和轮次编号，只能渲染锁定卡片。
 function previewQuestionGroups(): QuestionGroup[] {
   return (previewConversation.value?.questionPreviews ?? []).map((group: QuestionPreview): QuestionGroup => ({
@@ -512,6 +559,14 @@ const reviewContinueTurnId = computed((): string => reviewContinueTarget(liveCon
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && subscriptionReady.value && goalHostOnline.value && !busy.value && connection.pendingCommandId.length == 0)
+const interactionScope = computed((): string => JSON.stringify([props.target.cacheNamespace, pageHostId.value, pageThreadId.value]))
+const conversationInteractions = computed((): InteractionSubmission[] => interactionSubmissions.filter((entry: InteractionSubmission): boolean => entry.scope == interactionScope.value))
+const interactionInProgress = computed((): boolean => conversationInteractions.value.some((entry: InteractionSubmission): boolean => entry.state == 'sending'))
+const interactionDisabled = computed((): boolean => !canWrite.value || interactionCoolingDown.value || interactionInProgress.value)
+const canCheckInteraction = computed((): boolean => connection.connected && goalHostOnline.value && !interactionCoolingDown.value && !interactionInProgress.value && !busy.value)
+const planInteraction = computed((): InteractionSubmission | null => pendingPlan.value == null ? null : interactionFor('plan', pendingPlan.value!.id, pendingPlan.value!.turnId))
+const unansweredQuestionGroups = computed((): QuestionGroup[] => pendingQuestionGroups.value.filter((group: QuestionGroup): boolean => interactionFor('question', group.id, group.turnId) == null))
+const unansweredApprovalCount = computed((): number => liveApprovals.value.filter((approval: Approval): boolean => interactionFor('approval', approval.id, approval.turnId) == null).length)
 
 function isCurrentPage(): boolean { return props.target.cacheNamespace == (connection.cacheNamespace ?? '') && pageAlive && connection.hostId == pageHostId.value && connection.activeThreadId == pageThreadId.value }
 
@@ -631,22 +686,16 @@ function refreshFromMenu() {
   retryDesktopOpen()
 }
 // 取消只收起编辑区，重新进入时保留尚未发送的意见。
-function editPlan() { if (!busy.value && canWrite.value) planEditing.value = true }
-function cancelPlanFeedback() { if (!busy.value) planEditing.value = false }
-function hidePlan() { hiddenPlanId.value = pendingPlan.value?.id ?? '' }
-// 使用幂等写入通道；未知结果由命令状态核对，不自动重发。
+function editPlan() { if (!interactionDisabled.value && planInteraction.value == null) planEditing.value = true }
+function cancelPlanFeedback() { if (!busy.value && !interactionCoolingDown.value && planInteraction.value == null) planEditing.value = false }
+function hidePlan() { if (!busy.value && !interactionCoolingDown.value && planInteraction.value == null) hiddenPlanId.value = pendingPlan.value?.id ?? '' }
 function replyPlan(action: string) {
-  if (!canWrite.value || busy.value || pendingPlan.value == null) return
+  const plan = pendingPlan.value
+  if (plan == null || hiddenPlanId.value == plan.id) return
   if (action != 'implement' && action != 'feedback') return
-  if (action == 'feedback' && planFeedback.value.trim().length == 0) return
-  const planId = pendingPlan.value!.id
-  const hostId = pageHostId.value
-  const threadId = pageThreadId.value
-  busy.value = true; pendingAction.value = 'plan:' + action; operationError.value = ''
-  bridge.request('turn.send', { threadId, planId, planAction: action, text: planFeedback.value.trim() }, true).then((_: UTSJSONObject) => {
-    busy.value = false; pendingAction.value = ''
-    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId && pendingPlan.value?.id == planId) { hiddenPlanId.value = planId; planFeedback.value = ''; planEditing.value = false; notify(action == 'implement' ? '已提交实施计划' : '修改意见已发送'); refresh() }
-  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+  const text = action == 'feedback' ? planFeedback.value.trim() : ''
+  if (action == 'feedback' && text.length == 0) return
+  sendInteraction('plan', plan.id, plan.turnId, action, 'turn.send', { threadId: pageThreadId.value, planId: plan.id, planAction: action, text })
 }
 function copyText(text: string) { uni.setClipboardData({ data: text, success: (_) => { notify('已复制') }, fail: (_) => { notify('复制失败，请长按选择文字') } }) }
 function copyLatestReply() { closeActions(); const messages = displayConversation.value?.messages ?? []; for (let index = messages.length - 1; index >= 0; index--) { if (messages[index].role == 'assistant') { copyText(presentConversationMessages([messages[index]])[0].text); return } }; notify('还没有可复制的回复') }
@@ -1027,7 +1076,7 @@ watch(displayConversation, (current: Conversation | null, previous: Conversation
   }
   afterMarkdownLayout()
 }, { flush: 'pre' })
-watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
+watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
   nextTick(() => { updateTimelinePosition(); scheduleTimelineFill() })
@@ -1042,7 +1091,6 @@ watch(timeline, (entries: TimelineEntry[]) => {
 watch(pendingQuestionGroups, (groups: QuestionGroup[], previous: QuestionGroup[] | null) => {
   const previousGroups = previous ?? [] as QuestionGroup[]
   expandedQuestionIds.value = expandedQuestionIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
-  submittedGroupIds.value = submittedGroupIds.value.filter((id: string): boolean => groups.some((group: QuestionGroup): boolean => group.id == id))
   const added = groups.filter((group: QuestionGroup): boolean => !previousGroups.some((previous: QuestionGroup): boolean => previous.id == group.id))
   added.forEach((group: QuestionGroup) => { if (expandedQuestionIds.value.indexOf(group.id) < 0) expandedQuestionIds.value.push(group.id) })
   // 仅在跟随最新消息时随新问题滚动，阅读历史时由常驻入口提示。
@@ -1060,7 +1108,7 @@ function toggleExecutions(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyb
 // 详情独立于主时间线滚动，关闭面板不改变当前阅读位置。
 function toggleExecution(id: string) { pauseFollowing(); uni.hideKeyboard(); selectedExecutionId.value = id }
 function closeExecution() { selectedExecutionId.value = '' }
-function toggleQuestion(id: string) { pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
+function toggleQuestion(id: string) { if (interactionCoolingDown.value) return; pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
 function jumpTo(anchor: string) {
   closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''
   if (anchor.startsWith('message-') && !timelineFilled.value) {
@@ -1096,7 +1144,7 @@ watch((): string => taskNotifications.focusRevision + ':' + pageVisible.value + 
   })
 })
 function showApprovals() { jumpTo('approvals-anchor') }
-function showQuestions() { const groups = pendingQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
+function showQuestions() { const groups = unansweredQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
 // 输入事件先保存正文，再捕获实际光标；选择器取消不改正文。
 // 恢复同一聊天的编辑焦点；不会采纳预测或发送草稿。
 function focusComposerInput() {
@@ -1494,17 +1542,103 @@ function onKeyboardChange(event: UniInputKeyboardHeightChangeEvent) {
   if (following.value) scrollLatest()
 }
 
-// 成功响应先锁定本组，防止桌面状态尚未广播时再次点击；失败保留组件草稿。
+function interactionFor(kind: string, id: string, turnId: string): InteractionSubmission | null {
+  return conversationInteractions.value.find((entry: InteractionSubmission): boolean => entry.kind == kind && entry.id == id && entry.turnId == turnId) ?? null
+}
+function interactionSending(kind: string, id: string, turnId: string): boolean { return interactionFor(kind, id, turnId)?.state == 'sending' }
+function showInteractionForm(kind: string, id: string, turnId: string): boolean {
+  const entry = interactionFor(kind, id, turnId)
+  return entry == null || entry.state == 'sending'
+}
+function interactionAttached(entry: InteractionSubmission): boolean {
+  if (entry.kind == 'plan') return pendingPlan.value?.id == entry.id && pendingPlan.value?.turnId == entry.turnId
+  if (entry.kind == 'question') return pendingQuestionGroups.value.some((group: QuestionGroup): boolean => group.id == entry.id && group.turnId == entry.turnId)
+  return liveApprovals.value.some((approval: Approval): boolean => approval.id == entry.id && approval.turnId == entry.turnId)
+}
+function detachedInteractions(kind: string): InteractionSubmission[] {
+  const entries = conversationInteractions.value.filter((entry: InteractionSubmission): boolean => entry.kind == kind && !interactionAttached(entry))
+  const latest = entries.length > 0 ? entries[entries.length - 1] : null
+  return entries.filter((entry: InteractionSubmission): boolean => entry == latest || entry.state == 'unknown' || entry.state == 'sending')
+}
+
+// 一次点击的连点窗口内不允许另一个卡片接管触点。桌面晚到的快照也可能再次移动卡片。
+function holdInteractionLayout() {
+  interactionUnlockAt = Date.now() + 550
+  layoutUntil = Math.max(layoutUntil, interactionUnlockAt)
+  interactionCoolingDown.value = true
+  clearTimeout(interactionUnlockTimer)
+  interactionUnlockTimer = setTimeout(() => { interactionCoolingDown.value = false }, 550)
+}
+watch((): string => conversationInteractions.value.map((entry: InteractionSubmission): string => entry.commandId + ':' + interactionAttached(entry)).join('|'), (value: string, previous: string) => {
+  if (value != previous && (value.length > 0 || previous.length > 0)) holdInteractionLayout()
+})
+
+function settleInteraction(entry: InteractionSubmission, hostId: string, state: string, error: string = '') {
+  const current = entry.scope == interactionScope.value && isCurrentPage()
+  if (current) holdInteractionLayout()
+  if (pendingAction.value == 'interaction:' + entry.commandId) { busy.value = false; pendingAction.value = '' }
+  if (state == 'failed') {
+    const index = interactionSubmissions.findIndex((item: InteractionSubmission): boolean => item.commandId == entry.commandId)
+    if (index >= 0) interactionSubmissions.splice(index, 1)
+  } else entry.state = state
+  if (state == 'done' || state == 'failed') {
+    if (supportsSubmissionTasks(hostId)) {
+      try { acknowledgePendingSubmission(hostId, entry.commandId) } catch (_) { bridge.clearCommand(entry.commandId, hostId) }
+    } else bridge.clearCommand(entry.commandId, hostId)
+  }
+  if (!current) return
+  if (state == 'done' && entry.kind == 'plan' && interactionAttached(entry)) { planFeedback.value = ''; planEditing.value = false }
+  if (state == 'done') refresh()
+  else if (state == 'failed') { operationError.value = error; notify(error) }
+}
+
+// 先同步登记操作再发请求，旧 DOM 中已经排队的点击也会在入口被拦住。
+function sendInteraction(kind: string, id: string, turnId: string, action: string, method: string, params: UTSJSONObject) {
+  if (!isCurrentPage() || interactionDisabled.value || Date.now() < interactionUnlockAt || interactionFor(kind, id, turnId) != null) return
+  const hostId = pageHostId.value
+  const commandId = newSubmissionId()
+  const scope = interactionScope.value
+  for (let index = interactionSubmissions.length - 1; index >= 0; index--) {
+    const previous = interactionSubmissions[index]
+    if (previous.scope == scope && previous.kind == kind && (previous.state == 'done' || previous.state == 'resolved') && !interactionAttached(previous)) interactionSubmissions.splice(index, 1)
+  }
+  interactionSubmissions.push({ scope, kind, id, turnId, action, commandId, state: 'sending', checking: false } as InteractionSubmission)
+  const entry = interactionSubmissions[interactionSubmissions.length - 1]
+  busy.value = true; pendingAction.value = 'interaction:' + commandId; operationError.value = ''
+  pauseFollowing(); holdInteractionLayout(); uni.hideKeyboard()
+  bridge.submitInteraction(method, params, commandId).then((_: UTSJSONObject) => {
+    settleInteraction(entry, hostId, 'done')
+  }, (error: Error) => {
+    settleInteraction(entry, hostId, error.name == 'OUTCOME_UNKNOWN' ? 'unknown' : 'failed', error.message)
+  })
+}
+
+// 只查原命令与当前桌面快照。找不到回执且原卡仍待处理时继续锁定。
+async function checkInteraction(entry: InteractionSubmission) {
+  if (!canCheckInteraction.value || !isCurrentPage() || entry.scope != interactionScope.value || entry.state != 'unknown' || entry.checking) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value
+  entry.checking = true
+  try {
+    const status = await bridge.readCommandStatus(hostId, entry.commandId)
+    if (entry.scope != interactionScope.value || !isCurrentPage()) return
+    const error = status['error'] as UTSJSONObject | null
+    if (status.getString('state') == 'done' && error?.getBoolean('outcomeUnknown') != true) {
+      settleInteraction(entry, hostId, error == null ? 'done' : 'failed', error?.getString('message') ?? '操作失败')
+      return
+    }
+    await bridge.watch(threadId, true)
+    if (entry.scope != interactionScope.value || !isCurrentPage()) return
+    if (liveConversation.value != null && !interactionAttached(entry)) settleInteraction(entry, hostId, 'resolved')
+    else notify('结果仍待核对，请在电脑或提交任务中查看')
+  } catch (error) {
+    if (entry.scope == interactionScope.value && isCurrentPage()) notify((error as Error).message)
+  } finally { entry.checking = false }
+}
+
+// 缓存只用于展示，写入目标必须是当前实时快照中仍待回答的原题组。
 function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[]) {
-  if (!canWrite.value || submittedGroupIds.value.indexOf(questionGroupId) >= 0) return
-  // 只能提交当前实时快照中仍有效的题组，缓存展示编号永远不能成为写入目标。
   if (!liveConversation.value?.questionGroups.some((group: QuestionGroup): boolean => group.id == questionGroupId && group.turnId == turnId && group.state == 'pending')) return
-  const threadId = pageThreadId.value
-  busy.value = true; pendingAction.value = 'question:' + questionGroupId
-  bridge.request('question.reply', { threadId, questionGroupId, turnId, answers }, true).then((_: UTSJSONObject) => {
-    busy.value = false; pendingAction.value = ''
-    if (isCurrentPage()) { submittedGroupIds.value.push(questionGroupId); refresh() }
-  }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+  sendInteraction('question', questionGroupId, turnId, '', 'question.reply', { threadId: pageThreadId.value, questionGroupId, turnId, answers })
 }
 // 继续指令与输入框草稿独立，已提交和未知结果都保留轮次占位，避免重复发送。
 function reviewContinueSubmitted(turnId: string): boolean { return submittedReviewContinueKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
@@ -1659,10 +1793,9 @@ function stop(fromComposer: boolean = true) {
   }, fail: (_) => { stopPromptOpen = false } })
 }
 function reply(id: string, turnId: string, decision: string) {
-  if (!canWrite.value || handledApprovalIds.value.indexOf(id) >= 0) return
-  const hostId = pageHostId.value, threadId = pageThreadId.value
-  busy.value = true; pendingAction.value = 'approval:' + decision + ':' + id
-  bridge.request('approval.reply', { threadId, approvalId: id, turnId, decision }, true).then((_: UTSJSONObject) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { handledApprovalIds.value.push(id); notify(decision == 'accept' ? '已允许本次操作' : '已拒绝本次操作'); refresh() } }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message })
+  if (decision != 'accept' && decision != 'decline') return
+  if (!liveApprovals.value.some((approval: Approval): boolean => approval.id == id && approval.turnId == turnId)) return
+  sendInteraction('approval', id, turnId, decision, 'approval.reply', { threadId: pageThreadId.value, approvalId: id, turnId, decision })
 }
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
@@ -1841,7 +1974,9 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 .question-section { margin: 18px 12px 20px; border-width: 1px; border-style: solid; border-color: #e5e8f1; border-radius: 20px; background-color: #ffffff; overflow: hidden; }
 .question-entry { flex-direction: row; align-items: center; padding: 10px 16px; min-height: 56px; background-color: #f6f7fb; border-width: 0; border-bottom-width: 1px; border-style: solid; border-bottom-color: #e5e8f1; }
 .question-label { color: #596479; font-size: 16px; line-height: 24px; flex: 1; }
-.question-state { color: #596479; font-size: 12px; margin-right: 12px; }
+.interaction-shell { position: relative; }
+.interaction-underlay { opacity: 0; }
+.interaction-cover { position: absolute; left: 0; right: 0; top: 0; bottom: 0; justify-content: center; }
 .question-collapse-label { color: #596479; font-size: 13px; line-height: 22px; }
 .question-pressed { background-color: rgba(69, 70, 189, 0.04); }
 /* #ifdef WEB */
@@ -1855,7 +1990,6 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 .approval-actions { flex-direction: row; margin-top: 10px; }
 /* 窄屏为对称加载占位留出空间，四字审批文案保持单行。 */
 .approval-button { flex: 1; height: 44px; line-height: 44px; padding: 0 8px; margin: 0 4px; font-size: 14px; }
-.approval-feedback { color: #596479; font-size: 13px; margin-top: 12px; }
 .working { flex-direction: row; align-items: center; padding: 6px 16px; }
 .working-text { color: #596479; font-size: 13px; margin-left: 6px; }
 .bottom-space { height: 12px; }

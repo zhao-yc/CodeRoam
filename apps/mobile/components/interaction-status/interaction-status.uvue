@@ -1,0 +1,24 @@
+<template>
+  <view class="interaction-status">
+    <view class="interaction-status-row">
+      <action-progress v-if="entry.state == 'sending'" :busy="true" />
+      <text class="interaction-status-label" role="status" aria-live="polite">{{ label }}</text>
+    </view>
+    <button v-if="entry.state == 'unknown'" class="interaction-check" :disabled="disabled || entry.checking" @click="emit('check')">{{ entry.checking ? '正在核对' : '同步并核对' }}</button>
+  </view>
+</template>
+
+<script setup lang="uts">
+import { computed } from 'vue'
+import { InteractionSubmission, interactionStatusLabel } from '../../services/interaction-submissions.uts'
+const props = defineProps<{ entry: InteractionSubmission, disabled: boolean }>()
+const label = computed((): string => interactionStatusLabel(props.entry))
+const emit = defineEmits<{ (event: 'check'): void }>()
+</script>
+
+<style>
+.interaction-status { align-items: center; justify-content: center; padding: 6px 12px; }
+.interaction-status-row { flex-direction: row; align-items: center; justify-content: center; min-height: 36px; }
+.interaction-status-label { color: #596479; font-size: 14px; line-height: 22px; }
+.interaction-check { min-height: 44px; padding: 0 12px; margin: 0; background-color: transparent; color: #4546bd; font-size: 14px; }
+</style>

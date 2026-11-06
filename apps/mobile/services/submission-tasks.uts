@@ -80,9 +80,9 @@ export async function submitTask(hostId: string, id: string, kind: string, paylo
       const task = findTask(observed, id)
       if (task == null) throw reason
       result = { accepted: true, taskId: id, task }
-    } catch (_) { const record = pending.find((item: PendingSubmission): boolean => item.id == id); if (record != null) { record.unknown = true; savePending() }; throw new Error('提交是否入队尚未确认，请在提交任务中核对，勿重复发送') }
+    } catch (_) { const record = pending.find((item: PendingSubmission): boolean => item.id == id); if (record != null) { record.unknown = true; savePending() }; throw unknownSubmissionError('提交是否入队尚未确认，请在提交任务中核对，勿重复发送') }
   }
-  if (result.getBoolean('accepted') != true || result.getString('taskId') != id) throw new Error('未取得有效入队回执，请核对原任务')
+  if (result.getBoolean('accepted') != true || result.getString('taskId') != id) throw unknownSubmissionError('未取得有效入队回执，请核对原任务')
   if (connection.cacheNamespace == namespace) {
     const record = pending.find((item: PendingSubmission): boolean => item.id == id)
     if (record != null) { record.accepted = true; savePending() }
@@ -114,6 +114,12 @@ export async function submitTaskCommand(hostId: string, method: string, params: 
   }
 }
 
+function unknownSubmissionError(message: string): Error {
+  const error = new Error(message)
+  error.name = 'OUTCOME_UNKNOWN'
+  return error
+}
+
 export async function awaitSubmissionResult(hostId: string, id: string, namespace: string): Promise<UTSJSONObject> {
   while (connection.cacheNamespace == namespace) {
     if (connection.connected && connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) {
@@ -123,10 +129,10 @@ export async function awaitSubmissionResult(hostId: string, id: string, namespac
       if (raw == null) { await new Promise<void>((resolve) => { setTimeout(() => { resolve() }, 1000) }); continue }
       const task = findTask(raw, id)
       if (task != null) {
-        if (task.historyExpired == true) { removePending(id); throw new Error('执行记录已过保留期，原任务不会重发，请在电脑核对') }
+        if (task.historyExpired == true) { removePending(id); throw unknownSubmissionError('执行记录已过保留期，原任务不会重发，请在电脑核对') }
         if (task.state == 'succeeded') { removePending(id); return task.result ?? {} }
         if (['failed', 'cancelled', 'canceled', 'skipped'].indexOf(task.state) >= 0) { removePending(id); throw new Error(task.error.length > 0 ? task.error : '提交任务' + task.state) }
-        if (task.state == 'unknown' || task.state == 'waiting_resume') { const error = new Error(task.error.length > 0 ? task.error : '执行结果需要核对，请到提交任务中处理'); error.name = 'OUTCOME_UNKNOWN'; throw error }
+        if (task.state == 'unknown' || task.state == 'waiting_resume') throw unknownSubmissionError(task.error.length > 0 ? task.error : '执行结果需要核对，请到提交任务中处理')
       }
     }
     await new Promise<void>((resolve) => { setTimeout(() => { resolve() }, 1000) })

@@ -21,6 +21,7 @@ export function componentScope(scope) {
   scope.useLiquidGlass ??= () => false;
   // 测试各页面时注入连接入口，握手代次由专门用例执行真实实现。
   scope.useManualReconnect ??= () => () => scope.bridge?.resume?.();
+  scope.interactionSubmissions ??= [];
   const watch = scope.watch;
   if (watch != null) scope.watch = (source, callback, options) => {
     if (typeof source === 'function' && /props\.active/.test(source.toString())) {
