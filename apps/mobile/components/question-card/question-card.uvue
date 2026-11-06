@@ -4,7 +4,7 @@
     <view v-for="(item, index) in drafts" :key="item.question.id" :class="['question', index > 0 ? 'question-following' : '']">
       <text v-if="item.question.header.length > 0" class="header">{{ item.question.header }}</text>
       <text class="title">{{ item.question.title }}</text>
-      <text v-if="item.question.answer.length > 0" class="answer">{{ item.question.isSecret ? '已填写' : item.question.answer }}</text>
+      <text v-if="item.question.answer.length > 0 || (readOnly && item.question.isSecret)" class="answer">{{ item.question.isSecret ? '已填写' : item.question.answer }}</text>
       <template v-else-if="group.state == 'pending'">
         <view v-for="option in item.question.options" :key="option.label" :class="['option', !item.custom && item.text == option.label ? 'selected' : '']" @click="choose(item.question.id, option.label)">
           <view :class="['option-indicator', !item.custom && item.text == option.label ? 'indicator-selected' : '']"><AppIcon v-if="!item.custom && item.text == option.label" name="check" :size="14" tone="light" /></view>
@@ -18,7 +18,7 @@
           <view class="option-content"><text class="option-label">其他答案</text></view>
         </view>
         <!-- 提交后的长答案使用可选择正文完整展示，保密内容继续遮蔽。 -->
-        <text v-if="readOnly && (item.custom || item.question.options.length == 0)" class="custom-answer" selectable>{{ item.question.isSecret ? '已填写' : item.text }}</text>
+        <text v-if="readOnly && (item.custom || item.question.options.length == 0)" class="custom-answer" selectable>{{ item.text }}</text>
         <input v-else-if="item.question.isSecret && (item.custom || item.question.options.length == 0)" v-model="item.text" class="custom-input secret-input" password :maxlength="32000" :disabled="locked" placeholder="请输入答案" />
         <textarea v-else-if="item.custom || item.question.options.length == 0" v-model="item.text" class="custom-input" :maxlength="32000" :disabled="locked" placeholder="填写你的答案…"></textarea>
       </template>
@@ -30,9 +30,10 @@
 <script setup lang="uts">
 import { computed, ref, watch } from 'vue'
 import { QuestionGroup, QuestionAnswer, Question } from '../../services/bridge.uts'
+import { QuestionSubmissionDraft } from '../../services/interaction-submissions.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type AnswerDraft = { question: Question, text: string, custom: boolean }
-const props = defineProps<{ group: QuestionGroup, disabled: boolean, readOnly?: boolean }>()
+const props = defineProps<{ group: QuestionGroup, disabled: boolean, readOnly?: boolean, submittedDrafts?: QuestionSubmissionDraft[] }>()
 const emit = defineEmits(['submit'])
 const drafts = ref<AnswerDraft[]>([])
 const locked = computed((): boolean => props.disabled || props.readOnly == true || props.group.state != 'pending')
@@ -41,7 +42,8 @@ const complete = computed((): boolean => drafts.value.length == props.group.ques
 watch((): QuestionGroup => props.group, (group: QuestionGroup) => {
   drafts.value = group.questions.map((question): AnswerDraft => {
     const previous = drafts.value.find((draft: AnswerDraft): boolean => draft.question.id == question.id)
-    return { question, text: question.answer.length > 0 ? question.answer : previous?.text ?? '', custom: previous?.custom ?? (question.options.length == 0) } as AnswerDraft
+    const submitted = props.submittedDrafts?.find((draft: QuestionSubmissionDraft): boolean => draft.questionId == question.id)
+    return { question, text: question.answer.length > 0 ? question.answer : previous?.text ?? submitted?.text ?? '', custom: previous?.custom ?? submitted?.custom ?? (question.options.length == 0) } as AnswerDraft
   })
 }, { immediate: true })
 function choose(id: string, label: string) { if (locked.value) return; const draft = drafts.value.find((item: AnswerDraft): boolean => item.question.id == id); if (draft != null) { draft.text = label; draft.custom = false } }
@@ -50,7 +52,8 @@ function chooseOther(id: string) { if (locked.value) return; const draft = draft
 function submit() {
   if (locked.value || !complete.value) return
   const answers = drafts.value.map((draft: AnswerDraft): QuestionAnswer => ({ questionId: draft.question.id, text: draft.text.trim() } as QuestionAnswer))
-  emit('submit', props.group.id, props.group.turnId, answers)
+  const customQuestionIds = drafts.value.filter((draft: AnswerDraft): boolean => draft.custom).map((draft: AnswerDraft): string => draft.question.id)
+  emit('submit', props.group.id, props.group.turnId, answers, customQuestionIds)
 }
 </script>
 
