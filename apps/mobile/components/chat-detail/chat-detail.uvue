@@ -115,10 +115,11 @@
             </template>
           </view>
           <view class="interaction-shell">
-            <view v-show="expandedQuestionIds.indexOf(group.id) >= 0 && showInteractionForm('question', group.id, group.turnId)" :class="interactionSending('question', group.id, group.turnId) ? 'interaction-underlay' : ''" :aria-hidden="interactionSending('question', group.id, group.turnId)">
-              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview' || interactionFor('question', group.id, group.turnId) != null" @submit="submitAnswers" />
+            <!-- 提交及待核对期间保留原卡片草稿，只锁定编辑，状态提示放在正文之后。 -->
+            <view v-show="expandedQuestionIds.indexOf(group.id) >= 0">
+              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview'" :read-only="interactionFor('question', group.id, group.turnId) != null" @submit="submitAnswers" />
             </view>
-            <view v-if="interactionFor('question', group.id, group.turnId) != null" :class="interactionSending('question', group.id, group.turnId) ? 'interaction-cover' : ''">
+            <view v-if="interactionFor('question', group.id, group.turnId) != null">
               <interaction-status :entry="interactionFor('question', group.id, group.turnId)!" :disabled="!canCheckInteraction" @check="checkInteraction(interactionFor('question', group.id, group.turnId)!)" />
             </view>
           </view>

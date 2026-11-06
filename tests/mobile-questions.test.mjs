@@ -11,7 +11,7 @@ function fixture() {
   const emitted=[],watches=[];
   const context=componentContext({props,defineProps:()=>props,defineEmits:()=> (...args)=>emitted.push(args),ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(_source,callback)=>{watches.push(callback);callback(props.group);}});
   let source=fs.readFileSync(new URL('../apps/mobile/components/question-card/question-card.uvue',import.meta.url),'utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={drafts,complete,choose,chooseOther,submit};',context);
+  vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={drafts,complete,locked,choose,chooseOther,submit};',context);
   return {...context.subject,props,emitted,sync:()=>watches.forEach(callback=>callback(props.group))};
 }
 
@@ -25,6 +25,38 @@ test('离线、提交中、结果未知和已提交均阻止修改选择与重�
   const f=fixture();f.choose('a','甲');f.drafts.value[1].text='回答';
   f.props.disabled=true;f.choose('a','乙');f.chooseOther('a');f.submit();assert.equal(f.drafts.value[0].text,'甲');assert.equal(f.emitted.length,0);f.props.disabled=false;
   f.props.group=structuredClone(f.props.group);f.props.group.questions[0].answer='乙';f.sync();assert.equal(f.drafts.value[0].text,'乙');assert.equal(f.drafts.value[1].text,'回答');
+});
+
+test('只读提交保留选中态、自定义长答案和保密草稿，明确失败后可继续编辑',()=>{
+  const f=fixture();
+  f.props.group.questions.push({id:'secret',title:'保密答案',options:[],answer:'',isSecret:true});f.sync();
+  f.choose('a','乙');
+  const answer='合成长答案\n'.repeat(200);
+  f.drafts.value[1].text=answer;f.drafts.value[2].text='合成保密内容';f.submit();
+  assert.equal(f.emitted.length,1);
+  // 独立于全局 busy 锁定，成功回执释放 busy 后仍不能改选或重复提交。
+  f.props.readOnly=true;
+  assert.equal(f.locked.value,true);f.choose('a','甲');f.chooseOther('a');f.submit();
+  f.props.group=structuredClone(f.props.group);f.sync();
+  assert.equal(f.drafts.value[0].text,'乙');assert.equal(f.drafts.value[0].custom,false);
+  assert.equal(f.drafts.value[1].text,answer);assert.equal(f.drafts.value[2].text,'合成保密内容');
+  assert.equal(f.emitted.length,1);
+  f.props.readOnly=false;assert.equal(f.locked.value,false);f.choose('a','甲');f.submit();
+  assert.equal(f.drafts.value[0].text,'甲');assert.equal(f.drafts.value[1].text,answer);assert.equal(f.emitted.length,2);
+});
+
+test('问答提交状态位于可见正文之后，只读长答案完整显示且遮蔽保密内容',()=>{
+  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
+  const questions=page.slice(page.indexOf('<view v-for="group in pendingQuestionGroups"'),page.indexOf('<view id="approvals-anchor"'));
+  assert.doesNotMatch(questions,/interaction-underlay|interaction-cover|aria-hidden|showInteractionForm/);
+  assert.match(questions,/v-show="expandedQuestionIds.indexOf\(group.id\) >= 0"/);
+  assert.match(questions,/:read-only="interactionFor\('question', group.id, group.turnId\) != null"/);
+  assert.ok(questions.indexOf('<question-card')<questions.indexOf('<interaction-status'));
+  const card=fs.readFileSync('apps/mobile/components/question-card/question-card.uvue','utf8');
+  assert.match(card,/<text v-if="readOnly && \(item.custom \|\| item.question.options.length == 0\)" class="custom-answer" selectable>\{\{ item.question.isSecret \? '已填写' : item.text \}\}<\/text>/);
+  assert.match(card,/group.state == 'pending' && !readOnly/);
+  const style=card.match(/\.custom-answer \{([^}]+)\}/)[1];
+  assert.match(style,/color: #1a2135/);assert.doesNotMatch(style,/(?:^|;)\s*(?:height|max-height|opacity|overflow):/);
 });
 
 /** 执行页面实际计算与监听，供问题提醒及状态清理回归共用。 */
