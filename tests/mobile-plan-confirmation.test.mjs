@@ -106,6 +106,28 @@ test('未知结果只核对原编号，明确失败才恢复方案编辑并保�
   assert.equal(f.context.operationError.value, '明确拒绝');
 });
 
+test('问题提交状态持续绑定原题组，成功延迟同步及未知结果均保持锁定，明确失败才解锁', async () => {
+  for (const outcome of ['done','unknown','failed']) {
+    const f=fixture();f.answer();
+    assert.equal(f.interactionFor('question','question','turn').state,'sending');
+    if(outcome==='done') f.calls[0].resolve({});
+    else f.calls[0].reject(Object.assign(new Error('合成提交结果'),{name:outcome==='unknown'?'OUTCOME_UNKNOWN':'Error'}));
+    await Promise.resolve();f.tick(600);
+    const entry=f.interactionFor('question','question','turn');
+    assert.equal(entry?.state??'failed',outcome);
+    assert.equal(f.snapshot.questionGroups[0].id,'question');
+    f.answer();assert.equal(f.calls.length,outcome==='failed'?2:1);
+    if(outcome==='unknown') {
+      await f.checkInteraction(entry);assert.equal(f.calls.length,1);
+      assert.equal(entry.state,'unknown');assert.equal(f.checks[0][1],f.calls[0].request[2]);
+    }
+    if(outcome==='done') {
+      f.snapshot.questionGroups=[];f.sync();
+      assert.equal(f.detachedInteractions('question')[0].commandId,entry.commandId);
+    }
+  }
+});
+
 test('审批决策不能被连点改写，明确失败后可重试，离页回执隔离', async () => {
   const f = fixture();
   f.approve('decline'); f.approve('accept');
