@@ -364,6 +364,8 @@ const loadingHistory = ref(false)
 const historyError = ref('')
 const historyScrollTop = ref(0)
 let historyRequest = 0
+let historyContextStarted = false
+let historyContextTurnIds = [] as string[]
 let historyGesture = 0
 let lastHistoryGesture = -1
 let historyTopTimer = 0
@@ -905,7 +907,9 @@ function readOlderPage(request: number, preserveFollowing: boolean, remaining: n
     historyPage.value = { messages: merged.messages, turns: merged.turns ?? [], cursor: page.cursor, hasMore: page.hasMore } as HistoryPage
     // 完成轮次的工具与说明会折叠进同一过程，只有更早的可见正文出现才结束本次加载。
     const added = timeline.value.some((entry: TimelineEntry): boolean => entry.role != 'process' && entry.role != 'execution' && !previousEntries.has(entry.id))
-    if (!added && page.hasMore) {
+    if (preserveFollowing && (!pageVisible.value || !following.value)) historyContextStarted = false
+    const needsContext = preserveFollowing && pageVisible.value && following.value && !hasHistoryReadingContext()
+    if ((preserveFollowing ? needsContext : !added) && page.hasMore) {
       if (remaining > 1) { readOlderPage(request, preserveFollowing, remaining - 1); return }
       historyError.value = '本次历史读取已达上限'; loadingHistory.value = false; return
     }
@@ -925,6 +929,25 @@ function loadOlder(preserveFollowing: boolean = false) {
   loadingHistory.value = true; historyError.value = ''
   readOlderPage(++historyRequest, preserveFollowing, 32)
 }
+// 首屏按折叠后的正文补齐上下文；执行摘要不计入六条正文的目标。
+function hasHistoryReadingContext(): boolean {
+  const messages = displayConversation.value?.messages ?? [] as ChatMessage[]
+  const readable = timeline.value.filter((entry: TimelineEntry): boolean => entry.role != 'process' && entry.role != 'execution')
+  return readable.length >= 6 && historyContextTurnIds.every((turnId: string): boolean => messages.some((message: ChatMessage): boolean => message.turnId == turnId && message.role == 'user'))
+}
+// 仅在实时订阅确认且页面可见时预补一次；沿旧游标连续读取，保留每页预算及32页上限。
+function prefillHistoryContext() {
+  if (historyContextStarted || loadingHistory.value || !pageVisible.value || !isCurrentPage() || !subscriptionReady.value || !following.value || historyError.value.length > 0 || connection.snapshot?.supportsHistoryPages != true || historyPage.value?.hasMore == false) return
+  const snapshot = displayConversation.value
+  if (snapshot == null || snapshot.messages.length == 0) return
+  historyContextTurnIds = [] as string[]
+  snapshot.messages.forEach((message: ChatMessage) => {
+    if ((message.phase == 'final_answer' || message.turnId == snapshot.activeTurnId) && message.turnId.length > 0 && historyContextTurnIds.indexOf(message.turnId) < 0 && !snapshot.messages.some((entry: ChatMessage): boolean => entry.turnId == message.turnId && entry.role == 'user')) historyContextTurnIds.push(message.turnId)
+  })
+  historyContextStarted = true
+  if (!hasHistoryReadingContext()) loadOlder(true)
+}
+watch((): boolean => subscriptionReady.value, (ready: boolean) => { if (ready) nextTick(() => { prefillHistoryContext() }) })
 // 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
 function scheduleTimelineFill() {
   if (timelineFillTimer != 0 || timelineFilled.value || !pageVisible.value || !isReadingPage()) return
@@ -957,7 +980,7 @@ function onHistoryTop() {
   lastHistoryGesture = historyGesture; loadOlder()
 }
 // 隐藏页面停止补挂载，返回时继续当前面板的阅读位置。
-onPaneShow(() => { nextTick(() => { scheduleTimelineFill() }) })
+onPaneShow(() => { nextTick(() => { scheduleTimelineFill(); prefillHistoryContext() }) })
 onPaneHide(() => { clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
 onUnmounted(() => { executionDetailRequest++; clearTimeout(executionDetailTimer); clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
 
@@ -1036,7 +1059,7 @@ watch(displayConversation, (current: Conversation | null, previous: Conversation
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
-  nextTick(() => { updateTimelinePosition(); scheduleTimelineFill() })
+  nextTick(() => { updateTimelinePosition(); scheduleTimelineFill(); prefillHistoryContext() })
   if (connection.snapshot == null) return
   // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
   expandedExecutionIds.value = retainExpandedExecutions(executionTimeline(displayConversation.value?.messages ?? []), expandedExecutionIds.value)
@@ -1760,7 +1783,7 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
   const computer = connection.computers.find((item: Computer): boolean => item.id == pageHostId.value)
   const generation = computer?.instanceGeneration ?? ''
   if (props.target.cacheNamespace != connection.cacheNamespace || (connection.connected && computer == null) || (pageGeneration.length > 0 && generation.length > 0 && pageGeneration != generation)) {
-    historyPage.value = null; historyRequest++; historyError.value = ''
+    historyPage.value = null; historyRequest++; historyError.value = ''; historyContextStarted = false; historyContextTurnIds = [] as string[]
     timelineBoundary.value = ''; timelineFilled.value = false; timelineFillStarted = false
     cancelReadingCorrection(); closeFileReport()
   }
