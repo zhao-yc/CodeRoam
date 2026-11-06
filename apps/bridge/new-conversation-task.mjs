@@ -18,7 +18,7 @@ function assertSettings(snapshot, choices, images) {
 
 /** 跟随电脑权限也不能自动接受完整访问；必须保留用户的显式确认。 */
 function assertPermissions(current, choices) {
-  const selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? '';
+  const selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? 'default';
   if (selected && current.mode !== selected) throw new BridgeError('PERMISSIONS_CHANGED', '电脑权限已变化，请重新确认后发送');
   if (current.mode === 'full-access' && (selected !== 'full-access' || choices.confirmedFullAccess !== true)) throw new BridgeError('PERMISSION_CONFIRMATION_REQUIRED', '请先在手机选择并确认电脑完整访问权限');
   if (!['default', 'auto-review', 'read-only', 'full-access'].includes(current.mode)) throw new BridgeError('PERMISSIONS_UNAVAILABLE', '无法确认电脑权限，请重新选择后发送');
@@ -49,7 +49,8 @@ export async function runNewConversationTask(agent, task, context) {
 
   // 首轮执行选项随正文提交；权限由发送路径在最终提交前应用并回读。
   const permissions = await agent.adapter.readPermissions(threadId, task.deviceId);
-  const selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? '';
+  // 新聊天未手动选择时固定使用界面默认的请求批准；旧版显式跟随电脑仍保留原语义。
+  const selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? 'default';
   if (!selected) assertPermissions(permissions, choices);
   context.update({ stage: '正在绑定附件' });
   context.retainScope?.(threadId);
@@ -85,10 +86,16 @@ async function runNative(agent, task, context, command, choices, images, attachm
     if (input.threadMentionIds?.length && snapshot.supportsThreadMentions !== true) throw new BridgeError('THREAD_MENTIONS_UNAVAILABLE', '当前原生草稿不支持引用聊天');
   };
   assertReady();
-  const changes = settingChanges(snapshot.settings, choices), selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? '';
+  const changes = settingChanges(snapshot.settings, choices), selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? 'default';
   if (selected && snapshot.permissions.mode !== selected) changes.permissionMode = selected;
-  // 老原生草稿只有逐项 setter，不能静默退回先改设置再发送。
-  if (Object.keys(changes).length) throw new BridgeError('MESSAGE_CHOICES_UNSUPPORTED', '此电脑原生草稿不能直接携带所选设置，请更新连接服务，原输入已保留');
+  // 老原生草稿的执行选项仍要求直接发送能力；权限沿用原生 setter 并按最新修订回读。
+  if (Object.keys(changes).some(key => key !== 'permissionMode')) throw new BridgeError('MESSAGE_CHOICES_UNSUPPORTED', '此电脑原生草稿不能直接携带所选设置，请更新连接服务，原输入已保留');
+  if (changes.permissionMode) {
+    await context.step('应用草稿权限', commandId => command('thread.draft.update', {
+      draftId, expectedRevision: snapshot.revision, changes: { permissionMode: changes.permissionMode }, confirmedFullAccess: choices.confirmedFullAccess === true,
+    }, commandId));
+    snapshot = await agent.nativeDrafts.read({ draftId }, task.deviceId); assertReady();
+  }
   assertSettings(snapshot, choices, images); assertPermissions(snapshot.permissions, choices);
   context.update({ stage: '正在绑定草稿附件' });
   context.retainScope?.('draft:' + draftId);

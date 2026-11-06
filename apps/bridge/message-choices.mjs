@@ -52,7 +52,7 @@ export async function sendWithChoices(adapter, method, params, commandId, device
   const sendGuard = firstMessageGuard === undefined ? undefined : { ...firstMessageGuard };
   const beforeSend = async () => {
     assertCurrent();
-    if (permissions && method === 'turn.send' && permissions.mode !== choices.permissionMode) {
+    if (permissions && method === 'turn.send' && (permissions.mode !== choices.permissionMode || sendGuard !== undefined)) {
       // 单轮权限参数不会保存桌面菜单选择。复用原生设置及回读，未知结果时停止正文发送。
       permissions = await updatePermissions(adapter, {
         threadId: params.threadId, mode: choices.permissionMode, expectedRevision: permissions.revision,
