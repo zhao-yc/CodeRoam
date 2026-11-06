@@ -148,6 +148,19 @@ export class StateReader {
   }
   /** 离线轻维护只核对明确的任务尾部事件，正文解析留到确认终态或用户重新查看。 */
   historyActivity(threadId) { return readHistoricalActivity(this.historyRow(threadId),path.join(path.dirname(this.filePath),'sessions')); }
+  /** 执行详情只从当前实例的受控索引读取，早期记录也沿用历史继承边界。 */
+  readExecution(threadId, executionMessageId) {
+    const row = this.historyRow(threadId);
+    const projected = readProjectedHistory(row, path.dirname(this.filePath), { executionMessageId });
+    if (projected) return projected.messages.find(message => message.id === executionMessageId);
+    let before = '';
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const page = readHistoricalPage(row, path.join(path.dirname(this.filePath), 'sessions'), { executionMessageId, before });
+      if (page.messages.length || !page.hasMore) return page.messages.find(message => message.id === executionMessageId);
+      before = page.cursor;
+    }
+    throw new BridgeError('EXECUTION_UNAVAILABLE', '这条执行记录距离当前窗口较远，请稍后重试');
+  }
   /** 后台浏览只读取索引和已保存历史，不唤醒或导航桌面。 */
   readHistory(threadId, options = {}) {
     const row = this.historyRow(threadId);

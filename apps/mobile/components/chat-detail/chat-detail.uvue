@@ -138,7 +138,7 @@
     </view>
       <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ left: menuLeft + 'px', bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
-    <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
+    <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text v-if="executionDetailLoading" class="sheet-note">正在读取执行详情…</text><view v-if="executionDetailError.length > 0"><text class="sheet-note">{{ executionDetailError }}</text><button @click="readExecutionDetail">重新读取</button></view><text v-if="executionDetailText.length > 0" class="execution-text" selectable>{{ executionDetailText }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(executionDetailText)" :disabled="executionDetailLoading || executionDetailText.length == 0" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view>
         <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="pendingQuestionCount > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ pendingQuestionCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="approvalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ approvalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
     <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
@@ -352,12 +352,20 @@ function pauseFollowing() { following.value = false; timelineUserScrolling = fal
 function openFileReport(report: FileReport, fileId: string) { pauseFollowing(); uni.hideKeyboard(); selectedFileReport.value = report; selectedChangedFileId.value = fileId }
 function closeFileReport() { selectedFileReport.value = null; selectedChangedFileId.value = '' }
 const selectedExecutionId = ref('')
+const executionDetailText = ref('')
+const executionDetailLoading = ref(false)
+const executionDetailError = ref('')
+let executionDetailRequest = 0
+let executionDetailTimer = 0
+let executionDetailIdentity = ''
 const selectedAnnotationId = ref('')
 const historyPage = ref<HistoryPage | null>(null)
 const loadingHistory = ref(false)
 const historyError = ref('')
 const historyScrollTop = ref(0)
 let historyRequest = 0
+let historyContextStarted = false
+let historyContextTurnIds = [] as string[]
 let historyGesture = 0
 let lastHistoryGesture = -1
 let historyTopTimer = 0
@@ -899,7 +907,9 @@ function readOlderPage(request: number, preserveFollowing: boolean, remaining: n
     historyPage.value = { messages: merged.messages, turns: merged.turns ?? [], cursor: page.cursor, hasMore: page.hasMore } as HistoryPage
     // 完成轮次的工具与说明会折叠进同一过程，只有更早的可见正文出现才结束本次加载。
     const added = timeline.value.some((entry: TimelineEntry): boolean => entry.role != 'process' && entry.role != 'execution' && !previousEntries.has(entry.id))
-    if (!added && page.hasMore) {
+    if (preserveFollowing && (!pageVisible.value || !following.value)) historyContextStarted = false
+    const needsContext = preserveFollowing && pageVisible.value && following.value && !hasHistoryReadingContext()
+    if ((preserveFollowing ? needsContext : !added) && page.hasMore) {
       if (remaining > 1) { readOlderPage(request, preserveFollowing, remaining - 1); return }
       historyError.value = '本次历史读取已达上限'; loadingHistory.value = false; return
     }
@@ -919,6 +929,25 @@ function loadOlder(preserveFollowing: boolean = false) {
   loadingHistory.value = true; historyError.value = ''
   readOlderPage(++historyRequest, preserveFollowing, 32)
 }
+// 首屏按折叠后的正文补齐上下文；执行摘要不计入六条正文的目标。
+function hasHistoryReadingContext(): boolean {
+  const messages = displayConversation.value?.messages ?? [] as ChatMessage[]
+  const readable = timeline.value.filter((entry: TimelineEntry): boolean => entry.role != 'process' && entry.role != 'execution')
+  return readable.length >= 6 && historyContextTurnIds.every((turnId: string): boolean => messages.some((message: ChatMessage): boolean => message.turnId == turnId && message.role == 'user'))
+}
+// 仅在实时订阅确认且页面可见时预补一次；沿旧游标连续读取，保留每页预算及32页上限。
+function prefillHistoryContext() {
+  if (historyContextStarted || loadingHistory.value || !pageVisible.value || !isCurrentPage() || !subscriptionReady.value || !following.value || historyError.value.length > 0 || connection.snapshot?.supportsHistoryPages != true || historyPage.value?.hasMore == false) return
+  const snapshot = displayConversation.value
+  if (snapshot == null || snapshot.messages.length == 0) return
+  historyContextTurnIds = [] as string[]
+  snapshot.messages.forEach((message: ChatMessage) => {
+    if ((message.phase == 'final_answer' || message.turnId == snapshot.activeTurnId) && message.turnId.length > 0 && historyContextTurnIds.indexOf(message.turnId) < 0 && !snapshot.messages.some((entry: ChatMessage): boolean => entry.turnId == message.turnId && entry.role == 'user')) historyContextTurnIds.push(message.turnId)
+  })
+  historyContextStarted = true
+  if (!hasHistoryReadingContext()) loadOlder(true)
+}
+watch((): boolean => subscriptionReady.value, (ready: boolean) => { if (ready) nextTick(() => { prefillHistoryContext() }) })
 // 首帧之后分批向前挂载。手势、锚点补偿和首屏定位未结束时让出一轮。
 function scheduleTimelineFill() {
   if (timelineFillTimer != 0 || timelineFilled.value || !pageVisible.value || !isReadingPage()) return
@@ -951,9 +980,9 @@ function onHistoryTop() {
   lastHistoryGesture = historyGesture; loadOlder()
 }
 // 隐藏页面停止补挂载，返回时继续当前面板的阅读位置。
-onPaneShow(() => { nextTick(() => { scheduleTimelineFill() }) })
+onPaneShow(() => { nextTick(() => { scheduleTimelineFill(); prefillHistoryContext() }) })
 onPaneHide(() => { clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
-onUnmounted(() => { clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
+onUnmounted(() => { executionDetailRequest++; clearTimeout(executionDetailTimer); clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
 
 // 只保留已读过的实时窗口；分页回执不能覆盖最新消息或执行权限。
 watch(liveConversation, (current: Conversation | null, previous: Conversation | null) => {
@@ -1030,7 +1059,7 @@ watch(displayConversation, (current: Conversation | null, previous: Conversation
 watch((): string => connection.activeThreadId, (_current: string, _previous: string) => { if (_current == pageThreadId.value) return; cancelReadingCorrection(); closeFileReport(); selectedExecutionId.value = ''; expandedReportIds.value = [] as string[]; expandedExecutionIds.value = [] as string[]; expandedQuestionIds.value = [] as string[]; handledApprovalIds.value = [] as string[]; submittedGroupIds.value = [] as string[] }, { flush: 'sync' })
 // 快照替换与流式更新保持展开状态，滑动窗口移除记录时清理失效选择。
 watch(timeline, (entries: TimelineEntry[]) => {
-  nextTick(() => { updateTimelinePosition(); scheduleTimelineFill() })
+  nextTick(() => { updateTimelinePosition(); scheduleTimelineFill(); prefillHistoryContext() })
   if (connection.snapshot == null) return
   // 过程收起时仅隐藏显示，保留其中命令组的手动展开状态。
   expandedExecutionIds.value = retainExpandedExecutions(executionTimeline(displayConversation.value?.messages ?? []), expandedExecutionIds.value)
@@ -1059,7 +1088,38 @@ function toggleExecutions(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyb
 // 现有消息状态沿用所属轮次，不用于推断单条执行结果；辅助行仅说明详情入口。
 // 详情独立于主时间线滚动，关闭面板不改变当前阅读位置。
 function toggleExecution(id: string) { pauseFollowing(); uni.hideKeyboard(); selectedExecutionId.value = id }
-function closeExecution() { selectedExecutionId.value = '' }
+function closeExecution() { selectedExecutionId.value = ''; executionDetailRequest++; clearTimeout(executionDetailTimer); executionDetailText.value = ''; executionDetailLoading.value = false; executionDetailError.value = '' }
+// 详情仅在面板打开后读取，旧缓存仍可展示原内联正文；异步回执必须匹配电脑、聊天和记录。
+function readExecutionDetail() {
+  clearTimeout(executionDetailTimer)
+  const request = ++executionDetailRequest
+  const message = selectedExecution.value
+  executionDetailError.value = ''
+  if (message == null) { executionDetailText.value = ''; executionDetailLoading.value = false; return }
+  if ((message.detailRevision ?? '').length == 0) { executionDetailText.value = message.text; executionDetailLoading.value = false; return }
+  if (!isCurrentPage() || !connection.connected) { executionDetailLoading.value = false; executionDetailError.value = '连接电脑后可读取这条执行详情'; return }
+  const hostId = pageHostId.value, threadId = pageThreadId.value, id = message.id
+  executionDetailLoading.value = true
+  bridge.request('thread.history', { threadId, executionMessageId: id }).then((result: UTSJSONObject) => {
+    if (request != executionDetailRequest || !isCurrentPage() || pageHostId.value != hostId || pageThreadId.value != threadId || selectedExecutionId.value != id) return
+    const response = JSON.parse<{ threadId: string, message: ChatMessage }>(JSON.stringify(result))
+    executionDetailLoading.value = false
+    if (response == null || response.threadId != threadId || response.message?.id != id || (response.message.kind != 'commandExecution' && response.message.kind != 'fileChange') || typeof response.message.text != 'string') { executionDetailError.value = '执行详情响应不匹配，请重试'; return }
+    executionDetailText.value = response.message.text
+  }, (error: Error) => {
+    if (request != executionDetailRequest || !isCurrentPage() || selectedExecutionId.value != id) return
+    executionDetailLoading.value = false; executionDetailError.value = error.message
+  })
+}
+// 执行输出变化时合并短时间内的多次更新，关闭面板后不再请求日志。
+watch((): string => [pageHostId.value, pageThreadId.value, selectedExecutionId.value, selectedExecution.value?.detailRevision ?? '', connection.connected.toString()].join(':'), (_current: string, _previous: string) => {
+  const identity = [pageHostId.value, pageThreadId.value, selectedExecutionId.value].join(':')
+  if (executionDetailIdentity != identity) { executionDetailText.value = ''; executionDetailIdentity = identity }
+  const request = ++executionDetailRequest
+  clearTimeout(executionDetailTimer)
+  if (selectedExecution.value == null) { executionDetailText.value = ''; executionDetailLoading.value = false; executionDetailError.value = ''; return }
+  executionDetailTimer = setTimeout(() => { if (request == executionDetailRequest) readExecutionDetail() }, 150)
+}, { flush: 'sync' })
 function toggleQuestion(id: string) { pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
 function jumpTo(anchor: string) {
   closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''
@@ -1723,7 +1783,7 @@ watch((): string => connection.cacheNamespace + ':' + connection.connected + ':'
   const computer = connection.computers.find((item: Computer): boolean => item.id == pageHostId.value)
   const generation = computer?.instanceGeneration ?? ''
   if (props.target.cacheNamespace != connection.cacheNamespace || (connection.connected && computer == null) || (pageGeneration.length > 0 && generation.length > 0 && pageGeneration != generation)) {
-    historyPage.value = null; historyRequest++; historyError.value = ''
+    historyPage.value = null; historyRequest++; historyError.value = ''; historyContextStarted = false; historyContextTurnIds = [] as string[]
     timelineBoundary.value = ''; timelineFilled.value = false; timelineFillStarted = false
     cancelReadingCorrection(); closeFileReport()
   }
