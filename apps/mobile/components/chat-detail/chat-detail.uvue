@@ -1016,17 +1016,19 @@ watch(liveConversation, (current: Conversation | null, previous: Conversation | 
 }, { flush: 'sync' })
 
 let readRequestKey = ''
-// 正文挂载且实时订阅已确认后独立提交已读；不导航电脑，不发送草稿。
+// 桌面目录可能晚于正文到达，等实时快照明确报告未读后才提交已读确认。
 function confirmVisibleRead() {
   const snapshot = liveConversation.value
   if (!pageVisible.value || !isCurrentPage() || !subscriptionReady.value || snapshot?.supportsReadState != true) { readRequestKey = ''; return }
-  if (snapshot!.hasUnreadTurn == false) { readRequestKey = ''; return }
+  if (snapshot!.hasUnreadTurn != true) { readRequestKey = ''; return }
   if (displayConversation.value == null) return
   const key = pageHostId.value + ':' + pageThreadId.value + ':' + (connection.subscriptionRevision ?? 0).toString() + ':' + (snapshot!.latestTurn?.turnId ?? '')
   if (readRequestKey == key) return
   readRequestKey = key
   nextTick(() => {
     if (!pageVisible.value || !isCurrentPage() || !subscriptionReady.value || readRequestKey != key) return
+    const current = liveConversation.value
+    if (current?.supportsReadState != true || current?.hasUnreadTurn != true) { readRequestKey = ''; return }
     bridge.request('thread.read', { threadId: pageThreadId.value }).then((result: UTSJSONObject) => {
       if (isCurrentPage() && readRequestKey == key && result.getString('threadId') == pageThreadId.value && result.getBoolean('read') == true && connection.snapshot != null) { readRequestKey = ''; connection.snapshot!.hasUnreadTurn = false }
     }, (_: Error) => { if (isCurrentPage() && readRequestKey == key) operationError.value = '已读状态同步失败，可从右上角菜单重新同步后重试' })
