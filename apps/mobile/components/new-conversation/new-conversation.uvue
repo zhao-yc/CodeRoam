@@ -25,7 +25,7 @@
         @syncinput="syncComposerText" @submit="send" @primary="send" @add="openOptions('add')" @settings="openOptions('settings')" @toggleplan="composerAction('plan')"
         @expand="expandEditor" @layout="showDraftInput"
         @removeimage="removeImage" @previewimage="previewImage" @removefile="removeFile" @removeplugin="removePlugin" @removemention="removeThreadMention">
-        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded && projectReady" :project-id="projectId" :selected-mode="draft.choices.permissionMode ?? 'default'" :disabled="operationBusy" @select="selectPermission" /></template>
+        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded && projectReady" :project-id="projectId" :selected-mode="draft.choices.permissionMode ?? rememberedPermission" :disabled="operationBusy" @select="selectPermission" /></template>
       </message-composer>
     </view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
@@ -47,6 +47,7 @@
 <script setup lang="uts">
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import PermissionsControl from '../permissions-control/permissions-control.uvue'
+import { readPermissionPreference } from '../../services/permission-preferences.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 import MessageComposer from '../message-composer/message-composer.uvue'
 import ComposerOptions from '../composer-options/composer-options.uvue'
@@ -95,6 +96,7 @@ let projectRequest = 0, settingsRequest = 0
 let alive = true
 let editorRevision = 0, editorLayoutTimer = 0
 const draft = computed((): NewDraft => newDraft(connection.hostId, projectId.value))
+const rememberedPermission = computed((): string => readPermissionPreference(connection.cacheNamespace ?? '', connection.hostId) || 'default')
 const native = computed(() => nativeDraftState(connection.hostId, projectId.value))
 const direct = computed(() => directNewConversationState(draft.value))
 const existingDraft = computed(() => newConversationMode.value == 'nativeDraft' && native.value.snapshot?.status == 'ready' ? native.value.snapshot : null)
@@ -417,16 +419,24 @@ async function send() {
   const target = draft.value, mode = newConversationMode.value, revision = connection.configurationRevision
   // 旧连接不能静默拆成设置调用，先保留手机输入并要求更新。
   const choices = target.choices
+  const permissionMode = choices.permissionMode ?? rememberedPermission.value
   const selectedChoices = choices != null && (choices.model != null || choices.effort != null || choices.serviceTier != null || choices.mode != null || choices.permissionMode != null && choices.permissionMode != 'desktop-default')
   const taskReady =
     // #ifdef WEB
     typeof supportsSubmissionTasks == 'function' &&
     // #endif
     supportsSubmissionTasks(target.hostId)
-  if (selectedChoices && (!supportsDirectChoices.value || !taskReady)) { error.value = '请更新电脑连接服务后随消息提交所选设置，草稿已保留'; return }
+  if ((selectedChoices || permissionMode != 'default') && (!supportsDirectChoices.value || !taskReady)) { error.value = '请更新电脑连接服务后随消息提交所选设置，草稿已保留'; return }
   busy.value = true; pendingNewAction.value = 'send'; emit('busy', true); closeMenus(); error.value = ''
   const updateProgress = (message: string): void => { progress.value = message }
   try {
+    // 只记住权限档位，完全访问的授权须由这条新聊天独立确认；弹窗后重新核对目标。
+    if (permissionMode == 'full-access' && choices.confirmedFullAccess != true) {
+      const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完全访问权限', content: '上次选择了完全访问。是否为此新聊天启用？将允许 Codex 访问电脑文件和网络，沙箱限制将解除。', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
+      if (!confirmed || !alive || !props.expanded || draft.value != target || revision != connection.configurationRevision || !projectReady.value || target.choices != choices) return
+      choices.confirmedFullAccess = true
+    }
+    if (supportsDirectChoices.value && taskReady) choices.permissionMode = permissionMode
     if (taskReady) {
       await submitNewConversationTask(target, mode, updateProgress, settings.value)
       if (alive && props.expanded && draft.value == target && revision == connection.configurationRevision) { busy.value = false; emit('busy', false); uni.hideKeyboard(); emit('queued') }
