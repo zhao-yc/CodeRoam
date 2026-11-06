@@ -510,6 +510,8 @@ export class DesktopAdapter extends EventEmitter {
       ipcMethod=approval.kind==='command'?'thread-follower-command-approval-decision':'thread-follower-file-approval-decision';version=1;
       payload={...base,requestId:request.id,decision:params.decision};
     } else throw new BridgeError('METHOD_NOT_ALLOWED','不支持的桌面操作');
+    selection?.check(); mentions?.check();
+    if (beforeSend) await beforeSend();
     if(firstMessage){
       // 初始快照强制刷新，插件解析和附件落盘后再次核对当前订阅收到的最新状态。
       const current=this.firstMessageContext(params.threadId,deviceId,firstMessageGuard,firstMessage,firstMessage.permissions);
@@ -522,7 +524,6 @@ export class DesktopAdapter extends EventEmitter {
       else if(method==='turn.steer'&&Object.hasOwn(messageOptions,'serviceTier'))payload.serviceTier=messageOptions.serviceTier;
     }
     selection?.check(); mentions?.check();
-    beforeSend?.();
     const response=await this.client.request(ipcMethod,payload,version,{targetClientId:entry.owner.clientId,timeoutMs:15000});
     if(response.resultType!=='success') throw new BridgeError('OWNER_UNAVAILABLE','桌面聊天所有者已不可用');
     if(method==='thread.settings.update') {

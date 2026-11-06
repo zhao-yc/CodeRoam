@@ -89,7 +89,7 @@ export async function readPermissions(adapter,threadId,deviceId) {
 }
 
 /** 只提交固定内置档案；沙箱与审查始终由原桌面落实，成功后必须回读。 */
-export async function updatePermissions(adapter,params,commandId,deviceId,checkpoint=()=>{}) {
+export async function updatePermissions(adapter,params,commandId,deviceId,checkpoint=()=>{},beforeWrite=()=>{}) {
   const current=await readPermissions(adapter,params.threadId,deviceId);
   if(current.revision!==params.expectedRevision) throw new BridgeError('PERMISSIONS_CHANGED','电脑权限已变化，请重新选择');
   const preset=presets.find(p=>p.id===params.mode);
@@ -98,6 +98,7 @@ export async function updatePermissions(adapter,params,commandId,deviceId,checkp
   const entry=adapter.subscribed(params.threadId,deviceId), owner=entry.owner;
   const threadSettings={ permissions:preset.profile, approvalPolicy:preset.policy, approvalsReviewer:params.mode==='auto-review'?current.reviewer:'user' };
   const snapshot=adapter.snapshot(entry.state), activeTurnId=snapshot.activeTurnId;
+  beforeWrite();
   checkpoint({ permissionChange: { ...params } });
   let response;
   try { response=await adapter.client.request('thread-follower-update-thread-settings',{conversationId:params.threadId,threadSettings,...(activeTurnId?{activeTurnId}:{})},2,{targetClientId:owner.clientId,timeoutMs:15000}); }

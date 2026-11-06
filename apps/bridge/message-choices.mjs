@@ -1,8 +1,8 @@
 import { BridgeError, validateMessageChoices } from '../../packages/protocol/contracts.mjs';
 import { executionSettings, validateSettings, resolveExecutionEffort } from './model-settings.mjs';
-import { permissionState, permissionRequest } from './permissions.mjs';
+import { permissionState, permissionRequest, updatePermissions } from './permissions.mjs';
 
-/** 把本条消息的选择编译为原生发送参数，全程不提前写入聊天设置。 */
+/** 执行选项随正文发送；权限在提交前由原桌面应用并回读，保证聊天权限也同步。 */
 export async function sendWithChoices(adapter, method, params, commandId, deviceId, checkpoint, firstMessageGuard) {
   const choices = validateMessageChoices(params.choices), { choices: _choices, ...message } = params;
   await adapter.watch(params.threadId, deviceId, { fresh: true, history: false });
@@ -37,8 +37,8 @@ export async function sendWithChoices(adapter, method, params, commandId, device
       if (permissions.mode !== choices.permissionMode) throw new BridgeError('CHOICES_REQUIRE_QUEUE', '原生追加接口不能携带所选权限，请改为排队发送，草稿已保留');
     } else Object.assign(nativeRequest, permissionRequest(choices.permissionMode, permissions.reviewer, choices.confirmedFullAccess));
   }
-  // 插件解析、附件准备期间只核对原快照；所选值在真正发送时由原生接口一次接收。
-  const beforeSend = () => {
+  // 插件解析和附件准备后仍须核对原快照，不能覆盖桌面期间发生的变更。
+  const assertCurrent = () => {
     if (adapter.subscribed(params.threadId, deviceId) !== entry || entry.owner?.clientId !== owner.clientId || entry.owner?.hostId !== owner.hostId) throw new BridgeError('OWNER_UNAVAILABLE', '桌面聊天所有者已变化，请重新同步');
     assertTurn();
     if (baselineSettings) {
@@ -49,9 +49,23 @@ export async function sendWithChoices(adapter, method, params, commandId, device
     }
     if (permissions && permissionState(entry.state).revision !== permissions.revision) throw new BridgeError('PERMISSIONS_CHANGED', '电脑权限已变化，请重新选择后发送');
   };
-  beforeSend();
+  const sendGuard = firstMessageGuard === undefined ? undefined : { ...firstMessageGuard };
+  const beforeSend = async () => {
+    assertCurrent();
+    if (permissions && method === 'turn.send' && permissions.mode !== choices.permissionMode) {
+      // 单轮权限参数不会保存桌面菜单选择。复用原生设置及回读，未知结果时停止正文发送。
+      permissions = await updatePermissions(adapter, {
+        threadId: params.threadId, mode: choices.permissionMode, expectedRevision: permissions.revision,
+        confirmedFullAccess: choices.confirmedFullAccess === true,
+      }, commandId, deviceId, checkpoint, assertCurrent);
+      if (sendGuard) sendGuard.permissionRevision = permissions.revision;
+      checkpoint({ threadId: params.threadId, choicesStage: 'permissions-applied', messageAccepted: false });
+    }
+    assertCurrent();
+  };
+  assertCurrent();
   checkpoint({ threadId: params.threadId, choicesStage: 'ready', messageAccepted: false });
-  const result = await adapter.operate(method, message, commandId, deviceId, checkpoint, firstMessageGuard, beforeSend, nativeRequest);
+  const result = await adapter.operate(method, message, commandId, deviceId, checkpoint, sendGuard, beforeSend, nativeRequest);
   // 正文已被接受后，账本记录失败不能要求用户重新发送。
   try { checkpoint({ ...result, threadId: params.threadId, choicesStage: 'sent', messageAccepted: true }); } catch {}
   return result;

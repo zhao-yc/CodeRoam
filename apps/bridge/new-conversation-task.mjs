@@ -47,7 +47,7 @@ export async function runNewConversationTask(agent, task, context) {
   release = await agent.retainTaskThread(threadId, task.deviceId, task.id);
   await agent.adapter.watch(threadId, task.deviceId, { fresh: true, history: false });
 
-  // 首轮的设置和权限随发送请求进入原桌面，不提前修改空聊天。
+  // 首轮执行选项随正文提交；权限由发送路径在最终提交前应用并回读。
   const permissions = await agent.adapter.readPermissions(threadId, task.deviceId);
   const selected = choices.permissionMode === 'desktop-default' ? '' : choices.permissionMode ?? '';
   if (!selected) assertPermissions(permissions, choices);

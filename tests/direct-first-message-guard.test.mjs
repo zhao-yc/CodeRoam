@@ -63,6 +63,25 @@ test('首条 IPC 固定已核验沙箱和审查设置，完整访问须独立确
   assert.equal(f.requests[1][1].turnStart.request.permissions,full.permissions);
 });
 
+test('首轮显式权限应用后使用回读版本核对空聊天，原提交保护保持原值',async context=>{
+  const f=adapterFixture(context), request=f.adapter.client.request;
+  f.state.latestThreadSettings={...workspace};
+  f.adapter.permissionCatalog={capabilities:async()=>({options:[{id:'full-access',enabled:true}],reviewer:'auto_review'})};
+  f.adapter.client.request=async(...args)=>{
+    if(args[0]==='thread-follower-update-thread-settings'){
+      f.requests.push(args);
+      Object.assign(f.state.latestThreadSettings,args[1].threadSettings);
+      return {resultType:'success',result:{applied:true}};
+    }
+    return request(...args);
+  };
+  const originalRevision=f.guard.permissionRevision;
+  await f.adapter.operate('turn.send',{...params,choices:{permissionMode:'full-access',permissionRevision:originalRevision,confirmedFullAccess:true}},command,phone,()=>{},f.guard);
+  assert.equal(f.guard.permissionRevision,originalRevision);
+  assert.deepEqual(f.requests.map(call=>call[0]),['thread-follower-update-thread-settings','thread-follower-start-turn']);
+  assert.equal(f.requests[1][1].turnStart.request.permissions,full.permissions);
+});
+
 test('普通启动与多实例的空聊天首轮均保留手机显示的极高，原空值不覆盖所选档位',async context=>{
   for(const directIpc of [true,false]) {
     const f=adapterFixture(context),client=f.adapter.client;
