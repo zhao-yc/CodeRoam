@@ -14,11 +14,11 @@ function fixture(){
   const c={composerInstanceId:'example-composer',computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
   Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
   Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([]),mentionOpen:ref(false),draftMentions:ref([])});
-  Object.assign(c,{pendingAction:ref(''),connection:{pendingCommands:[]}});
+  Object.assign(c,{pendingAction:ref(''),connection:{pendingCommands:[]},timeline:ref([])});
   const layout=page.slice(page.indexOf('function updateComposerGeometry()'),page.indexOf('// 键盘由输入区处理'));
   const blur=page.slice(page.indexOf('function onDraftBlur()'),page.indexOf('function updateMenuHeight()'));
   const focus=page.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0];
-  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}), componentScope(c));
+  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerPlaceholderHidden,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}), componentScope(c));
   return {c,ui:c.ui,watches,unloads,timers,flush(){while(frames.length)frames.shift()();},blur(){for(const [id,fn] of [...timers]){timers.delete(id);fn();}}};
 }
 
@@ -70,6 +70,34 @@ test('普通启动和多实例按实例及聊天匹配发送，其他操作不�
     command.threadId='thread';assert.equal(f.ui.composerExpanded.value,false);
     command.method='thread.settings.update';assert.equal(f.ui.composerExpanded.value,true);
   }
+});
+
+test('发送及入队后等待期间隐藏全部占位文字，完成或失败后恢复提示',()=>{
+  const f=fixture();
+  const tag=page.slice(page.indexOf('<message-composer'),page.indexOf('</message-composer>'));
+  const prediction=tag.match(/:prediction="([^"]+)"/)[1];
+  const placeholder=tag.match(/:placeholder="([^"]+)"/)[1];
+  const scope={get composerPlaceholderHidden(){return f.ui.composerPlaceholderHidden.value;},visiblePrediction:'合成预测',readOnly:false,activating:false};
+  assert.equal(f.ui.composerPlaceholderHidden.value,false);
+  assert.equal(vm.runInNewContext(placeholder,scope),'问问 Codex');
+  assert.equal(vm.runInNewContext(prediction,scope),'合成预测');
+  f.c.pendingAction.value='send';
+  assert.equal(vm.runInNewContext(placeholder,scope),'');
+  assert.equal(vm.runInNewContext(prediction,scope),'');
+  f.c.pendingAction.value='';
+  for(const label of ['queued','running']){
+    f.c.timeline.value=[{kind:'submittedMessage',label}];
+    assert.equal(vm.runInNewContext(placeholder,scope),'');
+    assert.equal(vm.runInNewContext(prediction,scope),'');
+  }
+  for(const label of ['succeeded','failed','unknown']){
+    f.c.timeline.value=[{kind:'submittedMessage',label}];
+    assert.equal(vm.runInNewContext(placeholder,scope),'问问 Codex');
+  }
+  f.c.timeline.value=[{kind:'message',label:'running'}];
+  assert.equal(f.ui.composerPlaceholderHidden.value,false);
+  scope.readOnly=true;scope.activating=true;
+  assert.equal(vm.runInNewContext(placeholder,scope),'正在连接聊天…');
 });
 
 test('预测按真实排版高度取整并限制六行，编辑态保持原有高度范围',()=>{

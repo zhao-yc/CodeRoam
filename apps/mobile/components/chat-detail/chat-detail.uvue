@@ -164,7 +164,7 @@
         :primary-icon="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? 'stop' : 'send'"
         :primary-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? '停止任务' : '发送指令'"
         :settings-disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" :plan-enabled="planEnabled" :plan-disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'"
-        :prediction="visiblePrediction" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
+        :prediction="composerPlaceholderHidden ? '' : visiblePrediction" :placeholder="composerPlaceholderHidden ? '' : readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
         :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retrying-file-ids="retryingFileIds" :retry-disabled="!canWrite"
         @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange"
         @syncinput="syncComposerText" @submit="applyComposerEnter" @acceptprediction="acceptPrediction(false)" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
@@ -1566,6 +1566,8 @@ function onDraftLineChange(event: UniTextareaLineChangeEvent) {
 }
 // 发送回执到达前仍保留原草稿，但发送态优先收起；只匹配本实例、本聊天的消息提交。
 const composerSending = computed((): boolean => pendingAction.value == 'send' || connection.pendingCommands.some((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && (entry.method == 'turn.send' || entry.method == 'turn.steer')))
+// 入队回执可能先清空草稿；消息仍在等待或发送时，单行输入框也不显示预测或占位提示。
+const composerPlaceholderHidden = computed((): boolean => composerSending.value || timeline.value.some((entry: TimelineEntry): boolean => entry.kind == 'submittedMessage' && (entry.label == 'queued' || entry.label == 'running')))
 const composerExpanded = computed((): boolean => !composerSending.value && shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || mentionOpen.value || draftPlugins.value.length > 0 || draftMentions.value.length > 0, attachmentBusy: imageBusy.value }))
 const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
 // 高度由一行工具栏及编辑空间组成，数值过渡期间两端按钮始终贴住底边。
