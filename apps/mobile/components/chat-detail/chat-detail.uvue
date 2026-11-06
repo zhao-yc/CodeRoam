@@ -180,7 +180,7 @@
     </view>
       <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ left: menuLeft + 'px', bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
-    <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text class="execution-text" selectable>{{ selectedExecution?.text ?? '' }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(selectedExecution?.text ?? '')" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
+    <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text v-if="executionDetailLoading" class="sheet-note">正在读取执行详情…</text><view v-if="executionDetailError.length > 0"><text class="sheet-note">{{ executionDetailError }}</text><button @click="readExecutionDetail">重新读取</button></view><text v-if="executionDetailText.length > 0" class="execution-text" selectable>{{ executionDetailText }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(executionDetailText)" :disabled="executionDetailLoading || executionDetailText.length == 0" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
     <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view>
         <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="unansweredQuestionGroups.length > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ unansweredQuestionGroups.length }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="unansweredApprovalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ unansweredApprovalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
     <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
@@ -396,6 +396,12 @@ function pauseFollowing() { following.value = false; timelineUserScrolling = fal
 function openFileReport(report: FileReport, fileId: string) { pauseFollowing(); uni.hideKeyboard(); selectedFileReport.value = report; selectedChangedFileId.value = fileId }
 function closeFileReport() { selectedFileReport.value = null; selectedChangedFileId.value = '' }
 const selectedExecutionId = ref('')
+const executionDetailText = ref('')
+const executionDetailLoading = ref(false)
+const executionDetailError = ref('')
+let executionDetailRequest = 0
+let executionDetailTimer = 0
+let executionDetailIdentity = ''
 const selectedAnnotationId = ref('')
 const historyPage = ref<HistoryPage | null>(null)
 const loadingHistory = ref(false)
@@ -1002,7 +1008,7 @@ function onHistoryTop() {
 // 隐藏页面停止补挂载，返回时继续当前面板的阅读位置。
 onPaneShow(() => { nextTick(() => { scheduleTimelineFill() }) })
 onPaneHide(() => { clearTimeout(timelineFillTimer); timelineFillTimer = 0; cancelTimelinePaintWait() })
-onUnmounted(() => { clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
+onUnmounted(() => { executionDetailRequest++; clearTimeout(executionDetailTimer); clearTimeout(timelineFillTimer); cancelTimelinePaintWait() })
 
 // 只保留已读过的实时窗口；分页回执不能覆盖最新消息或执行权限。
 watch(liveConversation, (current: Conversation | null, previous: Conversation | null) => {
@@ -1107,7 +1113,38 @@ function toggleExecutions(entry: TimelineEntry) { pauseFollowing(); uni.hideKeyb
 // 现有消息状态沿用所属轮次，不用于推断单条执行结果；辅助行仅说明详情入口。
 // 详情独立于主时间线滚动，关闭面板不改变当前阅读位置。
 function toggleExecution(id: string) { pauseFollowing(); uni.hideKeyboard(); selectedExecutionId.value = id }
-function closeExecution() { selectedExecutionId.value = '' }
+function closeExecution() { selectedExecutionId.value = ''; executionDetailRequest++; clearTimeout(executionDetailTimer); executionDetailText.value = ''; executionDetailLoading.value = false; executionDetailError.value = '' }
+// 详情仅在面板打开后读取，旧缓存仍可展示原内联正文；异步回执必须匹配电脑、聊天和记录。
+function readExecutionDetail() {
+  clearTimeout(executionDetailTimer)
+  const request = ++executionDetailRequest
+  const message = selectedExecution.value
+  executionDetailError.value = ''
+  if (message == null) { executionDetailText.value = ''; executionDetailLoading.value = false; return }
+  if ((message.detailRevision ?? '').length == 0) { executionDetailText.value = message.text; executionDetailLoading.value = false; return }
+  if (!isCurrentPage() || !connection.connected) { executionDetailLoading.value = false; executionDetailError.value = '连接电脑后可读取这条执行详情'; return }
+  const hostId = pageHostId.value, threadId = pageThreadId.value, id = message.id
+  executionDetailLoading.value = true
+  bridge.request('thread.history', { threadId, executionMessageId: id }).then((result: UTSJSONObject) => {
+    if (request != executionDetailRequest || !isCurrentPage() || pageHostId.value != hostId || pageThreadId.value != threadId || selectedExecutionId.value != id) return
+    const response = JSON.parse<{ threadId: string, message: ChatMessage }>(JSON.stringify(result))
+    executionDetailLoading.value = false
+    if (response == null || response.threadId != threadId || response.message?.id != id || (response.message.kind != 'commandExecution' && response.message.kind != 'fileChange') || typeof response.message.text != 'string') { executionDetailError.value = '执行详情响应不匹配，请重试'; return }
+    executionDetailText.value = response.message.text
+  }, (error: Error) => {
+    if (request != executionDetailRequest || !isCurrentPage() || selectedExecutionId.value != id) return
+    executionDetailLoading.value = false; executionDetailError.value = error.message
+  })
+}
+// 执行输出变化时合并短时间内的多次更新，关闭面板后不再请求日志。
+watch((): string => [pageHostId.value, pageThreadId.value, selectedExecutionId.value, selectedExecution.value?.detailRevision ?? '', connection.connected.toString()].join(':'), (_current: string, _previous: string) => {
+  const identity = [pageHostId.value, pageThreadId.value, selectedExecutionId.value].join(':')
+  if (executionDetailIdentity != identity) { executionDetailText.value = ''; executionDetailIdentity = identity }
+  const request = ++executionDetailRequest
+  clearTimeout(executionDetailTimer)
+  if (selectedExecution.value == null) { executionDetailText.value = ''; executionDetailLoading.value = false; executionDetailError.value = ''; return }
+  executionDetailTimer = setTimeout(() => { if (request == executionDetailRequest) readExecutionDetail() }, 150)
+}, { flush: 'sync' })
 function toggleQuestion(id: string) { if (interactionCoolingDown.value) return; pauseFollowing(); layoutUntil = Date.now() + 350; const index = expandedQuestionIds.value.indexOf(id); if (index >= 0) expandedQuestionIds.value.splice(index, 1); else expandedQuestionIds.value.push(id) }
 function jumpTo(anchor: string) {
   closeActions(); pauseFollowing(); layoutUntil = Date.now() + 350; scrollTarget.value = ''
