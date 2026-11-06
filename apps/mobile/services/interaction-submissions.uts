@@ -1,0 +1,28 @@
+import { reactive } from 'vue'
+
+export type InteractionSubmission = {
+  scope: string
+  kind: string
+  id: string
+  turnId: string
+  action: string
+  commandId: string
+  state: string
+  checking: boolean
+}
+
+// 只记原操作编号和界面状态。切走再回到同一会话仍能核对，草稿和秘密答案不进入记录。
+export const interactionSubmissions = reactive<InteractionSubmission[]>([])
+
+export function interactionStatusLabel(entry: InteractionSubmission): string {
+  if (entry.state == 'unknown') return '结果待核对'
+  if (entry.state == 'resolved') return '已同步，原操作已结束'
+  const sending = entry.state == 'sending'
+  if (entry.kind == 'question') return sending ? '正在提交回答' : '回答已提交'
+  if (entry.kind == 'approval') {
+    if (entry.action == 'accept') return sending ? '正在提交本次允许' : '已允许本次操作'
+    return sending ? '正在提交拒绝' : '已拒绝本次操作'
+  }
+  if (entry.action == 'feedback') return sending ? '正在发送修改意见' : '修改意见已发送'
+  return sending ? '正在提交实施' : '已提交实施计划'
+}

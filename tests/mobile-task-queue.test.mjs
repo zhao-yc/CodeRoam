@@ -151,7 +151,7 @@ test('过期回执只提示核对，不将缺失的业务回执当作成功', as
 test('权限入队释放操作锁但不冒充生效；旧任务完成不能解除下一项提交的锁', async () => {
   const script = fs.readFileSync('apps/mobile/components/permissions-control/permissions-control.uvue', 'utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm, '');
   const emitted = [], watches = [], writes = [];
-  const permissions = { mode: 'default', revision: 'permissions-a', options: ['default', 'read-only', 'auto-review'].map(id => ({ id, enabled: true })) };
+  const permissions = { mode: 'read-only', revision: 'permissions-a', options: ['default', 'read-only', 'auto-review'].map(id => ({ id, enabled: true })) };
   const props = { threadId: 'thread-a', projectId: '', selectedMode: '', disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 390 };
   const connection = { hostId: 'pc-a', connected: true, subscriptionRevision: 1, computers: [{ id: 'pc-a', online: true }], snapshot: { threadId: 'thread-a', supportsPermissionSettings: true, permissionSettings: permissions } };
   const tasks = { accepted: { revision: 0, method: '', hostId: '', threadId: '', taskId: '' } };
@@ -161,13 +161,13 @@ test('权限入队释放操作锁但不冒充生效；旧任务完成不能解�
   });
   vm.runInContext(stripTypeScriptTypes(script, { mode: 'transform' }) + '\nglobalThis.subject={load,choose,busy,pendingQueued,state};', context);
   const f = context.subject; await f.load();
-  const first = f.choose('read-only'); assert.equal(f.busy.value, true);
+  const first = f.choose('default'); assert.equal(f.busy.value, true);
   const acceptedWatch = watches.find(item => /submissionTasks\.accepted/.test(item.source.toString())).callback;
   tasks.accepted = { revision: 1, method: 'thread.permissions.update', hostId: 'pc-a', threadId: 'thread-a', taskId: 'synthetic-permission-1' }; acceptedWatch();
-  assert.equal(f.busy.value, false); assert.equal(f.pendingQueued.value, true); assert.equal(f.state.value.mode, 'default');
+  assert.equal(f.busy.value, false); assert.equal(f.pendingQueued.value, true); assert.equal(f.state.value.mode, 'read-only');
   assert.equal(emitted.some(event => event[0] === 'applied'), false);
   const second = f.choose('auto-review'); assert.equal(f.busy.value, true);
-  writes[0].resolve(json({ ...permissions, mode: 'read-only' })); await first;
+  writes[0].resolve(json({ ...permissions, mode: 'default' })); await first;
   assert.equal(f.busy.value, true, '第一项迟到成功不能释放第二项的入队锁');
   tasks.accepted = { revision: 2, method: 'thread.permissions.update', hostId: 'pc-a', threadId: 'thread-a', taskId: 'synthetic-permission-2' }; acceptedWatch();
   assert.equal(f.busy.value, false);

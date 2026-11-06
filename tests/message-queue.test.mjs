@@ -35,6 +35,42 @@ function fixture(t) {
   return { client, journal, adapter, agent, queue: agent.messageQueue, send, resume };
 }
 
+for (const [mode, binding] of [['普通启动', { directIpc: true }], ['多实例模式', { port: 9300 }]]) {
+  test(mode + '发送占位在客户端确认成功时清除，实例核验和重复提交保护有效', async t => {
+    const f = fixture(t);
+    let verified = 0;
+    f.client.instance = { ...binding, platform: 'win32', generation: randomUUID(), alive: true, ready: true, verify: async () => { verified++; } };
+    f.client.idle();
+    await f.adapter.watch('thread', 'phone');
+    f.agent.taskQueue.ready = () => false;
+    const taskId = randomUUID();
+    const input = { taskId, kind: 'command', payload: { method: 'turn.send', params: { threadId: 'thread', text: '合成发送确认', queueAction: 'enqueue' } } };
+    const request = { v: 1, type: 'request', requestId: randomUUID(), deviceId: 'phone', method: 'tasks.submit', params: input, expectedGeneration: f.client.instance.generation };
+    const accepted = await f.agent.handleRequest(request);
+    assert.equal(accepted.error, undefined);
+    assert.equal(accepted.result.accepted, true);
+    assert.equal(f.client.calls.length, 0);
+    assert.equal(f.agent.taskQueue.decorateMessages({ threadId: 'thread', messages: [] }).messages[0].status, 'queued');
+    let confirm;
+    const confirmation = new Promise(resolve => { confirm = resolve; });
+    const original = f.client.request.bind(f.client);
+    f.client.request = async (...args) => { const result = await original(...args); await confirmation; return result; };
+    f.agent.taskQueue.ready = () => true;
+    const sending = f.agent.taskQueue.pump();
+    await new Promise(setImmediate);
+    assert.equal(f.agent.taskQueue.decorateMessages({ threadId: 'thread', messages: [] }).messages[0].status, 'running');
+    confirm();
+    await sending;
+    assert.equal(f.agent.taskQueue.row('phone', taskId).state, 'succeeded');
+    assert.deepEqual(f.agent.taskQueue.decorateMessages({ threadId: 'thread', messages: [] }).messages, []);
+    await f.agent.handleRequest({ ...request, requestId: randomUUID() });
+    assert.equal(f.client.calls.length, 1);
+    assert.equal(f.client.calls[0].method, 'thread-follower-start-turn');
+    assert.equal(f.client.calls[0].params.turnStart.request.clientUserMessageId, taskId);
+    assert.ok(verified > 0);
+  });
+}
+
 test('运行中发送只入队，重复请求不重复保存，手机退订后仍按顺序开始下一轮', async t => {
   const f = fixture(t), id = randomUUID();
   const first = await f.send('enqueue', { text: '第一条合成消息' }, id);

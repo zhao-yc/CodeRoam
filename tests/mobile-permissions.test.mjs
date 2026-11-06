@@ -1,4 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import {stripTypeScriptTypes} from 'node:module';
+const copySource = fs.readFileSync('apps/mobile/services/permissions.uts', 'utf8');
+const { permissionLabel, permissionDescription } = await import('data:text/javascript,' + encodeURIComponent(stripTypeScriptTypes(copySource, { mode: 'transform' })));
 /** 执行实际组件脚本，验证确认取消和目标切换不会触发写操作。 */
 function fixture({ initialProps = {}, mode = 'default', request: read } = {}){
  const props={threadId:'thread',projectId:'',selectedMode:'',disabled:false,active:true,...initialProps},calls=[],events=[],watchers=[],unmounts=[];
@@ -19,14 +21,41 @@ function fixture({ initialProps = {}, mode = 'default', request: read } = {}){
   }
   throw Error('测试监听未收敛');
  }
- const ctx=vm.createContext({props,connection,withDefaults:v=>v,defineProps:()=>props,defineEmits:()=>(...args)=>events.push(args),ref:value=>({value}),computed:fn=>({get value(){return fn()}}),watch,onUnmounted:fn=>unmounts.push(fn),permissionLabel:v=>v,uni:{getWindowInfo:()=>({windowWidth:390,windowHeight:844}),getElementById:()=>null,showModal:options=>{if(confirm)confirm.resolve=value=>options.success(value);else options.success(answer)}},bridge:{request:async(method,params)=>{calls.push({method,params});if(read)return read(method,params,data);return method==='thread.permissions.update'?{...data,mode:params.mode}:data}}});
+ const ctx=vm.createContext({props,connection,withDefaults:v=>v,defineProps:()=>props,defineEmits:()=>(...args)=>events.push(args),ref:value=>({value}),computed:fn=>({get value(){return fn()}}),watch,onUnmounted:fn=>unmounts.push(fn),permissionLabel,permissionDescription,uni:{getWindowInfo:()=>({windowWidth:390,windowHeight:844}),getElementById:()=>null,showModal:options=>{if(confirm)confirm.resolve=value=>options.success(value);else options.success(answer)}},bridge:{request:async(method,params)=>{calls.push({method,params});if(read)return read(method,params,data);return method==='thread.permissions.update'?{...data,mode:params.mode}:data}}});
  let source=fs.readFileSync('apps/mobile/components/permissions-control/permissions-control.uvue','utf8').split('<script setup lang="uts">')[1].split('</script>')[0].replace(/^import .*\r?\n/gm,'');
- vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={load,choose,state,mode,label,loading,error,opened,openMenu};',ctx);
+ vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+';globalThis.subject={load,choose,state,mode,label,loading,error,opened,openMenu,menuOptions};',ctx);
  return{...ctx.subject,props,connection,calls,events,data,sync,unmount:()=>unmounts.forEach(fn=>fn()),answer:v=>{answer=v},defer:()=>{confirm={};return confirm}};
 }
 test('完整访问取消不写入，确认后携带权限版本和确认标记',async()=>{const f=fixture();await f.load();await f.choose('full-access');assert.equal(f.calls.length,1);f.answer({confirm:true});await f.choose('full-access');assert.equal(f.calls[1].method,'thread.permissions.update');assert.equal(f.calls[1].params.confirmedFullAccess,true);assert.equal(f.calls[1].params.expectedRevision,'a'.repeat(64));assert.deepEqual(f.events,[['busy',true],['busy',false],['applied','pc','thread']]);});
-test('确认期间切换电脑和只读历史均不写入',async()=>{const f=fixture();await f.load();const deferred=f.defer(),pending=f.choose('full-access');f.connection.hostId='other';deferred.resolve({confirm:true});await pending;assert.equal(f.calls.length,1);f.connection.hostId='pc';f.connection.snapshot.readOnly=true;await f.choose('read-only');assert.equal(f.calls.length,1);});
-test('新建只修改当前草稿选择，不调用权限写接口',async()=>{const f=fixture();f.props.threadId='';f.props.projectId='project';await f.load();await f.choose('read-only');assert.equal(f.calls[0].method,'thread.create.permissions');assert.equal(f.calls.length,1);assert.deepEqual(f.events,[['select','read-only',false,'a'.repeat(64)]]);});
+test('确认期间切换电脑和只读历史均不写入',async()=>{const f=fixture();await f.load();const deferred=f.defer(),pending=f.choose('full-access');f.connection.hostId='other';deferred.resolve({confirm:true});await pending;assert.equal(f.calls.length,1);f.connection.hostId='pc';f.connection.snapshot.readOnly=true;await f.choose('auto-review');assert.equal(f.calls.length,1);});
+test('新建只修改当前草稿选择，不调用权限写接口',async()=>{const f=fixture();f.props.threadId='';f.props.projectId='project';await f.load();await f.choose('auto-review');assert.equal(f.calls[0].method,'thread.create.permissions');assert.equal(f.calls.length,1);assert.deepEqual(f.events,[['select','auto-review',false,'a'.repeat(64)]]);});
+
+test('桥接和原生草稿的手机菜单使用桌面三档文案，保留已同步的只读状态', async () => {
+  const expected = [
+    ['default', '请求批准', '编辑外部文件和使用互联网时始终询问'],
+    ['auto-review', '帮我批准', '仅对检测到的风险操作请求批准'],
+    ['full-access', '完全访问权限', '可不受限制地访问互联网和你电脑上的任何文件'],
+  ];
+  const regular = fixture({ mode: 'read-only', initialProps: { threadId: '', projectId: 'project' }, request: (_method, _params, data) => {
+    data.options[1] = { id: 'auto-review', enabled: false, disabledReason: '当前模型限制' };
+    return data;
+  } });
+  await settle();
+  const native = fixture({ initialProps: { threadId: '', draftId: 'draft', nativeState: regular.data, nativeStatus: 'ready' } });
+  for (const f of [regular, native]) {
+    f.openMenu();
+    const options = f.menuOptions.value;
+    assert.deepEqual(Array.from(options, ({id}) => [id, permissionLabel(id), permissionDescription(id)]), expected);
+    assert.equal(options[1].enabled, false);
+    assert.equal(options[1].disabledReason, '当前模型限制');
+    assert.equal(f.mode.value, 'read-only');
+    const callCount = f.calls.length;
+    await f.choose('read-only');
+    await f.choose('auto-review');
+    assert.equal(f.calls.length, callCount);
+    assert.equal(f.events.some(([event]) => event === 'select'), false);
+  }
+});
 
 const newProps = { threadId: '', projectId: 'project' };
 /** 释放模拟桥接 Promise 链，观察组件最终读取状态。 */
@@ -143,11 +172,11 @@ test('新建权限读取项目能力，只在用户选择后暂存草稿权限',
 test('已有聊天权限在成功前不通知聚焦，失败保留菜单且不发成功事件', async () => {
   let resolve,reject;
   const f=fixture({request:(method,_params,data)=>method==='thread.permissions.update'?new Promise((yes,no)=>{resolve=yes;reject=no;}):data});
-  await f.load(); f.opened.value=true; const pending=f.choose('read-only');
+  await f.load(); f.opened.value=true; const pending=f.choose('auto-review');
   assert.deepEqual(f.events,[['busy',true]]); reject(new Error('权限更新失败')); await pending;
   assert.equal(f.opened.value,true); assert.equal(f.error.value,'权限更新失败');
   assert.equal(f.events.some(event=>event[0]==='applied'),false);
-  const retried=f.choose('read-only'); resolve({...f.data,mode:'read-only'}); await retried;
+  const retried=f.choose('auto-review'); resolve({...f.data,mode:'auto-review'}); await retried;
   assert.deepEqual(f.events.slice(-2),[['busy',false],['applied','pc','thread']]);
 });
 test('取消完整访问、切换电脑或收起组件后不发权限成功事件', async () => {
@@ -156,12 +185,12 @@ test('取消完整访问、切换电脑或收起组件后不发权限成功事�
   for(const change of ['电脑','聊天','收起','卸载']) {
     let resolve;
     const f=fixture({request:(method,_params,data)=>method==='thread.permissions.update'?new Promise(yes=>{resolve=yes;}):data});
-    await f.load(); const pending=f.choose('read-only');
+    await f.load(); const pending=f.choose('auto-review');
     if(change==='电脑') f.connection.hostId='other';
     if(change==='聊天') f.props.threadId='other';
     if(change==='收起') f.props.active=false;
     if(change==='卸载') f.unmount(); else f.sync();
-    resolve({...f.data,mode:'read-only'}); await pending;
+    resolve({...f.data,mode:'auto-review'}); await pending;
     assert.equal(f.events.some(event=>event[0]==='applied'),false,change);
   }
 });

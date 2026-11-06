@@ -4,10 +4,17 @@ export type PermissionState = { mode: string, revision: string, options?: Permis
 // 缺失和自定义状态明确展示，不能把未知权限当作默认权限。
 export function permissionLabel(mode: string): string {
   if (mode == 'desktop-default') return '跟随电脑权限'
-  if (mode == 'default') return '默认权限'
-  if (mode == 'auto-review') return '自动审查'
+  if (mode == 'default') return '请求批准'
+  if (mode == 'auto-review') return '帮我批准'
   if (mode == 'read-only') return '只读'
-  if (mode == 'full-access') return '完整访问权限'
+  if (mode == 'full-access') return '完全访问权限'
   if (mode == 'custom') return '自定义权限'
   return '权限未同步'
+}
+
+export function permissionDescription(mode: string): string {
+  if (mode == 'default') return '编辑外部文件和使用互联网时始终询问'
+  if (mode == 'auto-review') return '仅对检测到的风险操作请求批准'
+  if (mode == 'full-access') return '可不受限制地访问互联网和你电脑上的任何文件'
+  return ''
 }

@@ -4,10 +4,22 @@
     <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || !available || busy || loading ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'dark'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
     <view v-if="opened" class="permission-overlay" :style="{ left: paneLeft + 'px', right: paneWidth > 0 ? 'auto' : '0px', width: paneWidth > 0 ? paneWidth + 'px' : 'auto' }" @click="closeMenu">
       <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
-        <view class="permission-heading"><text class="permission-title">{{ label }}</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
+        <view class="permission-heading"><text class="permission-title">应如何批准 ChatGPT 操作?</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
         <scroll-view direction="vertical" :style="{ height: panelHeight + 'px' }">
           <text v-if="loading && !manualRetry" class="permission-note">正在读取电脑权限…</text>
-          <template v-else><view v-for="option in state?.options ?? []" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }"><view class="permission-symbol"><app-icon :name="permissionIcon(option.id)" :size="24" :tone="option.id == 'full-access' ? 'warning' : 'dark'" /></view><view class="permission-copy"><text class="permission-name">{{ option.label }}</text><text class="permission-description">{{ option.enabled ? option.description : option.disabledReason }}</text></view><loading v-if="pendingMode == option.id && !pendingQueued" class="permission-spinner" /><text v-else-if="pendingMode == option.id && pendingQueued" class="permission-queued">待执行</text><view v-else-if="mode == option.id" class="permission-check"><app-icon name="check" :size="22" /></view><button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="pendingMode == option.id ? '正在同步' + option.label : '选择' + option.label" @click="choose(option.id)"></button></view></template>
+          <template v-else>
+            <view v-for="option in menuOptions" :key="option.id" class="permission-row" :style="{ opacity: option.enabled ? 1 : 0.45 }">
+              <view class="permission-symbol"><app-icon :name="permissionIcon(option.id)" :size="24" :tone="option.id == 'full-access' ? 'warning' : 'dark'" /></view>
+              <view class="permission-copy">
+                <text class="permission-name">{{ permissionLabel(option.id) }}</text>
+                <text class="permission-description">{{ option.enabled ? permissionDescription(option.id) : option.disabledReason }}</text>
+              </view>
+              <loading v-if="pendingMode == option.id && !pendingQueued" class="permission-spinner" />
+              <text v-else-if="pendingMode == option.id && pendingQueued" class="permission-queued">待执行</text>
+              <view v-else-if="mode == option.id" class="permission-check"><app-icon name="check" :size="22" /></view>
+              <button class="permission-hit" :disabled="busy || disabled || !option.enabled" :aria-label="(pendingMode == option.id ? '正在同步' : '选择') + permissionLabel(option.id)" @click="choose(option.id)"></button>
+            </view>
+          </template>
           <text v-if="threadId.length > 0 && activeTurn" class="permission-note">沙箱权限用于下一轮；当前轮次审批方式按电脑能力同步。</text>
           <text v-if="pendingQueued" class="permission-note">权限修改已入队，当前显示电脑已确认的权限。</text><text v-if="busy && pendingMode.length == 0" class="permission-note">正在同步电脑权限…</text>
           <text v-if="error.length > 0" class="permission-error">{{ error }}</text><view v-if="error.length > 0 || manualRetry" class="permission-retry inline-progress-button"><action-progress :busy="manualRetry" /><text class="inline-progress-caption" style="font-size: 13px; color: #4546bd;">重新读取</text><button class="inline-progress-hitbox" :disabled="busy || loading || manualRetry" :aria-label="manualRetry ? '正在重新读取权限' : '重新读取'" @click="retry"></button></view>
@@ -20,7 +32,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
-import { PermissionState, permissionLabel } from '../../services/permissions.uts'
+import { PermissionOption, PermissionState, permissionDescription, permissionLabel } from '../../services/permissions.uts'
 import { submissionTasks } from '../../services/submission-task-state.uts'
 const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, deferChanges?: boolean, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', deferChanges: false, disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
 const emit = defineEmits<{ select: [mode: string, confirmed: boolean, revision: string], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
@@ -28,9 +40,11 @@ const manualRetry = ref(false), pendingMode = ref('')
 const pendingPermissionCommand = ref(''), pendingQueued = ref(false)
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
 const panelLeft = ref(14), panelBottom = ref(100), panelWidth = ref(330), panelHeightLimit = ref(390)
+// 桌面菜单只开放这三档；仍保留只读等原生状态，供同步和已有会话使用。
+const menuOptions = computed((): PermissionOption[] => (state.value?.options ?? []).filter((option): boolean => option.id == 'default' || option.id == 'auto-review' || option.id == 'full-access'))
 // 行高与下方样式保持一致，按可见内容收紧面板；超出小屏可用高度时仍可滚动。
 const panelHeight = computed((): number => {
-  let height = loading.value && !manualRetry.value ? 40 : (state.value?.options?.length ?? 0) * 64
+  let height = loading.value && !manualRetry.value ? 40 : menuOptions.value.length * 78
   if (props.threadId.length > 0 && activeTurn.value) height += 60
   if (pendingQueued.value || (busy.value && pendingMode.value.length == 0)) height += 40
   if (error.value.length > 0 || manualRetry.value) height += 100
@@ -88,13 +102,13 @@ function openMenu() {
   else if (props.threadId.length > 0 || (state.value == null && error.value.length == 0)) load()
 }
 function closeMenu() { if (!busy.value) opened.value = false }
-// 每次切入完整访问都先确认；确认弹窗返回后再次检查目标和权限版本。
+// 每次切入完全访问都先确认；确认弹窗返回后再次检查目标和权限版本。
 async function choose(value: string) {
-  if (props.disabled || props.nativeBusy || busy.value || loading.value || state.value == null || !available.value || !(state.value!.options ?? []).some((option): boolean => option.id == value && option.enabled)) return
+  if (props.disabled || props.nativeBusy || busy.value || loading.value || state.value == null || !available.value || !menuOptions.value.some((option): boolean => option.id == value && option.enabled)) return
   if (value == mode.value) { closeMenu(); return }
   const key = context.value, id = request, revision = state.value!.revision
   if (value == 'full-access') {
-    const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完整访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此聊天启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
+    const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完全访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此聊天启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
     if (!confirmed || !current(key, id) || props.disabled || props.nativeBusy || !available.value || state.value?.revision != revision) return
   }
   if (isNative.value || props.threadId.length == 0 || props.deferChanges) { emit('select', value, value == 'full-access', revision); closeMenu(); return }
@@ -143,7 +157,7 @@ onUnmounted(() => { emit('visibility', false); alive = false; request++; if (bus
 .permission-title { flex: 1; font-size: 14px; color: #596479; }
 .permission-close { position: relative; width: 38px; height: 38px; align-items: center; justify-content: center; }
 .permission-close-hit { position: absolute; top: 0; bottom: 0; left: 0; right: 0; padding: 0; margin: 0; background-color: transparent; }
-.permission-row { position: relative; min-height: 64px; flex-direction: row; align-items: center; padding: 8px; }
+.permission-row { position: relative; min-height: 78px; flex-direction: row; align-items: center; padding: 8px; }
 .permission-symbol { width: 32px; height: 28px; flex-shrink: 0; justify-content: center; }
 .permission-copy { flex: 1; }
 .permission-name { font-size: 16px; color: #1a2135; line-height: 23px; }

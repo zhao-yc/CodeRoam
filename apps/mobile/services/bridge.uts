@@ -110,7 +110,13 @@ export function applyConversationMessages(base: ChatMessage[], update: Conversat
 type ConversationDelta = { supportsMessageChoices?: boolean, supportsDirectMessageChoices?: boolean, latestTurn?: LatestTurn, supportsReadState?: boolean, supportsTurnRetry?: boolean, supportsQueueEditing?: boolean, supportsThreadMentions?: boolean, supportsMessageQueue?: boolean, queuedMessages?: QueuedMessage[], notificationState?: NotificationSnapshot, pendingPlan?: PendingPlan | null, supportsPlanImplementation?: boolean, supportsFileReports?: boolean, hasUnreadTurn?: boolean, activeFlags?: string[], goal?: ThreadGoal | null, goalRevision?: string, supportsGoals?: boolean, supportsGoalControl?: boolean, supportsComposerPrediction?: boolean, predictionTurnId?: string, executionSettings?: ExecutionSettings | null, supportsPlanReset?: boolean, supportsPermissionSettings?: boolean, permissionSettings?: PermissionState, supportsExecutionSettings?: boolean, supportsAttachments?: boolean, threadId: string, title: string, cwd: string, status: string, activeTurnId: string, activity?: string, turns?: ConversationTurn[], approvals: Approval[], questionGroups: QuestionGroup[], updatedAt: number, order: string[], upserts: ChatMessage[], appends: TextAppend[], readOnly?: boolean, supportsImages?: boolean, supportsHistoryPages?: boolean }
 type ConnectionConfig = { relayUrl: string, token: string, hostId: string, cacheNamespace?: string }
 type SessionTicket = { ticket: string }
-type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string }
+type PendingReply = { resolve: (value: UTSJSONObject) => void, reject: (reason: Error) => void, timer: number, write: boolean, hostId: string, threadId: string, method?: string, interaction?: boolean }
+
+function replyError(message: string, unknown: boolean): Error {
+  const error = new Error(message)
+  if (unknown) error.name = 'OUTCOME_UNKNOWN'
+  return error
+}
 export type PendingCommand = { id: string, hostId: string, threadId: string, method?: string, namespace?: string }
 type ConnectionState = { cacheNamespace: string, supportsHostProfiles: boolean, supportsConversationCache: boolean, supportsConversationPreview: boolean, contentRevision: string, subscriptionRevision: number, subscribedHostId: string, subscribedThreadId: string, configurationRevision: number, connectionAttempt: number, desktopNavigationError: string, status: string, connected: boolean, configured: boolean, error: string, conversationError: string, hostId: string, computers: Computer[], threads: ThreadSummary[], threadsLoading: boolean, threadsLoadedHostId: string, snapshot: Conversation | null, preview: Conversation | null, activeThreadId: string, epoch: string, sequence: number, pendingCommandId: string, pendingCommands: PendingCommand[] }
 
@@ -366,7 +372,7 @@ class MobileBridge {
     this.pending.forEach((entry: PendingReply, id: string) => {
       clearTimeout(entry.timer)
       if (entry.write && entry.method != 'thread.delete' && entry.method != 'turn.retry' && !(entry.method ?? '').startsWith('thread.draft.')) this.clearCommand(id, entry.hostId)
-      entry.reject(new Error(entry.method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作，勿重复提交' : entry.write ? '连接已中断，恢复后请查看聊天，按需重新发送' : '连接已中断'))
+      entry.reject(replyError(entry.method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作，勿重复提交' : entry.write ? '连接已中断，恢复后请查看聊天，按需重新发送' : '连接已中断', entry.interaction == true))
     })
     this.pending.clear()
   }
@@ -510,7 +516,7 @@ class MobileBridge {
           }
         }
         if (entry.write && !((entry.method == 'thread.delete' || entry.method == 'turn.retry' || (entry.method ?? '').startsWith('thread.draft.')) && error.getBoolean('outcomeUnknown') == true)) this.clearCommand(id, entry.hostId)
-        entry.reject(new Error(entry.method == 'turn.retry' && error.getBoolean('outcomeUnknown') == true ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' && error.getBoolean('outcomeUnknown') == true ? '永久删除结果需要核对，请核对原操作，勿重复提交' : error.getBoolean('outcomeUnknown') == true ? '未收到明确结果，请查看聊天，按需重新操作' : error.getString('message') ?? '操作失败'))
+        entry.reject(replyError(entry.method == 'turn.retry' && error.getBoolean('outcomeUnknown') == true ? '重试结果需要核对，请勿重复提交' : entry.method == 'thread.delete' && error.getBoolean('outcomeUnknown') == true ? '永久删除结果需要核对，请核对原操作，勿重复提交' : error.getBoolean('outcomeUnknown') == true ? '未收到明确结果，请查看聊天，按需重新操作' : error.getString('message') ?? '操作失败', entry.interaction == true && error.getBoolean('outcomeUnknown') == true))
       } else {
         const result = envelope['result'] as UTSJSONObject
         if (entry.method == 'thread.delete') {
@@ -570,6 +576,12 @@ class MobileBridge {
     return this.requestForComputer(connection.hostId, method, params, write)
   }
 
+  // 原操作编号同时供队列和旧版连接核对。调用方仅能提交当前聊天的交互卡片。
+  submitInteraction(method: string, params: UTSJSONObject, commandId: string): Promise<UTSJSONObject> {
+    if (params['threadId'] != connection.activeThreadId || !(method == 'question.reply' || method == 'approval.reply' || method == 'turn.send' && (params['planAction'] == 'implement' || params['planAction'] == 'feedback'))) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('聊天交互目标已失效')) })
+    return this.requestForComputer(connection.hostId, method, params, true, commandId, '', null, true)
+  }
+
   // 任务通道仅开放固定管理接口，不能变成任意跨电脑执行入口。
   requestTaskChannel(hostId: string, method: string, params: UTSJSONObject): Promise<UTSJSONObject> {
     if (['tasks.submit', 'tasks.list', 'tasks.watch', 'tasks.unwatch', 'tasks.control'].indexOf(method) < 0 || !connection.computers.some((computer: Computer): boolean => computer.id == hostId && computer.online)) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('电脑离线或任务接口无效')) })
@@ -615,7 +627,7 @@ class MobileBridge {
   }
 
   // 通道内部复用回执和超时处理；写请求始终由当前电脑入口发出。
-  private requestForComputer(hostId: string, method: string, params: UTSJSONObject, write: boolean, commandId: string = '', expectedGeneration: string = '', firstMessageGuard: UTSJSONObject | null = null): Promise<UTSJSONObject> {
+  private requestForComputer(hostId: string, method: string, params: UTSJSONObject, write: boolean, commandId: string = '', expectedGeneration: string = '', firstMessageGuard: UTSJSONObject | null = null, interaction: boolean = false): Promise<UTSJSONObject> {
     // 新协议先确认数据库入队，旧调用的最终回执由应用服务跟随，不占用中转在途请求。
     if (write &&
       // #ifdef WEB
@@ -643,13 +655,13 @@ class MobileBridge {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         if (write && method != 'thread.delete' && method != 'turn.retry' && !method.startsWith('thread.draft.')) this.clearCommand(id, hostId)
-        reject(new Error(method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : method == 'thread.delete' ? '永久删除结果需要核对，请核对原操作，勿重复提交' : write ? '操作响应超时，请查看聊天，按需重新操作' : '读取超时，请重试'))
+        reject(replyError(method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : method == 'thread.delete' ? '永久删除结果需要核对，请核对原操作，勿重复提交' : write ? '操作响应超时，请查看聊天，按需重新操作' : '读取超时，请重试', interaction))
       }, method == 'thread.delete' || method == 'thread.draft.send' ? 65000 : method == 'thread.goal.update' || method == 'thread.draft.open' ? 30000 : 20000)
       if (write) {
         try { this.rememberCommand(id, hostId, threadId, method) }
         catch (_) { clearTimeout(timer); reject(new Error(method == 'thread.delete' ? '无法保存删除核对信息，请检查本地存储后重试' : '操作正在提交，请稍后再试')); return }
       }
-      this.pending.set(id, { resolve, reject, timer, write, hostId, threadId, method })
+      this.pending.set(id, { resolve, reject, timer, write, hostId, threadId, method, interaction })
       // 原实例代次和首次发送条件由电脑端复核，中转转发不能替换手机确认的值。
       const envelope: UTSJSONObject = { v: 1, type: 'request', requestId: id, hostId, method, params }
       if (expectedGeneration.length > 0) envelope['expectedGeneration'] = expectedGeneration
@@ -659,7 +671,7 @@ class MobileBridge {
         if (entry == null) return
         clearTimeout(entry.timer); this.pending.delete(id)
         if (write && method != 'thread.delete' && method != 'turn.retry' && !method.startsWith('thread.draft.')) this.clearCommand(id, hostId)
-        reject(new Error(method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作' : write ? '未收到发送结果，请查看聊天，按需重新发送' : '发送失败，请重新连接'))
+        reject(replyError(method == 'turn.retry' ? '重试结果需要核对，请勿重复提交' : method == 'thread.delete' ? '永久删除结果需要核对，恢复连接后请核对原操作' : write ? '未收到发送结果，请查看聊天，按需重新发送' : '发送失败，请重新连接', interaction))
       } })
     })
   }

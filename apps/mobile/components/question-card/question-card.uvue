@@ -1,6 +1,6 @@
 <template>
   <view class="question-card">
-    <text v-if="group.state != 'pending' || submitted" class="card-title">{{ group.state == 'answered' ? '已回答' : group.state == 'expired' ? '问题已失效' : '回答已提交，等待同步' }}</text>
+    <text v-if="group.state != 'pending'" class="card-title">{{ group.state == 'answered' ? '已回答' : '问题已失效' }}</text>
     <view v-for="(item, index) in drafts" :key="item.question.id" :class="['question', index > 0 ? 'question-following' : '']">
       <text v-if="item.question.header.length > 0" class="header">{{ item.question.header }}</text>
       <text class="title">{{ item.question.title }}</text>
@@ -21,7 +21,7 @@
         <textarea v-else-if="item.custom || item.question.options.length == 0" v-model="item.text" class="custom-input" :maxlength="32000" :disabled="locked" placeholder="填写你的答案…"></textarea>
       </template>
     </view>
-    <view v-if="group.state == 'pending'" class="submit inline-progress-button" :class="(locked && !busy) || !complete ? 'submit-disabled' : ''"><action-progress :busy="busy" light /><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">{{ submitted ? '已提交' : '提交回答' }}</text><button class="inline-progress-hitbox" :disabled="locked || !complete" @click="submit" :aria-label="(busy) ? '正在提交回答' : '提交回答'"></button></view>
+    <view v-if="group.state == 'pending'" class="submit inline-progress-button" :class="locked || !complete ? 'submit-disabled' : ''"><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">提交回答</text><button class="inline-progress-hitbox" :disabled="locked || !complete" @click="submit" aria-label="提交回答"></button></view>
   </view>
 </template>
 
@@ -30,10 +30,10 @@ import { computed, ref, watch } from 'vue'
 import { QuestionGroup, QuestionAnswer, Question } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type AnswerDraft = { question: Question, text: string, custom: boolean }
-const props = defineProps<{ group: QuestionGroup, busy: boolean, disabled: boolean, submitted: boolean }>()
+const props = defineProps<{ group: QuestionGroup, disabled: boolean }>()
 const emit = defineEmits(['submit'])
 const drafts = ref<AnswerDraft[]>([])
-const locked = computed((): boolean => props.busy || props.disabled || props.submitted)
+const locked = computed((): boolean => props.disabled || props.group.state != 'pending')
 const complete = computed((): boolean => drafts.value.length == props.group.questions.length && drafts.value.every((draft: AnswerDraft): boolean => draft.text.trim().length > 0))
 // 快照与增量更新保留当前草稿，仅以桌面已确认的答案覆盖对应子题。
 watch((): QuestionGroup => props.group, (group: QuestionGroup) => {
