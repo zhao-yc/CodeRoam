@@ -275,16 +275,19 @@ async function recoverPaused(instance: InstanceSubmissionTasks) {
 .submission-collapse-label { font-size: 12px; color: #596479; margin-right: 4px; }
 .submission-hit { position: absolute; left: 0; right: 0; top: 0; bottom: 0; margin: 0; padding: 0; border-width: 0; background-color: transparent; border-radius: 24px; }
 .submission-action, .submission-expand { margin: 0; padding: 6px; background-color: transparent; color: #4546bd; font-size: 12px; line-height: 22px; min-height: 34px; }
+.submission-action { padding: 6px 12px; border-width: 0; border-radius: 8px; background-color: #f1f2ff; flex-shrink: 0; white-space: nowrap; }
 .submission-rows { flex-shrink: 1; min-height: 0; }
-.submission-row { flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #e5e8f1; padding: 10px 0; }
-.submission-main { flex: 1; min-width: 0; }
+/* 操作区独占一行并允许换行，避免多个按钮挤占任务说明和错误摘要。 */
+.submission-row { flex-direction: column; align-items: stretch; border-top-width: 1px; border-top-color: #e5e8f1; padding: 10px 0; }
+.submission-main { min-width: 0; flex-shrink: 0; }
 .submission-meta { flex-direction: row; align-items: center; }
 .submission-meta .submission-task-status { margin-left: 6px; }
 .submission-row-title { color: #1a2135; font-size: 13px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .submission-description { color: #596479; font-size: 11px; line-height: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; }
-.submission-actions { flex-shrink: 0; margin-left: 6px; max-width: 96px; }
+.submission-actions { flex-direction: row; flex-wrap: wrap; flex-shrink: 0; margin-bottom: -6px; }
+.submission-actions .submission-action { margin-top: 8px; margin-right: 8px; margin-bottom: 6px; }
 .submission-error { color: #9b493a; font-size: 12px; line-height: 18px; }
-.submission-error-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.submission-error-summary { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .submission-expand { align-self: center; }
 .submission-recovery { flex-direction: row; align-items: center; justify-content: space-between; }
 .submission-footer { min-height: 44px; flex-direction: row; align-items: center; border-top-width: 1px; border-top-color: #e5e8f1; }
