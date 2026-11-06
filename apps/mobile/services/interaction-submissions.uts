@@ -14,6 +14,11 @@ export type InteractionSubmission = {
 // 只记原操作编号和界面状态。切走再回到同一会话仍能核对，草稿和秘密答案不进入记录。
 export const interactionSubmissions = reactive<InteractionSubmission[]>([])
 
+// 计划操作结束后收起提示，仍保留原记录，防止延迟快照重新开放提交入口。
+export function interactionStatusVisible(entry: InteractionSubmission): boolean {
+  return entry.kind != 'plan' || entry.state == 'sending' || entry.state == 'unknown'
+}
+
 export function interactionStatusLabel(entry: InteractionSubmission): string {
   if (entry.state == 'unknown') return '结果待核对'
   if (entry.state == 'resolved') return '已同步，原操作已结束'
