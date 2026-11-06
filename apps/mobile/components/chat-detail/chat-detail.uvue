@@ -63,7 +63,7 @@
             <view v-if="entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
           </view>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame">
-            <text v-if="!showProcessDurationOnly || (entry.durationLabel ?? '').length > 0" class="process-label">{{ showProcessDurationOnly ? entry.durationLabel : entry.label }}</text>
+            <text class="process-label">{{ showProcessDurationOnly && (entry.durationLabel ?? '').length > 0 ? entry.durationLabel : entry.label }}</text>
             <app-icon :name="isProcessExpanded(entry) ? 'chevron-down' : 'chevron-right'" :size="16" tone="muted" />
             <button class="action-hitbox" hover-class="action-pressed" :aria-label="entry.label" :aria-expanded="isProcessExpanded(entry)" @click="toggleProcess(entry)"></button>
           </view>
@@ -259,7 +259,7 @@ import { readFileBase64, validateFile, fileSizeLabel, FILE_CHUNK_BYTES } from '.
 import type { WorkspaceTarget } from '../../services/workspace-layout.uts'
 const liquidGlass = useLiquidGlass()
 const props = withDefaults(defineProps<{ target: WorkspaceTarget, active: boolean, paneWidth: number, paneHeight: number, embedded?: boolean, paneLeft?: number }>(), { embedded: false, paneLeft: 0 })
-// 仅宽屏网页采用桌面样式，无耗时的过程仍保留可展开箭头。
+// 宽屏网页有耗时时采用桌面样式，无耗时时保留操作文案。
 const showProcessDurationOnly = computed((): boolean => {
   // #ifdef WEB
   return props.embedded == true

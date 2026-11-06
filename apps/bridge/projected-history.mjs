@@ -3,7 +3,7 @@ import {CONVERSATION_PAGE_SIZE, CONVERSATION_PAGE_BYTES} from './conversation-pa
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {BridgeError} from '../../packages/protocol/contracts.mjs';
-import {normalizeConversation} from './conversation.mjs';
+import {isFinalAssistantReply,normalizeConversation} from './conversation.mjs';
 import {projectedTurnMetadata} from './turn-failure.mjs';
 
 // 方案是独立的可见项目，不能仅查询普通回复；保留原编号以复用历史分页游标。
@@ -67,7 +67,7 @@ export function readProjectedFileReport(row,home,reportId) {
       const target=db.prepare('SELECT turn_id,item_json,rollout_ordinal FROM thread_items WHERE thread_id=? AND item_id=? AND rollout_ordinal<? AND updated_at_ordinal<?').get(source.id,reportId,source.limit,source.limit);
       if(!target)continue;
       const final=JSON.parse(target.item_json);
-      if(final.id!==reportId||!['agentMessage','assistantMessage'].includes(final.type)||final.phase!=='final_answer')throw new BridgeError('REPORT_NOT_FOUND','指定消息不是任务报告');
+      if(final.id!==reportId||!isFinalAssistantReply(final))throw new BridgeError('REPORT_NOT_FOUND','指定消息不是任务报告');
       const records=db.prepare(`SELECT item_json FROM thread_items WHERE thread_id=? AND turn_id=? AND rollout_ordinal<=? AND updated_at_ordinal<? AND item_type IN (${visibleTypes.map(()=>'?').join(',')}) ORDER BY rollout_ordinal,item_id LIMIT 2001`).all(source.id,target.turn_id,target.rollout_ordinal,source.limit,...visibleTypes);
       if(records.length>2000||records.reduce((size,item)=>size+Buffer.byteLength(item.item_json),0)>8*1024*1024)throw new BridgeError('REPORT_TOO_LARGE','这份报告的记录过多，请在电脑端查看');
       return {cwd:row.cwd,sourceTurns:[{turnId:target.turn_id,items:records.map(record=>JSON.parse(record.item_json))}]};
@@ -121,7 +121,8 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
       }
       if(!anchor)return null;
     }else if(!sources.some(source=>db.prepare('SELECT 1 FROM thread_items WHERE thread_id=? AND rollout_ordinal<? LIMIT 1').get(source.id,source.limit)||db.prepare(`SELECT 1 FROM thread_turns WHERE thread_id=? AND ${turnColumns.has('rollout_ordinal')?'rollout_ordinal':'rollout_end_ordinal'}<? LIMIT 1`).get(source.id,source.limit)))return null;
-    const query=db.prepare(`SELECT turn_id,item_id,rollout_ordinal,item_json FROM thread_items WHERE thread_id=? AND rollout_ordinal<? AND updated_at_ordinal<? AND (rollout_ordinal<? OR (rollout_ordinal=? AND item_id<?)) AND item_type IN (${visibleTypes.map(()=>'?').join(',')}) ORDER BY rollout_ordinal DESC,item_id DESC LIMIT 81`);
+    const timingColumns=['started_at_ms','completed_at_ms'].filter(name=>columns.has(name));
+    const query=db.prepare(`SELECT turn_id,item_id,rollout_ordinal,item_json${timingColumns.map(name=>','+name).join('')} FROM thread_items WHERE thread_id=? AND rollout_ordinal<? AND updated_at_ordinal<? AND (rollout_ordinal<? OR (rollout_ordinal=? AND item_id<?)) AND item_type IN (${visibleTypes.map(()=>'?').join(',')}) ORDER BY rollout_ordinal DESC,item_id DESC LIMIT 81`);
     const turns=db.prepare('SELECT * FROM thread_turns WHERE thread_id=? AND turn_id=?');
     // 新版有起始位置；旧版按项目位置或结束位置定位没有消息的失败轮次。
     const turnPosition=`COALESCE(${turnColumns.has('rollout_ordinal')?'t.rollout_ordinal,':''}(SELECT MIN(i.rollout_ordinal) FROM thread_items i WHERE i.thread_id=t.thread_id AND i.turn_id=t.turn_id),t.rollout_end_ordinal)`;
@@ -141,9 +142,14 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
         const item=JSON.parse(saved.item_json);
         const savedTurn=turns.get(source.id,saved.turn_id),metadata=projectedTurnMetadata(savedTurn,saved.turn_id,source.limit);
         const status=metadata.status;
+        // 只给投影确认的末条回复附上生成区间，翻页时不会把整轮计时分给中间消息。
+        if(savedTurn?.final_agent_item_id===item.id && isFinalAssistantReply(item)) {
+          item.startedAtMs=saved.started_at_ms;
+          item.completedAtMs=saved.completed_at_ms;
+        }
         // 仅转换明确的可见项目，禁止把推理、内部提示或未知结构当正文。
         const normalized=item.id===saved.item_id&&visibleTypes.includes(item.type)&&item.phase!=='analysis'&&item.channel!=='analysis'
-          ?normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,status,items:[item]}]},{preserveDialogue:false}).messages[0]:null;
+          ?normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,status,durationMs:metadata.durationMs,items:[item]}]},{preserveDialogue:false}).messages[0]:null;
         const size=normalized?Buffer.byteLength(JSON.stringify(normalized)):0;
         if(normalized&&messages.length&&(messages.length>=CONVERSATION_PAGE_SIZE||bytes+size>CONVERSATION_PAGE_BYTES)){hasMore=true;break;}
         ordinal=saved.rollout_ordinal;itemId=saved.item_id;

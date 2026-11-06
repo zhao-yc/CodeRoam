@@ -20,6 +20,8 @@ test('历史保留消息阶段，按轮次合并并只从明确完成事件恢�
   assert.deepEqual(result.turns,[{turnId:'turn',status:'completed',durationMs:170000},{turnId:'next',status:'inProgress'}]);
   assert.deepEqual(result.messages.map(message=>message.phase),[undefined,'commentary','final_answer','final_answer']);
   assert.equal(result.status,'unknown');assert.equal(result.activeTurnId,'');assert.equal(result.readOnly,true);
+  Object.assign(final.payload,{started_at_ms:200000,completed_at_ms:202500});
+  assert.equal(historicalSnapshot(row,records).messages.find(message=>message.id==='f').workedMs,167500);
   const old=historicalSnapshot(row,[final]);assert.equal(old.turns[0].status,'');
   const interrupted=historicalSnapshot(row,[progress,final,event('task_complete','turn'),event('turn_aborted','turn')]);assert.equal(interrupted.turns[0].status,'interrupted');
 });

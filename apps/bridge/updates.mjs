@@ -5,8 +5,8 @@ export function messageWindowUpdate(beforeMessages, messages) {
   for(const message of messages){
     const before=old.get(message.id);
     if(before&&JSON.stringify(before)===JSON.stringify(message))continue;
-    // 只有显示类型和摘要不变时才追加文本，元数据变化须替换消息，兼容旧快照。
-    if(before&&message.role===before.role&&message.kind===before.kind&&message.summary===before.summary&&message.phase===before.phase&&message.imageCount===before.imageCount&&message.turnId===before.turnId&&typeof message.text==='string'&&typeof before.text==='string'&&message.text.startsWith(before.text))appends.push({id:message.id,text:message.text.slice(before.text.length),status:message.status});
+    // 耗时等展示字段可能在正文结束后才到达，变化时需要替换消息。
+    if(before&&message.role===before.role&&message.kind===before.kind&&message.summary===before.summary&&message.phase===before.phase&&message.workedMs===before.workedMs&&message.imageCount===before.imageCount&&message.turnId===before.turnId&&typeof message.text==='string'&&typeof before.text==='string'&&message.text.startsWith(before.text))appends.push({id:message.id,text:message.text.slice(before.text.length),status:message.status});
     else upserts.push(message);
   }
   return {order:messages.map(message=>message.id),upserts,appends};

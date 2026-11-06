@@ -2,6 +2,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'windows/bridge-service-registration.ps1')
 $localSettings=@{}
 $settingsFile=Join-Path $projectRoot '.local/development.json'
 if(Test-Path -LiteralPath $settingsFile){
@@ -53,8 +54,10 @@ function Start-Tunnel {
   Write-Output '开发中转健康检查通过：http://127.0.0.1:18787/healthz'
 }
 function Start-Bridge {
+  $registered=Get-BridgeServiceRegistration
+  if((Test-Path -LiteralPath $bridgeConfig) -and (Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel}
   # 安装独立托管后统一交给服务管理，避免临时命令再启动第二个桥接。
-  if($null -ne (Get-Service -Name 'CodexMobileBridge' -ErrorAction SilentlyContinue)) {
+  if($null -ne $registered) {
     & (Join-Path $PSScriptRoot 'bridge-service.ps1') -Action start
     return
   }
@@ -87,7 +90,7 @@ function Start-Mobile {
   if($LASTEXITCODE -ne 0){throw 'HBuilderX 手机界面预览启动失败'}
 }
 function Stop-Managed {
-  if($null -ne (Get-Service -Name 'CodexMobileBridge' -ErrorAction SilentlyContinue)) {
+  if($null -ne (Get-BridgeServiceRegistration)) {
     & (Join-Path $PSScriptRoot 'bridge-service.ps1') -Action stop
     if($LASTEXITCODE -ne 0){throw '托管服务尚未停止，保留现场'}
   }
@@ -98,11 +101,19 @@ function Stop-Managed {
   Write-Output '手机界面预览由 HBuilderX 运行面板的停止按钮管理。'
 }
 switch($Action){
-  'all'{if((Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel};Start-Bridge;Start-Mobile}
+  'all'{Start-Bridge;Start-Mobile}
   'tunnel'{Start-Tunnel}
-  'bridge'{if((Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel};Start-Bridge}
+  'bridge'{Start-Bridge}
   'mobile'{Start-Mobile}
   'stop'{Stop-Managed}
   'logs'{foreach($name in @('bridge.stdout.log','bridge.stderr.log','tunnel.stderr.log')){$file=Join-Path $runtimeDirectory $name;if(Test-Path -LiteralPath $file){Write-Output "日志：$name";Get-Content -LiteralPath $file -Tail 40 -Encoding UTF8}}}
-  'status'{foreach($name in @('bridge','tunnel')){$entry=Get-ManagedProcess $name;Write-Output "${name}：$(if($entry){'运行中，PID='+$entry.ProcessId}else{'未运行'})"}}
+  'status'{
+    $registered=Get-BridgeServiceRegistration
+    if($null -ne $registered){Write-Output "$($registered.Name)：$($registered.State)，PID=$($registered.ProcessId)"}
+    foreach($name in @('bridge','tunnel')){
+      if($name -eq 'bridge' -and $null -ne $registered){continue}
+      $entry=Get-ManagedProcess $name
+      Write-Output "${name}：$(if($entry){'运行中，PID='+$entry.ProcessId}else{'未运行'})"
+    }
+  }
 }
