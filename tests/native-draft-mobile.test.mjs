@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
+import { installPermissionPreferences } from './helpers/permission-preferences-context.mjs';
 
 const read = path => fs.readFileSync(path, 'utf8');
 const pngImage = 'data:image/png;base64,' + fs.readFileSync('apps/mobile/static/icons/check-dark.png').toString('base64');
@@ -105,6 +106,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
     uni: { removeStorageSync: key => storage.delete(key), getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), hideKeyboard() {}, showToast() {} },
     FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', computerIcon: () => 'laptop', bindImagePaste: () => () => {},
   });
+  installPermissionPreferences(context);
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/services/thread-mentions.uts') + '\n' + read('apps/mobile/services/direct-new-conversation.uts') + '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
   const names = 'nativeDraftState,watchNativeDraft,closeNativeDraft,applyNativeDraftSnapshot,readNativeDraft,updateNativeDraft,sendNativeDraft,checkNativeDraftCommand,newDraft,assignUnselectedDraft,sendNewConversation,openPromotedConversation,readDraft,readDraftImages,readDraftFiles,readDraftPlugins';
@@ -423,9 +425,10 @@ function permissionFixture(overrides = {}) {
   const c = vm.createContext({ connection, ref: value => ({ value }), computed: run => ({ get value() { return run(); } }),
     watch: (get, run, options) => { watches.push(run); if (options?.immediate) run(get.value); }, onUnmounted() {},
     defineProps: () => props, withDefaults: value => value, defineEmits: () => (...args) => emitted.push(args), permissionLabel: value => value,
-    uni: { showModal: options => modals.push(options), getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), getElementById: () => null },
+    uni: { getStorageSync: () => '', setStorageSync() {}, showModal: options => modals.push(options), getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), getElementById: () => null },
     bridge: { async request(method, params, write) { calls.push({ method, params, write }); return json(snapshot().permissions); } },
   });
+  installPermissionPreferences(c);
   vm.runInContext(compile(read('apps/mobile/components/permissions-control/permissions-control.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1]) + '\nglobalThis.subject={choose,load,mode,state,openMenu};', c);
   return { ...c.subject, props, connection, calls, emitted, watches, modals };
 }

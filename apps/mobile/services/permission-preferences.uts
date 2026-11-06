@@ -1,0 +1,30 @@
+import { reactive } from 'vue'
+
+type PermissionPreference = { key: string, mode: string }
+const permissionPreferences = reactive<PermissionPreference[]>([])
+
+// 偏好按配对空间和电脑隔离，只保存档位；权限版本和完全访问确认始终属于当前聊天。
+export function readPermissionPreference(namespace: string, hostId: string): string {
+  if (hostId.length == 0) return ''
+  const key = 'coderoam-permission-v1-' + JSON.stringify([namespace, hostId])
+  const found = permissionPreferences.find((entry: PermissionPreference): boolean => entry.key == key)
+  if (found != null) return found.mode
+  let mode = ''
+  try {
+    const saved = uni.getStorageSync(key)
+    if (typeof saved == 'string' && ['default', 'auto-review', 'full-access'].includes(saved)) mode = saved
+  } catch (_) {}
+  permissionPreferences.push({ key, mode } as PermissionPreference)
+  return mode
+}
+
+// 先保存再更新响应式值，存储失败时保留原选择并由菜单提示重试。
+export function savePermissionPreference(namespace: string, hostId: string, mode: string) {
+  if (hostId.length == 0 || !['default', 'auto-review', 'full-access'].includes(mode)) return
+  readPermissionPreference(namespace, hostId)
+  const key = 'coderoam-permission-v1-' + JSON.stringify([namespace, hostId])
+  try { uni.setStorageSync(key, mode) }
+  catch (_) { throw new Error('无法保存权限偏好，请检查本地存储后重试') }
+  const found = permissionPreferences.find((entry: PermissionPreference): boolean => entry.key == key)
+  if (found != null) found.mode = mode
+}

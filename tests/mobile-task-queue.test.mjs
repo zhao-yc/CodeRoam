@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
+import { installPermissionPreferences } from './helpers/permission-preferences-context.mjs';
 
 const code = ['submission-task-state', 'submission-tasks'].map(name => fs.readFileSync('apps/mobile/services/' + name + '.uts', 'utf8').replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, '')).join('\n');
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -198,8 +199,9 @@ test('权限入队释放操作锁但不冒充生效；旧任务完成不能解�
   const tasks = { accepted: { revision: 0, method: '', hostId: '', threadId: '', taskId: '' } };
   const context = vm.createContext({ connection, submissionTasks: tasks, ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }), watch(source, callback, options) { watches.push({ source, callback }); if (options?.immediate) callback(source.value); }, onUnmounted() {}, defineProps: () => props, withDefaults: value => value, defineEmits: () => (...args) => emitted.push(args), permissionLabel: value => value,
     bridge: { request(method) { if (method.endsWith('.read')) return Promise.resolve(json(permissions)); return new Promise(resolve => writes.push({ resolve })); }, pendingCommand: () => 'synthetic-permission-' + writes.length },
-    uni: { getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), getElementById: () => null },
+    uni: { getStorageSync: () => '', setStorageSync() {}, getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), getElementById: () => null },
   });
+  installPermissionPreferences(context);
   vm.runInContext(stripTypeScriptTypes(script, { mode: 'transform' }) + '\nglobalThis.subject={load,choose,busy,pendingQueued,state};', context);
   const f = context.subject; await f.load();
   const first = f.choose('default'); assert.equal(f.busy.value, true);
