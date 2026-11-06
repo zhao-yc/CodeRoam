@@ -153,7 +153,9 @@ export async function submitNewConversationTask(draft: NewDraft, mode: string, p
   const hostId = draft.hostId, namespace = draft.cacheNamespace, id = newSubmissionId()
   const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), originalChoices = { ...draft.choices } as NewDraftChoices
   const choices = { ...originalChoices } as NewDraftChoices
-  // 新建空聊天的默认值可能不同于编辑器。发送时固定界面已显示的四项配置，权限仍只取显式确认。
+  // 固定界面显示的请求批准默认值；完整访问始终要求用户显式确认。
+  if (choices.permissionMode == null) choices.permissionMode = 'default'
+  // 新建空聊天的执行设置可能不同于编辑器，发送时固定界面已显示的四项配置。
   if (execution != null) {
     if (execution.model.length == 0 || execution.effort.length == 0) throw new Error('执行设置尚未读取完成，请稍后发送')
     choices.model = execution.model; choices.effort = execution.effort
