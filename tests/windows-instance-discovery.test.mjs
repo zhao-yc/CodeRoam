@@ -75,12 +75,22 @@ foreach($case in @('ordinary','multi','wrongOwner','nonLoopback','duplicate','qu
  $results+=([pscustomobject]@{scenario=$case;queries=$global:TcpQueries;processQueries=$global:ProcessQueries;failed=$failed;ports=@($rows|ForEach-Object {$_.port});count=$rows.Count;soleIpc=($rows.Count -eq 1 -and $rows[0].soleIpc -eq $true)})
 }
 [Console]::WriteLine((ConvertTo-Json -Depth 5 -Compress -InputObject $results))
+[InstanceEnvironment]::FailOwner=$false
+[InstanceEnvironment]::ForeignOwner=$false
+$global:DiscoveryFixture=@{
+ processes=@([pscustomobject]@{ProcessId=101;SessionId=1;CommandLine='Codex.exe';ExecutablePath='C:\example\Codex.exe';CreationDate=[DateTime]'2026-01-01'})
+ native=@{candidates=@([pscustomobject]@{pid=101;path='pipe-one'});ipcProcessId=102;sessionPipeProbe='owner_read';toolPipeTimeouts=@('pipe-two')}
+}
+& (Join-Path $PSScriptRoot 'windows-instances.ps1') -Serve
 `;
   const file = path.join(root, 'fixture.ps1');
   fs.writeFileSync(file, '\ufeff' + fixture);
-  const result = spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-File', file], {encoding: 'utf8', windowsHide: true, timeout: 20000});
+  const result = spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-File', file], {input: 'scan\n', encoding: 'utf8', windowsHide: true, timeout: 20000});
   assert.equal(result.status, 0, result.stderr);
-  const rows = Object.fromEntries(JSON.parse(result.stdout.trim()).map(row => [row.scenario, row]));
+  const [cases, scan] = result.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+  assert.deepEqual(scan.windowsProbe, {sessionPipe: 'owner_mismatch', toolPipeTimeouts: ['pipe-two']});
+  assert.equal(scan.rows[0].pid, 101);
+  const rows = Object.fromEntries(cases.map(row => [row.scenario, row]));
   assert.equal(rows.ordinary.queries, 0);
   assert.equal(rows.multi.queries, 1);
   assert.deepEqual(rows.multi.ports, [1234, 1235]);
@@ -120,11 +130,14 @@ test('扫描器合并在途读取，结束后重新请求，同一进程可发�
   const child = children[0];
   assert.deepEqual(child.requests, ['scan\n']);
   child.stdout.write('\ufeff{"rows":[{"pid":101,"nativePipe":"pipe-one"}]}\n');
-  assert.deepEqual(await first, [{pid:101, nativePipe:'pipe-one'}]);
+  assert.deepEqual((await first).rows, [{pid:101, nativePipe:'pipe-one'}]);
   const second = reader.scan();
   assert.deepEqual(child.requests, ['scan\n', 'scan\n']);
-  child.stdout.write('{"rows":[{"pid":101,"nativePipe":"pipe-new"},{"pid":102}]}\n');
-  assert.deepEqual(await second, [{pid:101, nativePipe:'pipe-new'}, {pid:102}]);
+  child.stdout.write('{"rows":[{"pid":101,"nativePipe":"pipe-new"},{"pid":102}],"windowsProbe":{"sessionPipe":"timeout","toolPipeTimeouts":["pipe-three"]}}\n');
+  assert.deepEqual(await second, {
+    rows: [{pid:101, nativePipe:'pipe-new'}, {pid:102}],
+    windowsProbe: {sessionPipe:'timeout', toolPipeTimeouts:['pipe-three']},
+  });
   assert.equal(children.length, 1);
 });
 
@@ -136,14 +149,14 @@ test('分片 UTF-8 回执完整拼接，原始错误只消费，不进入结果'
   child.stderr.write('合成私有路径与错误');
   child.stdout.write(body.subarray(0, split));
   child.stdout.write(body.subarray(split));
-  assert.deepEqual(await reading, [{label:'合成电脑'}]);
+  assert.deepEqual((await reading).rows, [{label:'合成电脑'}]);
 });
 
 test('异常、非法回执或超时使本轮失败，后续扫描重建进程且不使用旧结果', async t => {
   for (const failure of ['error', 'exit', 'null', 'invalid', 'extra', 'large', 'reported', 'timeout']) {
     const {reader, children} = discoveryFixture(t, 20);
     const reading = reader.scan(), child = children[0];
-    const rejected = assert.rejects(reading, {message:'实例身份核对暂时失败'});
+    const rejected = assert.rejects(reading, {message:'实例身份核对暂时失败', code:failure === 'timeout' ? 'DISCOVERY_TIMEOUT' : 'DISCOVERY_FAILED'});
     if (failure === 'error') child.emit('error', Error('合成私有错误'));
     if (failure === 'exit') child.emit('exit', 1);
     if (failure === 'null') child.stdout.write('null\n');
@@ -156,7 +169,7 @@ test('异常、非法回执或超时使本轮失败，后续扫描重建进程�
     const next = reader.scan();
     child.stdout.write('{"rows":[{"pid":999}]}\n');
     children[1].stdout.write('{"rows":[]}\n');
-    assert.deepEqual(await next, []);
+    assert.deepEqual((await next).rows, []);
   }
 });
 

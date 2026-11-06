@@ -150,3 +150,47 @@ test('实例路由尚未找到目标也记录电脑接收和失败，不能形�
   assert.deepEqual(rows.map(row => row.event), ['bridge.received', 'bridge.completed']);
   assert.equal(rows[0].trace, rows[1].trace);
 });
+
+test('Windows 核验按失败分支记原因，原始管道、实例和异常内容不会进入日志', async () => {
+  const rows = [], diagnostics = createRequestDiagnostics({ component: 'bridge', write: line => rows.push(JSON.parse(line)) });
+  const id = 'synthetic-private-instance', nativePipe = 'synthetic-private-pipe', rawError = 'synthetic-private-error';
+  const desktop = { pid: 101, startedAt: 1, nativePipe, soleIpc: true };
+  const wrongPipeOwner = { ...desktop, soleIpc: false };
+  const hub = Object.assign(Object.create(InstanceHub.prototype), { diagnostics, runtimes: new Map(), publish() {} });
+  const cases = [
+    ['SESSION_PIPE_TIMEOUT', { rows: [wrongPipeOwner], windowsProbe: { sessionPipe: 'timeout' } }],
+    ['SESSION_PIPE_OWNER_MISMATCH', { rows: [wrongPipeOwner], windowsProbe: { sessionPipe: 'owner_mismatch' } }],
+    ['TOOL_PIPE_TIMEOUT', { rows: [], windowsProbe: { toolPipeTimeouts: [nativePipe] } }],
+    ['DESKTOP_NOT_FOUND', { rows: [], windowsProbe: { toolPipeTimeouts: ['synthetic-other-pipe'] } }],
+    ['INSTANCE_NOT_READY', { rows: [desktop] }, { ready: false }],
+    ['DISCOVERY_FAILED', new Error(rawError)],
+    ['ROUTER_CLIENT_MISSING', null, { directIpc: false, routerManaged: true, routerClientIds: () => new Set() }, 'router'],
+    ['INSTANCE_NOT_READY', null, { directIpc: false, ready: false }, 'bound'],
+  ];
+  for (const [reason, scan, state, mode = 'direct'] of cases) {
+    const instance = { ...desktop, id, alive: true, ready: true, directIpc: true, ...state };
+    hub.runtimes.set(id, { instance });
+    hub.discover = async () => {
+      if (scan instanceof Error) throw scan;
+      assert.ok(scan, '非直连模式不启动额外扫描');
+      return scan;
+    };
+    await assert.rejects(hub.verifyWindowsInstance(instance), { code: 'INSTANCE_NOT_READY' });
+    assert.equal(instance.ready, false);
+    const log = rows.at(-1);
+    assert.equal(log.event, 'instance.verification_failed');
+    assert.equal(log.reason, reason);
+    assert.equal(log.mode, mode);
+    assert.equal(log.errorCode, 'INSTANCE_NOT_READY');
+    assert.ok(log.elapsedMs >= 0);
+  }
+  const ready = { ...desktop, id, alive: true, ready: true, directIpc: true };
+  hub.runtimes.set(id, { instance: ready });
+  hub.discover = async () => ({ rows: [desktop] });
+  await hub.verifyWindowsInstance(ready);
+  assert.equal(rows.length, cases.length);
+  diagnostics.record('instance.verification_failed', null, { reason: rawError, mode: rawError });
+  assert.equal(rows.at(-1).reason, 'OTHER');
+  assert.equal(rows.at(-1).mode, undefined);
+  for (const value of [id, nativePipe, rawError]) assert.equal(JSON.stringify(rows).includes(value), false);
+});

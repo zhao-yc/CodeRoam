@@ -12,6 +12,7 @@ const events = {
   'bridge.sent': '电脑已发送回执', 'bridge.dropped': '电脑连接变化，未发送回执',
   'connection.open': '连接已建立', 'connection.close': '连接已断开',
   'connection.warning': '电脑连接出现警告',
+  'instance.verification_failed': 'Windows 实例核验失败',
 };
 const codes = new Set(['BUSY', 'HOST_OFFLINE', 'HOST_FORBIDDEN', 'REQUEST_TIMEOUT', 'OUTCOME_UNKNOWN',
   'INSTANCE_CHANGED', 'INSTANCE_OFFLINE', 'INSTANCE_NOT_READY', 'BAD_DRAFT_RESPONSE',
@@ -20,6 +21,10 @@ const codes = new Set(['BUSY', 'HOST_OFFLINE', 'HOST_FORBIDDEN', 'REQUEST_TIMEOU
   'INSTANCE_DIRECTORY_SHARED', 'INSTANCES_RELAY_UNSUPPORTED', 'OWNER_UNAVAILABLE',
   'SUBSCRIPTION_REQUIRED', 'REQUEST_ID_REUSED']);
 const numericFields = ['pendingTotal', 'pendingMobile', 'pendingHost', 'inFlight', 'elapsedMs', 'queueWaitMs', 'bufferedBytes', 'closeCode'];
+const verificationReasons = new Set(['SESSION_PIPE_TIMEOUT', 'SESSION_PIPE_OWNER_MISMATCH', 'SESSION_PIPE_PROBE_FAILED',
+  'TOOL_PIPE_TIMEOUT', 'TOOL_PIPE_CHANGED', 'DESKTOP_NOT_FOUND', 'DESKTOP_NOT_EXCLUSIVE', 'PROCESS_CHANGED',
+  'DEBUG_PORT_PRESENT', 'ROUTER_CLIENT_MISSING', 'SERVICE_STOPPED', 'INSTANCE_EXITED', 'INSTANCE_REPLACED',
+  'INSTANCE_NOT_READY', 'DISCOVERY_TIMEOUT', 'DISCOVERY_FAILED', 'VERIFICATION_FAILED']);
 
 /** 仅输出固定字段；编号进程内匿名化，随机 transportId 摘要用于跨中转和电脑关联。 */
 export function createRequestDiagnostics({ component, write = line => console.log(line) }) {
@@ -58,6 +63,10 @@ export function createRequestDiagnostics({ component, write = line => console.lo
       if (fields.connection) row.connection = reference(fields.connection);
       if (['host', 'mobile'].includes(fields.role)) row.role = fields.role;
       if (fields.errorCode) row.errorCode = codes.has(fields.errorCode) ? fields.errorCode : 'OTHER';
+      if (event === 'instance.verification_failed') {
+        row.reason = verificationReasons.has(fields.reason) ? fields.reason : 'OTHER';
+        if (['direct', 'router', 'bound'].includes(fields.mode)) row.mode = fields.mode;
+      }
       for (const key of numericFields) if (Number.isFinite(fields[key])) row[key] = Math.max(0, Math.round(fields[key]));
       for (const key of ['failed', 'outcomeUnknown', 'delivered', 'globalLimit', 'mobileLimit', 'lockQueued']) if (typeof fields[key] === 'boolean') row[key] = fields[key];
       if (queues) row.pending = { mobile: snapshot(queues.mobile ?? []), global: snapshot(queues.global ?? []) };

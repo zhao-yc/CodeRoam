@@ -83,20 +83,21 @@ if($result.Count -eq 1 -and !$result[0].port -and $native.ipcProcessId -eq $resu
   $result[0] | Add-Member -NotePropertyName soleIpc -NotePropertyValue $true
  }
 }
-return ,$result
+$sessionPipeProbe=$native.sessionPipeProbe
+if($result.Count -eq 1 -and $native.ipcProcessId -and $native.ipcProcessId -ne $result[0].pid){$sessionPipeProbe='owner_mismatch'}
+return @{rows=$result;windowsProbe=@{sessionPipe=$sessionPipeProbe;toolPipeTimeouts=@($native.toolPipeTimeouts)}}
 }
 
 if ($Serve) {
  while (($request = [Console]::ReadLine()) -ne $null) {
   if ($request -ne 'scan') { break }
   try {
-   $rows = Get-DesktopInstances
-   [Console]::WriteLine('{"rows":' + (ConvertTo-Json -InputObject $rows -Depth 3 -Compress) + '}')
+   [Console]::WriteLine((ConvertTo-Json -InputObject (Get-DesktopInstances) -Depth 4 -Compress))
   } catch {
    [Console]::WriteLine('{"error":"INSTANCE_IDENTITY_INCOMPLETE"}')
   }
  }
 } else {
- $result = Get-DesktopInstances
+ $result = (Get-DesktopInstances).rows
  if($AsObject){Write-Output -NoEnumerate $result}else{[Console]::WriteLine((ConvertTo-Json -InputObject $result -Depth 3 -Compress))}
 }

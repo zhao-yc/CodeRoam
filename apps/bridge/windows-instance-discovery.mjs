@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const unavailable = () => new Error('实例身份核对暂时失败');
+const unavailable = (code = 'DISCOVERY_FAILED') => Object.assign(new Error('实例身份核对暂时失败'), { code });
 
 /** 复用只读扫描进程，每次请求仍重新枚举进程、管道和实例身份，不缓存发现结果。 */
 export class WindowsInstanceDiscovery {
@@ -37,7 +37,7 @@ export class WindowsInstanceDiscovery {
       const pending = this.pending;
       this.pending = null;
       clearTimeout(pending.timer);
-      pending.resolve(response.rows);
+      pending.resolve({ rows: response.rows, windowsProbe: response.windowsProbe });
     });
     // 原始错误可能包含本机路径，只消费，不透传到诊断日志或手机。
     child.stderr.resume();
@@ -58,18 +58,18 @@ export class WindowsInstanceDiscovery {
     if (this.reading) return this.reading;
     this.reading = new Promise((resolve, reject) => {
       const child = this.child ?? this.start();
-      this.pending = { resolve, reject, timer: setTimeout(() => this.fail(child), this.timeoutMs) };
+      this.pending = { resolve, reject, timer: setTimeout(() => this.fail(child, 'DISCOVERY_TIMEOUT'), this.timeoutMs) };
       child.stdin.write('scan\n');
     }).finally(() => { this.reading = null; });
     return this.reading;
   }
 
-  fail(child) {
+  fail(child, code) {
     if (this.child !== child) return;
     this.child = null;
     const pending = this.pending;
     this.pending = null;
-    if (pending) { clearTimeout(pending.timer); pending.reject(unavailable()); }
+    if (pending) { clearTimeout(pending.timer); pending.reject(unavailable(code)); }
     child.stdin.destroy();
     child.kill();
   }

@@ -11,6 +11,7 @@ public static class NativePipeIdentity {
 '@
 }
 $found=New-Object 'System.Collections.Generic.List[object]'
+$toolPipeTimeouts=New-Object 'System.Collections.Generic.List[string]'
 foreach($file in [IO.Directory]::GetFiles('\\.\pipe\')) {
  $name=[IO.Path]::GetFileName($file)
  if($name -notmatch '^codex-app-tools-[0-9a-f-]+$'){continue}
@@ -22,15 +23,20 @@ foreach($file in [IO.Directory]::GetFiles('\\.\pipe\')) {
   $owner=Get-Process -Id $serverPid
   if($owner.Path -notmatch '\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\(?:ChatGPT|Codex)\.exe$'){continue}
   $found.Add([pscustomobject]@{path='\\.\pipe\'+$name;pid=$serverPid;hasWindow=($owner.MainWindowHandle -ne [IntPtr]::Zero)})
+ } catch [System.TimeoutException] {
+  if($toolPipeTimeouts.Count -lt 32){$toolPipeTimeouts.Add('\\.\pipe\'+$name)}
  } catch {} finally {$pipe.Dispose()}
 }
 # 后台服务没有聊天环境变量；只读查询正在使用的会话 IPC 服务进程来绑定实例。
 $ipcProcessId=$null
+$sessionPipeProbe='probe_failed'
 $ipc=New-Object IO.Pipes.NamedPipeClientStream('.', $IpcPipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
 try {
  $ipc.Connect(300)
  [uint32]$serverPid=0
- if([NativePipeIdentity]::GetNamedPipeServerProcessId($ipc.SafePipeHandle.DangerousGetHandle(),[ref]$serverPid)){$ipcProcessId=$serverPid}
-} catch {} finally {$ipc.Dispose()}
+ if([NativePipeIdentity]::GetNamedPipeServerProcessId($ipc.SafePipeHandle.DangerousGetHandle(),[ref]$serverPid)){$ipcProcessId=$serverPid;$sessionPipeProbe='owner_read'}
+} catch [System.TimeoutException] {$sessionPipeProbe='timeout'} catch {} finally {$ipc.Dispose()}
 $result=@{candidates=@($found.ToArray());ipcProcessId=$ipcProcessId}
+# 探测细节仅供实例扫描进程比对，桥接日志只记录原因码。
+if($AsObject){$result.sessionPipeProbe=$sessionPipeProbe;$result.toolPipeTimeouts=$toolPipeTimeouts.ToArray()}
 if($AsObject){Write-Output $result}else{[Console]::WriteLine((ConvertTo-Json -InputObject $result -Depth 3 -Compress))}

@@ -13,6 +13,25 @@ import { bindBackendOwners } from './instance-binding.mjs';
 import { defaultIpcSocketPath } from '../../packages/protocol/ipc-client.mjs';
 
 const windowsIpc = defaultIpcSocketPath({ platform: 'win32' });
+const sessionPipeFailures = new Map([
+  ['timeout', 'SESSION_PIPE_TIMEOUT'],
+  ['owner_mismatch', 'SESSION_PIPE_OWNER_MISMATCH'],
+  ['probe_failed', 'SESSION_PIPE_PROBE_FAILED'],
+]);
+
+/** 只有当前实例的工具管道出现在超时列表中，才能将实例缺失归因于该管道。 */
+function windowsDirectFailure(instance, { rows, windowsProbe }) {
+  const [row] = rows;
+  if (rows.length === 0 || rows.length === 1 && row.pid !== instance.pid) {
+    if (windowsProbe?.toolPipeTimeouts?.includes(instance.nativePipe)) return 'TOOL_PIPE_TIMEOUT';
+    return row ? 'PROCESS_CHANGED' : 'DESKTOP_NOT_FOUND';
+  }
+  if (rows.length !== 1) return 'DESKTOP_NOT_EXCLUSIVE';
+  if (row.startedAt !== instance.startedAt) return 'PROCESS_CHANGED';
+  if (row.nativePipe !== instance.nativePipe) return 'TOOL_PIPE_CHANGED';
+  if (row.port) return 'DEBUG_PORT_PRESENT';
+  if (row.soleIpc !== true) return sessionPipeFailures.get(windowsProbe?.sessionPipe) ?? 'DESKTOP_NOT_EXCLUSIVE';
+}
 
 /** 一条电脑鉴权连接承载多个实例，每个实例维护独立账本、订阅及运行代次。 */
 export class InstanceHub extends EventEmitter {
@@ -81,7 +100,9 @@ export class InstanceHub extends EventEmitter {
   }
   /** 周期发现与请求复核共用在途扫描，完成后即释放，后续写入重新核对当前身份。 */
   discoverCurrent() {
-    return this.discovery ??= Promise.resolve().then(() => this.discover()).finally(() => { this.discovery = null; });
+    return this.discovery ??= Promise.resolve().then(() => this.discover())
+      .then(scan => Array.isArray(scan) ? { rows: scan } : scan)
+      .finally(() => { this.discovery = null; });
   }
   /** 周期发现只改变本服务的上下文，不启动、关闭或重启任何 Codex 桌面。 */
   async refresh() {
@@ -89,7 +110,7 @@ export class InstanceHub extends EventEmitter {
     if (this.scan) return this.scan;
     this.scan = (async () => {
       let rows;
-      try { rows = await this.discoverCurrent(); }
+      try { ({ rows } = await this.discoverCurrent()); }
       catch { for (const runtime of this.runtimes.values()) runtime.instance.ready = false; this.publish(); this.emit('warning', { code: 'INSTANCE_DISCOVERY_FAILED', message: '实例身份核对暂时失败，已暂停操作' }); return; }
       if (this.stopped || this.managementDraining) return;
       const seen = new Set();
@@ -144,26 +165,38 @@ export class InstanceHub extends EventEmitter {
   }
   /** 单实例直连额外复核当前只有一个桌面主进程；多个实例继续使用固定端口绑定。 */
   async verifyWindowsInstance(instance) {
+    const startedAt = performance.now();
+    let reason, scan;
     try {
       if (instance.directIpc) {
-        const rows = await this.discoverCurrent();
-        const [row] = rows;
-        if (rows.length !== 1 || row.soleIpc !== true || row.port || row.pid !== instance.pid || row.startedAt !== instance.startedAt || row.nativePipe !== instance.nativePipe) throw new Error();
+        scan = await this.discoverCurrent();
+        reason = windowsDirectFailure(instance, scan);
       }
-      if (instance.routerManaged && !instance.routerClientIds().size) throw new Error();
-      if (this.stopped || !instance.alive || !instance.ready || this.runtimes.get(instance.id)?.instance !== instance) throw new Error();
-    } catch {
-      instance.ready = false;
-      this.publish();
-      throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连');
+      if (!reason) {
+        if (instance.routerManaged && !instance.routerClientIds().size) reason = 'ROUTER_CLIENT_MISSING';
+        else if (this.stopped) reason = 'SERVICE_STOPPED';
+        else if (!instance.alive) reason = 'INSTANCE_EXITED';
+        else if (this.runtimes.get(instance.id)?.instance !== instance) reason = 'INSTANCE_REPLACED';
+        else if (!instance.ready) reason = 'INSTANCE_NOT_READY';
+      }
+    } catch (error) {
+      reason = instance.directIpc && !scan ? (error?.code === 'DISCOVERY_TIMEOUT' ? 'DISCOVERY_TIMEOUT' : 'DISCOVERY_FAILED') : 'VERIFICATION_FAILED';
     }
+    if (!reason) return;
+    this.diagnostics?.record('instance.verification_failed', this.diagnostics.context({ hostId: instance.id }), {
+      errorCode: 'INSTANCE_NOT_READY', reason, mode: instance.directIpc ? 'direct' : instance.routerManaged ? 'router' : 'bound',
+      elapsedMs: performance.now() - startedAt,
+    });
+    instance.ready = false;
+    this.publish();
+    throw new BridgeError('INSTANCE_NOT_READY', '所选 Windows 实例身份已变化，请在电脑核对后重连');
   }
   /** Mac 不借用全局调试页面；操作前复核专属 IPC，目录共用或 PID 换代立即暂停。 */
   async verifyMacInstance(instance) {
     try {
       if (this.stopped || !instance.alive) throw new Error();
       // 同一轮并发请求共享系统快照，完成后即丢弃，不缓存过期进程身份。
-      const rows = await this.discoverCurrent();
+      const { rows } = await this.discoverCurrent();
       const matches = rows.filter(row => row.ipcSocketPath === instance.ipcSocketPath);
       const current = matches[0];
       if (matches.length !== 1 || !current || ['pid', 'startedAt', 'nativePipe', 'executable', 'codexHome', 'userData', 'port'].some(key => current[key] !== instance[key]) || !instance.alive || this.stopped) throw new Error();
