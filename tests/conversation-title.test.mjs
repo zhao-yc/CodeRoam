@@ -47,3 +47,12 @@ test('名称查询兼容新旧索引，尊重改名并排除已归档会话',()=
     assert.equal(reader.readTitle('old'),'原有标题');
   } finally {db.close();fs.rmSync(directory,{recursive:true});}
 });
+
+test('带编号的搜索摘要不能覆盖桌面索引标题',()=>{
+  const adapter=fixture(()=> '合成会话');
+  try {
+    for(const fallbackSearchTitle of ['1. 合成会话', '', undefined]) {
+      assert.equal(adapter.snapshot({id:'thread',fallbackSearchTitle}).title,'合成会话');
+    }
+  } finally {adapter.close();}
+});

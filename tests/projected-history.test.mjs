@@ -49,10 +49,10 @@ test('分叉分页从归档源会话定位早期消息，跨源连续翻页且�
     f.db.prepare('INSERT INTO thread_turns VALUES(?,?,?,?,?,?)').run('parent','turn','completed',null,1234,190);
     const before=[fs.readFileSync(parent,'utf8'),fs.readFileSync(child,'utf8')];
     const first=f.reader.readHistory('child',{page:true,beforeMessageId:'p-150'});
-    assert.deepEqual(first.messages.map(m=>m.id),Array.from({length:20},(_,i)=>'p-'+(130+i)));
+    assert.deepEqual(first.messages.map(m=>m.id),Array.from({length:60},(_,i)=>'p-'+(90+i)));
     assert.equal(first.turns[0].status,'');assert.equal(first.turns[0].durationMs,undefined);
     const second=f.reader.readHistory('child',{page:true,before:first.cursor});
-    assert.deepEqual(second.messages.map(m=>m.id),Array.from({length:20},(_,i)=>'p-'+(110+i)));assert.equal(second.hasMore,true);
+    assert.deepEqual(second.messages.map(m=>m.id),Array.from({length:60},(_,i)=>'p-'+(30+i)));assert.equal(second.hasMore,true);
     let cursor='',more=true;const pages=[];
     for(let n=0;more&&n<10;n++){const page=f.reader.readHistory('child',{page:true,before:cursor});pages.unshift(...page.messages.map(m=>m.id));cursor=page.cursor;more=page.hasMore;}
     assert.equal(more,false);assert.deepEqual(pages,[...Array.from({length:180},(_,i)=>'p-'+i),...Array.from({length:20},(_,i)=>'c-'+(180+i))]);
@@ -89,7 +89,7 @@ test('投影游标拒绝其他会话、无关来源及越过分叉边界，继�
       const before=Buffer.from(JSON.stringify({...valid,...change})).toString('base64url');
       assert.throws(()=>f.reader.readHistory('child',{page:true,before}),e=>e.code==='BAD_HISTORY_CURSOR');
     }
-    assert.equal(first.hasMore,true);assert.equal(first.messages.length,20);
+    assert.equal(first.hasMore,false);assert.equal(first.messages.length,50);
     const childFile=path.join(f.home,'sessions/child.jsonl');
     const outside=path.join(f.home,'outside.jsonl');fs.writeFileSync(outside,fs.readFileSync(childFile));
     f.index.prepare('UPDATE threads SET rollout_path=? WHERE id=?').run(outside,'child');

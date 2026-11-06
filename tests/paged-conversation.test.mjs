@@ -17,11 +17,13 @@ const message=(index,text='合成消息')=>({id:'message-'+index,role:'assistant
 const snapshot=messages=>({threadId:id,title:'合成分页聊天',cwd:'/synthetic/page',messages,turns:[{turnId:'turn',status:'completed'}],latestTurn:{turnId:'turn',status:'completed'},approvals:[],questionGroups:[],status:'idle',activeTurnId:'',updatedAt:1});
 
 test('首屏按条数和实际 UTF-8 字节取连续后缀，单条超长正文不丢失',()=>{
+  assert.equal(CONVERSATION_PAGE_SIZE,60);
+  assert.equal(CONVERSATION_PAGE_BYTES,72*1024);
   const source=snapshot(Array.from({length:90},(_,i)=>message(i)));
-  assert.deepEqual(recentConversationPage(source).messages.map(m=>m.id),source.messages.slice(-20).map(m=>m.id));
+  assert.deepEqual(recentConversationPage(source).messages.map(m=>m.id),source.messages.slice(-60).map(m=>m.id));
   const large=snapshot(Array.from({length:30},(_,i)=>message(i,'中文'.repeat(2000))));
   const page=recentConversationPage(large);
-  assert.ok(page.messages.length<20);assert.ok(Buffer.byteLength(JSON.stringify(page.messages))<=CONVERSATION_PAGE_BYTES);
+  assert.ok(page.messages.length<60);assert.ok(Buffer.byteLength(JSON.stringify(page.messages))<=CONVERSATION_PAGE_BYTES);
   assert.deepEqual(page.messages.map(m=>m.id),large.messages.slice(-page.messages.length).map(m=>m.id));
   const giant=message(1,'正文'.repeat(20000));assert.deepEqual(recentConversationPage(snapshot([message(0),giant])).messages,[giant]);
   assert.equal(source.messages.length,90);
@@ -30,7 +32,7 @@ test('首屏按条数和实际 UTF-8 字节取连续后缀，单条超长正文�
 test('最近窗口从原始连续尾部取消息，不因保留早期对话产生分页缺口',()=>{
   const state={id,turns:[{turnId:'turn',status:'completed',items:Array.from({length:100},(_,i)=>({id:'item-'+i,type:i%10===0?'userMessage':'commandExecution',content:'合成提问',command:'合成校验',output:'合成结果'}))}]};
   const page=normalizeConversation(state,RECENT_CONVERSATION_OPTIONS);
-  assert.deepEqual(page.messages.map(m=>m.id),Array.from({length:20},(_,i)=>'item-'+(80+i)));
+  assert.deepEqual(page.messages.map(m=>m.id),Array.from({length:60},(_,i)=>'item-'+(40+i)));
 });
 
 test('首帧、订阅回执和后续推送都保持一页，不自动补回全部正文',async t=>{
@@ -41,9 +43,9 @@ test('首帧、订阅回执和后续推送都保持一页，不自动补回全�
   let finish;adapter.watch=()=>new Promise(resolve=>{finish=resolve;});
   agent.threadCache.preview=async()=>({snapshot:{...source,readOnly:true},contentRevision:'content:'+'a'.repeat(64)});
   const pending=agent.handleRequest({v:1,type:'request',requestId:'synthetic-paged-request',transportId:'synthetic-paged-transport',deviceId:'phone',method:'thread.watch',params:{threadId:id,previewId:'synthetic-preview-page'}});
-  await new Promise(setImmediate);assert.equal(sent[0].snapshot.messages.length,20);finish(source);
-  const response=await pending;assert.equal(response.error,undefined);assert.ok(!response.result.snapshot.messages||response.result.snapshot.messages.length<=20);assert.equal(agent.published.get(id).snapshot.messages.length,20);
-  agent.publish(snapshot([...source.messages,message(100)]));assert.equal(agent.published.get(id).snapshot.messages.length,20);assert.equal(agent.published.get(id).snapshot.messages[0].id,'message-81');
+  await new Promise(setImmediate);assert.equal(sent[0].snapshot.messages.length,60);finish(source);
+  const response=await pending;assert.equal(response.error,undefined);assert.ok(!response.result.snapshot.messages||response.result.snapshot.messages.length<=60);assert.equal(agent.published.get(id).snapshot.messages.length,60);
+  agent.publish(snapshot([...source.messages,message(100)]));assert.equal(agent.published.get(id).snapshot.messages.length,60);assert.equal(agent.published.get(id).snapshot.messages[0].id,'message-41');
 });
 
 /** 从真实 UTS 导出分页合并方法，不复制手机端算法。 */

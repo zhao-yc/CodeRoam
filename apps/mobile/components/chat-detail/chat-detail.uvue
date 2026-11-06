@@ -43,11 +43,23 @@
             <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? userMessageText(entry.text) : entry.text }}</text>
             <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
+            <template v-if="entry.kind == 'submittedMessage'">
+              <text v-if="(entry.summary ?? '').length > 0" class="message-submission-note">{{ entry.summary }}</text>
+              <text class="message-submission-note" role="status" aria-live="polite">{{ submittedMessageStatus(entry.label) }}</text>
+            </template>
             <file-change-summary v-if="(entry.reportId ?? '').length > 0 && ((connection.snapshot?.supportsFileReports == true) || showingPreview)" :host-id="pageHostId" :thread-id="pageThreadId" :report-id="entry.reportId ?? ''" :connected="connection.connected && !showingPreview" @open="openFileReport" @reading="pauseFollowing" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
           </template>
           <view v-else-if="entry.role == 'failure' || entry.role == 'interruption'" class="turn-failure-card" :aria-label="entry.label">
             <app-icon class="turn-failure-icon" name="alert-circle" :size="16" tone="warning" />
-            <view class="turn-failure-copy"><text class="turn-failure-text" selectable>{{ entry.text }}</text><text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingPreview" class="turn-failure-hint">更新电脑连接服务后可重试</text></view>
+            <view class="turn-failure-copy">
+              <text class="turn-failure-text" selectable>{{ entry.text }}</text>
+              <text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingPreview" class="turn-failure-hint">更新电脑连接服务后可重试</text>
+              <view v-if="entry.kind == 'reviewStopped' && entry.turnId == displayReviewTurnId" class="turn-continue inline-progress-button">
+                <action-progress :busy="pendingAction == 'continue:review' && reviewContinueSubmitted(entry.turnId)" />
+                <text class="inline-progress-caption" style="color: #68534c; font-size: 13px;">{{ reviewContinueSubmitted(entry.turnId) && pendingAction != 'continue:review' ? '已提交' : '继续' }}</text>
+                <button class="inline-progress-hitbox" :disabled="!canContinueReviewTurn(entry.turnId)" aria-label="继续当前聊天" @click="continueReviewTurn(entry.turnId)"></button>
+              </view>
+            </view>
             <view v-if="entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
           </view>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame">
@@ -167,7 +179,7 @@ import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletio
 import type { PendingCommand } from '../../services/bridge.uts'
 import { conversationOpeningTitle, conversationDisplayTitle, conversationProjectName } from '../../services/conversation-opening.uts'
 import { TimelineEntry, executionTimeline, reportTimeline, executionTitle as executionRecordTitle, executionGroupExpanded, retainExpandedExecutions, toggleExecutionGroup } from '../../services/executions.uts'
-import { failureTimeline, retryTarget, latestFailureTurnId } from '../../services/turn-failure.uts'
+import { failureTimeline, retryTarget, latestFailureTurnId, latestReviewStoppedTurnId, reviewContinueTarget } from '../../services/turn-failure.uts'
 import { HistoryPage, conversationWithHistory, retainHistoryWindow } from '../../services/history.uts'
 import type { Conversation } from '../../services/bridge.uts'
 import { MessageAnnotation, MessagePresentation, annotationPresentationsForTimeline } from '../../services/annotations.uts'
@@ -493,7 +505,10 @@ const openingTitle = computed((): string => conversationOpeningTitle(connection.
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
 const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : previewConversation.value?.title ?? '', openingTitle.value))
 const submittedRetryKey = ref('')
+const submittedReviewContinueKey = ref('')
 const displayFailureTurnId = computed((): string => latestFailureTurnId(displayConversation.value))
+const displayReviewTurnId = computed((): string => latestReviewStoppedTurnId(displayConversation.value))
+const reviewContinueTurnId = computed((): string => reviewContinueTarget(liveConversation.value))
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && subscriptionReady.value && goalHostOnline.value && !busy.value && connection.pendingCommandId.length == 0)
@@ -1491,6 +1506,25 @@ function submitAnswers(questionGroupId: string, turnId: string, answers: Questio
     if (isCurrentPage()) { submittedGroupIds.value.push(questionGroupId); refresh() }
   }, (error: Error) => { busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
 }
+// 继续指令与输入框草稿独立，已提交和未知结果都保留轮次占位，避免重复发送。
+function reviewContinueSubmitted(turnId: string): boolean { return submittedReviewContinueKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
+function canContinueReviewTurn(turnId: string): boolean { return turnId.length > 0 && reviewContinueTurnId.value == turnId && canWrite.value && isCurrentPage() && !reviewContinueSubmitted(turnId) }
+function continueReviewTurn(turnId: string) {
+  if (!canContinueReviewTurn(turnId)) return
+  const hostId = pageHostId.value, threadId = pageThreadId.value, key = hostId + ':' + threadId + ':' + turnId
+  submittedReviewContinueKey.value = key; operationError.value = ''; busy.value = true; pendingAction.value = 'continue:review'
+  bridge.request('turn.send', { threadId, text: '继续完成当前聊天中尚未完成的任务。' }, true).then((_: UTSJSONObject) => {
+    if (pageHostId.value != hostId || pageThreadId.value != threadId) return
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) { resumeFollowing(); refresh() }
+  }, (error: Error) => {
+    if (error.name != 'OUTCOME_UNKNOWN' && bridge.pendingCommand(hostId, threadId).length == 0 && submittedReviewContinueKey.value == key) submittedReviewContinueKey.value = ''
+    if (pageHostId.value != hostId || pageThreadId.value != threadId) return
+    busy.value = false; pendingAction.value = ''
+    if (isCurrentPage() && pageHostId.value == hostId && pageThreadId.value == threadId) operationError.value = error.message
+  })
+}
+
 // 两个重试入口共享轮次占位，成功回执到新轮次广播之间也不能重复点击。
 function retrySubmitting(turnId: string): boolean { return submittedRetryKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
 function canRetryTurn(turnId: string): boolean { return turnId.length > 0 && retryTurnId.value == turnId && canWrite.value && goalHostOnline.value && liveConversation.value?.supportsTurnRetry == true && !retrySubmitting(turnId) }
@@ -1554,6 +1588,15 @@ function send() {
   const commandId = connection.pendingCommandId
   rememberSubmission(hostId, threadId, commandId, text)
   request.then((result: UTSJSONObject) => { settleSubmission(hostId, commandId, true); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) { resumeFollowing(); notify(steer ? '已追加到当前任务' : result['queued'] == true ? '已加入消息队列' : '指令已发送') } }, (error: Error) => { if (bridge.pendingCommand(hostId, pageThreadId.value) != commandId) settleSubmission(hostId, commandId, false); busy.value = false; pendingAction.value = ''; if (isCurrentPage()) operationError.value = error.message })
+}
+// 状态来自守护进程入库任务，真实用户消息回显后由同编号正文替换占位。
+function submittedMessageStatus(state: string): string {
+  if (state == 'queued') return '已入库，等待发送'
+  if (state == 'running') return '发送中'
+  if (state == 'succeeded') return '已发送，正在同步'
+  if (state == 'failed') return '发送失败，请查看执行记录'
+  if (state == 'unknown' || state == 'waiting_resume') return '发送结果待核对，请查看执行记录'
+  return '已入库'
 }
 // 回车先采纳占位预测；已有草稿才提交，空输入不会触发停止任务。
 function applyComposerEnter() {
@@ -1707,6 +1750,7 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 .turn-failure-copy { flex: 1; min-width: 0; margin-left: 9px; }
 .turn-failure-text { font-size: 13px; line-height: 22px; color: #795c57; }
 .turn-failure-hint { font-size: 11px; line-height: 18px; color: #8c7972; margin-top: 4px; }
+.turn-continue { align-self: flex-start; margin-top: 8px; min-width: 64px; min-height: 44px; padding: 0 16px; border-width: 1px; border-style: solid; border-color: #e4d8d4; border-radius: 8px; background-color: #ffffff; }
 .turn-retry { flex-shrink: 0; margin-left: 8px; min-width: 48px; min-height: 44px; padding: 0 8px; font-size: 12px; line-height: 44px; color: #68534c; background-color: transparent; }
 /* #ifdef WEB */
 .turn-failure-text { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1776,6 +1820,7 @@ if (typeof submissionTasks != 'undefined') watch((): number => submissionTasks.a
 .message-file-name { display: block; white-space: nowrap; overflow: hidden; }
 /* #endif */
 .message-text { color: #1a2135; font-size: 16px; line-height: 25px; }
+.message-submission-note { color: #737d91; font-size: 11px; line-height: 17px; margin-top: 4px; }
 .message-execution { margin-bottom: 4px; }
 .process-toggle { flex-direction: row; align-items: center; min-height: 44px; align-self: flex-start; border-bottom: 1px solid #e5e8f1; }
 .process-label { color: #596479; font-size: 14px; line-height: 22px; margin-right: 8px; flex-shrink: 1; }

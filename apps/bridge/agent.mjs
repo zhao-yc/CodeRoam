@@ -18,7 +18,7 @@ import { DesktopArchiveController } from './desktop-archive.mjs';
 import { deleteThread, deletionCommandStatus, retainDeletionTarget } from './thread-delete.mjs';
 import { NativeDeleteController } from './native-delete.mjs';
 import { ThreadListFeed } from './thread-list-feed.mjs';
-import { conversationContentRevision, conversationProjection, prefetchConversation } from './conversation-prefetch.mjs';
+import { conversationContentRevision, conversationProjection, prefetchConversation, existingConversationSnapshot } from './conversation-prefetch.mjs';
 import { CACHE_WATCHER, ThreadCacheFeed } from './thread-cache.mjs';
 import { ClientPresenceController } from './client-presence.mjs';
 import { readAccountUsage } from './account-usage.mjs';
@@ -62,6 +62,7 @@ export class BridgeAgent extends EventEmitter {
     this.detailDevices=new Map();this.taskLeaseCounts=new Map();this.taskClosed=false;
     this.operationHistory=journal.db?new StateOperationHistory({db:journal.db,changed:()=>this.taskQueue?.notify(),readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true})}):null;
     this.taskQueue=journal.db?new TaskQueue({journal,readOperations:deviceId=>this.operationHistory.list(deviceId,{view:'active',limit:100}).tasks,readTitle:id=>adapter.index?.readTitle?.(id,{includeArchived:true}),
+      readConversation:id=>existingConversationSnapshot(adapter,id),messagesChanged:id=>this.publishSubmittedMessages(id),
       ready:()=>!this.taskClosed&&!this.managementDraining&&(!adapter.client?.instance||(adapter.client.instance.alive===true&&adapter.client.instance.ready===true)),
       execute:(task,context)=>task.kind==='newConversation'?runNewConversationTask(this,task,context):this.runTaskCommand(task.payload.method,task.payload.params,task.deviceId,task.commandId,task.payload.firstMessageGuard),
       reconcile:task=>this.readTaskCommandStatus(task.deviceId,task.pendingCommandId,task.threadId),
@@ -128,6 +129,7 @@ export class BridgeAgent extends EventEmitter {
   publish(snapshot, { excludeTransportId, decorated = false, dedupe = false, broadcast = true } = {}) {
     snapshot=recentConversationPage(snapshot);
     if(!decorated)snapshot=this.messageQueue?.decorate(snapshot)??snapshot;
+    snapshot=this.taskQueue?.decorateMessages(snapshot)??snapshot;
     const previous=this.published.get(snapshot.threadId);
     if(dedupe&&sameSnapshot(snapshot,previous?.snapshot))return;
     const contentRevision=conversationContentRevision(snapshot);
@@ -138,7 +140,7 @@ export class BridgeAgent extends EventEmitter {
   /** 详情操作状态始终来自实时 watch，正文能用已知版本恢复时省略重复传输。 */
   watchResult(source, message, preview) {
     const page={...recentConversationPage(source),...(this.adapter.native?.platform==='win32'?{supportsReadState:true}:{})};
-    const snapshot=this.messageQueue?.decorate(page)??page;
+    const snapshot=this.taskQueue?.decorateMessages(this.messageQueue?.decorate(page)??page)??page;
     const projection=conversationProjection(snapshot), contentRevision=conversationContentRevision(projection);
     const requested=message.method==='thread.watch'?(message.params.contentRevision??preview?.contentRevision):undefined;
     let baseline;
@@ -171,6 +173,16 @@ export class BridgeAgent extends EventEmitter {
   publishQueue(threadId) {
     const entry=this.adapter.conversations?.get(threadId);
     if(entry?.state)this.publish(this.adapter.snapshot(entry.state));
+  }
+
+  /** 数据库已接纳的消息随任务状态推送；只复用已有订阅，不导航或重新发送桌面消息。 */
+  publishSubmittedMessages(changedThreadId) {
+    const ids=new Set(this.taskQueue?.db.prepare('SELECT DISTINCT thread_id FROM submission_tasks WHERE message_display IS NOT NULL').all().map(row=>row.thread_id)??[]);
+    if(changedThreadId)ids.add(changedThreadId);
+    for(const threadId of ids) {
+      const entry=this.adapter.conversations?.get(threadId);
+      if(entry?.state)this.publish(this.adapter.snapshot(entry.state),{dedupe:true});
+    }
   }
 
   /** 只读取暂停标记；消息队列不能绕过实例级暂停继续投递。 */

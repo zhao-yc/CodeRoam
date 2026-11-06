@@ -96,7 +96,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
     selectComputer(id) { connection.hostId = id; },
   };
   const props = { expanded: false };
-  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, submitNewConversationTask: async (draft, mode) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), text: draft.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
+  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, submitNewConversationTask: async (draft, mode, _progress, execution) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), execution: plain(execution), text: draft.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
     computed: run => ({ get value() { return run(); } }),
     watch: (get, run, options) => { watches.push({ get, run }); if (options?.immediate) run(get()); },
     nextTick: run => Promise.resolve().then(run), onMounted() {}, onUnmounted: run => unmounts.push(run),
@@ -695,6 +695,17 @@ test('后台项目刷新不抢输入焦点，明确重选当前项目则恢复�
   f.loadProjects();await tick();await tick();assert.equal(f.focused.value,false);
   f.chooseProject('project-a');await tick();await tick();assert.equal(f.focused.value,true);
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,opened);
+});
+
+test('新聊天未重复点选时也把编辑器已显示的执行配置交给任务', async () => {
+  const f=fixture({component:true,taskQueue:true});f.props.expanded=true;await f.loadProjects();await tick();await tick();
+  f.draft.value.text='合成默认设置正文';
+  assert.deepEqual(plain(f.draft.value.choices), {});
+  const displayed=plain(f.settings.value);
+  await f.send();
+  const sent=f.calls.find(c=>c.method==='tasks.submit');
+  assert.deepEqual(sent.params.execution,displayed);
+  assert.ok(sent.params.execution.effort.length>0);
 });
 
 test('新版新聊天把所有选择交给一条消息任务，不进入逐项设置路径', async () => {

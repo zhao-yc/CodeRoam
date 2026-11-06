@@ -1,6 +1,6 @@
 // 手机首屏、实时推送和历史翻页共用一页预算；单条超长消息保留完整内容。
-export const CONVERSATION_PAGE_SIZE = 20;
-export const CONVERSATION_PAGE_BYTES = 24 * 1024;
+export const CONVERSATION_PAGE_SIZE = 60;
+export const CONVERSATION_PAGE_BYTES = 72 * 1024;
 export const RECENT_CONVERSATION_OPTIONS = { maxMessages: CONVERSATION_PAGE_SIZE, maxCharacters: Number.MAX_SAFE_INTEGER, preserveDialogue: false };
 
 /** 返回连续的最近一页，按实际 UTF-8 大小限制，不跳过中间消息。 */
