@@ -31,7 +31,9 @@ class Desktop extends EventEmitter {
     this.calls.push({method,params});
     if(method==='thread-follower-read-model-settings')return {resultType:'success',result:{settings:{model:this.state.latestModel,reasoningEffort:this.state.latestReasoningEffort,modelProvider:'openai'}}};
     if(method==='thread-follower-update-thread-settings') {
+      if(this.unknownPermissions)throw new BridgeError('OUTCOME_UNKNOWN','合成权限结果未知',true);
       if(this.rejectSettings)return {resultType:'success',result:{applied:false}};
+      if(this.noApplyPermissions)return {resultType:'success',result:{applied:true}};
       const changes=params.threadSettings;
       Object.assign(this.state.latestThreadSettings,changes);
       if(changes.model!==undefined)this.state.latestModel=changes.model;
@@ -85,10 +87,67 @@ test('权限冲突在任何设置写入前拒绝，完整访问确认不跨版�
   assert.equal(result.error.code,'PERMISSIONS_CHANGED');assert.equal(f.client.calls.some(call=>call.method==='thread-follower-update-thread-settings'),false);assert.equal(f.client.sentSettings,undefined);
 });
 
-test('执行设置和权限放入同一原生发送请求，发送前 PC 设置保持原值',async t=>{
+test('执行设置随正文发送，权限先保存并回读桌面聊天选择',async t=>{
   const f=fixture(t);await f.adapter.watch('thread','phone');const permissions=await f.adapter.readPermissions('thread','phone');
   const result=await f.send({choices:{effort:'low',permissionMode:'read-only',permissionRevision:permissions.revision}});
   assert.equal(result.error,undefined);assert.equal(f.client.sentSettings[0].effort,'low');assert.equal(f.client.sentSettings[0].permissions,':read-only');
+  assert.equal(f.client.state.latestThreadSettings.permissions,':read-only');
+  assert.equal(f.client.state.latestReasoningEffort,'high');
+  assert.equal(f.client.calls.findIndex(call=>call.method==='thread-follower-update-thread-settings') < f.client.calls.findIndex(call=>call.method==='thread-follower-start-turn'),true);
+});
+
+test('完整访问发送后保存到聊天，下一次未指定权限的消息沿用所选档位',async t=>{
+  const f=fixture(t);await f.adapter.watch('thread','phone');
+  const permissions=await f.adapter.readPermissions('thread','phone'), id=randomUUID();
+  const params={choices:{permissionMode:'full-access',permissionRevision:permissions.revision,confirmedFullAccess:true}};
+  assert.equal((await f.send(params,id)).error,undefined);
+  assert.equal((await f.adapter.readPermissions('thread','phone')).mode,'full-access');
+  assert.equal(f.client.state.latestThreadSettings.approvalPolicy,'never');
+  assert.equal(f.client.state.latestThreadSettings.approvalsReviewer,'user');
+  await f.send(params,id);
+  assert.equal(f.client.sentSettings.length,1);
+  assert.equal((await f.send({})).error,undefined);
+  assert.equal(f.client.sentSettings[1].permissions,':danger-full-access');
+  assert.equal(f.client.calls.filter(call=>call.method==='thread-follower-update-thread-settings').length,1);
+});
+
+for(const failure of ['rejectSettings','unknownPermissions','noApplyPermissions'])test('权限未获桌面确认时不发送正文且不重发权限写入：'+failure,async t=>{
+  const f=fixture(t);await f.adapter.watch('thread','phone');
+  const permissions=await f.adapter.readPermissions('thread','phone'),id=randomUUID();
+  f.client[failure]=true;
+  const params={choices:{permissionMode:'full-access',permissionRevision:permissions.revision,confirmedFullAccess:true}};
+  const result=await f.send(params,id);
+  assert.equal(result.error.code,failure==='rejectSettings'?'PERMISSIONS_REJECTED':'OUTCOME_UNKNOWN');
+  assert.equal(f.client.sentSettings,undefined);
+  await f.send(params,id);
+  assert.equal(f.client.calls.filter(call=>call.method==='thread-follower-update-thread-settings').length,1);
+});
+
+test('附件准备阶段失败或桌面权限改变时不应用待发权限',async t=>{
+  const f=fixture(t);await f.adapter.watch('thread','phone');
+  const permissions=await f.adapter.readPermissions('thread','phone');
+  f.adapter.attachments.materialize=()=>{throw new BridgeError('ATTACHMENT_NOT_FOUND','合成附件不存在')};
+  const params={choices:{permissionMode:'full-access',permissionRevision:permissions.revision,confirmedFullAccess:true}};
+  await assert.rejects(f.adapter.operate('turn.send',{threadId:'thread',text:'合成正文',...params},randomUUID(),'phone'),{code:'ATTACHMENT_NOT_FOUND'});
+  f.adapter.attachments.materialize=()=>{f.adapter.conversations.get('thread').state.latestThreadSettings.approvalPolicy='never';return []};
+  await assert.rejects(f.adapter.operate('turn.send',{threadId:'thread',text:'合成正文',...params},randomUUID(),'phone'),{code:'PERMISSIONS_CHANGED'});
+  assert.equal(f.client.calls.some(call=>call.method==='thread-follower-update-thread-settings'),false);
+  assert.equal(f.client.sentSettings,undefined);
+});
+
+test('临发送权限能力读取期间更换所有者时拒绝写入',async t=>{
+  const f=fixture(t);await f.adapter.watch('thread','phone');
+  const permissions=await f.adapter.readPermissions('thread','phone');
+  const original=f.adapter.permissionCatalog.capabilities;let reads=0;
+  f.adapter.permissionCatalog.capabilities=async()=>{
+    const result=await original();
+    if(++reads===2)f.adapter.subscribed('thread','phone').owner.clientId='another-desktop';
+    return result;
+  };
+  const result=await f.send({choices:{permissionMode:'full-access',permissionRevision:permissions.revision,confirmedFullAccess:true}});
+  assert.equal(result.error.code,'OWNER_UNAVAILABLE');
+  assert.equal(f.client.calls.some(call=>call.method==='thread-follower-update-thread-settings'),false);
+  assert.equal(f.client.sentSettings,undefined);
 });
 
 test('原生请求结果未知时只核对原请求，不重发正文或补写设置',async t=>{

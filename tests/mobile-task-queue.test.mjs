@@ -54,7 +54,7 @@ test('任务附件先完整上传再入队，手机不创建聊天；确认后�
   assert.ok(writes.slice(0, 3).every(call => call.params.taskId === id && !('threadId' in call.params) && !('draftId' in call.params)));
   assert.equal(writes.at(-1).params.kind, 'newConversation');
   assert.equal(writes.at(-1).params.payload.text, '合成首条消息');
-  assert.deepEqual(writes.at(-1).params.payload.choices, { model: 'model-a' });
+  assert.deepEqual(writes.at(-1).params.payload.choices, { model: 'model-a', permissionMode: 'default' });
   assert.equal(f.draft.text, ''); assert.equal(f.draft.files.length, 0);
   assert.ok(progress.some(message => message.includes('99%')));
 });
@@ -77,7 +77,7 @@ test('新聊天提交固定界面默认强度，不能因未重复点选而丢�
       execution.effort = 'low';
     }, execution);
     const sent = f.calls.find(call => call.method === 'tasks.submit');
-    assert.deepEqual(sent.params.payload.choices, { model: 'model-a', effort: 'xhigh', serviceTier: '', mode: 'default' });
+    assert.deepEqual(sent.params.payload.choices, { model: 'model-a', effort: 'xhigh', serviceTier: '', mode: 'default', permissionMode: 'default' });
     assert.deepEqual(plain(f.draft.choices), {});
   }
 });

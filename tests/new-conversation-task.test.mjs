@@ -96,6 +96,33 @@ test('跟随电脑默认值遇到完整访问时，也必须显式选择和确�
   }
 });
 
+test('未手动选择的新聊天固定请求批准，空聊天的电脑权限不覆盖界面默认值', async () => {
+  for (const current of ['default','auto-review','full-access','read-only']) {
+    const f=fixture('desktopIpc',{choices:{}});f.state.permissions.mode=current;
+    await runNewConversationTask(f.agent,f.task,f.context);
+    assert.equal(f.sends[0].choices.permissionMode,'default');
+    assert.equal(f.sends[0].choices.confirmedFullAccess,false);
+  }
+});
+
+test('原生草稿默认请求批准，权限先按修订应用回读再发送且重试不重复更新', async () => {
+  const f=fixture('nativeDraft',{choices:{}});f.state.permissions.mode='full-access';
+  await runNewConversationTask(f.agent,f.task,f.context);
+  assert.equal(f.state.permissions.mode,'default');
+  assert.deepEqual(f.calls,['thread.draft.open','thread.draft.update','bind','thread.draft.send']);
+  await runNewConversationTask(f.agent,f.task,f.context);
+  assert.equal(f.calls.filter(call=>call==='thread.draft.update').length,1);
+  assert.equal(f.calls.filter(call=>call==='thread.draft.send').length,1);
+});
+
+test('原生默认权限未获回读确认时停止首条发送', async () => {
+  const f=fixture('nativeDraft',{choices:{}});f.state.permissions.mode='auto-review';
+  const original=f.agent.runTaskCommand;
+  f.agent.runTaskCommand=async(...args)=>args[0]==='thread.draft.update'?{ok:true}:original(...args);
+  await assert.rejects(runNewConversationTask(f.agent,f.task,f.context),{code:'PERMISSIONS_CHANGED'});
+  assert.equal(f.calls.includes('thread.draft.send'),false);
+});
+
 test('附件处理期间电脑默认设置变化时，显式选择仍随首条请求发送', async () => {
   const f = fixture();
   f.agent.adapter.attachments.bindScope = async () => { f.state.settings.effort = 'low'; };
