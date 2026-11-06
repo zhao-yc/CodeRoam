@@ -143,6 +143,10 @@ export function validateRequest(message) {
     if (/[\u0000-\u001f\u007f]/.test(displayName) || !['code', 'terminal', 'laptop', 'desktop'].includes(icon) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || Object.keys(message.params).some(key => !['displayName', 'icon', 'expectedRevision'].includes(key))) throw new BridgeError('BAD_PARAMS', '连接显示信息参数无效');
     return message;
   }
+  if (message.params.executionMessageId !== undefined) {
+    if (message.method !== 'thread.history' || Object.keys(message.params).some(key => !['threadId', 'executionMessageId'].includes(key))) throw new BridgeError('BAD_PARAMS', '执行详情仅接受聊天和执行记录编号');
+    requireString(message.params.executionMessageId, '执行记录编号', 1000);
+  }
   // 沿用协议 v1 的历史方法；静默视图不能夹带订阅、分页或任何操作参数。
   if(message.method==='thread.history'&&message.params.view!==undefined&&!['prefetch','file-report'].includes(message.params.view))throw new BridgeError('BAD_PARAMS','不支持此历史只读视图');
   if(message.params.view==='prefetch') {

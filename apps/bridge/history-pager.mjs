@@ -5,7 +5,7 @@ import {historicalSnapshot} from './history-reader.mjs';
 import {CONVERSATION_PAGE_SIZE, CONVERSATION_PAGE_BYTES} from './conversation-page.mjs';
 
 /** 逐块向前读取保存历史，只返回一页可见消息；游标只表达位置，不接受文件路径。 */
-export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessageId=''}={}, maximumBytes=8*1024*1024) {
+export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessageId='',executionMessageId}={}, maximumBytes=8*1024*1024) {
   let fd;
   try {
     const root=fs.realpathSync.native(sessionDirectory),file=fs.realpathSync.native(row.rollout_path);
@@ -15,7 +15,7 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
     const header=Buffer.alloc(Math.min(size,256*1024));fs.readSync(fd,header,0,header.length,0);
     const metadata=JSON.parse(header.toString('utf8').split('\n')[0]);
     if(metadata.type!=='session_meta'||metadata.payload?.id!==row.id)throw new BridgeError('HISTORY_ID_MISMATCH','历史记录与当前聊天不匹配');
-    let end=size,seek=beforeMessageId;
+    let end=size,seek=executionMessageId ?? beforeMessageId;
     if(before){
       let cursor;try{cursor=JSON.parse(Buffer.from(before,'base64url').toString('utf8'));}catch{throw new BridgeError('BAD_HISTORY_CURSOR','历史游标无效，请重新打开聊天');}
       if(cursor.threadId!==row.id||!Number.isSafeInteger(cursor.offset)||cursor.offset<0||cursor.offset>size||typeof cursor.seek!=='string'||cursor.seek.length>1000)throw new BridgeError('BAD_HISTORY_CURSOR','历史游标已失效，请重新打开聊天');
@@ -39,7 +39,8 @@ export function readHistoricalPage(row, sessionDirectory, {before='',beforeMessa
       if(start===0)throw new BridgeError('HISTORY_ANCHOR_MISSING','暂未找到当前消息的保存位置，请稍后重新同步');
       return {messages:[],turns:[],hasMore:true,cursor:encodeCursor(row.id,alignedStart<end?alignedStart:start,seek)};
     }
-    const snapshot=historicalSnapshot(row,records,{maxMessages:Number.MAX_SAFE_INTEGER,maxCharacters:maximumBytes*2,preserveDialogue:false});
+    const snapshot=historicalSnapshot(row,records,{maxMessages:Number.MAX_SAFE_INTEGER,maxCharacters:maximumBytes*2,preserveDialogue:false,executionDetails:!!executionMessageId,executionMessageId});
+    if(executionMessageId) return {messages:snapshot.messages.filter(message=>message.id===executionMessageId),turns:[],hasMore:false,cursor:''};
     const eligible=snapshot.messages.filter(message=>(offsets.get(message.id)??end)<(anchor>=0?anchor:end));
     const messages=[];let bytes=0;
     // 分页保留连续片段；大小不足时在边界结束，下一页继续，不能跳过中间消息。

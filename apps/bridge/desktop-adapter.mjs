@@ -301,6 +301,20 @@ export class DesktopAdapter extends EventEmitter {
     await this.native.markRead(threadId,current);
     return {threadId,read:true};
   }
+  /** 详情仅读取已订阅聊天的明确执行项，换实例、退订或所有者改变后丢弃迟到结果。 */
+  async executionDetail(threadId, executionMessageId, deviceId) {
+    const entry = this.conversations.get(threadId);
+    if (!entry?.watchers.has(deviceId)) throw new BridgeError('SUBSCRIPTION_REQUIRED', '请先打开这条聊天再查看执行详情');
+    const instance = this.client?.instance, generation = instance?.generation, owner = entry.owner;
+    let message = entry.state ? normalizeConversation(entry.state, { executionMessageId }).messages[0] : undefined;
+    if (!message) message = await this.index?.readExecution?.(threadId, executionMessageId);
+    if (this.stopped || this.conversations.get(threadId) !== entry || !entry.watchers.has(deviceId) || entry.owner !== owner ||
+        instance && (this.client.instance !== instance || !instance.alive || !instance.ready || instance.generation !== generation)) {
+      throw new BridgeError('SUBSCRIPTION_CANCELED', '聊天已切换，已停止读取执行详情');
+    }
+    if (!message || !['commandExecution', 'fileChange'].includes(message.kind)) throw new BridgeError('EXECUTION_NOT_FOUND', '未找到这条执行记录，请重新同步后重试');
+    return { threadId, message };
+  }
   /** 翻页只读取已订阅会话的保存记录，不导航桌面，也不发布成实时状态。 */
   async historyPage(threadId,deviceId,options) {
     const entry=this.conversations.get(threadId);

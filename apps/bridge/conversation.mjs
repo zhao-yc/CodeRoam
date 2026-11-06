@@ -1,3 +1,4 @@
+import { executionPreview } from './execution-details.mjs';
 import { permissionState } from './permissions.mjs';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { executionSettings } from './model-settings.mjs';
@@ -57,10 +58,10 @@ function workDurationMs(turn, reply) {
 }
 
 /** 将桌面内部时间线压缩为手机需要的消息、执行状态与待审批项。 */
-export function normalizeConversation(state, { imageMessageId, imageIndex, maxMessages = 80, maxCharacters = 120000, preserveDialogue = true } = {}) {
+export function normalizeConversation(state, { imageMessageId, imageIndex, executionDetails = true, executionMessageId, maxMessages = 80, maxCharacters = 120000, preserveDialogue = true } = {}) {
   const history = state.turnHistory?.history;
   const turns = history?.entitiesByKey ? (history.islands ?? []).flatMap(island => (island.entries ?? []).map(entry => history.entitiesByKey[entry.value]).filter(Boolean)) : state.turns ?? [];
-  const messages = [];
+  let messages = [];
   const seen = new Set();
   for (const turn of turns) {
     const final = turn.status === 'completed' ? turn.items?.findLast(isFinalAssistantReply) : undefined;
@@ -68,6 +69,7 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
     // 先用原文确认重复关系，不能根据截断后的相同尾部误删另一份最终回复。
     const planContents = new Set((turn.items ?? []).filter(item => ['plan','planImplementation'].includes(item.type)).map(item => item.type === 'plan' ? item.text : item.planContent).filter(text => typeof text === 'string').map(text => text.trim()));
     for (const item of turn.items ?? []) {
+      if (executionMessageId && item.id !== executionMessageId) continue;
       if (seen.has(item.id)) continue;
       seen.add(item.id);
       let role = 'tool';
@@ -112,6 +114,7 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof phase === 'string' ? {phase} : {}), ...(item === final && workedMs !== undefined ? { workedMs } : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }
+  if (!executionDetails) messages = messages.map(executionPreview);
   // 先给提问和最终报告预留空间，避免长任务的命令记录挤掉所有早期对话。
   const selectedIds = new Set();
   let total = 0;

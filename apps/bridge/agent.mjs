@@ -296,7 +296,7 @@ export class BridgeAgent extends EventEmitter {
       if(typeof message.deviceId!=='string')throw new BridgeError('UNAUTHENTICATED','缺少手机身份');
       if(this.managementDraining&&!taskExecution&&(WRITE_METHODS.has(message.method)||UPLOAD_METHODS.has(message.method)||['tasks.submit','tasks.control'].includes(message.method)))throw new BridgeError('SERVICE_RESTARTING','电脑连接服务正在准备重启，请稍后再操作');
       // 详情读订阅只记录手机本身的存活意图，后台写步骤不会改变它。
-      if(!taskExecution&&['thread.watch','thread.history','thread.unwatch'].includes(message.method)&&!message.params.view){
+      if(!taskExecution&&['thread.watch','thread.history','thread.unwatch'].includes(message.method)&&!message.params.view&&!message.params.executionMessageId){
         const devices=this.detailDevices.get(message.params.threadId)??new Set();
         if(message.method==='thread.unwatch')devices.delete(message.deviceId);else devices.add(message.deviceId);
         if(devices.size)this.detailDevices.set(message.params.threadId,devices);else this.detailDevices.delete(message.params.threadId);
@@ -409,6 +409,7 @@ export class BridgeAgent extends EventEmitter {
           const read=()=>this.adapter.markRead(message.params.threadId,message.deviceId);
           return this.operationHistory?this.operationHistory.run({deviceId:message.deviceId,requestId:message.requestId,method:'thread.read',threadId:message.params.threadId,alreadyRead:this.adapter.native?.unread?.get(message.params.threadId)===false},read,read):read();
         }
+        if(message.method==='thread.history'&&message.params.executionMessageId)return this.adapter.executionDetail(message.params.threadId,message.params.executionMessageId,message.deviceId);
         if(message.method==='thread.images')return this.adapter.messageImages(message.params.threadId,message.params.messageId,message.deviceId,message.params);
         if(message.method==='thread.history'&&message.params.page===true)return this.adapter.historyPage(message.params.threadId,message.deviceId,message.params);
         if(message.method==='thread.watch'||message.method==='thread.history') {

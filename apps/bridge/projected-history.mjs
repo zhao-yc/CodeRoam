@@ -77,7 +77,7 @@ export function readProjectedFileReport(row,home,reportId) {
 }
 
 /** 只读新版可见项目投影，兼容分叉与压缩；旧版无投影时继续使用原日志分页。 */
-export function readProjectedHistory(row, home, {before='',beforeMessageId='',imageMessageId,imageIndex}={}) {
+export function readProjectedHistory(row, home, {before='',beforeMessageId='',imageMessageId,imageIndex,executionMessageId}={}) {
   const file=path.join(home,'thread_history_1.sqlite'),continuing=isProjectedCursor(before);
   if(before&&!continuing)return null;
   if(!fs.existsSync(file)) {
@@ -95,15 +95,15 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
     db.exec('BEGIN');
     const sources=historySources(row,home);
     // 图片按明确消息编号定位，不受最近一页窗口影响，沿用继承边界。
-    if(imageMessageId) {
+    if(imageMessageId || executionMessageId) {
       for(const source of [...sources].reverse()) {
-        const saved=db.prepare('SELECT turn_id,item_json FROM thread_items WHERE thread_id=? AND item_id=? AND rollout_ordinal<? AND updated_at_ordinal<?').get(source.id,imageMessageId,source.limit,source.limit);
+        const saved=db.prepare('SELECT turn_id,item_json FROM thread_items WHERE thread_id=? AND item_id=? AND rollout_ordinal<? AND updated_at_ordinal<?').get(source.id,executionMessageId ?? imageMessageId,source.limit,source.limit);
         if(!saved)continue;
         const item=JSON.parse(saved.item_json);
-        if(item.id!==imageMessageId||!visibleTypes.includes(item.type))return {messages:[]};
-        return normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,items:[item]}]},{imageMessageId,imageIndex});
+        if(item.id!==(executionMessageId ?? imageMessageId)||!visibleTypes.includes(item.type)||executionMessageId&&!['commandExecution','fileChange'].includes(item.type))return {messages:[]};
+        return normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,items:[item]}]},{imageMessageId,imageIndex,executionMessageId});
       }
-      return null;
+      return executionMessageId ? {messages:[]} : null;
     }
     const turnColumns=new Set(db.prepare('PRAGMA table_info(thread_turns)').all().map(column=>column.name));
     let sourceIndex=sources.length-1,ordinal=Number.MAX_SAFE_INTEGER,itemId='';
@@ -149,7 +149,7 @@ export function readProjectedHistory(row, home, {before='',beforeMessageId='',im
         }
         // 仅转换明确的可见项目，禁止把推理、内部提示或未知结构当正文。
         const normalized=item.id===saved.item_id&&visibleTypes.includes(item.type)&&item.phase!=='analysis'&&item.channel!=='analysis'
-          ?normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,status,durationMs:metadata.durationMs,items:[item]}]},{preserveDialogue:false}).messages[0]:null;
+          ?normalizeConversation({id:row.id,turns:[{turnId:saved.turn_id,status,durationMs:metadata.durationMs,items:[item]}]},{preserveDialogue:false,executionDetails:false}).messages[0]:null;
         const size=normalized?Buffer.byteLength(JSON.stringify(normalized)):0;
         if(normalized&&messages.length&&(messages.length>=CONVERSATION_PAGE_SIZE||bytes+size>CONVERSATION_PAGE_BYTES)){hasMore=true;break;}
         ordinal=saved.rollout_ordinal;itemId=saved.item_id;

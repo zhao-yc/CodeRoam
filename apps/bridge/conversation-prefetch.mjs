@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { BridgeError } from '../../packages/protocol/contracts.mjs';
 import { normalizeConversation } from './conversation.mjs';
 import { recentConversationPage, RECENT_CONVERSATION_OPTIONS } from './conversation-page.mjs';
+import { executionPreview } from './execution-details.mjs';
 import { questionPreviews } from './question-preview.mjs';
 
-const MESSAGE_FIELDS = ['id', 'role', 'kind', 'summary', 'phase', 'workedMs', 'imageCount', 'text', 'turnId', 'status'];
+const MESSAGE_FIELDS = ['id', 'role', 'kind', 'summary', 'phase', 'workedMs', 'imageCount', 'detailRevision', 'text', 'turnId', 'status'];
 
 /** 固定顺序且只复制展示用标量，内部对象不能借白名单字段进入缓存。 */
 function displayFields(source, fields) {
@@ -23,7 +24,7 @@ export function conversationProjection(source) {
     threadId: typeof source.threadId === 'string' ? source.threadId : '',
     title: typeof source.title === 'string' ? source.title : '未命名聊天',
     cwd: typeof source.cwd === 'string' ? source.cwd : '',
-    messages: (source.messages ?? []).map(message => displayFields(message, MESSAGE_FIELDS)),
+    messages: (source.messages ?? []).map(message => displayFields(executionPreview(message), MESSAGE_FIELDS)),
     turns: (source.turns ?? []).map(turn => displayFields(turn, ['turnId', 'status', 'durationMs', 'errorMessage'])),
     ...(source.latestTurn ? { latestTurn: displayFields(source.latestTurn, ['turnId', 'status']) } : {}),
     ...(previews.length ? { questionPreviews: previews } : {}),
