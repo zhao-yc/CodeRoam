@@ -4,11 +4,16 @@ import { normalizeConversation } from './conversation.mjs';
 import { recentConversationPage, RECENT_CONVERSATION_OPTIONS } from './conversation-page.mjs';
 import { questionPreviews } from './question-preview.mjs';
 
-const MESSAGE_FIELDS = ['id', 'role', 'kind', 'summary', 'phase', 'imageCount', 'text', 'turnId', 'status'];
+const MESSAGE_FIELDS = ['id', 'role', 'kind', 'summary', 'phase', 'workedMs', 'imageCount', 'text', 'turnId', 'status'];
 
 /** 固定顺序且只复制展示用标量，内部对象不能借白名单字段进入缓存。 */
 function displayFields(source, fields) {
-  return Object.fromEntries(fields.filter(key => key === 'imageCount' ? Number.isSafeInteger(source?.[key]) && source[key] >= 0 : key === 'durationMs' ? Number.isFinite(source?.[key]) && source[key] >= 0 : typeof source?.[key] === 'string').map(key => [key, source[key]]));
+  return Object.fromEntries(fields.filter(key => {
+    const value = source?.[key];
+    if (key === 'imageCount' || key === 'workedMs') return Number.isSafeInteger(value) && value >= 0;
+    if (key === 'durationMs') return Number.isFinite(value) && value >= 0;
+    return typeof value === 'string';
+  }).map(key => [key, source[key]]));
 }
 
 /** 列表版本和预加载共用纯展示投影，不携带图片、权限或可操作的审批、问答目标。 */

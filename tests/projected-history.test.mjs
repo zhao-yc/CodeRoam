@@ -61,6 +61,19 @@ test('分叉分页从归档源会话定位早期消息，跨源连续翻页且�
   }finally{f.close();}
 });
 
+test('新版投影用已完成轮次的正式回复生成区间恢复耗时，异步通知归入过程',()=>{
+  const f=fixture();try{
+    f.session('thread');
+    f.item('thread','async',1,{phase:'final_answer',delivery:'async'});
+    f.item('thread','final',2,{phase:'final_answer'});
+    f.db.exec('ALTER TABLE thread_items ADD started_at_ms INTEGER; ALTER TABLE thread_items ADD completed_at_ms INTEGER; ALTER TABLE thread_turns ADD final_agent_item_id TEXT');
+    f.db.prepare('UPDATE thread_items SET started_at_ms=?,completed_at_ms=? WHERE item_id=?').run(200000,202500,'final');
+    f.db.prepare('INSERT INTO thread_turns VALUES(?,?,?,?,?,?,?)').run('thread','turn','completed',null,170000,3,'final');
+    const page=f.reader.readHistory('thread',{page:true});
+    assert.deepEqual(page.messages.map(({id,phase,workedMs})=>[id,phase,workedMs]),[['async','commentary',undefined],['final','final_answer',167500]]);
+  }finally{f.close();}
+});
+
 test('多层继承取最小边界，同序号按编号翻页，正文有大小限制且排除内部内容',()=>{
   const f=fixture();try {
     f.session('grandparent',{},1);f.session('parent',{history_base:{thread_id:'grandparent',end_ordinal_exclusive:100}},1);

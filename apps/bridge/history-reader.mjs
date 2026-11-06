@@ -24,7 +24,7 @@ export function historicalSnapshot(row, records, options = {}) {
       let converted;
       if(item.type==='UserMessage') converted={...item,type:'userMessage'};
       else if(item.type==='UserInputResponse') converted={...item,type:'userInputResponse',requestId:item.requestId??item.request_id,questions:(Array.isArray(item.questions)?item.questions:[]).map(question=>({...question,isSecret:question.isSecret===true||question.is_secret===true}))};
-      else if(item.type==='AgentMessage'&&item.phase!=='analysis'&&item.channel!=='analysis') converted={...item,type:'agentMessage'};
+      else if(item.type==='AgentMessage'&&item.phase!=='analysis'&&item.channel!=='analysis') converted={...item,type:'agentMessage',startedAtMs:event.started_at_ms,completedAtMs:event.completed_at_ms};
       // 已保存方案与普通回复分开记录，不能从提示词或推理中猜测方案。
       else if(item.type==='Plan'&&item.phase!=='analysis'&&item.channel!=='analysis') converted={...item,type:'plan'};
       else if(item.type==='ImageGeneration') converted={...item,type:'imageGeneration'};

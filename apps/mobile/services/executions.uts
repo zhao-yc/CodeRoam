@@ -55,7 +55,7 @@ export function reportProcessDurationLabel(durationMs: number | null): string {
   return '用时 ' + duration
 }
 
-// 操作文案供窄屏和无障碍读取，宽屏视觉只使用耗时。
+// 宽屏有耗时时只显示耗时，其余情况也要保留操作文案。
 export function reportProcessLabel(durationLabel: string, expanded: boolean): string {
   return (durationLabel.length > 0 ? durationLabel + ' · ' : '') + (expanded ? '收起执行过程' : '查看执行过程')
 }
@@ -86,7 +86,7 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
           const processId = 'process:' + turnId + ':' + group[finalIndex].id
           const expanded = expandedReports.indexOf(processId) >= 0
           // 多份报告共享底层轮次总耗时，不能将总耗时冒充每段耗时。
-          const durationLabel = reportProcessDurationLabel(finals.length == 1 ? turn?.durationMs ?? null : null)
+          const durationLabel = reportProcessDurationLabel(finals.length == 1 ? group[finalIndex].workedMs ?? turn?.durationMs ?? null : null)
           entries.push({ id: processId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(durationLabel, expanded), durationLabel })
           if (expanded) entries.push(...executionTimeline(group.slice(promptEnd, finalIndex).filter((message: ChatMessage): boolean => message.kind != 'imageGeneration')))
         }

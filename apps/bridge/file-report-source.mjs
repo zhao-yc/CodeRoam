@@ -1,14 +1,15 @@
 import {BridgeError} from '../../packages/protocol/contracts.mjs';
+import {isFinalAssistantReply} from './conversation.mjs';
 
 /** 按原桌面最终回复划分报告，只收集这份报告之前成功完成的结构化文件修改。 */
 export function fileReportSource(state, reportId) {
   const history=state.turnHistory?.history;
   const turns=state.sourceTurns??(history?.entitiesByKey?(history.islands??[]).flatMap(island=>(island.entries??[]).map(entry=>history.entitiesByKey[entry.value]).filter(Boolean)):state.turns??[]);
   for(const turn of turns){
-    const items=(turn.items??[]).filter(Boolean),end=items.findIndex(item=>item.id===reportId&&['agentMessage','assistantMessage'].includes(item.type)&&item.phase==='final_answer');
+    const items=(turn.items??[]).filter(Boolean),end=items.findIndex(item=>item.id===reportId&&isFinalAssistantReply(item));
     if(end<0)continue;
     let start=0;
-    for(let i=0;i<end;i++)if(['agentMessage','assistantMessage'].includes(items[i].type)&&items[i].phase==='final_answer')start=i+1;
+    for(let i=0;i<end;i++)if(isFinalAssistantReply(items[i]))start=i+1;
     if(start===0&&turn.itemsPagination?.hasLoadedOldest===false)return null;
     // 历史尾部截断时不能把半份报告当完整汇总。
     if(state.historyTruncated&&start===0)throw new BridgeError('REPORT_INCOMPLETE','这份报告的早期修改记录未完整保留，请在电脑端查看');
