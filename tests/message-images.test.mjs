@@ -108,10 +108,33 @@ test('读取图片必须已订阅对应会话，手机不能传文件路径或�
   for(const key of ['path','url'])assert.throws(()=>validateRequest({...request,params:{...request.params,[key]:'synthetic.png'}}),{code:'BAD_PARAMS'});
 });
 
+test('实时快照缺少历史助手图片时按编号回查，退订后不返回图片',async t=>{
+  const {state,file,data}=fixture(t);
+  const saved={id:'thread',turns:[{turnId:'older',items:[{id:'design',type:'imageGeneration',status:'completed',savedPath:file}]}]};
+  let finishRead;
+  const index={readHistory:(threadId,selection)=>{
+    assert.equal(threadId,'thread');
+    assert.deepEqual(selection,{imageMessageId:'design',imageIndex:0});
+    return new Promise(resolve=>{finishRead=()=>resolve(normalizeConversation(saved,selection));});
+  }};
+  const adapter=new DesktopAdapter({index,client:Object.assign(new EventEmitter(),{close(){}})});t.after(()=>adapter.close());
+  const watchers=new Set(['phone']);
+  adapter.conversations.set('thread',{state,watchers,waiters:[]});
+  const read=()=>adapter.messageImages('thread','design','phone',{imageIndex:0,chunkIndex:0});
+  const preview=read();finishRead();
+  assert.deepEqual(Buffer.from((await preview).data.split(',')[1],'base64'),data);
+  const canceled=read();watchers.delete('phone');finishRead();
+  await assert.rejects(canceled,{code:'SUBSCRIPTION_CANCELED'});
+});
+
 test('手机保留明确的图片错误原因，重试时清除旧错误，离页回执不写入图片',async()=>{
   const source=fs.readFileSync('apps/mobile/components/message-images/message-images.uvue','utf8').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
-  const pending=[],unmount=[];const context=vm.createContext({connection:{hostId:'host',activeThreadId:'thread',cacheNamespace:''},ref:value=>({value}),defineProps:()=>({hostId:'host',threadId:'thread',messageId:'message',connected:true}),defineEmits:()=>()=>{},watch(){},onUnmounted:cb=>unmount.push(cb),bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))}});
+  const props={hostId:'host',threadId:'thread',messageId:'message',connected:true,assistant:false};
+  const pending=[],unmount=[];const context=vm.createContext({connection:{hostId:'host',activeThreadId:'thread',cacheNamespace:''},ref:value=>({value}),defineProps:()=>props,defineEmits:()=>()=>{},watch(){},onUnmounted:cb=>unmount.push(cb),bridge:{request:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))}});
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.ui={loadImages,sources,error};',context);const ui=context.ui;
   ui.loadImages();pending.shift().reject(Error('电脑上的原图已不存在，请重新发送'));await new Promise(setImmediate);assert.match(ui.error.value,/原图已不存在/);
+  props.assistant=true;
+  ui.loadImages();pending.shift().reject(Error('这条记录没有保留可预览的图片，请重新发送原图'));await new Promise(setImmediate);assert.equal(ui.error.value,'暂时无法预览这张图片');
+  ui.loadImages();pending.shift().reject(Error('电脑上的原图已不存在，请重新发送'));await new Promise(setImmediate);assert.equal(ui.error.value,'电脑上的原图已不存在');
   ui.loadImages();assert.equal(ui.error.value,'');unmount[0]();pending.shift().resolve({chunkCount:1,data:'synthetic-image'});await new Promise(setImmediate);assert.equal(ui.sources.value.length,0);
 });

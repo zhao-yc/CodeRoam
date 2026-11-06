@@ -42,7 +42,7 @@
             <plan-preview v-if="entry.role == 'assistant' && entry.kind == 'planImplementation'" :source="planSource(entry.id, entry.text)" @open="openPlan(entry.id, entry.text)" />
             <markdown-body v-else-if="entry.role == 'assistant' && entry.text.trim().length > 0" :source="entry.text" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" @reading="markdownReading" />
             <text v-else-if="entry.text.trim().length > 0" class="message-text" selectable>{{ entry.role == 'user' ? userMessageText(entry.text) : entry.text }}</text>
-            <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
+            <message-images v-if="entry.role == 'assistant' && (entry.imageCount ?? 0) > 0" :host-id="pageHostId" :thread-id="pageThreadId" :message-id="entry.id" :connected="connection.connected" :ready="imagesReady" :subscription-revision="connection.subscriptionRevision" :scope-id="connection.cacheNamespace" :count="entry.imageCount ?? 0" :large="true" :assistant="true" @beforelayout="beforeMarkdownLayout()" @layout="afterMarkdownLayout" />
             <template v-if="entry.kind == 'submittedMessage'">
               <text v-if="(entry.summary ?? '').length > 0" class="message-submission-note">{{ entry.summary }}</text>
               <text class="message-submission-note" role="status" aria-live="polite">{{ submittedMessageStatus(entry.label) }}</text>

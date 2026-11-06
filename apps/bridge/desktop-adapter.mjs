@@ -269,16 +269,19 @@ export class DesktopAdapter extends EventEmitter {
     }
   }
 
-  /** 图片只从该手机已订阅会话的可见用户消息读取，不接受手机传入文件路径或图片地址。 */
+  /** 只读取已订阅聊天中的可见图片，不接受手机传入文件路径或图片地址。 */
   async messageImages(threadId,messageId,deviceId,options={}) {
     const entry=this.conversations.get(threadId);
     if(!entry?.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_REQUIRED','请先打开这条聊天再查看图片');
+    const owner=entry.owner;
     const selection={imageMessageId:messageId,...(options.imageIndex === undefined ? {} : {imageIndex:options.imageIndex})};
-    const snapshot=entry.state?normalizeConversation(entry.state,selection):await this.index?.readHistory(threadId,selection);
+    const findImage=snapshot=>snapshot?.messages.find(item=>item.id===messageId&&['user','assistant'].includes(item.role)&&item.images?.length);
+    let message=entry.state?findImage(normalizeConversation(entry.state,selection)):undefined;
+    // 历史分页可展示实时快照之外的图片，预览时按同一会话和消息编号回查。
+    if(!message)message=findImage(await this.index?.readHistory?.(threadId,selection));
     // 异步读取结束后再次核对订阅，切换会话或设备断开后不返回原图。
-    if(this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId))throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
-    const message=snapshot?.messages.find(item=>item.id===messageId&&['user','assistant'].includes(item.role));
-    if(!message?.images?.length)throw new BridgeError('IMAGE_UNAVAILABLE','这条记录没有保留可预览的图片，请重新发送原图');
+    if(this.stopped||this.conversations.get(threadId)!==entry||!entry.watchers.has(deviceId)||entry.owner!==owner)throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的同步已取消');
+    if(!message)throw new BridgeError('IMAGE_UNAVAILABLE','当前聊天记录中未找到可预览的图片');
     // 每个回复片段小于协议上限；手机只能选择消息内的图片序号。
     if(options.imageIndex !== undefined) {
       const source=message.images[0], size=1024*1024, count=Math.ceil(source.length/size);

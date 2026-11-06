@@ -9,7 +9,7 @@
 import { ref, watch, nextTick, onUnmounted } from 'vue'
 import { bridge, connection } from '../../services/bridge.uts'
 import LoadingSkeleton from '../loading-skeleton/loading-skeleton.uvue'
-const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, ready?: boolean, subscriptionRevision?: number, scopeId?: string, count?: number, large?: boolean }>()
+const props = defineProps<{ hostId: string, threadId: string, messageId: string, connected: boolean, ready?: boolean, subscriptionRevision?: number, scopeId?: string, count?: number, large?: boolean, assistant?: boolean }>()
 const emit = defineEmits<{ (event: 'beforelayout'): void, (event: 'layout'): void }>()
 const sources = ref<string[]>([])
 const error = ref('')
@@ -53,7 +53,14 @@ function loadImages(manual: boolean = false) {
     if (images.length == 0) error.value = '这条记录未保留图片'
   }, (failure: Error) => {
     if (!imageRequestReady() || version != requestVersion || identity != imageIdentity()) return
-    loading = false; manualRetry.value = false; error.value = failure.message.length > 0 ? failure.message : '图片加载失败，请稍后重试'
+    // 兼容仍在运行的旧版桥接，助手图片的提示不应要求用户重发。
+    let message = failure.message
+    if (props.assistant == true) {
+      message = message == '这条记录没有保留可预览的图片，请重新发送原图'
+        ? '暂时无法预览这张图片'
+        : message.replace(/，请(?:压缩后)?重新发送.*$/, '')
+    }
+    loading = false; manualRetry.value = false; error.value = message.length > 0 ? message : '图片加载失败，请稍后重试'
   })
 }
 // 父页可能连续更新就绪标记与订阅代次；合并到下一次渲染后只发起一次读取。
