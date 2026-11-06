@@ -9,6 +9,10 @@ test('回复阶段变化必须替换消息，轮次完成与耗时在无新增�
     const update={...conversationUpdate({snapshot:before,seq:1},after),epoch:'e',seq:2};
     assert.equal(update.kind,'delta');assert.equal(update.update.upserts.length,1);assert.equal(update.update.appends.length,0);
     assert.deepEqual(applyConversationUpdate({snapshot:before,seq:1,epoch:'e'},update).snapshot,after);
+    const timed=structuredClone(after);timed.messages[1].workedMs=1200;
+    const next={...conversationUpdate({snapshot:after,seq:2},timed),epoch:'e',seq:3};
+    assert.equal(next.update.upserts[0].workedMs,1200);
+    assert.deepEqual(applyConversationUpdate({snapshot:after,seq:2,epoch:'e'},next).snapshot,timed);
   }
 });
 

@@ -17,7 +17,7 @@ export type NotificationSnapshot = { latestTurnId: string, latestTurnStatus: str
 export type LatestTurn = { turnId: string, status: string }
 // 首次追平的完整通知状态只供建立基线；内部标记在每次列表快照重新计算。
 export type ThreadSummary = { notificationBaseline?: boolean, notificationBaselineState?: NotificationSnapshot, contentRevision?: string, latestTurn?: LatestTurn, notificationState?: NotificationSnapshot, id: string, title: string, cwd: string, updatedAt: number, hasUnreadTurn?: boolean, activeFlags?: string[], status?: string, activeTurnId?: string, approvalCount?: number, pendingQuestionCount?: number, unansweredQuestionCount?: number }
-export type ChatMessage = { id: string, role: string, kind?: string, summary?: string, phase?: string, imageCount?: number, text: string, turnId: string, status: string }
+export type ChatMessage = { id: string, role: string, kind?: string, summary?: string, phase?: string, workedMs?: number, imageCount?: number, text: string, turnId: string, status: string }
 export type ConversationTurn = { turnId: string, status: string, durationMs?: number, errorMessage?: string }
 export type Approval = { id: string, kind: string, turnId: string, title: string, detail: string, cwd: string }
 export type QuestionOption = { label: string, description: string }

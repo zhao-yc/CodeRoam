@@ -119,6 +119,19 @@ test('首份总结没有过程也不会阻止后续报告收起，提问与两�
  assert.deepEqual(plain(f.reportTimeline(state,['process:turn:final']).filter(e=>e.role!=='process').map(e=>e.id)),['u','early','followup','progress','execution:c','final']);
  assert.deepEqual(plain(f.reportTurnIds(state)),['turn']);
 });
+
+test('异步通知保留在执行过程内，正式回复采用桌面工作耗时',()=>{
+ const f=fixture(),state=normalizeConversation({id:'thread',turns:[{
+   turnId:'turn',status:'completed',durationMs:203000,turnStartedAtMs:10000,finalAssistantStartedAtMs:211000,
+   items:[user('u'),agent('progress'),{...agent('async','final_answer'),delivery:'async'},agent('final','final_answer')],
+ }],requests:[]});
+ const collapsed=f.reportTimeline(state,[]);
+ assert.deepEqual(plain(collapsed.map(entry=>entry.id)),['u','process:turn:final','final']);
+ assert.equal(collapsed[1].durationLabel,'用时 3分钟21秒');
+ assert.equal(state.messages.find(message=>message.id==='async').phase,'commentary');
+ assert.deepEqual(plain(f.reportTimeline(state,['process:turn:final']).map(entry=>entry.id)),['u','process:turn:final','progress','async','final']);
+});
+
 test('同轮多份报告过程独立开关，前插历史不会改变已展开段的编号',()=>{
  const f=fixture(),state=multipleReports();state.messages.splice(1,0,{id:'old-progress',role:'assistant',phase:'commentary',text:'早期过程',turnId:'turn',status:'completed'});
  const collapsed=f.reportTimeline(state,[]);assert.deepEqual(plain(collapsed.filter(e=>e.role==='process').map(e=>e.id)),['process:turn:early','process:turn:final']);

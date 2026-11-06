@@ -36,7 +36,7 @@ export function presentConversationMessages(messages: ChatMessage[]): MessagePre
     )) presentation.text = '是的，执行此计划'
     return presentation
   })
-  const prepared = messages.map((message: ChatMessage, index: number): ChatMessage => ({ id: message.id, role: message.role, kind: message.kind, summary: message.summary, phase: message.phase, imageCount: message.imageCount, text: attachments[index].text, turnId: message.turnId, status: message.status }))
+  const prepared = messages.map((message: ChatMessage, index: number): ChatMessage => ({ id: message.id, role: message.role, kind: message.kind, summary: message.summary, phase: message.phase, workedMs: message.workedMs, imageCount: message.imageCount, text: attachments[index].text, turnId: message.turnId, status: message.status }))
   const result = presentAnnotatedMessages(prepared)
   result.forEach((presentation: MessagePresentation, index: number) => {
     if (messages[index].role != 'user') return

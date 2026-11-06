@@ -40,6 +40,22 @@ function textOf(content, hideImages = false) {
   return '';
 }
 
+/** 异步通知也可能带最终回复阶段，但它仍属于当前执行过程。 */
+export function isFinalAssistantReply(item) {
+  return ['agentMessage', 'assistantMessage'].includes(item?.type) && item.phase === 'final_answer' && item.delivery !== 'async';
+}
+
+/** 优先使用桌面实时计时。历史只保留整轮耗时和末条回复的生成区间。 */
+function workDurationMs(turn, reply) {
+  const replyStart = turn.aeonAssistantMessageStartedAtMsById?.[reply.id] ?? turn.finalAssistantStartedAtMs ?? reply.startedAtMs;
+  if (!Number.isSafeInteger(replyStart) || replyStart < 0) return undefined;
+  if (Number.isSafeInteger(turn.turnStartedAtMs) && turn.turnStartedAtMs >= 0 && turn.turnStartedAtMs <= replyStart) return replyStart - turn.turnStartedAtMs;
+  const replyEnd = reply.completedAtMs;
+  if (!Number.isSafeInteger(replyEnd) || replyEnd < replyStart || !Number.isSafeInteger(turn.durationMs)) return undefined;
+  const duration = turn.durationMs - (replyEnd - replyStart);
+  return Number.isSafeInteger(duration) && duration >= 0 ? duration : undefined;
+}
+
 /** 将桌面内部时间线压缩为手机需要的消息、执行状态与待审批项。 */
 export function normalizeConversation(state, { imageMessageId, imageIndex, maxMessages = 80, maxCharacters = 120000, preserveDialogue = true } = {}) {
   const history = state.turnHistory?.history;
@@ -47,6 +63,8 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
   const messages = [];
   const seen = new Set();
   for (const turn of turns) {
+    const final = turn.status === 'completed' ? turn.items?.findLast(isFinalAssistantReply) : undefined;
+    const workedMs = final ? workDurationMs(turn, final) : undefined;
     // 先用原文确认重复关系，不能根据截断后的相同尾部误删另一份最终回复。
     const planContents = new Set((turn.items ?? []).filter(item => ['plan','planImplementation'].includes(item.type)).map(item => item.type === 'plan' ? item.text : item.planContent).filter(text => typeof text === 'string').map(text => text.trim()));
     for (const item of turn.items ?? []) {
@@ -90,7 +108,8 @@ export function normalizeConversation(state, { imageMessageId, imageIndex, maxMe
       // 长消息可能截掉执行确认的开头，先标记展示类型，仍沿用普通消息的正文预算。
       const planRequest = item.type === 'userMessage' && imageParts.length === 0 && /^PLEASE IMPLEMENT THIS PLAN:[ \t]*\r?\n\s*\S/.test(text);
       const kind = planRequest ? 'planImplementationRequest' : item.type === 'plan' ? 'planImplementation' : item.type;
-      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof item.phase === 'string' ? {phase:item.phase} : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
+      const phase = item.phase === 'final_answer' && item.delivery === 'async' ? 'commentary' : item.phase;
+      if (text.trim() || imageParts.length) messages.push({ id:String(item.id), role, kind, ...(imageParts.length?{imageCount:imageParts.length}:{}), ...(images.length?{images}:{}), ...(summary === undefined ? {} : { summary }), ...(role === 'assistant' && typeof phase === 'string' ? {phase} : {}), ...(item === final && workedMs !== undefined ? { workedMs } : {}), text:preservePlan ? text : text.slice(-10000), turnId:turn.turnId ?? '', status:turn.status ?? '' });
     }
   }
   // 先给提问和最终报告预留空间，避免长任务的命令记录挤掉所有早期对话。
