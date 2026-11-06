@@ -6,6 +6,9 @@ import vm from 'node:vm';
 import { componentContext } from './helpers/component-context.mjs';
 
 const source = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
+const submissionSource = fs.readFileSync('apps/mobile/services/interaction-submissions.uts', 'utf8');
+const planNoticeCondition = source.match(/<view v-if="([^"]+)" id="notice-plan"/)[1]
+  .replace(/\b(pendingPlan|hiddenPlanId|planInteraction)\b/g, '$1.value');
 const ref = value => ({ value });
 const computed = read => ({ get value() { return read(); } });
 const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
@@ -20,7 +23,7 @@ function fixture() {
     questionGroups: [{ id: 'question', turnId: 'turn', state: 'pending', questions: [{id:'sub',options:[],isSecret:false}] }]
   };
   const context = componentContext({
-    ref, computed, watch: (read, changed) => watchers.push({ read, changed, previous: read() }),
+    ref, computed, reactive: value => value, watch: (read, changed) => watchers.push({ read, changed, previous: read() }),
     Date: { now: () => now }, setTimeout: callback => { timer = callback; return 1; }, clearTimeout() {},
     busy: ref(false), pendingAction: ref(''), operationError: ref(''), goalHostOnline: ref(true),
     pageHostId: ref('host'), pageThreadId: ref('thread'),
@@ -38,13 +41,14 @@ function fixture() {
     }
   });
   const code = [
+    submissionSource.replace(/^import .*\r?\n/gm, '').replace(/\bexport /g, ''),
     'const interactionCoolingDown = ref(false); let interactionUnlockAt = 0, interactionUnlockTimer = 0, layoutUntil = 0',
     slice('const hiddenPlanId =', '// 运行中显示电脑确认值'),
     slice('const interactionScope =', '\nfunction isCurrentPage'),
     slice('// 取消只收起编辑区', 'function copyText('),
     slice('function interactionFor(', '// 继续指令与输入框草稿独立'),
     slice('function reply(id: string', '// 目标表单与聊天草稿独立'),
-    'globalThis.api={replyPlan,reply,submitAnswers,checkInteraction,interactionFor,detachedInteractions,planFeedback,planEditing,editPlan,cancelPlanFeedback,hidePlan,interactionCoolingDown}'
+    'globalThis.api={replyPlan,reply,submitAnswers,checkInteraction,interactionFor,detachedInteractions,planFeedback,planEditing,editPlan,cancelPlanFeedback,hidePlan,interactionCoolingDown,interactionSubmissions,planNoticeVisible:()=>(' + planNoticeCondition + ')}'
   ].join('\n');
   vm.runInContext(stripTypeScriptTypes(code), context);
   return {
@@ -137,7 +141,7 @@ test('切换实例后展示副本按原题组恢复，仅请求携带保密答�
   assert.deepEqual(JSON.parse(JSON.stringify(first.questionDrafts)),[
     {questionId:'choice',text:'乙',custom:true},{questionId:'long',text:answer,custom:true},{questionId:'secret',text:'',custom:true}
   ]);
-  assert.doesNotMatch(JSON.stringify(f.context.interactionSubmissions),/合成保密原文/);
+  assert.doesNotMatch(JSON.stringify(f.interactionSubmissions),/合成保密原文/);
   assert.equal(f.calls[0].request[1].answers[2].text,'合成保密原文');
   f.calls[0].reject(Object.assign(new Error('合成断线'),{name:'OUTCOME_UNKNOWN'}));await Promise.resolve();f.tick(600);
   f.context.pageHostId.value='other';f.context.connection.hostId='other';
@@ -172,4 +176,79 @@ test('方案取消编辑保留草稿，旧回执不清空新方案，空反馈�
   f.planFeedback.value = '新方案意见';
   f.calls[0].resolve({}); await Promise.resolve();
   assert.equal(f.planFeedback.value, '新方案意见');
+});
+
+test('计划成功回执立即收起整个确认区，延迟快照和切回聊天都不重新开放提交', async () => {
+  for (const action of ['implement', 'feedback']) {
+    const f = fixture();
+    if (action === 'feedback') { f.editPlan(); f.planFeedback.value = '合成修改意见'; }
+    assert.equal(f.planNoticeVisible(), true);
+    f.replyPlan(action);
+    assert.equal(f.planNoticeVisible(), true, '提交中保留确认区和进度');
+    f.calls[0].resolve({}); await Promise.resolve();
+    assert.equal(f.planNoticeVisible(), false, '旧计划仍在快照时也立即收起');
+    assert.equal(f.interactionFor('plan', 'plan', 'turn').state, 'done');
+    f.tick(600); f.replyPlan(action);
+    assert.equal(f.calls.length, 1);
+    f.context.pageThreadId.value = 'other'; f.context.connection.activeThreadId = 'other';
+    f.context.pageThreadId.value = 'thread'; f.context.connection.activeThreadId = 'thread';
+    assert.equal(f.planNoticeVisible(), false);
+    f.snapshot.pendingPlan = null; f.sync();
+    assert.equal(f.detachedInteractions('plan').length, 0, '快照移除后也没有底部成功提示');
+  }
+});
+
+test('快照先移除计划时继续显示提交进度，成功回执后移除底部提示', async () => {
+  const f = fixture(); f.replyPlan('implement');
+  f.snapshot.pendingPlan = null; f.sync();
+  assert.equal(f.planNoticeVisible(), false);
+  assert.equal(f.detachedInteractions('plan')[0].state, 'sending');
+  f.calls[0].resolve({}); await Promise.resolve();
+  assert.equal(f.detachedInteractions('plan').length, 0);
+});
+
+test('计划未知结果保留核对入口，核对成功或确认原操作结束后收起', async () => {
+  for (const receiptFound of [true, false]) {
+    const f = fixture(); f.replyPlan('implement');
+    f.calls[0].reject(Object.assign(new Error('合成断线'), { name: 'OUTCOME_UNKNOWN' }));
+    await Promise.resolve(); f.tick(600);
+    const entry = f.interactionFor('plan', 'plan', 'turn');
+    assert.equal(f.planNoticeVisible(), true);
+    assert.equal(entry.state, 'unknown');
+    if (receiptFound) f.setStatus({ state: 'done' });
+    else {
+      f.snapshot.pendingPlan = null; f.sync(); f.tick(600);
+      assert.equal(f.detachedInteractions('plan')[0].state, 'unknown');
+    }
+    await f.checkInteraction(entry);
+    assert.equal(entry.state, receiptFound ? 'done' : 'resolved');
+    assert.equal(f.planNoticeVisible(), false);
+    assert.equal(f.detachedInteractions('plan').length, 0);
+    assert.equal(f.calls.length, 1, '核对不重发计划');
+  }
+});
+
+test('失败恢复计划入口，新计划及其他实例的同编号计划正常显示', async () => {
+  const f = fixture(); f.replyPlan('implement');
+  f.calls[0].reject(new Error('合成失败')); await Promise.resolve(); f.tick(600);
+  assert.equal(f.planNoticeVisible(), true);
+  f.replyPlan('implement'); f.calls[1].resolve({}); await Promise.resolve(); f.tick(600);
+  assert.equal(f.planNoticeVisible(), false);
+  f.context.pageHostId.value = 'other-host'; f.context.connection.hostId = 'other-host';
+  assert.equal(f.planNoticeVisible(), true, '其他实例不沿用旧实例的提交记录');
+  f.context.pageHostId.value = 'host'; f.context.connection.hostId = 'host';
+  assert.equal(f.planNoticeVisible(), false);
+  f.snapshot.pendingPlan = { id: 'new-plan', turnId: 'new-turn', text: '合成新方案' }; f.sync(); f.tick(600);
+  assert.equal(f.planNoticeVisible(), true);
+  f.replyPlan('implement'); assert.equal(f.calls.length, 3);
+});
+
+test('计划提示收起规则保留问答和审批的现有成功提示', async () => {
+  for (const kind of ['question', 'approval']) {
+    const f = fixture();
+    if (kind === 'question') f.answer(); else f.approve();
+    f.calls[0].resolve({}); await Promise.resolve();
+    if (kind === 'question') f.snapshot.questionGroups = []; else f.snapshot.approvals = [];
+    assert.equal(f.detachedInteractions(kind)[0].state, 'done');
+  }
 });

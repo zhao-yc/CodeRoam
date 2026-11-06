@@ -77,7 +77,7 @@
             <!-- 方案可能不在当前消息窗口，仍使用桌面提供的原文显示独立预览。 -->
         <view v-if="pendingPlanOutsideTimeline && pendingPlan != null" class="plan-fallback"><plan-preview :source="pendingPlan!.text" @open="openPlan(pendingPlan!.id, pendingPlan!.text)" /></view>
         <!-- 提交中保留原布局，状态层覆盖失去操作能力的表单。 -->
-        <view v-if="pendingPlan != null && (hiddenPlanId != pendingPlan.id || planInteraction != null)" id="notice-plan" class="plan-confirm">
+        <view v-if="pendingPlan != null && (hiddenPlanId != pendingPlan.id || planInteraction != null) && (planInteraction == null || interactionStatusVisible(planInteraction!))" id="notice-plan" class="plan-confirm">
           <view class="plan-confirm-header">
             <text class="plan-confirm-title">{{ planEditing && planInteraction == null ? '修改方案' : '确认方案' }}</text>
             <button v-if="planEditing && planInteraction == null" class="plan-cancel" :disabled="busy || interactionCoolingDown" @click="cancelPlanFeedback">取消</button>
@@ -217,7 +217,7 @@ import { removeArchivedThread } from '../../services/thread-list.uts'
 import { clearFileReportCache } from '../../services/file-report-cache.uts'
 import { submissionTasks, supportsSubmissionTasks } from '../../services/submission-task-state.uts'
 import { newSubmissionId, submitTask, awaitSubmissionResult, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
-import { InteractionSubmission, QuestionSubmissionDraft, interactionSubmissions } from '../../services/interaction-submissions.uts'
+import { InteractionSubmission, QuestionSubmissionDraft, interactionSubmissions, interactionStatusVisible } from '../../services/interaction-submissions.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
@@ -1621,7 +1621,7 @@ function interactionAttached(entry: InteractionSubmission): boolean {
   return liveApprovals.value.some((approval: Approval): boolean => approval.id == entry.id && approval.turnId == entry.turnId)
 }
 function detachedInteractions(kind: string): InteractionSubmission[] {
-  const entries = conversationInteractions.value.filter((entry: InteractionSubmission): boolean => entry.kind == kind && !interactionAttached(entry))
+  const entries = conversationInteractions.value.filter((entry: InteractionSubmission): boolean => entry.kind == kind && interactionStatusVisible(entry) && !interactionAttached(entry))
   const latest = entries.length > 0 ? entries[entries.length - 1] : null
   return entries.filter((entry: InteractionSubmission): boolean => entry == latest || entry.state == 'unknown' || entry.state == 'sending')
 }
