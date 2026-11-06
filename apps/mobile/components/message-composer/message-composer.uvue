@@ -12,7 +12,7 @@
             <view v-if="images.length > 0" class="draft-images">
               <view v-for="image in images" :key="image.id" class="draft-image">
                 <image :src="image.src" mode="aspectFill" class="draft-thumbnail" @click="emit('previewimage', image.src)" />
-                <view class="remove-image action-frame"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="imagesDisabled" aria-label="移除图片" @click="emit('removeimage', image.id)"></button></view>
+                <view v-if="active && !disabled && !imagesDisabled" class="remove-image action-frame"><app-icon name="close" :size="14" tone="light" /><button class="action-hitbox" :disabled="imagesDisabled" aria-label="移除图片" @click="emit('removeimage', image.id)"></button></view>
               </view>
             </view>
             <view v-for="file in files" :key="file.id" class="draft-file">
