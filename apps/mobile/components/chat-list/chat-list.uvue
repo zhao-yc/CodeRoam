@@ -22,7 +22,7 @@
         <view v-else class="header-actions"><view class="header-button action-frame"><app-icon name="search" :size="23" /><button class="action-hitbox" hover-class="action-pressed" aria-label="搜索聊天" @click="openSearch"></button></view><view class="header-button action-frame"><app-icon name="settings" :size="23" /><button class="action-hitbox" :disabled="creatingConversation" hover-class="action-pressed" aria-label="设置" @click="openConnection"></button></view></view>
       </template>
     </view>
-    <view class="list-shell" :class="{ 'list-shell-glass': liquidGlass }">
+    <view id="submission-task-area" class="list-shell" :class="{ 'list-shell-glass': liquidGlass }">
     <deletion-task-list :visible-thread-keys="visibleDeletionThreadKeys" />
     <view v-if="displayComputers.length > 0" class="computer-tabs">
       <view v-if="displayComputers.length > 1" :class="['computer-tab', 'all-tab', selectedComputerId.length == 0 ? 'computer-tab-selected' : '']" @click="chooseComputerFilter('')"><text class="tab-label">全部</text></view>
@@ -59,7 +59,7 @@
       <liquid-glass-control symbol="plus" :title="props.wide ? '新聊天' : '问问 Codex'" :label="props.wide ? '新聊天' : '问问 Codex，开启新聊天'" :disabled="creatingConversation" @activate="openNewConversation" />
     </view>
     <!-- 任务浮层锚定列表窗格，手机和平板都不占用聊天行的位置。 -->
-    <submission-task-list :host-id="selectedComputerId" :active="pageVisible" :obscured="menuMounted || editingComputer != null" :glass="liquidGlass" @open="openSubmittedTask" />
+    <submission-task-list :host-id="selectedComputerId" :active="pageVisible" :obscured="menuMounted || editingComputer != null" :glass="liquidGlass" :layout-key="props.layoutKey + ':' + props.wide" @open="openSubmittedTask" />
     </view>
     <view v-if="!liquidGlass && props.wide" class="list-new-button action-frame">
       <composer-plus light /><text class="list-new-button-label">新聊天</text>
@@ -97,7 +97,7 @@ const liquidGlass = useLiquidGlass()
 // 列表模板通过本地方法读取删除任务。
 function deletionTask(hostId: string, threadId: string): DeleteTask | null { return findDeletionTask(hostId, threadId) }
 function deletionLabel(task: DeleteTask): string { return formatDeletionLabel(task) }
-const props = withDefaults(defineProps<{ active: boolean, wide?: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean }>(), { wide: false, selectedHostId: '', selectedThreadId: '', busy: false })
+const props = withDefaults(defineProps<{ active: boolean, wide?: boolean, selectedHostId?: string, selectedThreadId?: string, busy?: boolean, layoutKey?: string }>(), { wide: false, selectedHostId: '', selectedThreadId: '', busy: false, layoutKey: '' })
 const emit = defineEmits<{ open: [thread: ComputerThread], create: [hostId: string] }>()
 const paneShowCallbacks = [] as (() => void)[]
 const paneHideCallbacks = [] as (() => void)[]

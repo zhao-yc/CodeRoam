@@ -1,6 +1,6 @@
 <template>
-  <view v-if="available && active && !obscured" class="submission-dock" :class="{ 'submission-dock-glass': glass }">
-    <view v-if="opened" class="submission-panel">
+  <view v-if="available && active && !obscured" class="submission-dock" :class="{ 'submission-dock-glass': glass }" :style="dockStyle">
+    <view v-if="opened" id="submission-dock-panel" class="submission-panel">
     <view class="submission-heading"><text class="submission-title">{{ rows.length > 0 ? '执行记录 · ' + rows.length : '执行记录' }}</text><view class="submission-collapse"><text class="submission-collapse-label">收起</text><app-icon name="chevron-down" :size="16" tone="muted" /><button class="submission-hit" aria-label="收起执行记录" @click="closePanel"></button></view></view>
     <scroll-view v-if="shownRows.length > 0" direction="vertical" class="submission-rows" :show-scrollbar="false" :style="{ maxHeight: expanded ? '280px' : '222px' }">
       <view v-for="row in shownRows" :key="row.hostId + ':' + row.task.id" class="submission-row">
@@ -20,16 +20,21 @@
     <view v-for="instance in hiddenBlockers" :key="instance.hostId" class="submission-recovery"><text class="submission-error">{{ hostName(instance.hostId) }} · 队列已暂停</text><button class="submission-action" :disabled="working.length > 0" @click="recoverPaused(instance)">{{ (instance.snapshot?.blockerId ?? '').length > 0 ? '继续队列' : '查看执行记录' }}</button></view>
     <view class="submission-footer"><view class="submission-history-entry"><app-icon name="history" :size="16" tone="muted" /><text class="submission-history-label">执行记录</text><button class="submission-hit" aria-label="查看执行记录" @click="openHistory"></button></view><text class="submission-count">{{ rows.length > 0 ? rows.length + ' 项任务' : '暂无当前任务' }}</text></view>
     </view>
-    <view v-else class="submission-capsule" :class="{ 'submission-capsule-alert': summaryState == 'unknown' || summaryState == 'waiting_resume' }" role="status" aria-live="polite">
+    <view v-else id="submission-dock-capsule" class="submission-capsule" :class="{ 'submission-capsule-alert': summaryState == 'unknown' || summaryState == 'waiting_resume' }" :style="{ transform: 'translateX(' + capsuleOffset + 'px)' }" role="status" aria-live="polite" @touchstart.stop="beginTouch" @touchmove.stop="moveTouch" @touchend.stop="finishTouch" @touchcancel.stop="cancelDrag">
       <app-icon v-if="summaryState == 'idle'" name="history" :size="16" tone="muted" /><submission-task-status v-else :state="summaryState" />
       <text class="submission-capsule-label">{{ summaryLabel }}</text><app-icon v-if="hasCurrent" class="submission-capsule-chevron" name="chevron-down" :size="15" tone="muted" />
-      <button class="submission-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开执行记录' : '，查看历史')" @click="openPanel"></button>
+      <!-- #ifdef WEB -->
+      <button class="submission-hit submission-drag-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开执行记录' : '，查看历史') + '，可拖动调整位置'" @click="openPanel"></button>
+      <!-- #endif -->
+      <!-- #ifndef WEB -->
+      <button class="submission-hit" :aria-label="summaryLabel + (hasCurrent ? '，展开执行记录' : '，查看历史') + '，可拖动调整位置'" @click="openPanel"></button>
+      <!-- #endif -->
     </view>
   </view>
 </template>
 
 <script setup lang="uts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import SubmissionTaskStatus from '../submission-task-status/submission-task-status.uvue'
 import { connection, Computer } from '../../services/bridge.uts'
@@ -37,7 +42,7 @@ import { submissionTasks, SubmissionTask, SubmissionStep, InstanceSubmissionTask
 import { submissionCardMeta, submissionCardError, submissionNeedsPauseNotice, submissionFloatingState, submissionFloatingLabel } from '../../services/submission-task-presentation.uts'
 import { controlSubmissionTask, readSubmissionTasks, checkPendingSubmission, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
 type TaskRow = { hostId: string, task: SubmissionTask }
-const props = withDefaults(defineProps<{ hostId?: string, active?: boolean, obscured?: boolean, glass?: boolean }>(), { hostId: '', active: true, obscured: false, glass: false })
+const props = withDefaults(defineProps<{ hostId?: string, active?: boolean, obscured?: boolean, glass?: boolean, layoutKey?: string }>(), { hostId: '', active: true, obscured: false, glass: false, layoutKey: '' })
 const emit = defineEmits<{ open: [hostId: string, threadId: string, title: string] }>()
 const opened = ref(false), expanded = ref(false), error = ref(''), working = ref('')
 const instances = computed((): InstanceSubmissionTasks[] => submissionTasks.instances.filter((instance: InstanceSubmissionTasks): boolean => props.hostId.length == 0 || instance.hostId == props.hostId))
@@ -58,9 +63,152 @@ const queuePaused = computed((): boolean => instances.value.some((instance: Inst
 const hasCurrent = computed((): boolean => rows.value.length > 0 || queuePaused.value)
 const summaryState = computed((): string => submissionFloatingState(rows.value.map((row: TaskRow): SubmissionTask => row.task), queuePaused.value))
 const summaryLabel = computed((): string => submissionFloatingLabel(summaryState.value, rows.value.length))
+const positionKey = 'coderoam-submission-dock-position-v1'
+const positionX = ref(1), positionY = ref(1)
+const areaWidth = ref(0), areaHeight = ref(0), capsuleWidth = ref(0), capsuleHeight = ref(44), panelHeight = ref(0)
+const horizontalRange = computed((): number => Math.max(0, areaWidth.value - 32 - capsuleWidth.value))
+const bottomGap = computed((): number => props.glass ? 70 : 12)
+const verticalRange = computed((): number => Math.max(0, areaHeight.value - 12 - bottomGap.value - capsuleHeight.value))
+const capsuleOffset = computed((): number => -(1 - positionX.value) * horizontalRange.value)
+const dockStyle = computed(() => {
+  if (areaHeight.value <= 0) return {}
+  const capsuleBottom = bottomGap.value + (1 - positionY.value) * verticalRange.value
+  // 面板底边跟随胶囊，靠近顶部时向下让位，保证标题与操作入口可见。
+  const bottom = opened.value ? Math.min(capsuleBottom, Math.max(bottomGap.value, areaHeight.value - 12 - panelHeight.value)) : capsuleBottom
+  return { bottom: bottom + 'px', maxHeight: Math.max(0, areaHeight.value - 12 - bottomGap.value) + 'px' }
+})
+let mounted = false
+let gesture = ''
+let touchId = -1
+let startX = 0, startY = 0, startPositionX = 1, startPositionY = 1
+let moved = false
+let ignoreClickUntil = 0, ignoreMouseUntil = 0
+
+function measureDock() {
+  nextTick(() => {
+    if (!mounted || !props.active || props.obscured || !available.value) return
+    const area = uni.getElementById('submission-task-area')?.getBoundingClientRect()
+    if (area == null || area.width <= 0 || area.height <= 0) return
+    areaWidth.value = area.width; areaHeight.value = area.height
+    const capsule = uni.getElementById('submission-dock-capsule')?.getBoundingClientRect()
+    if (capsule != null) { capsuleWidth.value = capsule.width; capsuleHeight.value = capsule.height }
+    const panel = uni.getElementById('submission-dock-panel')?.getBoundingClientRect()
+    if (panel != null) panelHeight.value = panel.height
+  })
+}
+
+function removeMouseListeners() {
+  // #ifdef WEB
+  document.removeEventListener('mousemove', moveMouse)
+  document.removeEventListener('mouseup', finishMouse)
+  window.removeEventListener('blur', cancelDrag)
+  // #endif
+}
+
+// 系统取消、多指触摸或页面隐藏时撤销未完成手势，防止残留事件误开历史页。
+function cancelDrag() {
+  if (gesture.length > 0) {
+    positionX.value = startPositionX; positionY.value = startPositionY
+    ignoreClickUntil = Date.now() + 350
+  }
+  gesture = ''; touchId = -1; moved = false
+  removeMouseListeners()
+}
+
+function beginDrag(kind: string, x: number, y: number): boolean {
+  if (gesture.length > 0 || opened.value || !props.active || props.obscured || !available.value || areaHeight.value <= 0) return false
+  gesture = kind; startX = x; startY = y
+  startPositionX = positionX.value; startPositionY = positionY.value; moved = false
+  return true
+}
+
+// 位移按可移动区间归一化；先以像素判断手势，触边后仍保持拖拽状态。
+function moveDrag(x: number, y: number) {
+  const dx = x - startX, dy = y - startY
+  if (!moved && Math.max(Math.abs(dx), Math.abs(dy)) < 8) return
+  moved = true
+  if (horizontalRange.value > 0) positionX.value = Math.max(0, Math.min(1, startPositionX + dx / horizontalRange.value))
+  if (verticalRange.value > 0) positionY.value = Math.max(0, Math.min(1, startPositionY + dy / verticalRange.value))
+}
+
+function finishDrag(x: number, y: number) {
+  moveDrag(x, y)
+  if (moved) {
+    ignoreClickUntil = Date.now() + 350
+    try { uni.setStorageSync(positionKey, JSON.stringify({ x: positionX.value, y: positionY.value })) } catch (_) {}
+  }
+  gesture = ''; touchId = -1; moved = false
+  removeMouseListeners()
+}
+
+function beginTouch(event: UniTouchEvent) {
+  ignoreMouseUntil = Date.now() + 700
+  if (event.touches.length != 1) { cancelDrag(); return }
+  const touch = event.touches[0]
+  if (beginDrag('touch', touch.clientX, touch.clientY)) touchId = touch.identifier
+}
+function moveTouch(event: UniTouchEvent) {
+  if (gesture != 'touch') return
+  if (event.touches.length != 1 || event.touches[0].identifier != touchId) { cancelDrag(); return }
+  moveDrag(event.touches[0].clientX, event.touches[0].clientY)
+}
+function finishTouch(event: UniTouchEvent) {
+  if (gesture != 'touch') return
+  ignoreMouseUntil = Date.now() + 700
+  if (event.touches.length != 0 || event.changedTouches.length != 1 || event.changedTouches[0].identifier != touchId) { cancelDrag(); return }
+  finishDrag(event.changedTouches[0].clientX, event.changedTouches[0].clientY)
+}
+
+// #ifdef WEB
+type DockMouseTarget = { closest: (selector: string) => unknown }
+type DockMouseEvent = { button: number, buttons: number, clientX: number, clientY: number, target: DockMouseTarget | null }
+// 鼠标移出胶囊后由文档继续接收手势，松手和失焦均清理监听。
+function beginMouse(event: Event) {
+  const mouse = event as unknown as DockMouseEvent
+  if (mouse.target?.closest('.submission-drag-hit') == null || mouse.button != 0 || Date.now() < ignoreMouseUntil || !beginDrag('mouse', mouse.clientX, mouse.clientY)) return
+  document.addEventListener('mousemove', moveMouse)
+  document.addEventListener('mouseup', finishMouse)
+  window.addEventListener('blur', cancelDrag)
+}
+function moveMouse(event: Event) {
+  const mouse = event as unknown as DockMouseEvent
+  if (gesture != 'mouse') return
+  if (mouse.buttons != 1) { cancelDrag(); return }
+  moveDrag(mouse.clientX, mouse.clientY)
+}
+function finishMouse(event: Event) {
+  const mouse = event as unknown as DockMouseEvent
+  if (gesture == 'mouse' && mouse.button == 0) finishDrag(mouse.clientX, mouse.clientY)
+}
+// #endif
+
+onMounted(() => {
+  mounted = true
+  // #ifdef WEB
+  // 使用原生 DOM 鼠标事件，保留按键字段；模板事件会被转换为 UniPointerEvent。
+  document.addEventListener('mousedown', beginMouse)
+  // #endif
+  try {
+    const saved = JSON.parse<UTSJSONObject>(uni.getStorageSync(positionKey) as string)
+    const x = saved?.getNumber('x'), y = saved?.getNumber('y')
+    if (x != null && y != null && Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1) { positionX.value = x; positionY.value = y }
+  } catch (_) {}
+  measureDock()
+})
+onUnmounted(() => {
+  mounted = false; cancelDrag()
+  // #ifdef WEB
+  document.removeEventListener('mousedown', beginMouse)
+  // #endif
+})
+watch((): string => props.layoutKey + ':' + props.glass, () => { cancelDrag(); measureDock() })
+watch((): string => available.value + ':' + props.active + ':' + props.obscured + ':' + summaryLabel.value + ':' + opened.value + ':' + expanded.value + ':' + error.value + ':' + JSON.stringify(shownRows.value) + ':' + hiddenBlockers.value.length, () => {
+  if (!available.value || !props.active || props.obscured || opened.value) cancelDrag()
+  measureDock()
+})
 // 浮窗只控制展示；收起、切换电脑和离开页面都不取消已入队的任务。
 function closePanel() { opened.value = false; expanded.value = false }
-watch((): string => props.hostId + ':' + submissionTasks.namespace + ':' + props.active + ':' + props.obscured, () => { closePanel(); error.value = '' })
+watch((): string => props.hostId + ':' + submissionTasks.namespace + ':' + props.active + ':' + props.obscured, () => { cancelDrag(); closePanel(); error.value = '' })
 // 成功五秒后由既有任务时钟移出，自动恢复为常驻历史入口。
 watch((): boolean => hasCurrent.value, (current: boolean) => { if (!current) closePanel() })
 function cardMeta(hostId: string, task: SubmissionTask): string { const snapshot = instances.value.find((instance: InstanceSubmissionTasks): boolean => instance.hostId == hostId)?.snapshot; return submissionCardMeta(task, snapshot?.paused == true && snapshot.blockerId == task.id) }
@@ -69,7 +217,7 @@ function canResume(hostId: string, task: SubmissionTask): boolean { const snapsh
 function hostName(id: string): string { return connection.computers.find((computer: Computer): boolean => computer.id == id)?.label ?? '原电脑' }
 function taskTitle(task: SubmissionTask): string { return task.kind == 'newConversation' ? '新建聊天' : '聊天操作' }
 function openHistory() { closePanel(); uni.navigateTo({ url: '/pages/task-history/index' + (props.hostId.length > 0 ? '?hostId=' + encodeURIComponent(props.hostId) : '') }) }
-function openPanel() { if (hasCurrent.value) opened.value = true; else openHistory() }
+function openPanel() { if (gesture.length > 0 || Date.now() < ignoreClickUntil) return; if (hasCurrent.value) opened.value = true; else openHistory() }
 function openInstanceHistory(hostId: string) { closePanel(); uni.navigateTo({ url: '/pages/task-history/index?hostId=' + encodeURIComponent(hostId) }) }
 // 首页错误只占一行，用户点击仍能读取完整原因。
 function showError(task: SubmissionTask) { uni.showModal({ title: '执行失败详情', content: task.error, showCancel: false, confirmText: '知道了' }) }
@@ -149,6 +297,10 @@ async function recoverPaused(instance: InstanceSubmissionTasks) {
 .submission-capsule-chevron { transform: rotate(180deg); }
 /* #ifdef WEB */
 .submission-row-title, .submission-description, .submission-error-summary { display: block; }
+.submission-dock { pointer-events: none; }
+.submission-panel, .submission-capsule { pointer-events: auto; }
+.submission-drag-hit { touch-action: none; user-select: none; cursor: grab; }
+.submission-drag-hit:active { cursor: grabbing; }
 @media (max-height: 600px) { .submission-rows { max-height: 140px !important; } }
 @media (max-height: 420px) { .submission-rows { max-height: 80px !important; } }
 /* #endif */

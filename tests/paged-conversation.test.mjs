@@ -57,6 +57,23 @@ test('已加载历史与滚动实时窗口衔接，不漏边界消息，不复�
   const older={messages:[message(0)],turns:[],cursor:'older-page',hasMore:true};const next=api.retainHistoryWindow(older,previous,current);assert.equal(next.cursor,'older-page');assert.deepEqual(Array.from(next.messages,m=>m.id),['message-0','message-1']);
 });
 
+test('实时占位仅由当前快照提供，成功移除后不进入历史或在翻页时复活',()=>{
+  const api=historyApi();
+  const pending={id:'synthetic-submission',kind:'submittedMessage',role:'user',text:'合成占位',turnId:'',status:'running'};
+  const old=message(0),real={...pending,id:'synthetic-desktop-message',kind:'userMessage',turnId:'synthetic-turn',status:'completed'};
+  const legacyPage={messages:[old,pending],turns:[],cursor:'older-page',hasMore:true};
+  const live=api.conversationWithHistory(snapshot([pending]),legacyPage);
+  assert.deepEqual(Array.from(live.messages,m=>m.id),[old.id,pending.id]);
+  const retained=api.retainHistoryWindow(null,snapshot([pending]),snapshot([]));
+  assert.equal(retained,null,'独立占位退出窗口时不创建历史页');
+  const shifted=api.retainHistoryWindow(null,snapshot([old,pending]),snapshot([real]));
+  assert.deepEqual(Array.from(shifted.messages,m=>m.id),[old.id]);
+  const synced=api.conversationWithHistory(snapshot([real]),legacyPage);
+  assert.deepEqual(Array.from(synced.messages,m=>m.id),[old.id,real.id]);
+  const delayed=api.conversationWithHistory(snapshot([]),legacyPage);
+  assert.deepEqual(Array.from(delayed.messages,m=>m.id),[old.id],'正式消息尚未回显也清除旧占位');
+});
+
 test('已读确认独立于导航、执行队列与实时所有者，历史浏览也可清除未读',async t=>{
   const calls=[],native=new NativeDesktop({platform:'win32',invoke:async(tool,args)=>{calls.push(tool);return {threadId:args.threadId,hostId:'local',read:true};}}),client=new EventEmitter();client.close=()=>{};
   const adapter=new DesktopAdapter({client,native});adapter.conversations.set(id,{watchers:new Set(['phone']),owner:null,state:null,waiters:[]});t.after(()=>adapter.close());

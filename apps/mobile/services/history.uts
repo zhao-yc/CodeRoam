@@ -4,7 +4,8 @@ export type HistoryPage = { messages: ChatMessage[], turns: ConversationTurn[], 
 
 // 以共同消息编号对齐两份时间线；实时值覆盖旧值，新消息插到下一个已知锚点之前。
 export function mergeHistoryMessages(older: ChatMessage[], newer: ChatMessage[]): ChatMessage[] {
-  const result = older.slice()
+  // 占位只属于当前快照，不能作为历史保留或从旧缓存复活。
+  const result = older.filter((message: ChatMessage): boolean => message.kind != 'submittedMessage')
   newer.forEach((message: ChatMessage, index: number) => {
     const existing = result.findIndex((entry: ChatMessage): boolean => entry.id == message.id)
     if (existing >= 0) { result.splice(existing, 1, message); return }
@@ -37,7 +38,7 @@ export function retainHistoryWindow(page: HistoryPage | null, previous: Conversa
   const ids = new Set<string>(current.messages.map((message: ChatMessage): string => message.id))
   const firstRetained = previous.messages.findIndex((message: ChatMessage): boolean => ids.has(message.id))
   const boundary = firstRetained < 0 ? previous.messages.length : firstRetained
-  const evicted = previous.messages.filter((message: ChatMessage, index: number): boolean => index < boundary && !ids.has(message.id))
+  const evicted = previous.messages.filter((message: ChatMessage, index: number): boolean => message.kind != 'submittedMessage' && index < boundary && !ids.has(message.id))
   if (evicted.length == 0) return page
   const messages = mergeHistoryMessages(page?.messages ?? [] as ChatMessage[], evicted)
   const merged = conversationWithHistory(previous, page)

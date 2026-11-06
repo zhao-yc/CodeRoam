@@ -115,13 +115,13 @@ export class TaskQueue {
     return { text: params.text ?? '', summary: captions.join(' · ') };
   }
 
-  /** 原生消息沿用执行编号；观察到真实正文后永久收口占位，翻页或重连不能再次补出。 */
+  /** 成功回执即收口占位；同时清理旧版残留，翻页或重连不能再次补出。 */
   decorateMessages(snapshot) {
     const rows = this.db.prepare('SELECT * FROM submission_tasks WHERE thread_id=? AND message_display IS NOT NULL ORDER BY position').all(snapshot.threadId);
     const messages = snapshot.messages.filter(message => message.kind !== 'submittedMessage');
     for (const row of rows) {
       const id = this.executionId(row);
-      if (messages.some(message => message.role === 'user' && message.id === id) || ['canceled', 'skipped'].includes(row.state)) {
+      if (messages.some(message => message.role === 'user' && message.id === id) || ['succeeded', 'canceled', 'skipped'].includes(row.state)) {
         this.db.prepare('UPDATE submission_tasks SET message_display=NULL WHERE position=?').run(row.position);
         continue;
       }
@@ -292,7 +292,8 @@ export class TaskQueue {
     try {
       this.db.prepare('UPDATE submission_tasks SET state=?,stage=?,error=?,result=?,completed_at=?,updated_at=?,payload=CASE WHEN ? THEN NULL ELSE payload END WHERE position=?').run(state, stage, error?.message ?? '', null, final ? time : 0, time, release ? 1 : 0, row.position);
       this.db.prepare('UPDATE submission_task_keys SET state=?,result=?,error=? WHERE device_id=? AND id=?').run(state, JSON.stringify(result ?? null), error ? JSON.stringify(error) : '', row.device_id, row.id);
-      if (result?.queued === true) this.db.prepare('UPDATE submission_tasks SET message_display=NULL WHERE position=?').run(row.position);
+      // 桌面确认发送成功后立即释放占位，通知手机前与成功状态一起提交。
+      if (state === 'succeeded' || result?.queued === true) this.db.prepare('UPDATE submission_tasks SET message_display=NULL WHERE position=?').run(row.position);
       if (resolvedStep) this.db.prepare("UPDATE submission_task_steps SET state='succeeded',updated_at=? WHERE task_position=? AND name=?").run(time, row.position, resolvedStep.name);
       if (release) {
         this.db.prepare('UPDATE submission_task_steps SET result=NULL WHERE task_position=?').run(row.position);
