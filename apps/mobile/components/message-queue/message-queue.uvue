@@ -35,16 +35,17 @@ function cancel(id: string) { if (!props.disabled) emit('cancel', id) }
 function edit(id: string) { if (!props.disabled && props.editable) emit('edit', id) }
 </script>
 <style>
-.queue-panel { margin-top: 14px; border-radius: 16px; border-width: 1px; border-color: #e5e8f1; background-color: #f6f7fb; padding: 12px; }
+/* 与聊天正文保持相同的左右留白，卡片内边距独立计算，窄屏操作仍可换行。 */
+.queue-panel { margin: 16px 16px 0; border-radius: 16px; border-width: 1px; border-color: #e5e8f1; background-color: #f6f7fb; padding: 16px; }
 .queue-heading { color: #596479; font-size: 13px; font-weight: bold; }
 .queue-row { margin-top: 10px; padding-top: 10px; border-top-width: 1px; border-top-color: #e5e8f1; }
-.queue-state { color: #596479; font-size: 12px; margin-bottom: 6px; }
+.queue-state { color: #596479; font-size: 12px; margin-bottom: 8px; }
 .queue-source { align-self: flex-start; color: #596479; font-size: 11px; background-color: #e7e9fd; border-radius: 6px; padding: 2px 6px; margin-bottom: 6px; }
-.queue-text { color: #1a2135; font-size: 15px; line-height: 22px; }
+.queue-text { color: #1a2135; font-size: 15px; line-height: 24px; }
 .queue-caption { color: #596479; font-size: 12px; margin-top: 6px; }
 .queue-error { color: #a13830; font-size: 12px; line-height: 18px; margin-top: 6px; }
-.queue-actions { flex-direction: row; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.queue-steer, .queue-cancel, .queue-edit { margin: 0; padding: 4px 10px; min-height: 36px; font-size: 12px; line-height: 28px; border-radius: 10px; }
+.queue-actions { flex-direction: row; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.queue-steer, .queue-cancel, .queue-edit { margin: 0; padding: 4px 12px; min-height: 36px; font-size: 12px; line-height: 28px; border-radius: 10px; }
 .queue-steer { color: #4546bd; background-color: #e7e9fd; }
 .queue-cancel { color: #596479; background-color: #f6f7fb; }
 .queue-edit { color: #4546bd; background-color: #e7e9fd; }
