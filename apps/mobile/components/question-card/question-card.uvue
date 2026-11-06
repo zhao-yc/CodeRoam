@@ -17,11 +17,13 @@
           <view :class="['option-indicator', item.custom ? 'indicator-selected' : '']"><AppIcon v-if="item.custom" name="check" :size="14" tone="light" /></view>
           <view class="option-content"><text class="option-label">其他答案</text></view>
         </view>
-        <input v-if="item.question.isSecret && (item.custom || item.question.options.length == 0)" v-model="item.text" class="custom-input secret-input" password :maxlength="32000" :disabled="locked" placeholder="请输入答案" />
+        <!-- 提交后的长答案使用可选择正文完整展示，保密内容继续遮蔽。 -->
+        <text v-if="readOnly && (item.custom || item.question.options.length == 0)" class="custom-answer" selectable>{{ item.question.isSecret ? '已填写' : item.text }}</text>
+        <input v-else-if="item.question.isSecret && (item.custom || item.question.options.length == 0)" v-model="item.text" class="custom-input secret-input" password :maxlength="32000" :disabled="locked" placeholder="请输入答案" />
         <textarea v-else-if="item.custom || item.question.options.length == 0" v-model="item.text" class="custom-input" :maxlength="32000" :disabled="locked" placeholder="填写你的答案…"></textarea>
       </template>
     </view>
-    <view v-if="group.state == 'pending'" class="submit inline-progress-button" :class="locked || !complete ? 'submit-disabled' : ''"><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">提交回答</text><button class="inline-progress-hitbox" :disabled="locked || !complete" @click="submit" aria-label="提交回答"></button></view>
+    <view v-if="group.state == 'pending' && !readOnly" class="submit inline-progress-button" :class="locked || !complete ? 'submit-disabled' : ''"><text class="inline-progress-caption" style="color: #ffffff; font-size: 15px;">提交回答</text><button class="inline-progress-hitbox" :disabled="locked || !complete" @click="submit" aria-label="提交回答"></button></view>
   </view>
 </template>
 
@@ -30,10 +32,10 @@ import { computed, ref, watch } from 'vue'
 import { QuestionGroup, QuestionAnswer, Question } from '../../services/bridge.uts'
 import AppIcon from '../app-icon/app-icon.uvue'
 type AnswerDraft = { question: Question, text: string, custom: boolean }
-const props = defineProps<{ group: QuestionGroup, disabled: boolean }>()
+const props = defineProps<{ group: QuestionGroup, disabled: boolean, readOnly?: boolean }>()
 const emit = defineEmits(['submit'])
 const drafts = ref<AnswerDraft[]>([])
-const locked = computed((): boolean => props.disabled || props.group.state != 'pending')
+const locked = computed((): boolean => props.disabled || props.readOnly == true || props.group.state != 'pending')
 const complete = computed((): boolean => drafts.value.length == props.group.questions.length && drafts.value.every((draft: AnswerDraft): boolean => draft.text.trim().length > 0))
 // 快照与增量更新保留当前草稿，仅以桌面已确认的答案覆盖对应子题。
 watch((): QuestionGroup => props.group, (group: QuestionGroup) => {
@@ -69,6 +71,7 @@ function submit() {
 /* 答案输入框占满卡片内容宽度，覆盖 textarea 默认宽度并与提交按钮对齐。 */
 .custom-input { width: 100%; box-sizing: border-box; height: 88px; margin-top: 12px; padding: 12px; border-radius: 12px; border-width: 1px; border-style: solid; border-color: #e5e8f1; background-color: #ffffff; color: #1a2135; font-size: 16px; line-height: 24px; }
 .secret-input { height: 48px; }
+.custom-answer { margin-top: 12px; padding: 12px; border-radius: 12px; border-width: 1px; border-style: solid; border-color: #e5e8f1; background-color: #ffffff; color: #1a2135; font-size: 16px; line-height: 24px; }
 .answer { color: #1a2135; font-size: 15px; line-height: 25px; }
 .submit { margin: 18px 0px 0px; height: 48px; line-height: 48px; padding: 0px 18px; border-radius: 13px; background-color: #4546bd; color: #ffffff; font-size: 15px; font-weight: 500; align-items: center; justify-content: center; }
 .submit-disabled { background-color: #e5e8f1; color: #596479; }
