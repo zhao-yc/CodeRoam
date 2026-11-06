@@ -112,12 +112,14 @@ test('旧单实例 CLI 入口也沿用统一原生删除控制器', async () => 
     createRequestDiagnostics: () => ({}), defaultIpcSocketPath: () => 'synthetic-pipe', IpcClient: Empty,
     DesktopAdapter: Adapter, StateReader: Empty, ModelCatalog: Empty, AttachmentStore: Empty, DesktopGoalController: Empty,
     Journal: Empty, BridgeAgent: Agent, installManagementChild() {},
+    readBackgroundSyncSetting: () => true,
   };
   for (const platform of ['win32', 'darwin']) {
     context.process.platform = platform;
     options = null;
     await new AsyncFunction(...Object.keys(context), source)(...Object.values(context));
     assert.ok(options);
+    assert.equal(options.config.backgroundSyncEnabled, true);
     assert.equal(options.deleteController, undefined);
   }
 });

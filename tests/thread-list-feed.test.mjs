@@ -287,3 +287,62 @@ test('索引标题不被实时摘要、延迟尾帧或关闭持久化覆盖',asy
   feed.close();
   assert.equal(saved[0].title,'改名后的合成会话');
 });
+
+test('暂停列表后台同步后主动读取仍新鲜，定时采集和推送停止，显式删除仍通知',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
+  const f=fixture(t,{live:true});
+  await ready(f.feed);
+  const entry=f.adapter.conversations.get('a');
+  assert.ok(entry.watchers.has('list-status'));
+  f.feed.schedule();
+  const before=f.events.length,revision=f.feed.revision;
+  f.feed.setBackgroundSyncEnabled(false);
+  f.feed.setBackgroundSyncEnabled(false);
+  assert.deepEqual([...entry.watchers],['detail']);
+  assert.equal(f.feed.timer,null);
+  assert.equal(f.feed.cycleTimer,null);
+  f.setRows([{id:'a',title:'暂停时更新的标题',cwd:'/workspace/demo',updatedAt:43}]);
+  entry.state={...f.value,title:'暂停时更新的标题'};
+  f.adapter.emit('conversation',entry.state);
+  f.adapter.emit('readState',{threadId:'a',hasUnreadTurn:true});
+  t.mock.timers.tick(30000);
+  await drain();
+  assert.equal(f.feed.readIndex(),false);
+  const listed=f.feed.list(),watched=await f.feed.watch('another-phone');
+  assert.equal(listed.threads[0].title,'暂停时更新的标题');
+  assert.equal(watched.threads[0].title,'暂停时更新的标题');
+  assert.ok(listed.revision>revision&&watched.revision>listed.revision);
+  assert.deepEqual([...f.feed.devices],['phone','another-phone']);
+  assert.equal(f.events.length,before);
+  f.feed.forget(['a']);
+  assert.equal(f.events.length,before+1);
+  assert.deepEqual(f.events.at(-1).threads,[]);
+});
+
+test('恢复时丢弃旧活动探测，并以通知基线发布暂停期间已经完成的状态',async t=>{
+  const inventories=[];
+  const f=fixture(t,{onActivity:inventory=>inventories.push(inventory)});
+  let finish;
+  f.adapter.readActivityInventory=()=>new Promise(resolve=>{finish=resolve;});
+  await f.feed.watch('phone');
+  await drain();
+  assert.equal(typeof finish,'function');
+  f.feed.setBackgroundSyncEnabled(false);
+  const before=f.events.length;
+  f.setRows([{id:'a',title:'暂停后完成',cwd:'/workspace/demo',updatedAt:43}]);
+  f.adapter.readActivityInventory=async()=>({complete:true,threadIds:['a']});
+  f.adapter.watch=async id=>{
+    const value={...snapshot(id,'idle'),title:'暂停后完成',notificationState:{latestTurnId:'turn',latestTurnStatus:'completed',pending:[]}};
+    return value;
+  };
+  f.feed.setBackgroundSyncEnabled(true);
+  finish({complete:true,threadIds:['stale']});
+  await drain();
+  if(f.feed.running)await f.feed.running;
+  assert.deepEqual(inventories,[{complete:true,threadIds:['a']}]);
+  const terminal=f.events.slice(before).find(event=>event.threads.some(row=>row.latestTurn?.status==='completed'));
+  assert.equal(terminal?.catchup,true);
+  assert.equal(terminal.threads[0].notificationBaselineState.latestTurnStatus,'completed');
+  assert.equal(terminal.threads[0].notificationState.latestTurnStatus,'');
+  assert.ok(f.feed.devices.has('phone'));
+});

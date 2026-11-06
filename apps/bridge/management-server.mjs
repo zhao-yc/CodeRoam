@@ -14,6 +14,9 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 export function readManagementLogs(file, limit = 100) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw fail('日志条数须为 1 到 200', 'MANAGEMENT_REQUEST_INVALID');
   const names = {supervisor_started: '守护进程已启动', supervisor_stopping: '守护进程正在停止', bridge_spawned: '桥接进程已启动', bridge_started: '桥接程序开始运行', bridge_observed_exit: '桥接进程已退出', bridge_exit: '桥接程序已退出', bridge_restart_scheduled: '已安排恢复桥接', bridge_spawn_failed: '桥接进程启动失败', bridge_fatal: '桥接进程出现异常', management_restart_requested: '已接收管理端重启请求', management_restart_rejected: '管理端重启请求未执行'};
+  names.management_start_requested = '已接收管理端启动请求';
+  names.management_stop_requested = '已接收管理端停止请求';
+  names.management_stop_rejected = '管理端停止请求未执行';
   let descriptor;
   try {
     const info = fs.lstatSync(file); if (!info.isFile() || info.isSymbolicLink()) return {entries: []};
@@ -45,17 +48,17 @@ function localAddress() {
 }
 
 /** 固定 worker 的本机能力接口，短连接一条请求，令牌仅在私有端点文件中存放。 */
-export async function startManagementServer({worker, workerConfigPath = null, status, restart}) {
+export async function startManagementServer({worker, workerConfigPath = null, status, restart, startBridge, stopBridge, setBackgroundSync, setStartup, prepareQuit, cancelQuit, confirmQuit, onQuit}) {
   const address = localAddress(), token = randomBytes(32).toString('hex'), identity = managementWorkerIdentity(worker);
   const revision = workerConfigPath ? createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') : null;
   const file = path.join(worker.runDirectory, 'management.json'), sockets = new Set(); let closed = false;
   const current = () => {
     if (workerConfigPath && createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') !== revision) throw fail('托管配置已经变化，请重新连接管理服务', 'MANAGEMENT_CONFIG_CHANGED');
   };
-  const dispatch = async (method, params) => {
+  const dispatch = async (method, params, socket) => {
     current();
     if (!object(params)) throw fail('管理操作参数无效', 'MANAGEMENT_REQUEST_INVALID');
-    if (['status', 'config.read', 'service.restart'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
+    if (['status', 'config.read', 'service.restart', 'service.start', 'service.stop', 'service.cancelQuit', 'service.quit'].includes(method) && Object.keys(params).length) throw fail('管理操作包含不支持的参数', 'MANAGEMENT_REQUEST_INVALID');
     if (method === 'status') return status();
     if (method === 'config.read') return readManagedConfig(worker.bridgeConfig);
     if (method === 'config.save') {
@@ -67,6 +70,34 @@ export async function startManagementServer({worker, workerConfigPath = null, st
       return readManagementLogs(path.join(worker.logDirectory, 'lifecycle.jsonl'), params.limit ?? 100);
     }
     if (method === 'service.restart') return restart();
+    if (method === 'service.start' && startBridge) return startBridge();
+    if (method === 'service.stop' && stopBridge) return stopBridge();
+    if (method === 'service.prepareQuit' && prepareQuit) {
+      if (Object.keys(params).some(key => key !== 'confirmed') ||
+          (Object.hasOwn(params, 'confirmed') && typeof params.confirmed !== 'boolean')) {
+        throw fail('退出确认参数无效', 'MANAGEMENT_REQUEST_INVALID');
+      }
+      socket.setTimeout(25000);
+      return prepareQuit(params.confirmed === true);
+    }
+    if (method === 'service.cancelQuit' && cancelQuit) return cancelQuit();
+    if (method === 'service.quit' && confirmQuit) return confirmQuit();
+    if (method === 'sync.set') {
+      if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
+        throw fail('后台数据同步开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
+      }
+      if (!setBackgroundSync) throw fail('此守护版本暂不支持切换后台数据同步', 'MANAGEMENT_METHOD_INVALID');
+      return setBackgroundSync(params.enabled);
+    }
+    if (method === 'startup.set') {
+      if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
+        throw fail('开机启动开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
+      }
+      if (!setStartup) throw fail('此守护暂不支持切换开机启动', 'MANAGEMENT_METHOD_INVALID');
+      // 只有已认证且参数有效的开机启动请求可以等待 Windows 管理员确认。
+      socket.setTimeout(125000);
+      return setStartup(params.enabled);
+    }
     throw fail('不支持的管理方法', 'MANAGEMENT_METHOD_INVALID');
   };
   const server = net.createServer(socket => {
@@ -84,8 +115,8 @@ export async function startManagementServer({worker, workerConfigPath = null, st
         request = JSON.parse(buffer.subarray(0, newline).toString('utf8'));
         if (!object(request) || request.version !== 1 || typeof request.id !== 'string' || !/^[a-f0-9-]{36}$/.test(request.id) || typeof request.token !== 'string' || !/^[a-f0-9]{64}$/.test(request.token) || !timingSafeEqual(Buffer.from(request.token), Buffer.from(token))) return socket.destroy();
         if (Object.keys(request).some(key => !['version', 'id', 'token', 'method', 'params'].includes(key))) throw fail('管理请求包含不支持的字段', 'MANAGEMENT_REQUEST_INVALID');
-        const result = await dispatch(request.method, request.params ?? {});
-        socket.end(JSON.stringify({version: 1, id: request.id, pid: process.pid, result}) + '\n');
+        const result = await dispatch(request.method, request.params ?? {}, socket);
+        socket.end(JSON.stringify({version: 1, id: request.id, pid: process.pid, result}) + '\n', request.method === 'service.quit' ? onQuit : undefined);
       } catch (error) {
         if (!request?.id) return socket.destroy();
         const safe = typeof error?.code === 'string' && /^MANAGEMENT_[A-Z_]+$/.test(error.code);

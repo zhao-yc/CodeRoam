@@ -14,17 +14,22 @@ function catchupRows(rows) {
 
 /** 常驻列表维护可信内存状态，首帧只读索引，不等待原生未读或所有者探测。 */
 export class ThreadListFeed {
-  constructor(adapter,send,{db,onSettled=()=>{},onActivity=()=>{}}={}) {
+  constructor(adapter,send,{db,onSettled=()=>{},onActivity=()=>{},backgroundSyncEnabled=true}={}) {
     Object.assign(this,{adapter,send,onSettled,onActivity});
     this.devices=new Set();this.rows=[];this.ids=new Set();this.revision=0;this.generation=0;
     this.mode='legacy';this.closed=false;this.started=false;this.dirty=false;this.syncing=false;
+    this.backgroundSyncEnabled=backgroundSyncEnabled!==false;
     this.store=new ThreadListStore(db,{verifyVisible:ids=>this.adapter.index.visibleThreadIds?this.adapter.index.visibleThreadIds(ids):new Set(this.adapter.index.list({limit:50}).map(row=>row.id))});
     this.indexRows=new Map();this.changed=new Set();this.initialized=new Set();
     this.probeLeases=new Map();
     this.nextActivityAt=0;this.nextReadStateAt=0;this.activityReading=null;
     this.owned=new Set();this.nextProbe=new Map();this.activity=new Set();this.pendingSnapshots=new Map();this.recheck=new Set();this.settled=new Set();
     this.onConversation=snapshot=>this.update(snapshot);adapter.on('conversation',this.onConversation);
-    this.onReadState=state=>{if(this.started&&!this.closed)this.replace((this.pendingRows??this.rows).map(row=>row.id===state.threadId?{...row,hasUnreadTurn:state.hasUnreadTurn}:row));};
+    this.onReadState=state=>{
+      if(!this.started||this.closed||!this.backgroundSyncEnabled)return;
+      if(this.readStateRunning&&this.readStateGeneration!==this.generation)return;
+      this.replace((this.pendingRows??this.rows).map(row=>row.id===state.threadId?{...row,hasUnreadTurn:state.hasUnreadTurn}:row));
+    };
     adapter.on('readState',this.onReadState);
   }
   /** 进程启动即恢复展示索引；兼容旧中转时没有设备就不持有正文跟随。 */
@@ -32,6 +37,7 @@ export class ThreadListFeed {
     if(this.closed||this.started)return;
     this.started=true;
     try {this.rows=this.store.load().map(row=>this.unknown(row));this.ids=new Set(this.rows.map(row=>row.id));} catch { /* 副本损坏时继续读取原生只读索引。 */ }
+    if(!this.backgroundSyncEnabled)return;
     this.readIndex();this.attachWatcher();this.armCycle();
     if(this.maintaining())this.kick();
   }
@@ -45,35 +51,68 @@ export class ThreadListFeed {
     if(mode==='light'||!this.maintaining())this.releaseAll();
     this.armCycle();if(previous!==mode&&this.maintaining()&&!this.running)this.kick();return mode;
   }
-  maintaining() {return !this.closed&&(this.mode!=='legacy'||this.devices.size>0);}
+  /** 暂停仅释放内部维护，保留已登记的手机设备及已有展示索引。 */
+  setBackgroundSyncEnabled(enabled) {
+    if(this.closed||this.backgroundSyncEnabled===enabled)return;
+    this.backgroundSyncEnabled=enabled;
+    if(!enabled) {
+      this.stop();
+      this.watcher?.close();this.watcher=null;
+      clearTimeout(this.store.timer);this.store.timer=null;
+      this.syncing=false;this.syncError=undefined;this.dirty=false;
+      return;
+    }
+    // 第一份新鲜状态建立通知基线，避免将暂停期间的终态误认为实时变化。
+    this.resumeBaselineIds=new Set();
+    this.catchupStarted=false;this.nextActivityAt=0;this.nextReadStateAt=0;
+    this.initialized.clear();this.settled.clear();this.nextProbe.clear();
+    if(!this.started)return;
+    this.attachWatcher();this.armCycle();
+    if(this.maintaining())this.kick();else this.readIndex();
+  }
+  maintaining() {return !this.closed&&this.backgroundSyncEnabled&&(this.mode!=='legacy'||this.devices.size>0);}
   realtime() {return this.maintaining()&&this.mode!=='light';}
   /** 新订阅不重放旧完成通知；后续真实转换仍使用原协议通知字段。 */
   list() {
     const started=this.started;this.start();
+    if(!this.backgroundSyncEnabled)return this.readPausedList();
     // 旧客户端可能只请求普通列表；没有实时订阅时仍同步读取索引，不等待任何 IPC。
     if(started&&!this.maintaining())this.readIndex();
     return {threads:catchupRows(this.pendingRows??this.rows),revision:this.revision,catchup:true,...this.syncFields()};
   }
+  /** 主动请求返回新游标，让手机优先使用这次回执而非暂停前的旧推送。 */
+  readPausedList() {
+    let rows=this.rows,syncError;
+    try {
+      rows=this.adapter.index.list({limit:50}).slice(0,50).map(raw=>{
+        const row=threadListDisplay(raw),entry=this.adapter.conversations?.get(row.id);
+        return entry?.state?this.summary(row,this.adapter.snapshot(entry.state)):this.unknown(row);
+      });
+    } catch {syncError='电脑聊天索引暂时不可用';}
+    return {threads:catchupRows(rows),revision:++this.revision,catchup:true,...(syncError?{syncError}:{})};
+  }
   async watch(deviceId) {
     const wasMaintaining=this.maintaining();this.devices.add(deviceId);this.start();
-    if(!wasMaintaining){this.armCycle();if(!this.running)this.kick();}
+    if(!wasMaintaining&&this.maintaining()){this.armCycle();if(!this.running)this.kick();}
     return this.list();
   }
   unwatch(deviceId) {this.devices.delete(deviceId);if(!this.maintaining())this.stop();return {ok:true};}
   syncFields() {return {...(this.syncing?{syncing:true}:{}),...(this.syncError?{syncError:this.syncError}:{})};}
   /** 固定首个三百毫秒窗口，持续写入也不会重置计时器而饿死索引更新。 */
   attachWatcher() {
-    if(this.watcher||!this.adapter.index?.filePath||this.closed)return;
+    if(this.watcher||!this.adapter.index?.filePath||this.closed||!this.backgroundSyncEnabled)return;
     const file=this.adapter.index.filePath,name=path.basename(file);
     try {
-      this.watcher=fs.watch(path.dirname(file),{persistent:false},(_event,filename)=>{
+      const watcher=fs.watch(path.dirname(file),{persistent:false},(_event,filename)=>{
+        if(this.watcher!==watcher)return;
         if(filename==null||[name,name+'-wal','session_index.jsonl'].includes(String(filename)))this.schedule();
       });
-      this.watcher.on('error',()=>{this.watcher?.close();this.watcher=null;});
+      this.watcher=watcher;
+      watcher.on('error',()=>{if(this.watcher===watcher){watcher.close();this.watcher=null;}});
     } catch { /* 索引未创建时由周期读取恢复。 */ }
   }
   schedule() {
-    if(this.closed)return;this.dirty=true;
+    if(this.closed||!this.backgroundSyncEnabled)return;this.dirty=true;
     if(this.mode==='light'||!this.maintaining()||this.timer)return;
     this.timer=setTimeout(()=>{this.timer=null;this.kick();},300);this.timer.unref?.();
   }
@@ -87,7 +126,9 @@ export class ThreadListFeed {
   activityRead(generation) {
     if(!this.activityReading&&Date.now()>=this.nextActivityAt) {
       this.nextActivityAt=Date.now()+(this.mode==='light'?15000:2000);
-      const reading={generation,promise:Promise.resolve().then(()=>this.adapter.readActivityInventory?.({rows:[...this.indexRows.values()]}))};
+      const reading={generation,promise:Promise.resolve().then(()=>{
+        if(generation===this.generation&&this.maintaining())return this.adapter.readActivityInventory?.({rows:[...this.indexRows.values()]});
+      })};
       this.activityReading=reading;
       reading.promise.finally(()=>{if(this.activityReading===reading)this.activityReading=null;}).catch(()=>{});
     }
@@ -96,17 +137,19 @@ export class ThreadListFeed {
   unknown(row) {return {...row,contentRevision:savedContentRevision(row),status:'unknown',activeTurnId:'',approvalCount:0,pendingQuestionCount:0,unansweredQuestionCount:0};}
   /** 失败保留完整旧索引；持久化仅使用展示白名单，绝不恢复实时权限。 */
   readIndex() {
+    if(this.closed||!this.backgroundSyncEnabled)return false;
     try {
       const rows=this.adapter.index.list({limit:50}).slice(0,50).map(threadListDisplay);
       const previous=new Map((this.pendingRows??this.rows).map(row=>[row.id,row]));
       const wasWarm=this.indexRows.size>0;
       for(const row of rows)if(wasWarm&&JSON.stringify(this.indexRows.get(row.id))!==JSON.stringify(row)){this.changed.add(row.id);this.settled.delete(row.id);}
       const ids=new Set(rows.map(row=>row.id));
+      if(this.resumeBaselineIds&&!this.catchupStarted)this.resumeBaselineIds=new Set(ids);
       for(const id of this.ids)if(!ids.has(id)){const lease=this.probeLeases.get(id);if(lease)lease.active=false;this.release(id);this.changed.delete(id);this.initialized.delete(id);this.nextProbe.delete(id);this.pendingSnapshots.delete(id);}
       this.ids=ids;this.indexRows=new Map(rows.map(row=>[row.id,row]));
       const result=rows.map(row=>{
         const entry=this.adapter.conversations?.get(row.id);
-        if(entry?.state&&!this.initialized.has(row.id)){this.initialized.add(row.id);return this.summary(row,this.adapter.snapshot(entry.state));}
+        if(entry?.state&&!this.initialized.has(row.id)){this.initialized.add(row.id);this.resumeBaselineIds?.delete(row.id);return this.summary(row,this.adapter.snapshot(entry.state));}
         return previous.has(row.id)?{...previous.get(row.id),...row}:this.unknown(row);
       });
       this.replace(result,true,!this.catchupStarted);try {this.store.save(rows);} catch { /* 磁盘展示副本失败不阻断实时读取。 */ }
@@ -115,12 +158,18 @@ export class ThreadListFeed {
   }
   /** 并发通知合并到同一轮；刷新 Promise 仅供后台协调，watch/list 不等待它。 */
   async refresh() {
-    if(this.closed)return;
+    if(this.closed||!this.backgroundSyncEnabled)return;
     if(!this.started){this.start();if(this.running)return this.running;}
     if(this.running){this.dirty=true;return this.running;}
     this.dirty=false;if(!this.readIndex()||!this.maintaining())return;
     const generation=this.generation;this.running=this.reconcile(generation);
-    try {await this.running;} finally {this.running=null;if(this.dirty&&this.maintaining()&&this.mode!=='light')this.schedule();}
+    try {await this.running;} finally {
+      this.running=null;
+      if(this.dirty&&this.maintaining()){
+        if(generation!==this.generation)this.kick();
+        else if(this.mode!=='light')this.schedule();
+      }
+    }
   }
   /** 活动清单只给候选，缺席或查询失败都不能伪造空闲状态。 */
   async reconcile(generation) {
@@ -132,7 +181,8 @@ export class ThreadListFeed {
     // 原生未读可能较慢，独立追平且同一实例只允许一份任务，不能阻塞首帧或活动发现。
     if(!this.readStateRunning&&this.adapter.refreshReadState&&Date.now()>=this.nextReadStateAt) {
       this.nextReadStateAt=Date.now()+(this.mode==='light'?15000:2000);
-      this.readStateRunning=Promise.resolve().then(()=>this.adapter.refreshReadState([...this.ids])).then(()=>{
+      this.readStateGeneration=generation;
+      this.readStateRunning=Promise.resolve().then(()=>{if(current())return this.adapter.refreshReadState([...this.ids]);}).then(()=>{
         if(current())this.replace((this.pendingRows??this.rows).map(row=>this.adapter.native?.unread?.has(row.id)?{...row,hasUnreadTurn:this.adapter.native.unread.get(row.id)}:row));
       }).catch(()=>{}).finally(()=>{this.readStateRunning=null;});
     }
@@ -169,7 +219,7 @@ export class ThreadListFeed {
           this.nextProbe.set(id,Date.now()+RETRY_MS);
           let timeout;const lease={active:true,finished:false};this.probeLeases.set(id,lease);
           const valid=()=>lease.active&&current()&&this.realtime()&&this.probeLeases.get(id)===lease;
-          const operation=Promise.resolve().then(()=>this.adapter.watch(id,OWNER,{history:false,snapshotTimeoutMs:1000,ownerTimeoutMs:350,isCurrent:valid,...(this.recheck.has(id)?{fresh:true}:{})}));
+          const operation=Promise.resolve().then(()=>valid()?this.adapter.watch(id,OWNER,{history:false,snapshotTimeoutMs:1000,ownerTimeoutMs:350,isCurrent:valid,...(this.recheck.has(id)?{fresh:true}:{})}):undefined);
           // 旧连接或探测迟到时清理自己的内部跟随，不遗留超时后的正文订阅。
           operation.then(()=>{lease.finished=true;if(!valid()&&this.probeLeases.get(id)===lease)this.release(id);},()=>{lease.finished=true;}).finally(()=>{if(!lease.active&&this.probeLeases.get(id)===lease)this.probeLeases.delete(id);});
           try {
@@ -203,8 +253,11 @@ export class ThreadListFeed {
       this.release(id);this.ids.delete(id);this.indexRows.delete(id);this.changed.delete(id);this.initialized.delete(id);
       this.nextProbe.delete(id);this.pendingSnapshots.delete(id);this.activity.delete(id);this.recheck.delete(id);this.settled.delete(id);
     }
-    this.replace((this.pendingRows??this.rows).filter(row=>!removed.has(row.id)),true);
+    const rows=(this.pendingRows??this.rows).filter(row=>!removed.has(row.id));
+    if(this.backgroundSyncEnabled)this.replace(rows,true);else this.publishRows(rows,false,false,true);
+    for(const id of removed)this.resumeBaselineIds?.delete(id);
     try {this.store.forget([...removed]);}catch{/* 展示清理失败不改变真实归档删除结果，后续新鲜成员核对会重试。 */}
+    if(!this.backgroundSyncEnabled){clearTimeout(this.store.timer);this.store.timer=null;}
   }
   /** 状态比较不计算正文哈希；纯流式变化在一秒尾帧才计算内容版本。 */
   stateSummary(row,snapshot,includeNotification=true) {
@@ -224,9 +277,10 @@ export class ThreadListFeed {
   }
   /** 首份快照建立通知基线；终态先交缓存保存，再由 follow 释放内部订阅。 */
   consume(snapshot,baseline=false) {
-    if(!this.ids.has(snapshot.threadId))return;
+    if(!this.backgroundSyncEnabled||!this.ids.has(snapshot.threadId))return;
+    const resumed=this.resumeBaselineIds?.delete(snapshot.threadId)===true;
     this.pendingSnapshots.delete(snapshot.threadId);
-    this.replace((this.pendingRows??this.rows).map(row=>row.id===snapshot.threadId?this.summary(row,snapshot):row),false,baseline);
+    this.replace((this.pendingRows??this.rows).map(row=>row.id===snapshot.threadId?this.summary(row,snapshot):row),resumed,baseline||resumed);
     this.initialized.add(snapshot.threadId);
     const settled=!this.needsAttention(this.stateSummary({id:snapshot.threadId},snapshot))&&snapshot.status==='idle';
     const terminal=!snapshot.activeTurnId&&snapshot.status!=='active'&&['completed','failed','interrupted','reviewStopped'].includes(snapshot.latestTurn?.status);
@@ -243,7 +297,7 @@ export class ThreadListFeed {
     if(!this.started||this.closed||!this.realtime()||!this.ids.has(snapshot.threadId))return;
     const row=(this.pendingRows??this.rows).find(value=>value.id===snapshot.threadId),baseline=!this.initialized.has(snapshot.threadId);
     const state=this.stateSummary(row,snapshot);
-    if(!baseline&&statusSummary([state])===statusSummary([row])) {
+    if(!baseline&&!this.resumeBaselineIds?.has(snapshot.threadId)&&statusSummary([state])===statusSummary([row])) {
       this.pendingSnapshots.set(snapshot.threadId,snapshot);this.armContent();
     } else this.consume(snapshot,baseline);
     this.follow(snapshot.threadId,snapshot);
@@ -256,11 +310,12 @@ export class ThreadListFeed {
     this.pendingRows=rows;this.pendingCatchup=catchup;this.armContent();
   }
   armContent() {
-    if(this.contentTimer)return;
+    if(this.contentTimer||!this.backgroundSyncEnabled)return;
     this.contentTimer=setTimeout(()=>{if(!this.closed)this.publishRows(this.pendingRows??this.rows,this.pendingCatchup===true);},1000);this.contentTimer.unref?.();
   }
   /** 发布前一次性计算各会话最新正文版本，再清理尾帧，允许发送回调重入。 */
-  publishRows(rows,catchup=false,force=false) {
+  publishRows(rows,catchup=false,force=false,explicit=false) {
+    if(!this.backgroundSyncEnabled&&!explicit)return;
     // 标题由索引维护，尾帧只补正文版本，避免重放旧名称、运行或未读状态。
     if(this.pendingSnapshots.size){rows=rows.map(row=>{const snapshot=this.pendingSnapshots.get(row.id);return snapshot?this.contentSummary(row,snapshot):row;});this.pendingSnapshots.clear();}
     clearTimeout(this.contentTimer);this.contentTimer=null;this.pendingRows=null;this.pendingCatchup=false;
@@ -272,7 +327,7 @@ export class ThreadListFeed {
   stop() {
     this.generation++;clearTimeout(this.timer);this.timer=null;clearTimeout(this.cycleTimer);this.cycleTimer=null;
     clearTimeout(this.contentTimer);this.contentTimer=null;this.pendingRows=null;this.pendingSnapshots.clear();this.releaseAll();
-    if(this.mode!=='legacy'&&!this.closed){this.armCycle();this.kick();}
+    if(this.mode!=='legacy'&&!this.closed&&this.backgroundSyncEnabled){this.armCycle();this.kick();}
   }
   close() {
     if(this.closed)return;

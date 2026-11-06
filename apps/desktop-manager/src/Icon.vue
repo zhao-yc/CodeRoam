@@ -8,6 +8,8 @@ const paths: Record<string, string> = {
   info: 'M12 11v6 M12 7h.01 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
   refresh: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5',
   power: 'M12 2v10 M6.3 5.3a9 9 0 1 0 11.4 0',
+  play: 'M8 5v14l12-7z',
+  pause: 'M9 5v14 M15 5v14',
   folder: 'M3 20h18V6H11L9 3H3z',
   chevron: 'm9 5 7 7-7 7',
   arrow: 'M5 12h14 M13 6l6 6-6 6',

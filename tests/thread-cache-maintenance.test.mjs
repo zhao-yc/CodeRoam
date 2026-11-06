@@ -126,3 +126,56 @@ test('light取消尚未完成的内部探测，迟到CACHE订阅不能重新驻�
   assert.equal(typeof finish, 'function'); f.feed.setMode('light'); finish(); await drain();
   assert.equal(f.adapter.conversations.get('probing').watchers.has(CACHE_WATCHER), false); assert.equal(f.feed.liveVersions.size, 0);
 });
+
+test('暂停正文后台时保留手机订阅和历史读取，旧结果不会落缓存，恢复后补发新版本',async t=>{
+  const f=fixture(t,{file:true});
+  f.add('pending','completed');
+  f.feed.watch('phone',{subscriptionId:'synthetic-cache',threads:[{threadId:'pending',revision:''}]});
+  const read=f.adapter.index.readHistory;
+  let finish;
+  f.adapter.index.readHistory=id=>{f.calls.history.push(id);return new Promise(resolve=>{finish=resolve;});};
+  const running=f.feed.refresh();
+  await drain();
+  assert.equal(typeof finish,'function');
+  f.feed.setBackgroundSyncEnabled(false);
+  assert.equal(f.feed.interval,null);
+  assert.equal(f.feed.timer,null);
+  assert.ok(f.watchers.every(watcher=>watcher.closed));
+  const foreground=f.feed.readSaved('pending');
+  finish(snapshot('pending','completed'));
+  assert.equal((await foreground).threadId,'pending');
+  await running;
+  assert.equal(f.feed.subscriptions.size,1);
+  assert.equal(f.feed.row('pending'),undefined);
+  assert.equal(f.sent.length,0);
+  f.feed.schedule(0);
+  t.mock.timers.tick(30000);
+  await drain();
+  assert.equal(f.calls.history.length,1);
+  f.adapter.index.readHistory=read;
+  f.feed.setBackgroundSyncEnabled(true);
+  t.mock.timers.tick(1);
+  await drain();
+  assert.equal(f.calls.history.length,2);
+  assert.ok(f.feed.row('pending'));
+  assert.ok(f.sent.some(event=>event.deviceId==='phone'&&event.subscriptionId==='synthetic-cache'&&event.revision));
+});
+
+test('暂停保留已有正文和真实详情，旧内部探测迟到只清理自己的跟随',async t=>{
+  const f=fixture(t);
+  f.add('live','active');f.add('probing','active');
+  const live=f.live('live','active',['detail']);
+  let finish;
+  f.adapter.watch=(id,watcher)=>new Promise(resolve=>{finish=()=>{f.live(id,'active',[watcher,'other-detail']);resolve(snapshot(id));};});
+  f.feed.start();
+  await f.feed.refresh();
+  const prior=f.feed.row('live').revision;
+  assert.ok(live.watchers.has(CACHE_WATCHER));
+  f.feed.setBackgroundSyncEnabled(false);
+  assert.deepEqual([...live.watchers],['detail']);
+  finish();await drain();
+  assert.deepEqual([...f.adapter.conversations.get('probing').watchers],['other-detail']);
+  assert.equal(f.feed.row('live').revision,prior);
+  f.feed.captureLive({...snapshot('live'),messages:[{id:'changed',text:'暂停后的流式正文'}]});
+  assert.equal(f.feed.row('live').revision,prior);
+});

@@ -12,6 +12,7 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "pack:win": "npm run build && node scripts/prepare-runtime.mjs && electron-builder --win --x64 --dir",
+    "pack:mac": "npm run build && node scripts/prepare-runtime.mjs && electron-builder --mac --dir",
     "dist:win": "npm run build && node scripts/prepare-runtime.mjs && electron-builder --win zip --x64"
   },
   "dependencies": { "vue": "3.5.44" },
@@ -29,7 +30,8 @@
     "directories": { "output": "out" },
     "files": ["dist/**/*", "electron/**/*", "package.json"],
     "extraResources": [{ "from": ".runtime", "to": "bridge-runtime" }],
-    "win": { "target": "zip", "signAndEditExecutable": false },
+    "win": { "target": "zip", "icon": "electron/icon.ico", "signAndEditExecutable": true, "signExecutable": false },
+    "mac": { "icon": "electron/tray.png" },
     "artifactName": "coderoam-manager-${version}-${os}-${arch}.${ext}"
   }
 }

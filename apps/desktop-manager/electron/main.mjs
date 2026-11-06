@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createManagerController, trustedSender} from './manager-controller.mjs';
+import {createServiceSession} from './service-session.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererFile = path.resolve(directory, '../dist/index.html'), rendererUrl = pathToFileURL(rendererFile).href;
 let window = null, tray = null, controller;
+let session, restoring, quitting = false, quitReady = false;
 app.setName('CodeRoam 电脑管理');
 if (process.platform === 'win32') app.setAppUserModelId('com.codexmobile.manager');
 // 沿用旧数据目录及自定义配置；首次安装先创建目录，改名后仍能关联原服务。
@@ -27,7 +29,7 @@ function initialWorker() {
   return '';
 }
 
-/** 管理端仅连接已有服务；启动或退出窗口均不创建、停止桥接。 */
+/** 关闭窗口保留托盘，托盘和系统退出入口统一等待守护收尾。 */
 function showWindow() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
   window = new BrowserWindow({
@@ -47,6 +49,7 @@ function showWindow() {
 function handle(channel, action) {
   ipcMain.handle(channel, async (event, value) => {
     if (!trustedSender(event, window, rendererUrl)) throw new Error('此窗口不能访问本机管理接口');
+    if (quitting) throw new Error('正在退出，请等待服务收尾');
     try { return await action(value); }
     catch (error) {
       const message = /^(?:MANAGEMENT|MANAGER)_[A-Z_]+$/.test(error?.code ?? '') && typeof error?.message === 'string' ? error.message.slice(0, 300) : '管理服务暂时不可用，请确认守护进程已升级并正在运行';
@@ -55,11 +58,51 @@ function handle(channel, action) {
   });
 }
 
+/** 用户从托盘退出时窗口可能已关，系统确认框也要能独立显示。 */
+async function confirmPendingExit() {
+  const options = {
+    type: 'warning', title: '手机操作尚未完成', message: '仍然退出 CodeRoam？',
+    detail: '退出会中断手机连接，正在处理的操作结果可能需要重新核对。',
+    buttons: ['继续运行', '仍然退出'], defaultId: 0, cancelId: 0, noLink: true,
+  };
+  const result = window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  return result.response === 1;
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', showWindow);
   app.on('activate', showWindow);
-  app.on('window-all-closed', () => { /* 托盘继续运行，守护生命周期由系统服务负责。 */ });
+  app.on('window-all-closed', () => { /* 关闭窗口后继续驻留托盘。 */ });
+  app.on('before-quit', event => {
+    if (!session || quitReady) return;
+    event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    tray?.setToolTip('CodeRoam 正在停止连接服务');
+    void (async () => {
+      try {
+        await restoring;
+        const worker = controller.context().workerConfigPath;
+        try { await session.close(worker); }
+        catch (error) {
+          if (error?.code !== 'MANAGEMENT_IN_FLIGHT') throw error;
+          if (!await confirmPendingExit()) return;
+          await session.close(worker, true);
+        }
+        quitReady = true;
+        app.quit();
+      } catch (error) {
+        const message = error?.code?.startsWith('MANAGEMENT_') ? error.message : '暂未确认守护安全退出，请检查运行状态后重试。';
+        dialog.showErrorBox('连接服务尚未停止', message);
+      } finally {
+        if (!quitReady) {
+          quitting = false;
+          tray?.setToolTip('CodeRoam 电脑管理');
+        }
+      }
+    })();
+  });
   app.whenReady().then(async () => {
     const clientFile = app.isPackaged
       ? path.join(process.resourcesPath, 'bridge-runtime', 'apps', 'bridge', 'management-client.mjs')
@@ -73,21 +116,33 @@ else {
         return result.canceled ? '' : result.filePaths[0];
       },
     });
+    session = createServiceSession({
+      file: path.join(userData, 'resume-service.json'), connect: connectManagement,
+    });
     handle('manager:context', () => controller.context());
     handle('manager:choose-worker', () => controller.chooseWorker());
     handle('manager:status', () => controller.request('status'));
     handle('manager:read-config', () => controller.request('config.read'));
     handle('manager:save-config', value => controller.request('config.save', value));
     handle('manager:read-logs', value => controller.request('logs.read', value));
+    handle('manager:set-background-sync', value => controller.request('sync.set', value));
+    handle('manager:set-startup', value => controller.request('startup.set', value));
     handle('manager:restart', () => controller.request('service.restart'));
-    tray = new Tray(nativeImage.createFromPath(path.join(directory, 'tray.png')));
+    handle('manager:start', () => controller.request('service.start'));
+    handle('manager:stop', () => controller.request('service.stop'));
+    const brand = nativeImage.createFromPath(path.join(directory, 'tray.png'));
+    if (process.platform === 'darwin') app.dock.setIcon(brand);
+    tray = new Tray(process.platform === 'darwin' ? brand.resize({width: 18, height: 18}) : brand);
     tray.setToolTip('CodeRoam 电脑管理');
     tray.setContextMenu(Menu.buildFromTemplate([
       {label: '打开管理界面', click: showWindow}, {type: 'separator'},
-      {label: '退出管理客户端（守护继续运行）', click: () => app.quit()},
+      {label: '退出并停止连接服务', click: () => app.quit()},
     ]));
     tray.on('double-click', showWindow);
     showWindow();
+    restoring = session.resume(controller.context().workerConfigPath).catch(() => {
+      dialog.showErrorBox('连接服务尚未恢复', '请查看当前运行状态，确认关联的守护配置仍有效。');
+    });
   }).catch(() => {
     dialog.showErrorBox('管理客户端无法启动', '请确认安装包完整，或重新构建电脑管理客户端。'); app.quit();
   });

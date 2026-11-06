@@ -13,7 +13,7 @@ const MAX_SUBSCRIPTIONS = 128;
 
 /** 每个桌面实例独立保留有限的展示正文，订阅身份和实时权限只在内存中存在。 */
 export class ThreadCacheFeed {
-  constructor({ adapter, db, send, blocked, removed = () => {}, listRows }) {
+  constructor({ adapter, db, send, blocked, removed = () => {}, listRows, backgroundSyncEnabled = true }) {
     this.adapter = adapter;
     this.db = db;
     this.send = send;
@@ -30,16 +30,42 @@ export class ThreadCacheFeed {
     this.nextProbe = new Map();
     this.probes = new Set();
     this.closed = false;
+    this.started = false;
+    this.backgroundSyncEnabled = backgroundSyncEnabled !== false;
     this.mode = 'legacy';this.activity = new Set();this.lifecycle = new Map();this.maintenanceGeneration=0;
     this.cacheStore = new ConversationCacheStore({
       db, blocked, visible: ids => this.adapter.index?.visibleThreadIds?.(ids) ?? null,
       onMissing: id => this.forget(id, { storeCleared: true }),
     });
+    this.cacheStore.setPaused(!this.backgroundSyncEnabled);
+  }
+
+  /** 保留缓存和手机订阅，只取消这一代自动采集与内部跟随。 */
+  setBackgroundSyncEnabled(enabled) {
+    if (this.closed || this.backgroundSyncEnabled === enabled) return;
+    this.backgroundSyncEnabled = enabled;
+    this.maintenanceGeneration++;
+    this.cacheStore.setPaused(!enabled || this.mode === 'light');
+    if (!enabled) {
+      clearTimeout(this.timer); this.timer = null;
+      clearInterval(this.interval); this.interval = null;
+      this.watcher?.close(); this.watcher = null;
+      this.dirty = false;
+      this.sourceView?.close?.(); this.sourceView = undefined;
+      for (const id of new Set([...this.targets, ...this.probes])) this.stopFollowing(id);
+      return;
+    }
+    this.nextProbe.clear();
+    if (this.started) {
+      this.start();
+      if (this.mode === 'light') this.schedule(0);
+    }
   }
 
   /** 新协议只跟随实际活动，轻维护释放内部正文状态而不碰真实详情订阅。 */
   setMode(mode) {
     if(!['legacy','online','grace','light'].includes(mode)||mode===this.mode)return;
+    if(!this.backgroundSyncEnabled){this.mode=mode;this.maintenanceGeneration++;return;}
     // 降频前保存最后一份展示窗口；轻维护中不按短周期重试正文写入。
     if(mode==='light')this.cacheStore.flush();
     this.cacheStore.setPaused(mode==='light');
@@ -57,13 +83,13 @@ export class ThreadCacheFeed {
   }
   /** 不完整活动查询只增加候选；失败和缺席不能证明先前任务已经结束。 */
   setActivityInventory(inventory) {
-    if(!inventory||!Array.isArray(inventory.threadIds))return;
+    if(!this.backgroundSyncEnabled||!inventory||!Array.isArray(inventory.threadIds))return;
     if(inventory.complete)this.activity=new Set(inventory.threadIds);
     else for(const id of inventory.threadIds)this.activity.add(id);
   }
   /** 终态先保存再释放内部跟随，静态副本不继续持有完整桌面 state。 */
   settled(snapshot) {
-    if(this.closed||this.blocked(snapshot.threadId))return;
+    if(this.closed||!this.backgroundSyncEnabled||this.blocked(snapshot.threadId))return;
     this.remember(snapshot.threadId);
     try {
       if(this.liveEntry(snapshot.threadId))this.save(snapshot);
@@ -77,15 +103,18 @@ export class ThreadCacheFeed {
 
   /** 文件通知及时触发，低频元数据核对补偿漏报和在其他目录追加的日志。 */
   start() {
-    if (this.interval || this.closed || !this.db || !this.adapter.index?.historyCacheSource || !this.adapter.index?.list) return;
+    this.started = true;
+    if (this.interval || this.closed || !this.backgroundSyncEnabled || !this.db || !this.adapter.index?.historyCacheSource || !this.adapter.index?.list) return;
     const file = this.adapter.index.filePath;
     if (file && !this.watcher) {
       try {
         const name = path.basename(file);
-        this.watcher = fs.watch(path.dirname(file), { persistent: false }, (_event, filename) => {
+        const watcher = fs.watch(path.dirname(file), { persistent: false }, (_event, filename) => {
+          if (this.watcher !== watcher) return;
           if (filename == null || [name, name + '-wal', 'session_index.jsonl'].includes(String(filename))) this.schedule();
         });
-        this.watcher.on('error', () => { this.watcher?.close(); this.watcher = null; });
+        this.watcher = watcher;
+        watcher.on('error', () => { if (this.watcher === watcher) { watcher.close(); this.watcher = null; } });
       } catch { /* 索引尚未创建时由低频核对恢复。 */ }
     }
     this.interval = setInterval(() => this.schedule(0), this.mode==='light'?15000:2000);
@@ -121,7 +150,7 @@ export class ThreadCacheFeed {
   }
 
   schedule(delay = 250) {
-    if (this.closed || !this.db || !this.adapter.index?.historyCacheSource) return;
+    if (this.closed || !this.backgroundSyncEnabled || !this.db || !this.adapter.index?.historyCacheSource) return;
     if(this.mode==='light'&&delay>0){this.dirty=true;return;}
     if (this.running) { this.dirty = true; return; }
     if (this.timer && delay > 0) return;
@@ -179,7 +208,7 @@ export class ThreadCacheFeed {
 
   /** 最新两版展示立即进入内存和推送，普通落盘由固定合并窗口负责。 */
   save(source, savedSource) {
-    if (this.closed || !this.db || this.blocked(source.threadId)) return;
+    if (this.closed || !this.backgroundSyncEnabled || !this.db || this.blocked(source.threadId)) return;
     const record = this.cacheStore.stage(source, savedSource);
     if (!record) return;
     const latest = source.latestTurn?.status ?? source.turns?.at(-1)?.status;
@@ -192,6 +221,7 @@ export class ThreadCacheFeed {
 
   /** 只有指定设备和订阅才收到其关注会话的最新展示正文。 */
   deliver(snapshot, revision, baseRevision, baseSnapshot) {
+    if (!this.backgroundSyncEnabled) return;
     const deltas = new Map();
     for (const { deviceId, subscriptionId, versions } of this.subscriptions.values()) {
       const previous = versions.get(snapshot.threadId);
@@ -261,7 +291,7 @@ export class ThreadCacheFeed {
   /** 只从桌面适配器已确认所有者的实时数据提取展示缓存。 */
   captureLive(snapshot) {
     const id = snapshot.threadId;
-    if (this.closed || this.mode==='light' || !this.db || snapshot.readOnly || this.blocked(id) || (!this.targets.has(id) && !this.recent.has(id))) return;
+    if (this.closed || !this.backgroundSyncEnabled || this.mode==='light' || !this.db || snapshot.readOnly || this.blocked(id) || (!this.targets.has(id) && !this.recent.has(id))) return;
     const entry = this.liveEntry(id);
     if (!entry || (!this.verified.has(id) && !this.adapter.index?.containsThread?.(id))) return;
     this.save(snapshot);
@@ -283,6 +313,8 @@ export class ThreadCacheFeed {
     if (source && previous?.source === source) return previous.snapshot;
     const pending = this.reading.get(threadId);
     if (pending) return pending;
+    // 前台详情仍能等待共用读取，旧代结果只返回调用者，不登记为新缓存。
+    const generation = this.maintenanceGeneration;
     const reading = Promise.resolve().then(async () => {
       let snapshot;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -291,7 +323,7 @@ export class ThreadCacheFeed {
         const current = this.adapter.index.historyCacheSource(threadId);
         if (this.closed || this.blocked(threadId) || this.reading.get(threadId) !== reading) throw new BridgeError('SUBSCRIPTION_CANCELED', '已取消旧的聊天历史读取');
         if (source !== current) { source = current; continue; }
-        if (source && (this.targets.has(threadId) || this.recent.has(threadId))) {
+        if (this.backgroundSyncEnabled && generation === this.maintenanceGeneration && source && (this.targets.has(threadId) || this.recent.has(threadId))) {
           this.saved.delete(threadId);
           this.saved.set(threadId, { source, snapshot });
           if (this.saved.size > CACHE_THREAD_LIMIT) this.saved.delete(this.saved.keys().next().value);
@@ -309,6 +341,7 @@ export class ThreadCacheFeed {
 
   /** 少量并行探测可跟随的原桌面，已加载时共用现有 IPC 状态。 */
   follow(threadId) {
+    if (!this.backgroundSyncEnabled || this.probes.has(threadId)) return;
     const entry = this.liveEntry(threadId);
     if(this.mode==='light'||this.mode!=='legacy'&&!this.activity.has(threadId)&&entry?.state?.threadRuntimeStatus?.type!=='active')return;
     if (entry) {
@@ -317,14 +350,15 @@ export class ThreadCacheFeed {
     }
     // 列表或详情已经在取得同一快照时，让其现有请求完成，避免重复发现所有者。
     if(this.adapter.conversations?.has(threadId))return;
-    if (!this.adapter.watch || this.probes.size >= 2 || this.probes.has(threadId) || (this.nextProbe.get(threadId) ?? 0) > Date.now()) return;
+    if (!this.adapter.watch || this.probes.size >= 2 || (this.nextProbe.get(threadId) ?? 0) > Date.now()) return;
     this.probes.add(threadId);
     const generation=this.maintenanceGeneration;
     this.nextProbe.set(threadId, Date.now() + 10000);
-    this.adapter.watch(threadId, CACHE_WATCHER, { history: false, ownerTimeoutMs: 350, snapshotTimeoutMs: 1000,isCurrent:()=>!this.closed&&generation===this.maintenanceGeneration&&this.mode!=='light'&&this.targets.has(threadId)&&!this.blocked(threadId) })
-      .then(snapshot => this.captureLive(snapshot)).catch(() => {}).finally(() => {
+    const current=()=>!this.closed&&this.backgroundSyncEnabled&&generation===this.maintenanceGeneration&&this.mode!=='light'&&this.targets.has(threadId)&&!this.blocked(threadId);
+    this.adapter.watch(threadId, CACHE_WATCHER, { history: false, ownerTimeoutMs: 350, snapshotTimeoutMs: 1000,isCurrent:current })
+      .then(snapshot => { if (current()) this.captureLive(snapshot); }).catch(() => {}).finally(() => {
         this.probes.delete(threadId);
-        if (this.closed || generation!==this.maintenanceGeneration || this.mode==='light' || !this.targets.has(threadId) || this.blocked(threadId)) this.stopFollowing(threadId);
+        if (!current()) this.stopFollowing(threadId);
       });
   }
 
@@ -334,7 +368,9 @@ export class ThreadCacheFeed {
 
   /** 逐条让出事件循环，缓存预热不连续占用正在打开的详情请求。 */
   async refresh() {
-    if (this.closed || !this.db || this.running) return;
+    if (this.closed || !this.backgroundSyncEnabled || !this.db || this.running) return;
+    const generation = this.maintenanceGeneration;
+    const current = () => !this.closed && this.backgroundSyncEnabled && generation === this.maintenanceGeneration;
     this.running = true;
     try {
       this.checkMembership();
@@ -358,7 +394,7 @@ export class ThreadCacheFeed {
       this.sourceView = sourceView;
       for (const id of desired) {
         await nextTick();
-        if (this.closed) return;
+        if (!current()) return;
         if (this.blocked(id)) continue;
         try {
           // 每轮都核对是否已归档或删除，即使 IPC 仍保留先前的所有者。
@@ -385,7 +421,7 @@ export class ThreadCacheFeed {
             await this.readSaved(id, source);
           }
         } catch (error) {
-          if (error.code === 'THREAD_NOT_FOUND') this.forget(id);
+          if (current() && error.code === 'THREAD_NOT_FOUND') this.forget(id);
         }
       }
     } finally {

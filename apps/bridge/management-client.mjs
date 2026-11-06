@@ -69,14 +69,16 @@ export function readManagementConnection(workerConfigPath) {
 export function connectManagement(workerConfigPath) {
   return {
     async request(method, params = {}) {
-      if (!['status', 'config.read', 'config.save', 'logs.read', 'service.restart'].includes(method)) throw failure('不支持的本机管理操作', 'MANAGEMENT_METHOD_INVALID');
+      if (!['status', 'config.read', 'config.save', 'logs.read', 'service.restart', 'service.start', 'service.stop', 'service.prepareQuit', 'service.cancelQuit', 'service.quit', 'sync.set', 'startup.set'].includes(method)) throw failure('不支持的本机管理操作', 'MANAGEMENT_METHOD_INVALID');
       const connection = readManagementConnection(workerConfigPath), id = randomUUID();
       const body = JSON.stringify({version: 1, id, token: connection.token, method, params}) + '\n';
       if (Buffer.byteLength(body) > 65536) throw failure('本机管理请求过大', 'MANAGEMENT_REQUEST_INVALID');
       return new Promise((resolve, reject) => {
         const socket = net.createConnection(connection.address); let buffer = Buffer.alloc(0), settled = false;
         const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); socket.destroy(); error ? reject(error) : resolve(value); };
-        const timer = setTimeout(() => finish(failure('本机管理服务响应超时')), method === 'service.restart' ? 20000 : 15000);
+        const timer = method === 'startup.set'
+          ? setTimeout(() => finish(failure('等待系统确认开机启动超时，请刷新以核对实际状态')), 120000)
+          : setTimeout(() => finish(failure('本机管理服务响应超时')), ['service.restart', 'service.stop', 'service.prepareQuit'].includes(method) ? 25000 : 15000);
         socket.once('connect', () => socket.write(body));
         socket.on('data', chunk => {
           buffer = Buffer.concat([buffer, chunk]);
