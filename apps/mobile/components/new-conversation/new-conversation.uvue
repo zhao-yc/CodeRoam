@@ -25,7 +25,7 @@
         @syncinput="syncComposerText" @submit="send" @primary="send" @add="openOptions('add')" @settings="openOptions('settings')" @toggleplan="composerAction('plan')"
         @expand="expandEditor" @layout="showDraftInput"
         @removeimage="removeImage" @previewimage="previewImage" @removefile="removeFile" @removeplugin="removePlugin" @removemention="removeThreadMention">
-        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded && projectReady" :project-id="projectId" :selected-mode="draft.choices.permissionMode ?? 'desktop-default'" :disabled="operationBusy" @select="selectPermission" /></template>
+        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :active="props.expanded && projectReady" :project-id="projectId" :selected-mode="draft.choices.permissionMode ?? 'default'" :disabled="operationBusy" @select="selectPermission" /></template>
       </message-composer>
     </view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
