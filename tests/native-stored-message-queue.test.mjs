@@ -152,16 +152,14 @@ test('分次短读可完整恢复JSON，固定以只读句柄打开已知文件'
   assert.deepEqual(open.mock.calls.map(call => call.arguments), [[f.file, 'r']]);
 });
 
-test('打开前文件被替换时拒绝，原句柄关闭', t => {
+test('打开后句柄身份与先前路径不同时拒绝并关闭句柄', t => {
   const f = fixture(t, state([native()]));
-  const originalOpen = fs.openSync, originalClose = fs.closeSync;
-  const previous = path.join(f.home, 'synthetic-previous.json');
-  t.mock.method(fs, 'openSync', (file, flags, ...rest) => {
-    if (file === f.file && flags === 'r') {
-      fs.renameSync(file, previous);
-      fs.writeFileSync(file, JSON.stringify(state([native({ text: '替换内容' })])));
-    }
-    return originalOpen(file, flags, ...rest);
+  const originalStat = fs.fstatSync, originalClose = fs.closeSync;
+  // 模拟替换后的不同 inode，避免 Windows 文件共享检查在取得句柄前提前拒绝。
+  t.mock.method(fs, 'fstatSync', (...args) => {
+    const result = originalStat(...args);
+    result.ino += 1n;
+    return result;
   });
   const close = t.mock.method(fs, 'closeSync', fd => originalClose(fd));
   assert.throws(() => f.read(), safe);

@@ -30,13 +30,11 @@ function describe(row) {
   const prefix = marker ? raw.slice(0, marker.index) : '';
   const imageInputs = row.input.filter(item => ['image', 'localImage'].includes(item.type));
   const markedText = texts.some(item => item.text_elements?.length);
-  const complex = row.input.some(item => !['text', 'image'].includes(item.type)) || markedText;
   const text = markedText ? '包含复杂上下文的电脑排队消息' : marker ? raw.slice(marker.index + marker[0].length).trim() : raw;
-  const simple = !complex && !marker && text.length <= 32000 && imageInputs.length <= 3 && imageInputs.every(item => typeof item.url === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(item.url)) && !/plugin:\/\//.test(raw);
   return {
     id: publicId(row.id), nativeId: row.id, row, source: 'desktop', text: text.slice(0, 32000),
     imageCount: imageInputs.length, attachmentCount: (prefix.match(/^## /gm) ?? []).length,
-    state: 'queued', error: '', canCancel: true, canEdit: simple, canSteer: simple,
+    state: 'queued', error: '', canCancel: true, canEdit: false, canSteer: false,
   };
 }
 
@@ -61,8 +59,6 @@ export class NativeServerMessageQueue {
     this.timer = setInterval(() => this.poll(), intervalMs); this.timer.unref();
     this.supportsSubmissionOptions = false;
   }
-
-  setJournal(journal) { this.db = journal.db; }
 
   snapshot(threadId) {
     const value = this.queues.get(threadId);
@@ -125,19 +121,11 @@ export class NativeServerMessageQueue {
     }
   }
 
-  /** 接管追加前先落盘恢复正文，任何中断都不能把已移除消息重新当作待发送队列。 */
-  retain(row, threadId, commandId, deviceId) {
-    if (!this.db) throw unavailable();
-    const draft = { text: row.text, images: row.row.input.filter(item => item.type === 'image').map(item => item.url), attachments: [] };
-    this.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'sending')").run(row.id, threadId, deviceId, commandId, JSON.stringify({ threadId, ...draft }));
-    return draft;
-  }
-
-  setRetained(id, state, error = '') { this.db.prepare('UPDATE message_queue SET state=?,error=? WHERE id=?').run(state, error, id); }
-  discardRetained(id) { this.db.prepare('DELETE FROM message_queue WHERE id=?').run(id); }
-
   async operate(action, params, commandId, deviceId, message) {
     const { threadId } = params;
+    // 辅助进程与原桌面的队列锁不共享，删除后另发追加不能保证只消费一次。
+    // 撤回后重发也存在同样竞态，旧客户端必须在任何删除副作用前被拦截。
+    if (action === 'steer' || action === 'edit') throw new BridgeError('NATIVE_QUEUE_CONVERSION_UNAVAILABLE', '当前电脑版本暂不支持手机撤回或追加原生排队消息，请在电脑处理');
     if (!await this.refresh(threadId, deviceId, { force: true })) throw unavailable();
     const context = this.context(threadId, deviceId);
     await context.instance?.verify?.(); context.check();
@@ -149,43 +137,20 @@ export class NativeServerMessageQueue {
       return { ok: true, queued: true, queueId: publicId(row.id) };
     }
     const row = this.queues.get(threadId).messages.find(value => value.id === params.queueId);
-    if (!row || !['cancel', 'edit', 'steer'].includes(action) || !row[action === 'edit' ? 'canEdit' : action === 'steer' ? 'canSteer' : 'canCancel']) throw new BridgeError('NATIVE_QUEUE_CHANGED', '这条电脑排队消息已变化，请重新同步');
-    const assertTurn = () => {
-      context.check();
-      const state = this.adapter.snapshot(context.entry.state);
-      if (!state.activeTurnId || state.activeTurnId !== params.expectedTurnId) throw new BridgeError('STALE_TURN', '运行中的任务已变化，消息保留为可恢复草稿');
-    };
-    if (action === 'steer') assertTurn();
-    const draft = action === 'cancel' ? null : this.retain(row, threadId, commandId, deviceId);
-    let removed = false, sending = false;
+    if (!row || action !== 'cancel' || !row.canCancel) throw new BridgeError('NATIVE_QUEUE_CHANGED', '这条电脑排队消息已变化，请重新同步');
+    let removed = false;
     try {
       if (row.row.stored) {
-        const response = await this.adapter.client.request('thread-follower-remove-queued-message', { conversationId: threadId, messageId: row.nativeId }, 1, { targetClientId: context.owner.clientId, hostId: context.owner.hostId });
+        // 本地 follower 的基础协议版本不带顶层 hostId，带上该字段须使用下一版本。
+        const response = await this.adapter.client.request('thread-follower-remove-queued-message', { conversationId: threadId, messageId: row.nativeId }, 1, { targetClientId: context.owner.clientId, timeoutMs: 15000 });
         removed = response.resultType === 'success' && response.result?.removed?.message != null;
       } else removed = await context.client.remove(threadId, row.nativeId, context.cwd);
       if (!removed) throw new BridgeError('NATIVE_QUEUE_CHANGED', '这条电脑排队消息已处理，请重新同步');
       try { context.check(); } catch { throw new BridgeError('OUTCOME_UNKNOWN', '电脑队列操作结果需要核对，请勿重复提交', true); }
-      if (action === 'cancel') return { ok: true, canceled: true };
-      if (action === 'edit') { this.setRetained(row.id, 'editing'); return { ok: true, edited: true, draft }; }
-      assertTurn();
-      const restoreMessage = { id: row.row.clientUserMessageId, text: draft.text, cwd: context.cwd, createdAt: Date.now(), context: { prompt: draft.text, addedFiles: [], fileAttachments: [], imageAttachments: draft.images.map((src, index) => ({ id: commandId + ':image:' + index, src })), ideContext: null, workspaceRoots: [context.cwd] } };
-      // 原生记录已明确删除后才追加，沿用同一用户消息编号和原轮次，不启动新轮次。
-      sending = true;
-      const response = await this.adapter.client.request('thread-follower-steer-turn', { conversationId: threadId, input: row.row.input, restoreMessage, clientUserMessageId: row.row.clientUserMessageId, attachments: [] }, 1, { targetClientId: context.owner.clientId, hostId: context.owner.hostId });
-      if (response.resultType !== 'success' || typeof response.result?.result?.turnId !== 'string') throw new BridgeError('OUTCOME_UNKNOWN', '电脑追加结果需要核对，请勿重复提交', true);
-      try { context.check(); } catch { throw new BridgeError('OUTCOME_UNKNOWN', '电脑追加结果需要核对，请勿重复提交', true); }
-      this.discardRetained(row.id);
-      return { ok: true, queued: false };
+      return { ok: true, canceled: true };
     } catch (error) {
-      if (draft) {
-        // 删除后轮次变化可能与原桌面自动取走队首并发，只能人工核对，不能恢复成可再次发送的草稿。
-        const unknown = removed || error.outcomeUnknown || sending;
-        if (unknown) this.setRetained(row.id, 'unknown', '发送结果需要核对，此消息不会自动重发');
-        else if (removed) this.setRetained(row.id, 'editing', '追加未完成，可恢复草稿继续编辑');
-        else this.discardRetained(row.id);
-        if (unknown) throw new BridgeError('OUTCOME_UNKNOWN', '电脑队列操作结果需要核对，请勿重复提交', true);
-      }
       if (error instanceof BridgeError) throw error;
+      if (row.row.stored) throw new BridgeError('OUTCOME_UNKNOWN', '电脑取消结果需要核对，请勿重复提交', true);
       throw unavailable();
     } finally {
       await this.refresh(threadId, deviceId, { force: true });

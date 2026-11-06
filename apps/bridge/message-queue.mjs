@@ -20,7 +20,6 @@ export class MessageQueue {
       payload TEXT NOT NULL, state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
       previous_turn TEXT NOT NULL DEFAULT '', UNIQUE(device_id, command_id)
     )`);
-    this.adapter.nativeQueue?.setJournal?.(journal);
     // 崩溃前已开始发送的消息必须人工核对，绝不能当作待发送消息重放。
     this.db.prepare("UPDATE message_queue SET state='unknown', error='发送结果需要核对，请先查看聊天；此消息不会自动重发' WHERE state='sending'").run();
     this.timer = setInterval(() => this.pump(), 1000); this.timer.unref();

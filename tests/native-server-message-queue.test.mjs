@@ -74,56 +74,52 @@ test('原生文件上下文只公开正文及附件数量，复杂项隐藏编�
   assert.equal(JSON.stringify(row).includes('/example/private'), false);
 });
 
-test('同编号追加复用成功回执，双队列出队且后台泵不会再次发送', async t => {
+test('原生队列转换入口关闭，同编号追加重放不会删除或发送', async t => {
   const f = fixture(t); f.add(); const id = (await f.read()).queuedMessages[0].id;
   const params = { queueId: id, expectedTurnId: 'synthetic-turn' };
-  assert.equal((await f.send('steer', params)).queued, false);
-  assert.equal((await f.send('steer', params)).queued, false);
-  assert.equal(f.rows.length, 0); assert.equal(f.queue.rows('synthetic-thread').length, 0);
-  assert.equal(f.calls.filter(call => call.method === 'thread-follower-steer-turn').length, 1);
-  assert.equal(f.calls.find(call => call.method)?.params.clientUserMessageId, 'synthetic-message-0');
-  await f.queue.pump(); assert.equal(f.calls.length, 2);
+  await assert.rejects(f.send('steer', params), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
+  await assert.rejects(f.send('steer', params), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
+  assert.equal(f.rows.length, 1); assert.equal(f.queue.rows('synthetic-thread').length, 0);
+  await f.queue.pump(); assert.equal(f.calls.length, 0);
 });
 
 test('追加轮次过期时保留原生消息，不能移除或发送', async t => {
   const f = fixture(t); f.add(); const id = (await f.read()).queuedMessages[0].id;
-  await assert.rejects(f.send('steer', { queueId: id, expectedTurnId: 'synthetic-old-turn' }), error => error.code === 'STALE_TURN');
+  await assert.rejects(f.send('steer', { queueId: id, expectedTurnId: 'synthetic-old-turn' }), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
   assert.equal(f.rows.length, 1); assert.equal(f.calls.length, 0);
 });
 
-test('删除后轮次变化保留未知占位，不恢复可重复发送的草稿', async t => {
+test('当前轮次变化仍在删除前拒绝旧客户端转换请求', async t => {
   const f = fixture(t); f.add(); const id = (await f.read()).queuedMessages[0].id;
   f.afterRemove = () => { f.turnId = 'synthetic-next-turn'; };
-  await assert.rejects(f.send('steer', { queueId: id, expectedTurnId: 'synthetic-turn' }), error => error.code === 'OUTCOME_UNKNOWN');
-  assert.equal(f.queue.rows('synthetic-thread')[0].state, 'unknown');
-  await f.queue.pump(); assert.equal(f.calls.filter(call => call.method).length, 0);
+  await assert.rejects(f.send('steer', { queueId: id, expectedTurnId: 'synthetic-turn' }), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
+  assert.equal(f.rows.length, 1);
+  await f.queue.pump(); assert.equal(f.calls.length, 0);
 });
 
-test('追加断线后同编号重试和后台恢复均不重新发送', async t => {
+test('转换请求遇到断线也不会开始删除或追加', async t => {
   const f = fixture(t); f.add(); const id = (await f.read()).queuedMessages[0].id;
   f.sendError = Error('synthetic-transport-closed');
   const params = { queueId: id, expectedTurnId: 'synthetic-turn' };
-  await assert.rejects(f.send('steer', params), error => error.code === 'OUTCOME_UNKNOWN');
-  await assert.rejects(f.send('steer', params), error => error.code === 'OUTCOME_UNKNOWN');
-  assert.equal(f.queue.rows('synthetic-thread')[0].state, 'unknown');
-  await f.queue.pump(); assert.equal(f.calls.filter(call => call.method).length, 1);
+  await assert.rejects(f.send('steer', params), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
+  await assert.rejects(f.send('steer', params), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
+  assert.equal(f.rows.length, 1);
+  await f.queue.pump(); assert.equal(f.calls.length, 0);
 });
 
-test('移除结果未知时正文留在未知账本中，不继续追加', async t => {
-  const f = fixture(t); f.add(); const id = (await f.read()).queuedMessages[0].id;
-  f.removeError = new BridgeError('OUTCOME_UNKNOWN', '合成未知结果', true);
-  await assert.rejects(f.send('steer', { queueId: id, expectedTurnId: 'synthetic-turn' }), error => error.code === 'OUTCOME_UNKNOWN');
+test('历史未知追加占位保持冻结，后台泵不会恢复投递', async t => {
+  const f = fixture(t);
+  f.journal.db.prepare("INSERT INTO message_queue(id,thread_id,device_id,command_id,payload,state) VALUES (?,?,?,?,?,'unknown')").run('desktop-synthetic-unknown', 'synthetic-thread', 'synthetic-phone', 'synthetic-prior-command', JSON.stringify({ threadId: 'synthetic-thread', text: '合成未知正文', images: [], attachments: [] }));
+  await f.queue.pump();
   assert.equal(f.queue.rows('synthetic-thread')[0].state, 'unknown');
-  assert.equal(f.calls.filter(call => call.method).length, 0);
+  assert.equal(f.calls.length, 0);
 });
 
-test('原生撤回先落盘恢复草稿，再次编辑不重复删除', async t => {
+test('原生撤回编辑在任何删除前被拒绝，正文仍由原桌面调度', async t => {
   const f = fixture(t); f.add(); const id = (await f.read()).queuedMessages[0].id;
-  const result = await f.send('edit', { queueId: id });
-  assert.equal(result.draft.text, '合成电脑消息');
-  assert.equal(f.rows.length, 0); assert.equal(f.queue.rows('synthetic-thread')[0].state, 'editing');
-  assert.equal((await f.send('edit', { queueId: id }, 'synthetic-recover')).draft.text, result.draft.text);
-  assert.equal(f.calls.filter(call => call.action === 'remove').length, 1);
+  await assert.rejects(f.send('edit', { queueId: id }), error => error.code === 'NATIVE_QUEUE_CONVERSION_UNAVAILABLE');
+  assert.equal(f.rows.length, 1); assert.equal(f.queue.rows('synthetic-thread').length, 0);
+  assert.equal(f.calls.length, 0);
 });
 
 test('写入后实例归属变化只报告未知，不转入旧发送队列', async t => {
@@ -147,8 +143,9 @@ test('兼容原生特殊上下文队列只展示安全字段并通过原所有�
   assert.equal(row.text, '合成特殊设置消息'); assert.equal(row.attachmentCount, 1);
   assert.equal(row.canEdit, false); assert.equal(row.canSteer, false);
   assert.equal(JSON.stringify(row).includes('/example/private'), false);
-  f.adapter.client.request = async (method, params) => {
+  f.adapter.client.request = async (method, params, version, options) => {
     assert.equal(method, 'thread-follower-remove-queued-message'); assert.equal(params.messageId, 'synthetic-stored-id');
+    assert.equal(version, 1); assert.equal(options.hostId, undefined); assert.equal(options.timeoutMs, 15000);
     f.stored = []; return { resultType: 'success', result: { removed: { message: { id: params.messageId } } } };
   };
   assert.equal((await f.send('cancel', { queueId: row.id })).canceled, true);
