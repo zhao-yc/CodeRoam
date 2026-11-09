@@ -63,7 +63,19 @@ export function installManagementChild({agents, drain, status, close, setBackgro
       else reply(message.requestId, null, {code: 'MANAGEMENT_BUSY', message: '手机仍有操作未完成，或服务尚未就绪，请稍后重试'});
     }
   };
+  /** 父进程消失后拒绝新任务；账本由下次启动按原规则核对。 */
+  function ownerLost() {
+    const deadline=setTimeout(()=>exit(1),4000);
+    if(shuttingDown)return;
+    shuttingDown=true;
+    void Promise.resolve().then(()=>{
+      setDraining(true);
+      return close();
+    }).then(()=>{clearTimeout(deadline);exit(0);},()=>{clearTimeout(deadline);exit(1);});
+  }
+  channel.once('disconnect',ownerLost);
   channel.on('message', listener);
-  channel.send({type: 'codex-mobile-management', action: 'ready'});
-  return () => channel.off('message', listener);
+  if(channel.connected)channel.send({type: 'codex-mobile-management', action: 'ready'},error=>{if(error&&channel.connected)ownerLost();});
+  else ownerLost();
+  return () => {channel.off('message', listener);channel.off('disconnect',ownerLost);};
 }

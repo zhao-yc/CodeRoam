@@ -42,20 +42,21 @@ test('真实本机管道仅返回配置投影，保存后保留敏感字段并�
 
 test('伪造能力令牌、超限请求和未授权方法均不能执行服务动作',async t=>{
   const f=fixture(t);let actions=0;
-  const server=await startManagementServer({...f,status:async()=>({}),restart:async()=>{actions++;return {};},setStartup:async enabled=>{actions++;return {startupEnabled:enabled};}});f.after.push(()=>server.close());
+  const server=await startManagementServer({...f,status:async()=>({}),restart:async()=>{actions++;return {};},setBackgroundSync:async enabled=>{actions++;return {backgroundSyncEnabled:enabled};}});f.after.push(()=>server.close());
   const connection=readManagementConnection(f.workerConfigPath);
   const raw=body=>new Promise(resolve=>{let output='';const socket=net.createConnection(connection.address);socket.on('error',()=>{});socket.on('data',data=>output+=data);socket.once('connect',()=>socket.write(body));socket.once('close',()=>resolve(output));});
   assert.equal(await raw(JSON.stringify({version:1,id:randomUUID(),token:'0'.repeat(64),method:'service.restart',params:{}})+'\n'),'');
-  assert.equal(await raw(JSON.stringify({version:1,id:randomUUID(),token:'0'.repeat(64),method:'startup.set',params:{enabled:false}})+'\n'),'');
+  assert.equal(await raw(JSON.stringify({version:1,id:randomUUID(),token:'0'.repeat(64),method:'sync.set',params:{enabled:false}})+'\n'),'');
   assert.equal(await raw('x'.repeat(65537)),'');
   await assert.rejects(connectManagement(f.workerConfigPath).request('shell.exec',{}),{code:'MANAGEMENT_METHOD_INVALID'});
   const error=JSON.parse(await raw(JSON.stringify({version:1,id:randomUUID(),token:connection.token,method:'shell.exec',params:{}})+'\n'));
   assert.equal(error.error.code,'MANAGEMENT_METHOD_INVALID');assert.equal(actions,0);
   const client=connectManagement(f.workerConfigPath);
-  await assert.rejects(client.request('startup.set',{enabled:'false'}),{code:'MANAGEMENT_REQUEST_INVALID'});
-  await assert.rejects(client.request('startup.set',{enabled:false,service:'synthetic-service'}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  await assert.rejects(client.request('startup.set',{enabled:false}),{code:'MANAGEMENT_METHOD_INVALID'});
+  await assert.rejects(client.request('sync.set',{enabled:'false'}),{code:'MANAGEMENT_REQUEST_INVALID'});
+  await assert.rejects(client.request('sync.set',{enabled:false,service:'synthetic-service'}),{code:'MANAGEMENT_REQUEST_INVALID'});
   assert.equal(actions,0);
-  assert.deepEqual(await client.request('startup.set',{enabled:false}),{startupEnabled:false});
+  assert.deepEqual(await client.request('sync.set',{enabled:false}),{backgroundSyncEnabled:false});
   assert.equal(actions,1);
 });
 
@@ -130,7 +131,7 @@ test('真实托管管理重启只关闭合成子进程，保存配置要等重�
       close:async()=>clearInterval(timer),
     });
   `);
-  const child=spawn(process.execPath,['apps/bridge/service-supervisor.mjs','--config',f.workerConfigPath],{windowsHide:true,stdio:'ignore'});
+  const child=spawn(process.execPath,['apps/bridge/service-supervisor.mjs','--foreground','--config',f.workerConfigPath],{windowsHide:true,stdio:'ignore'});
   f.after.push(async()=>{let pid;try{pid=JSON.parse(fs.readFileSync(path.join(f.worker.runDirectory,'bridge.json'))).pid;}catch{}child.kill();await new Promise(resolve=>{child.once('close',resolve);setTimeout(resolve,1000).unref();});if(pid)try{process.kill(pid);}catch{}});
   const client=connectManagement(f.workerConfigPath);
   const wait=async predicate=>{const until=Date.now()+15000;while(Date.now()<until){try{const value=await predicate();if(value)return value;}catch{}await new Promise(resolve=>setTimeout(resolve,100));}assert.fail('合成托管未在期限内达到目标状态');};
@@ -196,42 +197,100 @@ for(const multiInstance of [false,true])test(`退出和重新打开托盘会收�
       },
     });
   `);
-  const supervisor=spawn(process.execPath,['apps/bridge/service-supervisor.mjs','--config',f.workerConfigPath],{windowsHide:true,stdio:'ignore'});
+  const supervisor=path.resolve('apps/bridge/service-supervisor.mjs');
+  const session=createServiceSession({connect:connectManagement,node:process.execPath,supervisor,trayReady:()=>true});
   f.after.push(()=>{
     try{
       const {supervisorPid,childPid}=JSON.parse(fs.readFileSync(path.join(f.worker.logDirectory,'supervisor.json'),'utf8'));
       for(const pid of [childPid,supervisorPid])if(pid)try{process.kill(pid);}catch{}
     }catch{}
-    if(supervisor.exitCode===null&&supervisor.signalCode===null)supervisor.kill();
   });
   const client=connectManagement(f.workerConfigPath);
-  const file=path.join(f.root,'resume.json');
-  // 使用真实本机 IPC 和合成托管进程。平台托管命令留给各系统的真实验收。
-  const session=createServiceSession({file,connect:connectManagement,platform:'linux'});
-  let before;
-  for(let attempt=0;attempt<75;attempt++){
-    try{before=await client.request('status');if(before.connected)break;}catch{}
-    await new Promise(resolve=>setTimeout(resolve,100));
-  }
+  const [before,duplicate]=await Promise.all([session.start(f.workerConfigPath),session.start(f.workerConfigPath)]);
   assert.equal(before?.connected,true);
+  assert.equal(before.supervisorPid,duplicate.supervisorPid);
   const labels=before.instances.map(instance=>instance.label);
   assert.equal(labels.length,multiInstance?2:1);
   const busy=path.join(f.root,labels.at(-1));
   fs.writeFileSync(busy,'');
   await assert.rejects(session.close(f.workerConfigPath),{code:'MANAGEMENT_IN_FLIGHT'});
   assert.equal((await client.request('status')).pid,before.pid);
-  assert.equal(fs.existsSync(file),false);
   await assert.rejects(client.request('service.prepareQuit',{confirmed:'true'}),{code:'MANAGEMENT_REQUEST_INVALID'});
   await assert.rejects(client.request('service.stop',{confirmed:true}),{code:'MANAGEMENT_REQUEST_INVALID'});
   await session.close(f.workerConfigPath,true);
   for(const pid of [before.pid,before.supervisorPid])assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
   fs.unlinkSync(busy);
-  assert.equal(fs.existsSync(file),true);
-  await session.resume(f.workerConfigPath);
-  const after=await client.request('status');
+  const after=await session.start(f.workerConfigPath);
   assert.notEqual(after.supervisorPid,before.supervisorPid);
   assert.notEqual(after.pid,before.pid);
   assert.deepEqual(after.instances.map(instance=>instance.label),labels);
-  assert.equal(fs.existsSync(file),false);
   await session.close(f.workerConfigPath);
+});
+
+test('托盘创建失败和迁移失败都不会创建守护',async t=>{
+  const f=fixture(t),failure=new Error('合成迁移失败');
+  let trayReady=false,attempts=0;
+  const session=createServiceSession({
+    connect:connectManagement,node:process.execPath,supervisor:path.resolve('apps/bridge/service-supervisor.mjs'),
+    trayReady:()=>trayReady,beforeStart:async()=>{attempts++;throw failure;},
+  });
+  await assert.rejects(session.start(f.workerConfigPath),/托盘未就绪/);
+  assert.equal(attempts,0);
+  trayReady=true;
+  await assert.rejects(session.start(f.workerConfigPath),failure);
+  assert.equal(attempts,1);
+  assert.equal(fs.existsSync(path.join(f.worker.runDirectory,'management.json')),false);
+});
+
+test('父进程 IPC 断开时立即排空并关闭桥接',async()=>{
+  const channel=new EventEmitter(), calls=[];
+  channel.connected=true;
+  channel.send=()=>{};
+  const exited=new Promise(resolve=>installManagementChild({
+    channel,agents:()=>[{setManagementDraining:value=>calls.push(['draining',value])}],
+    drain:value=>calls.push(['drain',value]),close:async()=>calls.push(['close']),exit:resolve,
+  }));
+  channel.connected=false;
+  channel.emit('disconnect');
+  assert.equal(await exited,0);
+  assert.deepEqual(calls,[['drain',true],['draining',true],['close']]);
+});
+
+for(const killed of ['manager','supervisor'])test(`强制结束 ${killed} 后不会留下或重启桥接`,async t=>{
+  const f=fixture(t),supervisor=path.resolve('apps/bridge/service-supervisor.mjs');
+  const sessionFile=pathToFileURL(path.resolve('apps/desktop-manager/electron/service-session.mjs')).href;
+  const clientFile=pathToFileURL(path.resolve('apps/bridge/management-client.mjs')).href;
+  const helper=pathToFileURL(path.resolve('apps/bridge/management-child.mjs')).href;
+  fs.writeFileSync(f.worker.entry,`
+    import {installManagementChild} from ${JSON.stringify(helper)};
+    const timer=setInterval(()=>{},1000);
+    installManagementChild({
+      agents:()=>[],drain:()=>{},
+      status:()=>({pid:process.pid,connected:true}),close:async()=>clearInterval(timer),
+    });
+  `);
+  const manager=spawn(process.execPath,['--input-type=module','-e',`
+    import {createServiceSession} from ${JSON.stringify(sessionFile)};
+    import {connectManagement} from ${JSON.stringify(clientFile)};
+    const session=createServiceSession({connect:connectManagement,node:process.execPath,supervisor:process.argv[1],trayReady:()=>true});
+    process.send(await session.start(process.argv[2]));
+  `,supervisor,f.workerConfigPath],{windowsHide:true,stdio:['ignore','ignore','ignore','ipc']});
+  const isGone=pid=>{try{process.kill(pid,0);return false;}catch(error){return error.code==='ESRCH';}};
+  let before;
+  f.after.push(()=>{
+    for(const pid of [manager.pid,before?.supervisorPid,before?.pid])if(pid&&!isGone(pid))try{process.kill(pid,'SIGKILL');}catch{}
+  });
+  before=await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('合成桌面未启动')),10000);
+    manager.once('message',status=>{clearTimeout(timer);resolve(status);});
+    manager.once('close',()=>{clearTimeout(timer);reject(new Error('合成桌面提前退出'));});
+  });
+  process.kill(killed==='manager'?manager.pid:before.supervisorPid,'SIGKILL');
+  for(let attempt=0;attempt<80;attempt++){
+    if(isGone(before.supervisorPid)&&isGone(before.pid))break;
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.equal(isGone(before.supervisorPid),true);
+  assert.equal(isGone(before.pid),true);
+  await assert.rejects(connectManagement(f.workerConfigPath).request('status'),{code:'MANAGEMENT_UNAVAILABLE'});
 });

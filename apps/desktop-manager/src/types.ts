@@ -27,6 +27,7 @@ export type RuntimeStatus = {
   configPath: string
   backgroundSyncEnabled?: boolean
   startupEnabled?: boolean
+  startError?: string
   serviceState?: 'starting' | 'running' | 'stopping' | 'stopped'
 }
 

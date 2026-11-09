@@ -13,7 +13,7 @@ fs.mkdirSync(output, {recursive: true});
 // 输出目录固定归本桌面工程所有；打包前清理，避免把旧配置或运行数据混入产物。
 if (fs.realpathSync(output) !== path.join(fs.realpathSync(project), '.runtime')) throw new Error('打包目录归属不符');
 for (const name of fs.readdirSync(output)) fs.rmSync(path.join(output, name), {recursive: true, force: true});
-const tracked = execFileSync('git', ['ls-files', '-z', 'apps/bridge', 'packages/protocol', 'scripts/asar-reader.mjs', 'scripts/windows', 'scripts/bridge-service.ps1'], {cwd: repository, encoding: 'utf8'}).split('\0').filter(Boolean);
+const tracked = execFileSync('git', ['ls-files', '-z', 'apps/bridge', 'packages/protocol', 'scripts/asar-reader.mjs'], {cwd: repository, encoding: 'utf8'}).split('\0').filter(Boolean);
 for (const file of tracked) {
   const destination = path.join(output, file); fs.mkdirSync(path.dirname(destination), {recursive: true}); fs.copyFileSync(path.join(repository, file), destination);
 }

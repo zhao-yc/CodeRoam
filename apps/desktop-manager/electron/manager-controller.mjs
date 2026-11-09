@@ -21,7 +21,7 @@ export function trustedSender(event, window, rendererUrl) {
 }
 
 /** 偏好只保存托管路径；配对令牌和管理接口凭据始终不进入渲染页面。 */
-export function createManagerController({preferencesPath, initialWorker = '', version, platform, chooseFile, connect}) {
+export function createManagerController({preferencesPath, initialWorker = '', defaultWorker = () => '', beforeChoose = async () => {}, version, platform, chooseFile, connect}) {
   let workerConfigPath = '';
   // 首次通过启动参数关联的现有服务也要记住，后续双击客户端即可恢复连接。
   const remember = selected => {
@@ -34,8 +34,9 @@ export function createManagerController({preferencesPath, initialWorker = '', ve
     const saved = JSON.parse(fs.readFileSync(preferencesPath, 'utf8'));
     workerConfigPath = validateWorkerFile(saved.workerConfigPath);
   } catch { /* 首次启动或原路径不存在时，由用户重新选择。 */ }
-  if (initialWorker) {
-    const selected = validateWorkerFile(initialWorker);
+  const candidate = initialWorker || (!workerConfigPath && defaultWorker());
+  if (candidate) {
+    const selected = validateWorkerFile(candidate);
     if (selected !== workerConfigPath) remember(selected);
     workerConfigPath = selected;
   }
@@ -46,6 +47,8 @@ export function createManagerController({preferencesPath, initialWorker = '', ve
       const selected = await chooseFile();
       if (!selected) return context();
       const next = validateWorkerFile(selected);
+      if (next === workerConfigPath) return context();
+      await beforeChoose(next, workerConfigPath);
       remember(next); workerConfigPath = next;
       return context();
     },

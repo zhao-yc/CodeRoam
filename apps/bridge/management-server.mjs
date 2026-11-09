@@ -48,7 +48,7 @@ function localAddress() {
 }
 
 /** 固定 worker 的本机能力接口，短连接一条请求，令牌仅在私有端点文件中存放。 */
-export async function startManagementServer({worker, workerConfigPath = null, status, restart, startBridge, stopBridge, setBackgroundSync, setStartup, prepareQuit, cancelQuit, confirmQuit, onQuit}) {
+export async function startManagementServer({worker, workerConfigPath = null, status, restart, startBridge, stopBridge, setBackgroundSync, prepareQuit, cancelQuit, confirmQuit, onQuit}) {
   const address = localAddress(), token = randomBytes(32).toString('hex'), identity = managementWorkerIdentity(worker);
   const revision = workerConfigPath ? createHash('sha256').update(fs.readFileSync(workerConfigPath)).digest('hex') : null;
   const file = path.join(worker.runDirectory, 'management.json'), sockets = new Set(); let closed = false;
@@ -88,15 +88,6 @@ export async function startManagementServer({worker, workerConfigPath = null, st
       }
       if (!setBackgroundSync) throw fail('此守护版本暂不支持切换后台数据同步', 'MANAGEMENT_METHOD_INVALID');
       return setBackgroundSync(params.enabled);
-    }
-    if (method === 'startup.set') {
-      if (Object.keys(params).length !== 1 || typeof params.enabled !== 'boolean') {
-        throw fail('开机启动开关必须是布尔值', 'MANAGEMENT_REQUEST_INVALID');
-      }
-      if (!setStartup) throw fail('此守护暂不支持切换开机启动', 'MANAGEMENT_METHOD_INVALID');
-      // 只有已认证且参数有效的开机启动请求可以等待 Windows 管理员确认。
-      socket.setTimeout(125000);
-      return setStartup(params.enabled);
     }
     throw fail('不支持的管理方法', 'MANAGEMENT_METHOD_INVALID');
   };

@@ -43,7 +43,7 @@ npm test
 
 ```powershell
 node scripts/provision.mjs --relay-url wss://relay.example.com/ws --backup-root '<自己的私有备份目录>'
-node apps/bridge/cli.mjs --config .local/bridge.json
+npm run bridge -- --bridge-config .local/bridge.json
 ```
 
 初始化先备份，再写入 `.local`；已有配对会拒绝覆盖。`.local/relay.json` 包含鉴权哈希，仅部署到自己的中转；`.local/bridge.json` 留在电脑；`.local/mobile.json` 导入自己的手机。三份文件不能提交或公开。

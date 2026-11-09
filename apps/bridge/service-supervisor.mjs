@@ -8,18 +8,16 @@ import {lifecycleEvent} from './service-lifecycle.mjs';
 import {acquireRuntimeLock} from './runtime-lock.mjs';
 import {readManagedConfig} from './management-config.mjs';
 import {startManagementServer} from './management-server.mjs';
-import {createMacStartupControl, createWindowsStartupControl} from './management-startup.mjs';
 import {randomUUID} from 'node:crypto';
 
 /** 原账号下的单实例守护进程；只启动固定 Node 入口，不重放任何手机请求。 */
-export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}) {
+export async function supervise(config,{restartMs=5000,workerConfigPath=null,desktopOwned=false,bridgeEntry=config.entry}={}) {
   const {entry,bridgeConfig,projectRoot,runDirectory,statusFile,logDirectory}=config;
-  for(const file of [entry,bridgeConfig])if(!path.isAbsolute(file)||!fs.existsSync(file))throw new Error('固定桥接入口或配置不存在');
+  for(const file of [bridgeEntry,bridgeConfig])if(!path.isAbsolute(file)||!fs.existsSync(file))throw new Error('固定桥接入口或配置不存在');
+  if(desktopOwned&&!process.connected)throw new Error('桌面托盘未建立进程连接');
   fs.mkdirSync(logDirectory,{recursive:true});fs.mkdirSync(runDirectory,{recursive:true});
   const log=path.join(logDirectory,'lifecycle.jsonl'),stateFile=path.join(logDirectory,'supervisor.json');
   const release=await acquireRuntimeLock(path.join(fs.realpathSync.native(logDirectory),'supervisor'));
-  const startupOptions={workerConfigPath,projectRoot};
-  const startup=createWindowsStartupControl(startupOptions)??createMacStartupControl(startupOptions);
   let child=null,timer=null,stopping=false,attempt=0,startedAt=0,activeRevision='',management=null,restarting=false,manualRestart=false,changingSync=false;
   let bridgePaused=false, quitting=false, quitTimer=null;
   const pending=new Map();
@@ -39,14 +37,11 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
   /** 只展示结构化状态，不能把原运行文件里的未知字段或凭据透传界面。 */
   async function status() {
     const saved=readManagedConfig(bridgeConfig);let runtime={},childConfirmed=false;
-    const startupReading=startup?.read();
     try {runtime=JSON.parse(fs.readFileSync(statusFile,'utf8'));}catch{}
     if(child?.managementReady)try{runtime=await askChild('status',2000);childConfirmed=true;}catch{}
-    const startupEnabled=await startupReading;
     const valid=runtime.pid===child?.pid;
     return {running:!!child&&child.exitCode===null,connected:valid&&runtime.connected===true,pid:child?.pid??null,supervisorPid:process.pid,version:valid&&typeof runtime.version==='string'?runtime.version:'0.1.0',activeRevision,savedRevision:saved.revision,restartRequired:activeRevision!==saved.revision,maintenance:valid&&runtime.maintenance&&typeof runtime.maintenance==='object'?Object.fromEntries(Object.entries(runtime.maintenance).filter(([key,value])=>['online','grace','light','legacy'].includes(key)&&Number.isSafeInteger(value)&&value>=0)):{},instances:valid&&Array.isArray(runtime.instances)?runtime.instances.slice(0,50).filter(item=>item&&typeof item.label==='string').map(item=>({label:item.label.slice(0,100),ready:item.ready===true})):[],configPath:bridgeConfig,
       ...(childConfirmed&&valid&&typeof runtime.backgroundSyncEnabled==='boolean'?{backgroundSyncEnabled:runtime.backgroundSyncEnabled}:{}),
-      ...(typeof startupEnabled==='boolean'?{startupEnabled}:{}),
       serviceState:bridgePaused?(child?'stopping':'stopped'):(child?.managementReady?'running':'starting')};
   }
   /** 开关与受控重启互斥，确认以当前桥接进程的回执为准。 */
@@ -129,12 +124,12 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
   /** 只在下次启动时轮换本项目日志，防止长期运行无限增长。 */
   function rotate(file) {if(fs.existsSync(file)&&fs.statSync(file).size>2*1024*1024){if(fs.existsSync(file+'.2'))fs.unlinkSync(file+'.2');if(fs.existsSync(file+'.1'))fs.renameSync(file+'.1',file+'.2');fs.renameSync(file,file+'.1');}}
   function start() {
-    if(stopping||bridgePaused)return;
+    if(stopping||bridgePaused||desktopOwned&&!process.connected)return;
     activeRevision=readManagedConfig(bridgeConfig).revision;
     rotate(log);const stdout=path.join(runDirectory,'bridge.stdout.log'),stderr=path.join(runDirectory,'bridge.stderr.log');rotate(stdout);rotate(stderr);
     const out=fs.openSync(stdout,'a'),err=fs.openSync(stderr,'a');
     startedAt=Date.now();
-    const launched=spawn(process.execPath,['--import',pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)),'service-lifecycle.mjs')).href,entry,'--config',bridgeConfig],{
+    const launched=spawn(process.execPath,['--import',pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)),'service-lifecycle.mjs')).href,bridgeEntry,'--config',bridgeConfig],{
       cwd:projectRoot,windowsHide:true,stdio:['ignore',out,err,'ipc'],env:{...process.env,CODEX_BRIDGE_LIFECYCLE_LOG:log},
     });
     fs.closeSync(out);fs.closeSync(err);child=launched;
@@ -145,35 +140,58 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null}={}
       clearTimeout(item.timer);pending.delete(message.requestId);
       message.error?item.reject(Object.assign(new Error(message.error.message??'桥接尚未结束在途操作'),{code:message.error.code??'MANAGEMENT_BUSY'})):item.resolve(message.result);
     });
-    launched.once('spawn',()=>{fs.writeFileSync(path.join(runDirectory,'bridge.json'),JSON.stringify({pid:launched.pid,marker:entry,supervised:true,supervisorPid:process.pid}));event('bridge_spawned',{childPid:launched.pid,attempt});save({state:'running'});});
+    launched.once('spawn',()=>{fs.writeFileSync(path.join(runDirectory,'bridge.json'),JSON.stringify({pid:launched.pid,marker:bridgeEntry,supervised:true,supervisorPid:process.pid}));event('bridge_spawned',{childPid:launched.pid,attempt});save({state:'running'});});
     launched.once('error',error=>event('bridge_spawn_failed',{errorCode:/^[A-Z0-9_]+$/.test(error.code??'')?error.code:'SPAWN_ERROR'}));
     launched.once('close',(code,signal)=>{
       for(const[id,item]of pending)if(item.target===launched){clearTimeout(item.timer);pending.delete(id);item.reject(Object.assign(new Error('桥接进程已经退出'),{code:'MANAGEMENT_NOT_READY'}));}
       event('bridge_observed_exit',{childPid:launched.pid??null,exitCode:code,signal:signal??null,planned:stopping||bridgePaused||manualRestart,uptimeMs:Date.now()-startedAt});
       try {const status=JSON.parse(fs.readFileSync(statusFile,'utf8'));if(status.pid===launched.pid)fs.writeFileSync(statusFile,JSON.stringify({...status,connected:false,updatedAt:Date.now(),exitCode:code,signal:signal??null}));}catch{}
-      child=null;if(stopping){save({state:'stopped'});release();return;}
+      child=null;if(stopping){finishStop();return;}
       if(bridgePaused){save({state:'stopped'});return;}
       attempt=Date.now()-startedAt>60000?0:attempt+1;
       const delay=manualRestart?0:Math.min(30000,restartMs*Math.max(1,Math.min(attempt,6)));manualRestart=false;
       save({state:'restarting',exitCode:code,nextRestartAt:Date.now()+delay});event('bridge_restart_scheduled',{delayMs:delay});timer=setTimeout(start,delay);
     });
   }
-  /** 停止守护时仅终止其子桥接；系统服务的 Job Object 另保证无孤儿进程。 */
-  function stop() {if(stopping)return;stopping=true;management?.close();clearTimeout(timer);event('supervisor_stopping');if(child)child.kill();else{save({state:'stopped'});release();}}
+  function finishStop() {
+    save({state:'stopped'});release();
+    if(desktopOwned&&process.connected)process.disconnect();
+  }
+  /** 托盘失联后撤销重启，桥接先排空并关闭，超时只结束本守护持有的子进程。 */
+  function stop() {
+    if(stopping)return;
+    stopping=true;management?.close();clearTimeout(timer);clearTimeout(quitTimer);event('supervisor_stopping');
+    const target=child;
+    if(!target){finishStop();return;}
+    if(target.connected)target.disconnect();
+    const deadline=setTimeout(()=>target.kill('SIGKILL'),5000);
+    target.once('close',()=>clearTimeout(deadline));
+  }
   process.once('SIGTERM',stop);process.once('SIGINT',stop);process.once('exit',release);
+  if(desktopOwned)process.once('disconnect',stop);
   try{management=await startManagementServer({
     worker:config,workerConfigPath,status,restart:()=>stopOrRestart(false),stopBridge:()=>stopOrRestart(true),startBridge,
-    setBackgroundSync,setStartup:startup?.set,
+    setBackgroundSync,
     prepareQuit, cancelQuit, confirmQuit, onQuit:stop,
   });}
   catch(error){release();throw error;}
-  try{event('supervisor_started',{parentPid:process.ppid});start();}
+  try{
+    if(desktopOwned&&!process.connected){
+      management.close();
+      stop();
+    } else {
+      event('supervisor_started',{parentPid:process.ppid});start();
+    }
+  }
   catch(error){management.close();release();throw error;}
   return{stop};
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
-  const {values}=parseArgs({options:{config:{type:'string'}}});
+  const {values}=parseArgs({options:{config:{type:'string'},entry:{type:'string'},'desktop-owned':{type:'boolean'},foreground:{type:'boolean'}}});
   if(!values.config)throw new Error('缺少守护配置');
-  await supervise(JSON.parse(fs.readFileSync(values.config,'utf8').replace(/^\uFEFF/,'')),{workerConfigPath:path.resolve(values.config)});
+  if(!values['desktop-owned']&&!values.foreground)throw new Error('请通过 CodeRoam 桌面程序启动守护');
+  await supervise(JSON.parse(fs.readFileSync(values.config,'utf8').replace(/^\uFEFF/,'')),{
+    workerConfigPath:path.resolve(values.config),desktopOwned:values['desktop-owned'],bridgeEntry:values.entry,
+  });
 }

@@ -54,11 +54,11 @@ const serviceControlLabel = computed(() => {
 })
 const serviceSettings: { key: ServiceSetting; descriptionId: string; title: string; description: string; offLabel: string }[] = [
   { key: 'backgroundSyncEnabled', descriptionId: 'background-sync-description', title: '后台数据同步', description: '暂停后仍可手动打开聊天、发送消息和处理审批。', offLabel: '已暂停' },
-  { key: 'startupEnabled', descriptionId: 'startup-description', title: '开机启动', description: '', offLabel: '已关闭' },
+  { key: 'startupEnabled', descriptionId: 'startup-description', title: '登录时启动', description: '', offLabel: '已关闭' },
 ]
 const startupDescription = computed(() => {
-  if (context.value?.platform === 'win32') return '开启后，守护随 Windows 启动，登录后启动桥接。关闭后改为手动启动，当前服务继续运行。切换时需确认 Windows 管理员授权。'
-  return '开启后，守护在登录 macOS 时自动启动。关闭后，下次登录需手动启动，当前服务继续运行。'
+  const location = context.value?.platform === 'win32' ? '系统托盘' : '菜单栏'
+  return '开启后，登录时 CodeRoam 会驻留' + location + '并启动连接服务。'
 })
 const serviceSettingsLocked = computed(() => operationBusy.value || confirmRestart.value || restartPreviousPid.value !== null || serviceControlBusy.value)
 
@@ -67,11 +67,11 @@ function serviceSettingDisabled(key: ServiceSetting): boolean {
 }
 
 function serviceSettingLabel(key: ServiceSetting, offLabel: string): string {
-  if (changingSetting.value === key) return key === 'startupEnabled' && context.value?.platform === 'win32' ? '等待 Windows 确认…' : '正在应用…'
+  if (changingSetting.value === key) return '正在应用…'
   if (restarting.value || restartPreviousPid.value !== null) return '等待后台重启'
   if (!status.value || key === 'backgroundSyncEnabled' && !status.value.running) return '等待后台就绪'
   const enabled = status.value[key]
-  if (typeof enabled !== 'boolean') return key === 'startupEnabled' ? '当前服务暂不支持' : '当前服务版本暂不支持'
+  if (typeof enabled !== 'boolean') return key === 'startupEnabled' ? '登录项未确认' : '当前服务版本暂不支持'
   return enabled ? '已开启' : offLabel
 }
 
@@ -119,7 +119,7 @@ async function refreshStatus(showFeedback = false) {
     const value = await api.status()
     if (!current(requestGeneration) || request !== statusRequest) return
     if (restartPreviousPid.value !== null && value.running && value.pid !== null && value.pid !== restartPreviousPid.value) restartPreviousPid.value = null
-    status.value = value; lastUpdated.value = new Date(); statusError.value = ''
+    status.value = value; lastUpdated.value = new Date(); statusError.value = value.startError ?? ''
     if (showFeedback) feedback.value = '运行状态已更新'
     if (config.value === null && !operationBusy.value) await loadMissingConfig(requestGeneration)
   } catch (reason) {
@@ -311,7 +311,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
 
       <section v-if="loading" class="empty-state panel"><div class="loading-ring"></div><h2>正在读取本机服务</h2><p>确认运行状态与当前配置…</p></section>
       <section v-else-if="!api" class="empty-state panel"><div class="empty-icon"><Icon name="monitor" :size="32" /></div><h2>请从桌面客户端打开</h2><p>当前页面没有连接 Electron 的本机管理接口。<br />请运行电脑连接管理客户端，再查看和编辑后台配置。</p><div class="muted-note">浏览器预览不会显示模拟状态，也不能修改本机服务。</div></section>
-      <section v-else-if="!ready" class="empty-state panel"><div class="empty-icon"><Icon name="folder" :size="32" /></div><h2>连接现有的后台服务</h2><p>选择守护服务使用的 <code>worker.json</code>，<br />即可查看运行状态、调整配置和读取日志。</p><button class="button primary" :disabled="loading || operationBusy" @click="chooseWorker"><Icon name="folder" :size="18" />{{ choosing ? '正在选择…' : '选择服务配置' }}<Icon name="arrow" :size="16" /></button><div class="muted-note">管理客户端连接已有守护，不会重复启动桥接进程。</div></section>
+      <section v-else-if="!ready" class="empty-state panel"><div class="empty-icon"><Icon name="folder" :size="32" /></div><h2>设置电脑连接服务</h2><p>选择此电脑的 <code>worker.json</code>，<br />CodeRoam 会启动并管理连接服务。</p><button class="button primary" :disabled="loading || operationBusy" @click="chooseWorker"><Icon name="folder" :size="18" />{{ choosing ? '正在选择…' : '选择服务配置' }}<Icon name="arrow" :size="16" /></button></section>
 
       <template v-else-if="page === 'overview'">
         <section class="stat-grid overview-stats" aria-label="运行摘要">

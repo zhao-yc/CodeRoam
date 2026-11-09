@@ -43,7 +43,7 @@ Compose 中相对路径以 Compose 文件位置为基准，请放置对应配置
 
 ## 手机与桌面
 
-Windows 或 Mac 桌面须已登录，桥接运行：`node apps/bridge/cli.mjs --config .local/bridge.json`。手机在连接页面导入自己的 `.local/mobile.json`。
+Windows 或 Mac 桌面须已登录，桥接运行：`npm run bridge -- --bridge-config .local/bridge.json`。手机在连接页面导入自己的 `.local/mobile.json`。
 
 Mac 默认自动发现当前用户的多个官方桌面实例，每套独立 `CODEX_HOME` 使用自己的 `ipc/ipc.sock`，聊天链接定向投递到已核验的进程，再等待原桌面所有者及实时快照。依赖本机 `/usr/bin/python3`；共用同一配置目录的 Mac 多开会暂停连接。详见[多实例说明](multi-instance.md)。`codexHome` 指定默认设备目录，`codexCliPath` 指定随附 CLI；设置 `multiInstance: false` 可回退单实例模式并使用 `ipcSocketPath`。不修改桌面安装文件、鉴权或数据库。Mac 的原生未读同步、归档、永久删除、目标管理及输入预测尚未适配，不能把 Web 编译或模拟测试记为这些功能已通过真机验收。
 

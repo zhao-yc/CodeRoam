@@ -11,7 +11,7 @@
     "diagnose": "node scripts/diagnose.mjs",
     "test": "node --test tests/*.test.mjs",
     "relay": "node apps/relay/cli.mjs",
-    "bridge": "node apps/bridge/cli.mjs",
+    "bridge": "npm run desktop:start --",
     "desktop:build": "npm --prefix apps/desktop-manager run build",
     "desktop:start": "npm --prefix apps/desktop-manager start",
     "desktop:pack:win": "npm --prefix apps/desktop-manager run pack:win",

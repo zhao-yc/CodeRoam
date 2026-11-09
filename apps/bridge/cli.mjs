@@ -19,6 +19,7 @@ import { applyBackgroundSyncSetting, readBackgroundSyncSetting } from './backgro
 const {values}=parseArgs({options:{config:{type:'string',default:'.local/bridge.json'}}});
 let releaseBridgeLock=()=>{};
 try {
+  if(typeof process.send==='function'&&!process.connected)throw new Error('守护进程未建立连接');
   // 先取得进程级排他，再打开操作账本；避免第二个启动入口扰动正在提交的请求。
   releaseBridgeLock=await acquireBridgeLock(values.config);
   const config=JSON.parse(fs.readFileSync(values.config,'utf8'));
@@ -54,15 +55,15 @@ try {
   agent.on('connected',()=>{writeStatus(true);diagnostics.record('connection.open',null,{role:'host'});console.log('电脑已连接中转服务');});
   agent.on('disconnected',()=>{writeStatus(false);diagnostics.record('connection.close',null,{role:'host'});console.log('中转连接已断开');});
   agent.on('warning',warning=>{diagnostics.record('connection.warning',null,{errorCode:warning.code});console.log(`${warning.code}：${warning.message}`);});
-  adapter.connect().catch(()=>console.log('等待 Codex 桌面客户端启动'));
-  agent.predictions.start().catch(()=>{});
-  agent.start();
   let closing=false;const close=async()=>{if(closing)return;closing=true;try{agent.predictions.close();await agent.close();}finally{releaseBridgeLock();}};
   installManagementChild({
     agents:()=>[agent], drain:()=>{}, close,
     status:()=>({pid:process.pid,version:'0.1.0',connected:agent.socket?.readyState===1,backgroundSyncEnabled:config.backgroundSyncEnabled,maintenance:{[agent.clientPresence.mode]:1},instances:[{label:config.label??'电脑',ready:agent.socket?.readyState===1}]}),
     setBackgroundSync: enabled => applyBackgroundSyncSetting(syncSettingFile, config, () => [agent], enabled),
   });
+  adapter.connect().catch(()=>console.log('等待 Codex 桌面客户端启动'));
+  agent.predictions.start().catch(()=>{});
+  agent.start();
   process.on('SIGINT',close);process.on('SIGTERM',close);
   }
 }catch(error){releaseBridgeLock();console.error(`电脑连接服务启动失败：${error.message}`);process.exitCode=1;}

@@ -1,8 +1,8 @@
-﻿param([ValidateSet('all','bridge','mobile','tunnel','stop','logs','status')][string]$Action='all')
+param([ValidateSet('all','bridge','mobile','tunnel','stop','logs','status')][string]$Action='all')
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot 'windows/bridge-service-registration.ps1')
+
 $localSettings=@{}
 $settingsFile=Join-Path $projectRoot '.local/development.json'
 if(Test-Path -LiteralPath $settingsFile){
@@ -53,33 +53,26 @@ function Start-Tunnel {
   if(!$ready){throw '开发隧道未就绪，请查看 .local/run/tunnel.stderr.log'}
   Write-Output '开发中转健康检查通过：http://127.0.0.1:18787/healthz'
 }
+function Invoke-DesktopManager([string[]]$Arguments) {
+  $manager=Join-Path $projectRoot 'apps/desktop-manager'
+  $electron=Join-Path $manager 'node_modules/electron/dist/electron.exe'
+  if(!(Test-Path -LiteralPath $electron)){throw '请先安装桌面管理客户端依赖'}
+  $previous=$env:CODEX_MOBILE_MANAGER_USER_DATA
+  try {
+    # 开发托盘使用独立偏好目录，启动和退出命令不会控制日常安装。
+    $env:CODEX_MOBILE_MANAGER_USER_DATA=Join-Path $runtimeDirectory 'desktop-manager'
+    Start-Process -FilePath $electron -ArgumentList (@(('"'+$manager+'"'))+$Arguments) -WorkingDirectory $projectRoot
+  } finally {
+    $env:CODEX_MOBILE_MANAGER_USER_DATA=$previous
+  }
+}
 function Start-Bridge {
-  $registered=Get-BridgeServiceRegistration
-  if((Test-Path -LiteralPath $bridgeConfig) -and (Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel}
-  # 安装独立托管后统一交给服务管理，避免临时命令再启动第二个桥接。
-  if($null -ne $registered) {
-    & (Join-Path $PSScriptRoot 'bridge-service.ps1') -Action start
-    return
-  }
-  if($null -ne (Get-ManagedProcess 'bridge')){Write-Output '复用本项目的电脑连接服务';return}
-  $entry=Join-Path $projectRoot 'apps/bridge/cli.mjs'
-  $config=$bridgeConfig
-  if(!(Test-Path -LiteralPath $config)){throw '请先执行 npm run provision 并完成凭据备份'}
-  $node=(Get-Command node.exe).Source
-  $node=& $node -p "require('node:fs').realpathSync(process.execPath)"
-  $process=Start-Process -FilePath $node -ArgumentList @("`"$entry`"",'--config',"`"$config`"") -WorkingDirectory $bridgeWorkingDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtimeDirectory 'bridge.stdout.log') -RedirectStandardError (Join-Path $runtimeDirectory 'bridge.stderr.log')
-  Save-ManagedProcess 'bridge' $process.Id $entry
-  $ready=$false
-  $bridgeSettings=Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
-  $dataPath=if($bridgeSettings.PSObject.Properties.Name -contains 'dataPath'){$bridgeSettings.dataPath}else{'.local/bridge'}
-  $dataDirectory=if([IO.Path]::IsPathRooted($dataPath)){$dataPath}else{Join-Path $bridgeWorkingDirectory $dataPath}
-  $statusFile=Join-Path $dataDirectory 'runtime-status.json'
-  for($attempt=0;$attempt -lt 40;$attempt++) {
-    if(Test-Path -LiteralPath $statusFile){try{$status=Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json;if($status.pid -eq $process.Id -and $status.connected){$ready=$true;break}}catch{}}
-    if($process.HasExited){break};Start-Sleep -Milliseconds 250
-  }
-  if(!$ready){throw '电脑连接服务未就绪，请查看 .local/run/bridge.stderr.log'}
-  Write-Output "电脑连接服务已启动，PID=$($process.Id)"
+  if(!(Test-Path -LiteralPath $bridgeConfig)){throw '请先执行 npm run provision 并完成凭据备份'}
+  if((Get-Content -LiteralPath $bridgeConfig -Raw -Encoding UTF8 | ConvertFrom-Json).relayUrl -like 'ws://127.0.0.1:*'){Start-Tunnel}
+  & npm run desktop:build
+  if($LASTEXITCODE -ne 0){throw '桌面管理客户端构建失败'}
+  Invoke-DesktopManager @('--bridge-config',('"'+$bridgeConfig+'"'),'--bridge-working-directory',('"'+$bridgeWorkingDirectory+'"'),'--run-directory',('"'+$runtimeDirectory+'"'))
+  Write-Output 'CodeRoam 开发托盘已请求启动，可从托盘打开管理窗口查看连接状态。'
 }
 function Start-Mobile {
   $configuredCli=Resolve-LocalPath 'hbuilderxCli' ''
@@ -90,14 +83,15 @@ function Start-Mobile {
   if($LASTEXITCODE -ne 0){throw 'HBuilderX 手机界面预览启动失败'}
 }
 function Stop-Managed {
-  if($null -ne (Get-BridgeServiceRegistration)) {
-    & (Join-Path $PSScriptRoot 'bridge-service.ps1') -Action stop
-    if($LASTEXITCODE -ne 0){throw '托管服务尚未停止，保留现场'}
+  Invoke-DesktopManager @('--quit')
+  for($attempt=0;$attempt -lt 20;$attempt++){
+    if($null -eq (Get-ManagedProcess 'bridge')){break}
+    Start-Sleep -Milliseconds 500
   }
-  foreach($name in @('bridge','tunnel')){
-    $process=Get-ManagedProcess $name
-    if($null -ne $process){Stop-Process -Id $process.ProcessId;Write-Output "已停止本项目服务：$name"}
-  }
+  if($null -eq (Get-ManagedProcess 'bridge')) {
+    $tunnel=Get-ManagedProcess 'tunnel'
+    if($null -ne $tunnel){Stop-Process -Id $tunnel.ProcessId;Write-Output '已停止本项目开发隧道'}
+  } else {Write-Output '连接服务仍在运行，请查看桌面托盘的退出结果。'}
   Write-Output '手机界面预览由 HBuilderX 运行面板的停止按钮管理。'
 }
 switch($Action){
@@ -108,10 +102,7 @@ switch($Action){
   'stop'{Stop-Managed}
   'logs'{foreach($name in @('bridge.stdout.log','bridge.stderr.log','tunnel.stderr.log')){$file=Join-Path $runtimeDirectory $name;if(Test-Path -LiteralPath $file){Write-Output "日志：$name";Get-Content -LiteralPath $file -Tail 40 -Encoding UTF8}}}
   'status'{
-    $registered=Get-BridgeServiceRegistration
-    if($null -ne $registered){Write-Output "$($registered.Name)：$($registered.State)，PID=$($registered.ProcessId)"}
     foreach($name in @('bridge','tunnel')){
-      if($name -eq 'bridge' -and $null -ne $registered){continue}
       $entry=Get-ManagedProcess $name
       Write-Output "${name}：$(if($entry){'运行中，PID='+$entry.ProcessId}else{'未运行'})"
     }
