@@ -302,7 +302,7 @@ onUnmounted(() => { alive = false; generation++; if (timer) clearInterval(timer)
     </aside>
 
     <main class="main-pane">
-      <header class="page-header"><div><div class="page-eyebrow">电脑连接管理</div><h1>{{ currentPage.title }}</h1><p>{{ currentPage.subtitle }}</p></div><div v-if="ready" class="header-actions"><button class="button secondary icon-button" :disabled="refreshing || restarting || changingSetting !== null" aria-label="刷新运行状态" title="刷新运行状态" @click="refreshStatus(true)"><Icon name="refresh" :class="{ spinning: refreshing }" :size="18" /></button><button class="button secondary" :disabled="!status?.running || operationBusy || restartPreviousPid !== null" @click="confirmRestart = true"><Icon name="power" :size="17" />{{ restarting || restartPreviousPid !== null ? '正在重启…' : '重启服务' }}</button></div></header>
+      <header class="page-header"><div><div class="page-eyebrow">电脑连接管理</div><h1>{{ currentPage.title }}</h1><p>{{ currentPage.subtitle }}</p></div><div v-if="ready" class="header-actions"><button class="button secondary icon-button" :disabled="refreshing || restarting || changingSetting !== null" aria-label="刷新运行状态" title="刷新运行状态" @click="refreshStatus(true)"><Icon name="refresh" :class="{ spinning: refreshing }" :size="18" /></button></div></header>
 
       <div v-if="error" class="notice error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span><button class="notice-close" aria-label="关闭错误提示" @click="error = ''"><Icon name="close" :size="16" /></button></div>
       <div v-if="statusError" class="notice error" role="alert"><Icon name="signal" :size="18" /><span>运行状态：{{ statusError }}</span><button class="notice-close" aria-label="关闭状态提示" @click="statusError = ''"><Icon name="close" :size="16" /></button></div>
