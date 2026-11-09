@@ -27,10 +27,12 @@ export function createServiceSession({connect, node, supervisor, entry, trayRead
     const owned = {child, worker, closed: false};
     active = owned;
     child.on('error', () => { /* 启动与关闭统一通过 close 和状态核验。 */ });
-    child.once('close', () => {
+    const exited = () => {
       owned.closed = true;
       if (active === owned) active = null;
-    });
+    };
+    child.once('exit', exited);
+    child.once('close', exited);
     try {
       return await waitFor(async () => {
         if (owned.closed) throw failure('守护启动失败，请检查托管配置或运行目录占用');

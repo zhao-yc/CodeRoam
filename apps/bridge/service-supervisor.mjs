@@ -107,7 +107,7 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null,des
     try {
       const wasRunning=!bridgePaused;
       await stopOrRestart(true, {confirmed});
-      if(child)await once(child,'close',{signal:AbortSignal.timeout(5000)});
+      if(child)await once(child,'exit',{signal:AbortSignal.timeout(5000)});
       // 客户端意外退出时，托管器仍可恢复手动启动入口。
       quitTimer=setTimeout(cancelQuit,45000);quitTimer.unref();
       return {pid:process.pid,node:process.execPath,supervisor:fileURLToPath(import.meta.url),wasRunning};
@@ -142,7 +142,8 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null,des
     });
     launched.once('spawn',()=>{fs.writeFileSync(path.join(runDirectory,'bridge.json'),JSON.stringify({pid:launched.pid,marker:bridgeEntry,supervised:true,supervisorPid:process.pid}));event('bridge_spawned',{childPid:launched.pid,attempt});save({state:'running'});});
     launched.once('error',error=>event('bridge_spawn_failed',{errorCode:/^[A-Z0-9_]+$/.test(error.code??'')?error.code:'SPAWN_ERROR'}));
-    launched.once('close',(code,signal)=>{
+    const exited=(code,signal)=>{
+      if(child!==launched)return;
       for(const[id,item]of pending)if(item.target===launched){clearTimeout(item.timer);pending.delete(id);item.reject(Object.assign(new Error('桥接进程已经退出'),{code:'MANAGEMENT_NOT_READY'}));}
       event('bridge_observed_exit',{childPid:launched.pid??null,exitCode:code,signal:signal??null,planned:stopping||bridgePaused||manualRestart,uptimeMs:Date.now()-startedAt});
       try {const status=JSON.parse(fs.readFileSync(statusFile,'utf8'));if(status.pid===launched.pid)fs.writeFileSync(statusFile,JSON.stringify({...status,connected:false,updatedAt:Date.now(),exitCode:code,signal:signal??null}));}catch{}
@@ -151,11 +152,17 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null,des
       attempt=Date.now()-startedAt>60000?0:attempt+1;
       const delay=manualRestart?0:Math.min(30000,restartMs*Math.max(1,Math.min(attempt,6)));manualRestart=false;
       save({state:'restarting',exitCode:code,nextRestartAt:Date.now()+delay});event('bridge_restart_scheduled',{delayMs:delay});timer=setTimeout(start,delay);
-    });
+    };
+    // 主动断开 IPC 后，部分平台只报告进程退出；启动失败仍由 close 收口。
+    launched.once('exit',exited);
+    launched.once('close',exited);
   }
   function finishStop() {
-    save({state:'stopped'});release();
-    if(desktopOwned&&process.connected)process.disconnect();
+    try{save({state:'stopped'});}
+    finally{
+      release();
+      if(desktopOwned&&process.connected)process.disconnect();
+    }
   }
   /** 托盘失联后撤销重启，桥接先排空并关闭，超时只结束本守护持有的子进程。 */
   function stop() {
@@ -163,9 +170,10 @@ export async function supervise(config,{restartMs=5000,workerConfigPath=null,des
     stopping=true;management?.close();clearTimeout(timer);clearTimeout(quitTimer);event('supervisor_stopping');
     const target=child;
     if(!target){finishStop();return;}
-    if(target.connected)target.disconnect();
     const deadline=setTimeout(()=>target.kill('SIGKILL'),5000);
+    target.once('exit',()=>clearTimeout(deadline));
     target.once('close',()=>clearTimeout(deadline));
+    if(target.connected)target.disconnect();
   }
   process.once('SIGTERM',stop);process.once('SIGINT',stop);process.once('exit',release);
   if(desktopOwned)process.once('disconnect',stop);

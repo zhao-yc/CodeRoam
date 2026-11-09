@@ -31,7 +31,7 @@
     "files": ["dist/**/*", "electron/**/*", "package.json"],
     "extraResources": [{ "from": ".runtime", "to": "bridge-runtime" }],
     "win": { "target": "zip", "icon": "electron/icon.ico", "signAndEditExecutable": true, "signExecutable": false },
-    "mac": { "icon": "electron/tray.png" },
+    "mac": { "icon": "../../assets/branding/coderoam-v1/coderoam-logo-512.png" },
     "artifactName": "coderoam-manager-${version}-${os}-${arch}.${ext}"
   }
 }
