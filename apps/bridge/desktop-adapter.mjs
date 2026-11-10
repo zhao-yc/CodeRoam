@@ -223,7 +223,10 @@ export class DesktopAdapter extends EventEmitter {
 
   /** 详情首次返回前补齐原生队列；后台列表及缓存跟随不扫描页面通道。 */
   async queueSnapshot(entry,threadId,deviceId) {
-    if(!internalWatcher(deviceId)&&!deviceId.startsWith('status:')&&!deviceId.startsWith('submission:'))await this.nativeQueue?.refresh(threadId,deviceId);
+    if(deviceId==='message-queue') {
+      // 自动投递只在空闲时核对电脑队列，即使手机已离开详情也能独立读取。
+      if(entry.state&&normalizeConversation(entry.state).status==='idle')await this.nativeQueue?.refresh(threadId,deviceId);
+    } else if(!internalWatcher(deviceId)&&!deviceId.startsWith('status:')&&!deviceId.startsWith('submission:'))await this.nativeQueue?.refresh(threadId,deviceId);
     if(this.conversations.get(threadId)!==entry||!entry.state)throw new BridgeError('SUBSCRIPTION_CANCELED','聊天同步已取消');
     return this.snapshot(entry.state);
   }

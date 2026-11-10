@@ -3,7 +3,7 @@
     <view class="setting-row action-frame">
       <view class="setting-copy">
         <text class="setting-title">新消息默认发送方式</text>
-        <text class="setting-description">任务进行中，新消息默认按所选方式发送。排队后，可手动追加到当前任务。</text>
+        <text class="setting-description">任务进行中，新消息可进入手机队列或直接追加。手机排队消息也可手动追加到当前任务。</text>
       </view>
       <text class="setting-value">{{ behaviorLabel }}</text><app-icon name="chevron-down" :size="18" tone="muted" />
       <button class="action-hitbox" :aria-label="'新消息默认发送方式，当前为' + behaviorLabel + '，点击选择'" hover-class="action-pressed" @click="chooseBehavior"></button>

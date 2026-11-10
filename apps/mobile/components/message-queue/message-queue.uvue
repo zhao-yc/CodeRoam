@@ -4,6 +4,7 @@
     <view v-for="message in messages" :key="message.id" class="queue-row">
       <text class="queue-state">{{ statusLabel(message.state) }}</text>
       <text v-if="message.source == 'desktop'" class="queue-source">电脑同步</text>
+      <text v-if="message.source == 'mobile'" class="queue-source">手机排队</text>
       <text v-if="message.source == 'legacy'" class="queue-source">旧版排队</text>
       <text v-if="message.text.length > 0" class="queue-text" selectable>{{ threadMentionMessageText(message.text) }}</text>
       <thread-mention-chips :mentions="message.threadMentions ?? []" :readonly="true" />

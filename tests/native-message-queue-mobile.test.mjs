@@ -50,8 +50,9 @@ test('允许编辑仍受全局开关限制，允许追加仍依赖运行状态�
   for (const name of ['edit', 'steer', 'cancel']) assert.equal(action(name, message, { disabled: true }).disabled, true);
 });
 
-test('来源小标签区分电脑同步和旧版排队，未知来源不显示', () => {
+test('来源小标签区分电脑同步、手机排队和旧版排队，未知来源不显示', () => {
   assert.deepEqual(sourceLabels({ ...message, source: 'desktop' }), ['电脑同步']);
+  assert.deepEqual(sourceLabels({ ...message, source: 'mobile' }), ['手机排队']);
   assert.deepEqual(sourceLabels({ ...message, source: 'legacy' }), ['旧版排队']);
   assert.deepEqual(sourceLabels({ ...message, source: 'other' }), []);
 });

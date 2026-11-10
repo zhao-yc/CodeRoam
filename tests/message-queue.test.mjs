@@ -69,6 +69,24 @@ for (const [mode, binding] of [['普通启动', { directIpc: true }], ['多实�
     assert.equal(f.client.calls[0].params.turnStart.request.clientUserMessageId, taskId);
     assert.ok(verified > 0);
   });
+  test(mode + '手机队列独立保存并通过原桌面追加一次', async t => {
+    const f = fixture(t);
+    f.client.instance = { ...binding, platform: 'win32', generation: randomUUID(), alive: true, ready: true, verify: async () => {} };
+    f.adapter.nativeQueue = {
+      snapshot: () => ({ supportsNativeMessageQueue: true, queuedMessages: [{ id: 'desktop-synthetic', source: 'desktop' }] }),
+      refresh: async () => true, forget() {}, close() {},
+      operate() { assert.fail('手机消息不能写入电脑队列'); },
+    };
+    const { result } = await f.send('enqueue', { text: '合成手机消息' });
+    assert.equal(result.queued, true);
+    assert.equal(f.queue.rows('thread').length, 1);
+    assert.equal(f.client.calls.length, 0);
+    assert.equal((await f.send('steer', { queueId: result.queueId, expectedTurnId: 'original' })).error, undefined);
+    f.client.idle();
+    await f.queue.pump();
+    assert.deepEqual(f.client.calls.map(call => call.method), ['thread-follower-steer-turn']);
+    assert.equal(f.queue.rows('thread').length, 0);
+  });
 }
 
 test('运行中发送只入队，重复请求不重复保存，手机退订后仍按顺序开始下一轮', async t => {
