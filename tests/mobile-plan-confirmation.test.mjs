@@ -76,6 +76,7 @@ test('三种交互都拦截同卡连点、下一张卡，以及桌面晚到的�
     if (kind === 'question') f.snapshot.questionGroups = [];
     if (kind === 'approval') f.snapshot.approvals = [];
     f.sync();
+    if (kind === 'question') assert.equal(f.detachedInteractions(kind).length, 0, '题组结束后收起成功回执');
     next(); assert.equal(f.calls.length, 1, '快照移除旧卡时不能点到下一张');
     f.tick(600);
     next(); assert.equal(f.calls.length, 2, '等界面稳定后允许新的操作');
@@ -100,6 +101,21 @@ test('未知结果只核对原编号，明确失败才恢复方案编辑并保�
   assert.equal(f.planFeedback.value, '保留合成意见');
   assert.equal(f.planEditing.value, true);
   assert.equal(f.context.operationError.value, '明确拒绝');
+});
+
+test('题组先消失时保留提交和待核对提示，确认结束后收起回执', async () => {
+  const f = fixture(); f.answer();
+  f.snapshot.questionGroups = []; f.sync();
+  assert.equal(f.detachedInteractions('question')[0].state, 'sending');
+  f.calls[0].reject(Object.assign(new Error('合成断线'), { name: 'OUTCOME_UNKNOWN' }));
+  await Promise.resolve();
+  const entry = f.detachedInteractions('question')[0];
+  assert.equal(entry.state, 'unknown');
+  f.tick(600);
+  await f.checkInteraction(entry);
+  assert.equal(entry.state, 'resolved');
+  assert.equal(f.detachedInteractions('question').length, 0);
+  assert.equal(f.calls.length, 1);
 });
 
 test('审批决策不能被连点改写，明确失败后可重试，离页回执隔离', async () => {

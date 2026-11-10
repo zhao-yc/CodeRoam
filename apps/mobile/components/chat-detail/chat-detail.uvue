@@ -1619,6 +1619,8 @@ function interactionAttached(entry: InteractionSubmission): boolean {
 }
 function detachedInteractions(kind: string): InteractionSubmission[] {
   const entries = conversationInteractions.value.filter((entry: InteractionSubmission): boolean => entry.kind == kind && !interactionAttached(entry))
+  // 题组消失后只显示仍需等待或核对的状态，已完成的记录继续用于防止重复提交。
+  if (kind == 'question') return entries.filter((entry: InteractionSubmission): boolean => entry.state == 'sending' || entry.state == 'unknown')
   const latest = entries.length > 0 ? entries[entries.length - 1] : null
   return entries.filter((entry: InteractionSubmission): boolean => entry == latest || entry.state == 'unknown' || entry.state == 'sending')
 }
