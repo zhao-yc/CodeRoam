@@ -73,37 +73,39 @@ function fixture(storage = new Map()) {
 
 const file = () => ({ id: 'example-upload-000001', name: 'example.txt', size: 6, source: '/example', data: 'YWJjZGVm', status: 'local', progress: 0, error: '' });
 
-test('手机草稿按电脑和项目隔离，首次项目分配保留文字、附件及插件且不打开原生草稿', () => {
-  const f = fixture(), source = f.newDraft('pc', ''); source.text = '先输入'; source.files = [file()]; source.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
+test('同一电脑的项目共用文字和附件，首次项目分配插件时不打开原生草稿', () => {
+  const f = fixture(), source = f.newDraft('pc', ''); source.input.text = '先输入'; source.input.files = [file()]; source.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
   f.assignUnselectedDraft('pc', 'project');
-  assert.equal(f.newDraft('pc', 'project').text, '先输入'); assert.equal(f.newDraft('pc', 'project').files.length, 1); assert.equal(f.newDraft('pc', 'project').plugins.length, 1);
-  assert.equal(source.text, ''); assert.equal(source.plugins.length, 0); assert.equal(f.newDraft('other', 'project').text, ''); assert.equal(f.newDraft('pc', 'other').files.length, 0);
+  assert.equal(f.newDraft('pc', 'project').input.text, '先输入'); assert.equal(f.newDraft('pc', 'project').input.files.length, 1); assert.equal(f.newDraft('pc', 'project').plugins.length, 1);
+  assert.equal(source.plugins.length, 0);
+  assert.equal(f.newDraft('other', 'project').input.text, '');
+  assert.equal(f.newDraft('pc', 'other').input, source.input);
   assert.equal(f.calls.length, 0);
 });
 
 test('打开只取得原生草稿，首条确认后一次 native send 再订阅正式聊天，不创建空线程或补写设置', async () => {
   const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project');
   assert.deepEqual(f.calls.map(call => call.method), ['thread.draft.open', 'thread.draft.read']); assert.equal(draft.threadId, '');
-  draft.text = '首条合成消息'; const id = await f.sendNewConversation(draft, () => {});
-  assert.equal(id, 'thread-native-draft-1'); assert.equal(f.connection.activeThreadId, id); assert.equal(draft.text, '');
+  draft.input.text = '首条合成消息'; const id = await f.sendNewConversation(draft, () => {});
+  assert.equal(id, 'thread-native-draft-1'); assert.equal(f.connection.activeThreadId, id); assert.equal(draft.input.text, '');
   assert.deepEqual(f.calls.slice(2).map(call => call.method), ['thread.draft.read', 'thread.draft.read', 'thread.draft.send', 'thread.watch', 'thread.draft.unwatch']);
   assert.equal(f.calls.find(call => call.method === 'thread.draft.send').params.expectedRevision, 1); assert.equal(state.watching, false);
 });
 
 test('连续点击只发送一次，未选择项目或离线不打开草稿，显式发送才首次打开', async () => {
-  const f = fixture(); await f.open(); const draft = f.newDraft('pc', 'project'); draft.text = '合成消息';
+  const f = fixture(); await f.open(); const draft = f.newDraft('pc', 'project'); draft.input.text = '合成消息';
   const sending = f.sendNewConversation(draft, () => {}); await assert.rejects(f.sendNewConversation(draft, () => {}), /正在提交/); await sending;
-  const empty = f.newDraft('pc', ''); empty.text = '未选项目'; await assert.rejects(f.sendNewConversation(empty, () => {}), /选择项目/);
-  const unopened = f.newDraft('pc', 'other'); unopened.text = '未打开'; await f.sendNewConversation(unopened, () => {});
+  const empty = f.newDraft('pc', ''); empty.input.text = '未选项目'; await assert.rejects(f.sendNewConversation(empty, () => {}), /选择项目/);
+  const unopened = f.newDraft('pc', 'other'); unopened.input.text = '未打开'; await f.sendNewConversation(unopened, () => {});
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.open' && call.params.projectId === 'other').length, 1);
   f.connection.connected = false; await assert.rejects(f.sendNewConversation(draft, () => {}), /连接已变化/);
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 2); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 2);
 });
 
 test('明确发送失败先核对原命令，失败确认后用户重试仍复用同草稿，不自动发送', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.text = '保留文字';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.input.text = '保留文字';
   f.fail('thread.draft.send'); await assert.rejects(f.sendNewConversation(draft, () => {}), /明确失败/);
-  assert.equal(draft.text, '保留文字'); assert.equal(state.outcomeUnknown, true);
+  assert.equal(draft.input.text, '保留文字'); assert.equal(state.outcomeUnknown, true);
   await assert.rejects(f.sendNewConversation(draft, () => {}), /需要核对/);
   await f.checkNativeDraftCommand(state); assert.equal(state.outcomeUnknown, false);
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
@@ -112,21 +114,21 @@ test('明确发送失败先核对原命令，失败确认后用户重试仍复�
 });
 
 test('未知发送关闭重开仍保护原命令，确认成功后只打开对应聊天，不重发或覆盖本地输入', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.text = '未知时保留的文字';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.input.text = '未知时保留的文字';
   f.fail('thread.draft.send', true); await assert.rejects(f.sendNewConversation(draft, () => {}), /结果未知/);
   const commandId = state.pendingCommandId; f.closeNativeDraft('pc', 'project');
   await assert.rejects(f.watchNativeDraft('pc', 'project'), /需要核对/); await assert.rejects(f.sendNewConversation(draft, () => {}), /需要核对/);
   const backend = f.snapshots.get(state.draftId); backend.status = 'promoted'; backend.threadId = 'confirmed-thread'; backend.revision++;
   f.commands.set(commandId, { state: 'done', result: { threadId: 'confirmed-thread' } });
   assert.equal(await f.checkNativeDraftCommand(state), 'confirmed-thread'); await f.openPromotedConversation(draft);
-  assert.equal(f.readDraft('pc', 'confirmed-thread'), '未知时保留的文字'); assert.equal(draft.text, '未知时保留的文字');
+  assert.equal(f.readDraft('pc', 'confirmed-thread'), '未知时保留的文字'); assert.equal(draft.input.text, '未知时保留的文字');
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
 });
 
 test('文件首条在 draftId 范围分片上传，中断后重试从已确认分片继续且不创建线程', async () => {
-  const f = fixture(); await f.open(); const draft = f.newDraft('pc', 'project'); draft.text = '有附件'; draft.files = [file()];
+  const f = fixture(); await f.open(); const draft = f.newDraft('pc', 'project'); draft.input.text = '有附件'; draft.input.files = [file()];
   f.fail('attachment.chunk', false, 1); await assert.rejects(f.sendNewConversation(draft, () => {}), /明确失败/);
-  assert.equal(draft.files[0].status, 'paused'); assert.equal(draft.text, '有附件'); assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false);
+  assert.equal(draft.input.files[0].status, 'paused'); assert.equal(draft.input.text, '有附件'); assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false);
   await f.sendNewConversation(draft, () => {});
   const chunks = f.calls.filter(call => call.method === 'attachment.chunk');
   assert.deepEqual(chunks.map(call => call.params.index), [0, 1, 1]);
@@ -136,40 +138,40 @@ test('文件首条在 draftId 范围分片上传，中断后重试从已确认�
 });
 
 test('收起重开同原生草稿保留上传完成状态、文字与插件，明确失败核对后不重复上传', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.text = '未发送内容'; draft.files = [file()];
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.input.text = '未发送内容'; draft.input.files = [file()];
   f.fail('thread.draft.send'); await assert.rejects(f.sendNewConversation(draft, () => {}), /明确失败/); await f.checkNativeDraftCommand(state);
-  assert.equal(draft.files[0].status, 'ready');
+  assert.equal(draft.input.files[0].status, 'ready');
   f.closeNativeDraft('pc', 'project'); await f.open();
-  assert.equal(draft.text, '未发送内容'); assert.equal(draft.files[0].status, 'ready');
+  assert.equal(draft.input.text, '未发送内容'); assert.equal(draft.input.files[0].status, 'ready');
   await f.sendNewConversation(draft, () => {});
   assert.equal(f.calls.filter(call => call.method === 'attachment.begin').length, 1); assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 1);
 });
 
 test('旧创建缓存被清理且不接管旧线程，新的原生草稿编号来自本次 open', async () => {
   const storage = new Map([['codex-mobile-new-pc-project', JSON.stringify({ threadId: 'legacy-thread', pendingCommandId: 'legacy-command' })]]);
-  const f = fixture(storage), draft = f.newDraft('pc', 'project'); draft.text = '真正的新任务';
+  const f = fixture(storage), draft = f.newDraft('pc', 'project'); draft.input.text = '真正的新任务';
   assert.equal(storage.size, 0); assert.equal(draft.threadId, ''); assert.equal(f.calls.length, 0);
   await f.open(); await f.sendNewConversation(draft, () => {});
   assert.equal(f.connection.activeThreadId, 'thread-native-draft-1');
 });
 
 test('电脑先发送 promotion 时首条编排不发消息，手机草稿保留并打开电脑已有聊天', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.text = '手机未发';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc', 'project'); draft.input.text = '手机未发';
   f.applyNativeDraftSnapshot(json({ ...plain(state.snapshot), revision: 2, status: 'promoted', threadId: 'desktop-thread' }), 'pc');
   await assert.rejects(f.sendNewConversation(draft, () => {}), /电脑已发送/); await f.openPromotedConversation(draft);
-  assert.equal(draft.text, '手机未发'); assert.equal(f.readDraft('pc', 'desktop-thread'), '手机未发'); assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false);
+  assert.equal(draft.input.text, '手机未发'); assert.equal(f.readDraft('pc', 'desktop-thread'), '手机未发'); assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false);
 });
 
 test('存储不可写时在任何原生 WRITE 前拒绝，避免丢失未知结果的原命令核对入口', async () => {
-  const f = fixture(), draft = f.newDraft('pc', 'project'); draft.text = '保留手机输入'; f.denyStorage();
+  const f = fixture(), draft = f.newDraft('pc', 'project'); draft.input.text = '保留手机输入'; f.denyStorage();
   await assert.rejects(f.watchNativeDraft('pc', 'project'), /无法保存/);
-  assert.equal(f.calls.length, 0); assert.equal(draft.text, '保留手机输入');
+  assert.equal(f.calls.length, 0); assert.equal(draft.input.text, '保留手机输入');
 });
 
 test('只选择插件和附件超限均不提交，插件未开放时保留选择并明确拒绝', async () => {
   const f = fixture(); await f.open(); const draft = f.newDraft('pc', 'project'); draft.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
   const count = f.calls.length; await assert.rejects(f.sendNewConversation(draft, () => {}), /输入内容或添加附件/);
-  draft.text = '合成消息'; await assert.rejects(f.sendNewConversation(draft, () => {}), /暂不支持插件/);
-  draft.plugins = []; draft.files = [file(), file(), file(), file()]; await assert.rejects(f.sendNewConversation(draft, () => {}), /最多添加3个/);
+  draft.input.text = '合成消息'; await assert.rejects(f.sendNewConversation(draft, () => {}), /暂不支持插件/);
+  draft.plugins = []; draft.input.files = [file(), file(), file(), file()]; await assert.rejects(f.sendNewConversation(draft, () => {}), /最多添加3个/);
   assert.equal(f.calls.length, count); await tick(); assert.equal(f.calls.length, count);
 });

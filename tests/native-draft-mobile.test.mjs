@@ -96,7 +96,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
     selectComputer(id) { connection.hostId = id; },
   };
   const props = { expanded: false };
-  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, submitNewConversationTask: async (draft, mode, _progress, execution) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), execution: plain(execution), text: draft.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
+  const context = vm.createContext({ supportsSubmissionTasks: () => taskQueue, submitNewConversationTask: async (draft, mode, _progress, execution) => { calls.push({ method: 'tasks.submit', write: true, params: { mode, choices: plain(draft.choices), execution: plain(execution), text: draft.input.text } }); return 'synthetic-task'; }, bridge, connection, reactive: value => value, ref: value => ({ value }),
     computed: run => ({ get value() { return run(); } }),
     watch: (get, run, options) => { watches.push({ get, run }); if (options?.immediate) run(get()); },
     nextTick: run => Promise.resolve().then(run), onMounted() {}, onUnmounted: run => unmounts.push(run),
@@ -104,7 +104,6 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
     setTimeout: () => 1, clearTimeout() {},
     uni: { removeStorageSync: key => storage.delete(key), getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), hideKeyboard() {}, showToast() {} },
     FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', computerIcon: () => 'laptop', bindImagePaste: () => () => {},
-    submissionTasks: { pending: [] },
   });
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/services/thread-mentions.uts') + '\n' + read('apps/mobile/services/direct-new-conversation.uts') + '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
@@ -120,13 +119,13 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
 
 test('展开打开原生草稿，收起只 unwatch，重新展开同编号只读且保留插件和文字', async () => {
   const f = fixture(), local = f.newDraft('pc-a', '');
-  local.text = '合成手机输入'; local.plugins = [{ id: 'docs@example', displayName: '文档插件' }]; f.assignUnselectedDraft('pc-a', 'project-a');
+  local.input.text = '合成手机输入'; local.plugins = [{ id: 'docs@example', displayName: '文档插件' }]; f.assignUnselectedDraft('pc-a', 'project-a');
   const state = await f.open(); f.closeNativeDraft('pc-a', 'project-a'); await tick();
   assert.equal(f.calls.at(-1).method, 'thread.draft.unwatch');
   await f.open();
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, 1);
   assert.equal(f.nativeDraftState('pc-a', 'project-a').draftId, state.draftId);
-  assert.equal(f.newDraft('pc-a', 'project-a').text, '合成手机输入'); assert.equal(f.newDraft('pc-a', 'project-a').plugins[0].id, 'docs@example');
+  assert.equal(f.newDraft('pc-a', 'project-a').input.text, '合成手机输入'); assert.equal(f.newDraft('pc-a', 'project-a').plugins[0].id, 'docs@example');
   assert.equal(f.calls.some(call => call.method === 'thread.create'), false);
 });
 
@@ -214,31 +213,31 @@ test('完整访问必须确认，并将确认标志和草稿版本一同交给�
 
 test('电脑先 promotion：手机打开对应正式聊天，保留文字和插件且不发送', async () => {
   const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a');
-  draft.text = '未发送的手机文字'; draft.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
+  draft.input.text = '未发送的手机文字'; draft.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
   f.event({ ...plain(state.snapshot), status: 'promoted', threadId: 'desktop-thread', revision: 2 });
   await assert.rejects(f.sendNewConversation(draft, () => {}), /电脑已发送/);
   assert.equal(await f.openPromotedConversation(draft), 'desktop-thread');
-  assert.equal(f.readDraft('pc-a', 'desktop-thread'), '未发送的手机文字'); assert.equal(draft.text, '未发送的手机文字');
+  assert.equal(f.readDraft('pc-a', 'desktop-thread'), '未发送的手机文字'); assert.equal(draft.input.text, '未发送的手机文字');
   assert.equal(f.readDraftPlugins('pc-a', 'desktop-thread')[0].id, 'docs@example');
   assert.equal(f.calls.some(call => call.method === 'thread.draft.send' || call.method === 'turn.send' || call.method === 'thread.create'), false);
   assert.equal(f.calls.filter(call => call.method === 'thread.watch').length, 1);
 });
 
 test('电脑有文字拒绝覆盖；上传期间 promotion 也不提交首条消息', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '手机输入';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '手机输入';
   f.event({ ...plain(state.snapshot), revision: 2, hasDesktopText: true });
   await assert.rejects(f.sendNewConversation(draft, () => {}), /已有内容/);
   f.event({ ...plain(state.snapshot), revision: 3, hasDesktopText: false });
-  draft.files = [{ id: 'file-a', name: 'example.txt', size: 3, source: '/example', data: 'YWJj', status: 'local', progress: 0, error: '' }];
+  draft.input.files = [{ id: 'file-a', name: 'example.txt', size: 3, source: '/example', data: 'YWJj', status: 'local', progress: 0, error: '' }];
   f.hooks.set('attachment.finish', () => { f.event({ ...plain(state.snapshot), revision: 4, status: 'promoted', threadId: 'desktop-thread' }); return {}; });
   await assert.rejects(f.sendNewConversation(draft, () => {}), /电脑已发送/);
-  assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false); assert.equal(draft.text, '手机输入');
+  assert.equal(f.calls.some(call => call.method === 'thread.draft.send'), false); assert.equal(draft.input.text, '手机输入');
 });
 
 test('首条图片直接传递压缩data URI，只有文档在 draftId 范围分片上传，且只原生提交一次', async () => {
   const f = fixture(); await f.open(); const draft = f.newDraft('pc-a', 'project-a');
-  draft.text = '首条合成消息'; draft.images = [{ id: 'image-a', src: pngImage }];
-  draft.files = [{ id: 'file-a', name: 'example.txt', size: 3, source: '/example', data: 'YWJj', status: 'local', progress: 0, error: '' }];
+  draft.input.text = '首条合成消息'; draft.input.images = [{ id: 'image-a', src: pngImage }];
+  draft.input.files = [{ id: 'file-a', name: 'example.txt', size: 3, source: '/example', data: 'YWJj', status: 'local', progress: 0, error: '' }];
   const sending = f.sendNewConversation(draft, () => {}); await assert.rejects(f.sendNewConversation(draft, () => {}), /正在提交/);
   const threadId = await sending;
   const uploads = f.calls.filter(call => call.method.startsWith('attachment.'));
@@ -247,38 +246,38 @@ test('首条图片直接传递压缩data URI，只有文档在 draftId 范围分
   assert.deepEqual(sends[0].params.images, [pngImage]); assert.deepEqual(sends[0].params.attachments, ['file-a']);
   assert.equal('plugins' in sends[0].params, false);
   assert.equal(f.calls.at(-2).method, 'thread.watch'); assert.equal(f.connection.activeThreadId, threadId);
-  assert.equal(draft.text, ''); assert.equal(draft.plugins.length, 0);
+  assert.equal(draft.input.text, ''); assert.equal(draft.plugins.length, 0);
   assert.equal(f.calls.some(call => ['thread.create', 'thread.settings.update', 'thread.permissions.update', 'turn.send'].includes(call.method)), false);
 });
 
 test('纯图片首条直接 native send data URI，不调用文档附件上传', async () => {
   const f = fixture(); await f.open(); const draft = f.newDraft('pc-a', 'project-a');
-  draft.images = [{ id: 'image-a', src: pngImage }];
+  draft.input.images = [{ id: 'image-a', src: pngImage }];
   await f.sendNewConversation(draft, () => {});
   assert.equal(f.calls.some(call => call.method.startsWith('attachment.')), false);
   const sends = f.calls.filter(call => call.method === 'thread.draft.send'); assert.equal(sends.length, 1);
   assert.deepEqual(sends[0].params.images, [pngImage]); assert.equal(sends[0].params.text, '');
-  assert.equal(draft.images.length, 0);
+  assert.equal(draft.input.images.length, 0);
 });
 
 test('未开放原生插件输入时在上传和发送前明确拒绝，保留原插件选择而不静默丢弃', async () => {
   const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a');
-  draft.text = '带插件的合成消息'; draft.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
-  draft.images = [{ id: 'image-a', src: 'data:image/png;base64,YWJj' }];
+  draft.input.text = '带插件的合成消息'; draft.plugins = [{ id: 'docs@example', displayName: '文档插件' }];
+  draft.input.images = [{ id: 'image-a', src: 'data:image/png;base64,YWJj' }];
   const count = f.calls.length;
   await assert.rejects(f.sendNewConversation(draft, () => {}), /暂不支持插件/);
-  await assert.rejects(f.sendNativeDraft(state, { text: draft.text, plugins: draft.plugins }), /暂不支持插件/);
-  assert.equal(f.calls.length, count); assert.equal(draft.plugins.length, 1); assert.equal(draft.text, '带插件的合成消息');
+  await assert.rejects(f.sendNativeDraft(state, { text: draft.input.text, plugins: draft.plugins }), /暂不支持插件/);
+  assert.equal(f.calls.length, count); assert.equal(draft.plugins.length, 1); assert.equal(draft.input.text, '带插件的合成消息');
 });
 
 test('附件合计超过三个在上传前拒绝，换原生草稿后不能复用旧上传完成状态', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '合成消息';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '合成消息';
   const draftId = state.draftId;
-  draft.images = Array.from({ length: 4 }, (_, id) => ({ id: 'image-' + id, src: 'data:image/png;base64,YWJj' }));
+  draft.input.images = Array.from({ length: 4 }, (_, id) => ({ id: 'image-' + id, src: 'data:image/png;base64,YWJj' }));
   await assert.rejects(f.sendNewConversation(draft, () => {}), /最多添加3个/);
   assert.equal(f.calls.some(call => call.method.startsWith('attachment.')), false);
-  draft.images = []; draft.attachmentDraftId = 'old-draft';
-  draft.files = [{ id: 'file-a', name: 'example.txt', size: 3, source: '/example', data: 'YWJj', status: 'ready', progress: 100, error: '' }];
+  draft.input.images = []; draft.input.attachmentDraftId = 'old-draft';
+  draft.input.files = [{ id: 'file-a', name: 'example.txt', size: 3, source: '/example', data: 'YWJj', status: 'ready', progress: 100, error: '' }];
   await f.sendNewConversation(draft, () => {});
   assert.ok(f.calls.some(call => call.method === 'attachment.begin' && call.params.draftId === draftId));
 });
@@ -299,10 +298,10 @@ test('open 结果未知保留原命令，重开与重连不重放，通过 comma
 });
 
 test('send 结果未知查账前后都不重复提交，unknown/not_found 不能解除保护', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '保留手机文字';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '保留手机文字';
   f.hooks.set('thread.draft.send', () => { throw Error('发送结果未知'); });
   await assert.rejects(f.sendNewConversation(draft, () => {}), /核对/);
-  const commandId = state.pendingCommandId; assert.ok(commandId); assert.equal(draft.text, '保留手机文字');
+  const commandId = state.pendingCommandId; assert.ok(commandId); assert.equal(draft.input.text, '保留手机文字');
   await assert.rejects(f.sendNewConversation(draft, () => {}), /需要核对/);
   for (const outcome of ['unknown', 'pending', 'not_found']) {
     f.hooks.set('command.status', () => ({ state: outcome })); await assert.rejects(f.checkNativeDraftCommand(state), /仍待核对/); assert.equal(state.outcomeUnknown, true);
@@ -334,17 +333,17 @@ test('新建已完成但升级后草稿 token 过期时解除未知保护，只�
 });
 
 test('旧新建查账明确连接失效时清除过期 token，保留文字且不自动再次打开', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '保留的合成输入';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '保留的合成输入';
   f.hooks.set('thread.draft.open', () => { throw Error('原生连接中断'); });
   await assert.rejects(f.watchNativeDraft('pc-a', 'project-a', true), /核对/);
   const opens = f.calls.filter(call => call.method === 'thread.draft.open').length;
   f.hooks.set('command.status', () => ({ state: 'done', error: { code: 'DRAFT_OPEN_EXPIRED', message: '连接失效', outcomeUnknown: false } }));
   await f.checkNativeDraftCommand(state);
   assert.equal(state.outcomeUnknown, false); assert.equal(state.draftId, ''); assert.equal(state.snapshot, null); assert.equal(state.pendingCommandId, '');
-  assert.equal(draft.text, '保留的合成输入'); assert.match(state.error, /手动重新连接/);
+  assert.equal(draft.input.text, '保留的合成输入'); assert.match(state.error, /手动重新连接/);
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.open').length, opens);
   f.hooks.delete('thread.draft.open'); await f.watchNativeDraft('pc-a', 'project-a', true);
-  assert.equal(state.snapshot.status, 'ready'); assert.equal(draft.text, '保留的合成输入');
+  assert.equal(state.snapshot.status, 'ready'); assert.equal(draft.input.text, '保留的合成输入');
 });
 
 test('桥接明确拒绝且已释放操作编号时不制造永久未知保护', async () => {
@@ -360,21 +359,21 @@ test('桥接明确拒绝且已释放操作编号时不制造永久未知保护',
 test('刷新恢复旧新建记录后自动只查原命令，失效时停在手动重连且文字保留', async () => {
   const original=fixture();original.hooks.set('thread.draft.open',()=>{throw Error('合成断线');});
   await assert.rejects(original.watchNativeDraft('pc-a','project-a'));
-  const restored=fixture({storage:original.storage}),draft=restored.newDraft('pc-a','project-a');draft.text='刷新后保留的合成输入';
+  const restored=fixture({storage:original.storage}),draft=restored.newDraft('pc-a','project-a');draft.input.text='刷新后保留的合成输入';
   restored.hooks.set('command.status',()=>({state:'done',error:{code:'DRAFT_OPEN_EXPIRED',outcomeUnknown:false}}));
   await assert.rejects(restored.watchNativeDraft('pc-a','project-a'),/手动重新连接/);
   assert.equal(restored.nativeDraftState('pc-a','project-a').outcomeUnknown,false);
-  assert.equal(draft.text,'刷新后保留的合成输入');assert.equal(restored.calls.length,1);assert.equal(restored.calls[0].method,'command.status');
+  assert.equal(draft.input.text,'刷新后保留的合成输入');assert.equal(restored.calls.length,1);assert.equal(restored.calls[0].method,'command.status');
   await restored.watchNativeDraft('pc-a','project-a',true);assert.equal(restored.calls.filter(call=>call.method==='thread.draft.open').length,1);
 });
 
 test('手机提交成功时切换电脑，迟到成功仍保护原草稿，返回后不能再 send', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '合成消息';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '合成消息';
   f.hooks.set('thread.draft.read', () => ({ snapshot: plain(f.current()) }));
   // 模拟 native submit 在电脑切换后才确认成功。
   const wait = deferred(); f.hooks.set('thread.draft.send', async () => { await wait.promise; f.connection.hostId = 'pc-b'; return { threadId: 'sent-thread' }; });
   const sending = f.sendNewConversation(draft, () => {}), rejected = assert.rejects(sending, /目标已切换/); await tick(); wait.resolve(); await rejected;
-  assert.equal(draft.text, '合成消息'); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
+  assert.equal(draft.input.text, '合成消息'); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
   assert.equal(state.snapshot.status, 'promoted');
   f.connection.hostId = 'pc-a';
   await assert.rejects(f.sendNewConversation(draft, () => {}), /电脑已发送/);
@@ -392,20 +391,20 @@ test('设置回读失败保留原显示并暂停写入，手动只读恢复后�
 });
 
 test('正式聊天导航失败只重试打开，不重复已经成功的 native submit', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '已成功的合成消息';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '已成功的合成消息';
   f.hooks.set('thread.watch', () => { throw Error('导航失败'); });
   await assert.rejects(f.sendNewConversation(draft, () => {}), /导航失败/);
-  assert.equal(draft.text, ''); assert.equal(state.snapshot.status, 'promoted');
+  assert.equal(draft.input.text, ''); assert.equal(state.snapshot.status, 'promoted');
   await assert.rejects(f.sendNewConversation(draft, () => {}), /电脑已发送/);
   f.hooks.delete('thread.watch'); await f.openPromotedConversation(draft);
   assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
 });
 
 test('刷新保留未知命令编号并只查账；核对记录不含文字、图片、插件', async () => {
-  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.text = '不可持久化的合成正文';
+  const f = fixture(), state = await f.open(), draft = f.newDraft('pc-a', 'project-a'); draft.input.text = '不可持久化的合成正文';
   f.hooks.set('thread.draft.send', () => { throw Error('发送结果未知'); });
   await assert.rejects(f.sendNewConversation(draft, () => {}), /核对/);
-  assert.ok([...f.storage.values()].every(value => !value.includes(draft.text)));
+  assert.ok([...f.storage.values()].every(value => !value.includes(draft.input.text)));
   const reloaded = fixture({ storage: f.storage });
   await assert.rejects(reloaded.watchNativeDraft('pc-a', 'project-a'), /需要核对/);
   const restored = reloaded.nativeDraftState('pc-a', 'project-a'); assert.equal(restored.pendingCommandId, state.pendingCommandId);
@@ -456,14 +455,14 @@ test('展开与本地选择不写 PC，旧任务入口不会拆成逐项设置',
   const f = fixture({ component: true }); f.loadProjects(); await tick(); assert.equal(f.calls.length, 0);
   f.props.expanded = true; f.loadProjects(); await tick(); await tick();
   assert.equal(f.projectId.value, 'project-a');
-  f.draft.value.text = '首条合成消息'; f.selectSetting('model', 'model-b'); f.selectPermission('full-access', false);
+  f.draft.value.input.text = '首条合成消息'; f.selectSetting('model', 'model-b'); f.selectPermission('full-access', false);
   assert.equal(f.draft.value.choices.permissionMode, undefined);
   f.selectPermission('read-only', false); f.composerAction('plan'); await tick();
   assert.deepEqual(plain(f.settings.value), { model: 'model-b', effort: 'high', serviceTier: '', mode: 'plan' });
   assert.equal(f.focused.value, true); assert.equal(f.canSend.value, true);
   assert.equal(f.calls.some(call => call.method.startsWith('thread.draft.')), false);
   await f.send();
-  assert.deepEqual(f.calls.filter(call => call.write), []);assert.match(f.error.value,/更新电脑连接服务/);assert.equal(f.draft.value.choices.model,'model-b');assert.equal(f.draft.value.text,'首条合成消息');
+  assert.deepEqual(f.calls.filter(call => call.write), []);assert.match(f.error.value,/更新电脑连接服务/);assert.equal(f.draft.value.choices.model,'model-b');assert.equal(f.draft.value.input.text,'首条合成消息');
   const legacy = fixture({ component: true }); legacy.props.expanded = true; legacy.hooks.set('projects.list', () => ({ supportsThreadCreation: true, projects: [] }));
   legacy.loadProjects(); await tick(); assert.equal(legacy.calls.some(call => call.method === 'thread.draft.open'), false);
 });
@@ -481,19 +480,19 @@ test('重新展开和连接恢复仅刷新项目，保留本地选择且不打�
 
 test('旧提交能力保留权限选择和首条输入，不调用原生发送', async () => {
   const f=fixture({component:true}); f.props.expanded=true; await f.loadProjects(); await tick();
-  f.draft.value.text='保留合成草稿'; f.selectPermission('read-only',false);
+  f.draft.value.input.text='保留合成草稿'; f.selectPermission('read-only',false);
   f.hooks.set('thread.draft.update',()=>({}));
   await f.send();
   assert.match(f.error.value,/更新电脑连接服务/);
-  assert.equal(f.draft.value.text,'保留合成草稿'); assert.equal(f.draft.value.choices.permissionMode,'read-only');
+  assert.equal(f.draft.value.input.text,'保留合成草稿'); assert.equal(f.draft.value.choices.permissionMode,'read-only');
   assert.equal(f.calls.some(call=>call.method==='thread.draft.send'),false);
 });
 
 test('电脑默认完整访问仍需手机确认，旧入口确认后也不能拆分设置', async () => {
   const f=fixture({component:true}); f.props.expanded=true; await f.loadProjects(); await tick();
   const value={...snapshot(),hostId:'pc-a'}; value.permissions.mode='full-access'; f.backend.set('pc-a:draft-a',value);
-  f.draft.value.text='合成草稿'; await f.send();
-  assert.match(f.error.value,/选择并确认权限/); assert.equal(f.draft.value.text,'合成草稿');
+  f.draft.value.input.text='合成草稿'; await f.send();
+  assert.match(f.error.value,/选择并确认权限/); assert.equal(f.draft.value.input.text,'合成草稿');
   assert.equal(f.calls.some(call=>call.method==='thread.draft.send'),false);
   f.selectPermission('full-access',true); await f.send();
   assert.equal(f.calls.filter(call=>call.method==='thread.draft.open').length,1);
@@ -503,20 +502,20 @@ test('电脑默认完整访问仍需手机确认，旧入口确认后也不能�
 test('缺少新建能力声明时提示重新读取，保留本地输入且不创建会话',async()=>{
   const f=fixture({component:true});
   f.props.expanded=true;
-  f.draft.value.text='合成输入';
+  f.draft.value.input.text='合成输入';
   f.hooks.set('projects.list',()=>({supportsNativeNewDraft:false,nativeNewDraftNeedsDesktopPage:true,projects:[]}));
   f.loadProjects();
   await tick(); await tick();
   assert.equal(f.error.value,'暂时无法确认电脑的新建聊天能力，请重新读取');
   assert.equal(f.canSend.value,false);
-  assert.equal(f.draft.value.text,'合成输入');
+  assert.equal(f.draft.value.input.text,'合成输入');
   assert.equal(f.calls.some(call=>call.method==='thread.draft.open'||call.method==='thread.create'),false);
 });
 
 test('无法安全新建时优先显示电脑返回的原因，旧创建能力不绕过绑定', async () => {
   const f = fixture({ component: true });
   f.props.expanded = true;
-  f.draft.value.text = '合成输入';
+  f.draft.value.input.text = '合成输入';
   f.hooks.set('projects.list', () => ({
     supportsThreadCreation: true, supportsNativeNewDraft: false, nativeNewDraftNeedsDesktopPage: true,
     newConversationUnavailableReason: '所选电脑的实例连接尚未就绪，请重新连接后读取项目',
@@ -526,7 +525,7 @@ test('无法安全新建时优先显示电脑返回的原因，旧创建能力�
   assert.equal(f.error.value, '所选电脑的实例连接尚未就绪，请重新连接后读取项目');
   assert.equal(f.newConversationMode.value, '');
   assert.equal(f.canSend.value, false);
-  assert.equal(f.draft.value.text, '合成输入');
+  assert.equal(f.draft.value.input.text, '合成输入');
   await f.send();
   assert.equal(f.calls.some(call => call.write), false);
 });
@@ -548,7 +547,7 @@ test('明确直连能力时读取设置，点击发送才创建聊天并提交�
   assert.equal(f.newConversationMode.value, 'desktopIpc');
   assert.equal(f.settings.value.model, 'model-a');
   assert.equal(f.calls.some(call => call.write), false);
-  f.draft.value.text = '合成首条消息';
+  f.draft.value.input.text = '合成首条消息';
   assert.equal(f.canSend.value, true);
   await f.send();
   assert.deepEqual(f.calls.filter(call => call.write).map(call => call.method), ['thread.create', 'turn.send']);
@@ -560,7 +559,7 @@ test('明确直连能力时读取设置，点击发送才创建聊天并提交�
 
 test('未识别的显式模式不回退，原生未知操作也不能通过直连重发', async () => {
   const f = await directComponentFixture();
-  f.draft.value.text = '保留合成消息';
+  f.draft.value.input.text = '保留合成消息';
   f.native.value.outcomeUnknown = true;
   await f.send();
   assert.equal(f.canSend.value, false);
@@ -569,20 +568,20 @@ test('未识别的显式模式不回退，原生未知操作也不能通过直�
   await f.loadProjects();
   assert.equal(f.newConversationMode.value, '');
   assert.equal(f.canSend.value, false);
-  assert.equal(f.draft.value.text, '保留合成消息');
+  assert.equal(f.draft.value.input.text, '保留合成消息');
   assert.equal(f.calls.some(call => call.write), false);
 });
 
 test('直连声明缺少实例代际时保留输入并拒绝创建', async () => {
   const f = await directComponentFixture();
-  f.draft.value.text = '合成首条消息';
+  f.draft.value.input.text = '合成首条消息';
   f.connection.computers[0].instanceGeneration = '';
   await f.loadProjects();
   assert.equal(f.newConversationMode.value, '');
   assert.match(f.error.value, /确认当前 Codex 实例/);
   assert.equal(f.canSend.value, false);
   await f.send();
-  assert.equal(f.draft.value.text, '合成首条消息');
+  assert.equal(f.draft.value.input.text, '合成首条消息');
   assert.equal(f.calls.some(call => call.write), false);
 });
 
@@ -614,7 +613,7 @@ test('直连引用需要明确能力，撤回能力时保留已选引用并锁�
 
 test('直连结果未知时原生模式仍锁定发送，核对仅回读原命令', async () => {
   const f = await directComponentFixture();
-  f.draft.value.text = '待核对的合成消息';
+  f.draft.value.input.text = '待核对的合成消息';
   f.hooks.set('turn.send', () => { throw Error('模拟回执中断'); });
   await f.send();
   const commandId = f.direct.value.pendingCommandId;
@@ -634,7 +633,7 @@ test('直连结果未知时原生模式仍锁定发送，核对仅回读原命�
 test('发送中换电脑时不发出原聊天事件，回到原电脑可以交接已确认聊天', async () => {
   const f = await directComponentFixture(), response = deferred();
   const original = f.direct.value;
-  f.draft.value.text = '合成首条消息';
+  f.draft.value.input.text = '合成首条消息';
   f.hooks.set('turn.send', (_, commandId) => response.promise.then(() => ({ ok: true, commandId })));
   const submitting = f.send();
   await tick();
@@ -669,13 +668,14 @@ test('展开与连接状态同时触发时只读取一次项目，换电脑后�
   old.resolve({supportsNativeNewDraft:true,projects:[{id:'project-a',label:'示例甲',cwd:'/example/a'}],selectedProjectId:'project-a'});
   await first;assert.equal(f.projectId.value,'');assert.equal(f.calls.some(call=>call.hostId==='pc-b'&&call.method==='thread.create.settings'&&call.params.projectId==='project-a'),false);
 });
-test('选择项目确认成功后聚焦，切回原项目仍保留各自草稿且不发送消息',async()=>{
+test('改选项目后恢复聚焦，切回原项目仍显示同一份最新输入',async()=>{
   const f=await projectPickerFixture();
-  f.newDraft('pc-a','project-a').text='项目甲合成草稿';f.newDraft('pc-a','project-b').text='项目乙合成草稿';
+  f.draft.value.input.text='合成草稿';
   f.chooseProject('project-b');assert.equal(f.focused.value,false);
-  await tick();await tick();assert.equal(f.focused.value,true);assert.equal(f.projectId.value,'project-b');assert.equal(f.draft.value.text,'项目乙合成草稿');
+  await tick();await tick();assert.equal(f.focused.value,true);assert.equal(f.projectId.value,'project-b');assert.equal(f.draft.value.input.text,'合成草稿');
+  f.draft.value.input.text='改选后继续编辑';
   f.focused.value=false;f.chooseProject('project-a');await tick();await tick();
-  assert.equal(f.focused.value,true);assert.equal(f.draft.value.text,'项目甲合成草稿');
+  assert.equal(f.focused.value,true);assert.equal(f.draft.value.input.text,'改选后继续编辑');
   assert.equal(f.calls.some(call=>['thread.draft.send','turn.send','turn.steer'].includes(call.method)),false);
 });
 
@@ -683,22 +683,21 @@ test('两种新聊天模式改选项目时保留正文和附件，直到发送�
   for (const mode of ['desktopIpc', 'nativeDraft']) {
     const f = await projectPickerFixture(mode);
     const source = f.draft.value;
-    source.text = '改选项目的合成正文';
-    source.images = [{ id: 'example-image', src: pngImage }];
-    source.files = [{ id: 'example-file', name: 'example.txt', size: 3, data: 'YWJj', status: 'ready', progress: 100, error: '' }];
+    source.input.text = '改选项目的合成正文';
+    source.input.images = [{ id: 'example-image', src: pngImage }];
+    source.input.files = [{ id: 'example-file', name: 'example.txt', size: 3, data: 'YWJj', status: 'local', progress: 0, error: '' }];
     source.choices = { mode: 'plan', permissionMode: 'full-access', confirmedFullAccess: true };
     source.threadMentions = [{ id: 'example-thread', title: '示例引用' }];
     f.chooseProject('project-b'); await tick();
     assert.equal(f.draft.value.projectId, 'project-b', mode);
-    assert.equal(f.draft.value.text, '改选项目的合成正文', mode);
-    assert.equal(f.draft.value.images[0].src, pngImage, mode);
-    assert.equal(f.draft.value.files[0].data, 'YWJj', mode);
-    assert.equal(f.draft.value.files[0].status, 'local', mode);
+    assert.equal(f.draft.value.input.text, '改选项目的合成正文', mode);
+    assert.equal(f.draft.value.input.images[0].src, pngImage, mode);
+    assert.equal(f.draft.value.input.files[0].data, 'YWJj', mode);
+    assert.equal(f.draft.value.input.files[0].status, 'local', mode);
     assert.deepEqual(plain(f.draft.value.choices), {}, mode);
     assert.equal(f.draft.value.threadMentions.length, 0, mode);
     assert.equal(source.threadMentions.length, 1, mode);
-    assert.equal(source.text, '', mode);
-    assert.equal(source.images.length + source.files.length, 0, mode);
+    assert.equal(f.draft.value.input, source.input, mode);
     assert.equal(f.canSend.value, true, mode);
     assert.equal(f.calls.some(call => call.write), false, mode);
 
@@ -716,17 +715,23 @@ test('两种新聊天模式改选项目时保留正文和附件，直到发送�
     assert.equal(sent[0].params.text, '改选项目的合成正文', mode);
     assert.deepEqual(sent[0].params.images, [pngImage], mode);
     assert.deepEqual(sent[0].params.attachments, ['example-file'], mode);
+    assert.equal(source.input.text, '', mode);
+    assert.equal(source.input.images.length + source.input.files.length, 0, mode);
   }
 });
 
-test('原项目提交结果待核对时，切换项目不会移动可能已发送的内容', async () => {
+test('原项目提交结果待核对时，改选项目仍显示同一份草稿且阻止重复发送', async () => {
   const f = await projectPickerFixture();
   const source = f.draft.value;
-  source.text = '待核对的合成正文';
+  source.input.text = '待核对的合成正文';
   f.native.value.outcomeUnknown = true;
+  f.native.value.pendingAction = 'send';
   f.chooseProject('project-b'); await tick();
-  assert.equal(f.draft.value.text, '');
-  assert.equal(source.text, '待核对的合成正文');
+  assert.equal(f.draft.value.input, source.input);
+  assert.equal(f.draft.value.input.text, '待核对的合成正文');
+  await f.send();
+  assert.match(f.error.value, /核对上一条消息/);
+  assert.equal(f.calls.some(call => call.write), false);
   assert.equal(f.nativeDraftState('pc-a', 'project-a').outcomeUnknown, true);
 });
 
@@ -752,7 +757,7 @@ test('后台项目刷新不抢输入焦点，明确重选当前项目则恢复�
 
 test('新聊天未重复点选时也把编辑器已显示的执行配置交给任务', async () => {
   const f=fixture({component:true,taskQueue:true});f.props.expanded=true;await f.loadProjects();await tick();await tick();
-  f.draft.value.text='合成默认设置正文';
+  f.draft.value.input.text='合成默认设置正文';
   assert.deepEqual(plain(f.draft.value.choices), {});
   const displayed=plain(f.settings.value);
   await f.send();
@@ -763,13 +768,13 @@ test('新聊天未重复点选时也把编辑器已显示的执行配置交给�
 
 test('新版新聊天把所有选择交给一条消息任务，不进入逐项设置路径', async () => {
   const f=fixture({component:true,taskQueue:true});f.props.expanded=true;f.loadProjects();await tick();await tick();
-  f.draft.value.text='合成汇总正文';f.selectSetting('model','model-b');f.selectPermission('read-only',false);f.composerAction('plan');
+  f.draft.value.input.text='合成汇总正文';f.selectSetting('model','model-b');f.selectPermission('read-only',false);f.composerAction('plan');
   await f.send();
   assert.deepEqual(f.calls.filter(c=>c.write).map(c=>c.method),['tasks.submit']);
   const sent=f.calls.find(c=>c.method==='tasks.submit');assert.equal(sent.params.choices.model,'model-b');assert.equal(sent.params.choices.mode,'plan');assert.equal(sent.params.choices.permissionMode,'read-only');
 });
 test('旧连接只声明汇总但不声明原生一次发送时保留新聊天选择和正文',async()=>{
   const f=fixture({component:true,taskQueue:true});f.props.expanded=true;f.hooks.set('projects.list',()=>({supportsNativeNewDraft:true,supportsDirectMessageChoices:false,selectedProjectId:'project-a',projects:[{id:'project-a',cwd:'/example'}]}));await f.loadProjects();await tick();await f.loadSettings();
-  f.draft.value.text='保留合成消息';f.draft.value.choices={effort:'high'};await f.send();
-  assert.equal(f.calls.some(c=>c.write),false);assert.equal(f.draft.value.text,'保留合成消息');assert.equal(f.draft.value.choices.effort,'high');assert.match(f.error.value,/更新电脑连接服务/);
+  f.draft.value.input.text='保留合成消息';f.draft.value.choices={effort:'high'};await f.send();
+  assert.equal(f.calls.some(c=>c.write),false);assert.equal(f.draft.value.input.text,'保留合成消息');assert.equal(f.draft.value.choices.effort,'high');assert.match(f.error.value,/更新电脑连接服务/);
 });

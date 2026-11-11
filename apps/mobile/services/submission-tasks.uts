@@ -158,7 +158,7 @@ export function acknowledgePendingSubmission(hostId: string, id: string) { remov
 // 文件先完整写入任务作用域；只有守护进程确认接管后才消费手机草稿。
 export async function submitNewConversationTask(draft: NewDraft, mode: string, progress: (message: string) => void, execution: ExecutionSettings | null = null): Promise<string> {
   const hostId = draft.hostId, namespace = draft.cacheNamespace, id = newSubmissionId()
-  const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), originalChoices = { ...draft.choices } as NewDraftChoices
+  const text = draft.input.text.trim(), images = draft.input.images.slice(), files = draft.input.files.slice(), originalChoices = { ...draft.choices } as NewDraftChoices
   const choices = { ...originalChoices } as NewDraftChoices
   // 固定界面显示的请求批准默认值；完整访问始终要求用户显式确认。
   if (choices.permissionMode == null) choices.permissionMode = 'default'
@@ -176,6 +176,8 @@ export async function submitNewConversationTask(draft: NewDraft, mode: string, p
   if (images.length + files.length > 3) throw new Error('每次最多添加3个附件')
   if (mode == 'nativeDraft' && plugins.length > 0) throw new Error('原生草稿暂不支持插件，请先移除插件后发送')
   if (choices.permissionMode == 'full-access' && choices.confirmedFullAccess != true) throw new Error('请先确认电脑完整访问权限')
+  // 任务上传状态与原生草稿上传状态属于不同目标。
+  if (files.length > 0) draft.input.attachmentDraftId = ''
   for (const file of files) {
     if (connection.cacheNamespace != namespace || connection.hostId != hostId) throw new Error('连接目标已变化，输入已保留')
     if (file.data.length == 0) file.data = await readFileBase64(file.source)
@@ -206,9 +208,9 @@ export async function submitNewConversationTask(draft: NewDraft, mode: string, p
   if (choices.confirmedFullAccess != null) taskChoices['confirmedFullAccess'] = choices.confirmedFullAccess
   await submitTask(hostId, id, 'newConversation', { projectId: draft.projectId, mode, text, images: images.map((image: DraftImage): string => image.src), attachments: files.map((file: DraftFile): string => file.id), choices: taskChoices, pluginIds: plugins.map((plugin: SelectedPlugin): string => plugin.id), threadMentionIds: mentions.map((mention: SelectedThreadMention): string => mention.id) })
   // 迟到回执只消费原快照，后续输入与重新选择的引用不会被清空。
-  if (draft.text.trim() == text) draft.text = ''
-  draft.images = draft.images.filter((image: DraftImage): boolean => !images.some((sent: DraftImage): boolean => sent.id == image.id))
-  draft.files = draft.files.filter((file: DraftFile): boolean => !files.some((sent: DraftFile): boolean => sent.id == file.id))
+  if (draft.input.text.trim() == text) draft.input.text = ''
+  draft.input.images = draft.input.images.filter((image: DraftImage): boolean => !images.some((sent: DraftImage): boolean => sent.id == image.id))
+  draft.input.files = draft.input.files.filter((file: DraftFile): boolean => !files.some((sent: DraftFile): boolean => sent.id == file.id))
   if (draft.threadMentionRevision == mentionRevision) { draft.threadMentions = [] as SelectedThreadMention[]; draft.threadMentionRevision++ }
   if (JSON.stringify(draft.choices) == JSON.stringify(originalChoices)) draft.choices = {} as NewDraftChoices
   return id

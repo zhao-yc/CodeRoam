@@ -88,7 +88,8 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
     connection: {configurationRevision: 1}, newConversationMode: ref('nativeDraft'), outcomeUnknown: ref(false),
     hasCompletedConversation: ref(false), direct: ref({threadId: ''}), mentionsAvailable: ref(true),
     busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), settingsLoading: ref(false), settings: ref({model:'model-a',effort:'high'}),
-    draft: ref({text: '保留的合成草稿', images: [], files: [], threadMentions: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
+    draft: ref({input: {text: '保留的合成草稿', images: [], files: []}, threadMentions: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
+    findOtherNewDraft: () => null,
     computed: read => ({get value() { return read(); }}), closeMenus() {}, uni: {hideKeyboard() {}},
     emit: (...event) => events.push(event), sendNewConversation: () => new Promise((resolve, reject) => pending.push({resolve, reject}))};
   c.operationBusy = c.busy;
@@ -98,9 +99,9 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
   const enter = () => input.ui.onKeydown({key: 'Enter', preventDefault() {}});
   enter(); enter(); await c.send(); assert.equal(pending.length, 1); assert.equal(c.pendingNewAction.value, 'send');
   pending.shift().reject(Error('合成发送失败')); await new Promise(resolve => setImmediate(resolve));
-  assert.equal(c.draft.value.text, '保留的合成草稿'); assert.equal(c.error.value, '合成发送失败'); assert.equal(c.busy.value, false); assert.equal(c.pendingNewAction.value, '');
-  c.draft.value.text = ''; enter(); assert.equal(pending.length, 0);
-  c.draft.value.images = [{id: 'example-image'}]; enter(); assert.equal(pending.length, 1);
+  assert.equal(c.draft.value.input.text, '保留的合成草稿'); assert.equal(c.error.value, '合成发送失败'); assert.equal(c.busy.value, false); assert.equal(c.pendingNewAction.value, '');
+  c.draft.value.input.text = ''; enter(); assert.equal(pending.length, 0);
+  c.draft.value.input.images = [{id: 'example-image'}]; enter(); assert.equal(pending.length, 1);
   pending.shift().resolve('example-thread'); await new Promise(resolve => setImmediate(resolve));
   assert.ok(events.some(event => event[0] === 'created' && event[1] === 'example-thread'));
   c.projectReady.value = false; enter(); assert.equal(pending.length, 0);

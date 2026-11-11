@@ -10,7 +10,7 @@ const component=fs.readFileSync('apps/mobile/components/new-conversation/new-con
 function fixture(){
   const ref=value=>({value}),frames=[],timers=new Map(),unmounts=[],calls=[];let timerId=0;
   const native={draftId:'same-native-draft',watching:false};
-  const c={composerInstanceId:'example-composer',props:{expanded:false},connection:{hostId:'example-computer'},projectId:ref('example-project'),native:ref(native),computed:read=>({get value(){return read();}}),draftHeight:ref(64),draft:ref({text:'保留的手机草稿',images:[],files:[],plugins:[],threadMentions:[],threadMentionRevision:0}),currentWindowHeight:ref(844),keyboardInset:ref(0),focused:ref(false),contentTarget:ref(''),error:ref('旧错误'),settingsError:ref('旧设置错误'),projectsLoading:ref(false),settingsLoading:ref(false),editorRevision:0,editorLayoutTimer:0,projectRequest:0,settingsRequest:0,alive:true,baseWindowHeight:844,uni:{getWindowInfo:()=>({windowHeight:844})},nextTick:fn=>frames.push(fn),setTimeout:(fn,ms)=>{timers.set(++timerId,{fn,ms});return timerId;},clearTimeout:id=>timers.delete(id),onUnmounted:fn=>unmounts.push(fn),watch:(read,run,options)=>{if(options?.immediate)run(read());},loadProjects:()=>{calls.push('读取项目');native.watching=true;},closeNativeDraft:(hostId,projectId)=>{assert.equal(hostId,'example-computer');assert.equal(projectId,'example-project');calls.push('取消原生订阅');native.watching=false;},closeMenus:()=>calls.push('关闭菜单'),emit:event=>calls.push(event)};
+  const c={composerInstanceId:'example-composer',props:{expanded:false},connection:{hostId:'example-computer'},projectId:ref('example-project'),native:ref(native),computed:read=>({get value(){return read();}}),draftHeight:ref(64),draft:ref({input:{text:'保留的手机草稿',images:[],files:[]},plugins:[],threadMentions:[],threadMentionRevision:0}),currentWindowHeight:ref(844),keyboardInset:ref(0),focused:ref(false),contentTarget:ref(''),error:ref('旧错误'),settingsError:ref('旧设置错误'),projectsLoading:ref(false),settingsLoading:ref(false),editorRevision:0,editorLayoutTimer:0,projectRequest:0,settingsRequest:0,alive:true,baseWindowHeight:844,uni:{getWindowInfo:()=>({windowHeight:844})},nextTick:fn=>frames.push(fn),setTimeout:(fn,ms)=>{timers.set(++timerId,{fn,ms});return timerId;},clearTimeout:id=>timers.delete(id),onUnmounted:fn=>unmounts.push(fn),watch:(read,run,options)=>{if(options?.immediate)run(read());},loadProjects:()=>{calls.push('读取项目');native.watching=true;},closeNativeDraft:(hostId,projectId)=>{assert.equal(hostId,'example-computer');assert.equal(projectId,'example-project');calls.push('取消原生订阅');native.watching=false;},closeMenus:()=>calls.push('关闭菜单'),emit:event=>calls.push(event)};
   c.reloading=ref(false);
   const dimensions=component.split(/\r?\n/).filter(line=>/^const (editorContentHeight|visibleInputHeight|visibleContentHeight) =/.test(line)).join('\n');
   // 通过实际函数定位生命周期，中文说明修改不会改变需要执行的范围。
@@ -29,14 +29,14 @@ test('列表默认保留单行高度，点击只请求展开，展开后才读�
 
 test('多行和附件扩展数值高度，过渡完成后滚到实际输入位置',()=>{
   const f=fixture();f.expand(true);f.flush();f.ui.onLineChange({detail:{height:360}});assert.equal(f.c.draftHeight.value,144);
-  f.c.draft.value.images=[{}];assert.equal(f.ui.visibleContentHeight.value,214);assert.equal(f.ui.visibleInputHeight.value,144);
+  f.c.draft.value.input.images=[{}];assert.equal(f.ui.visibleContentHeight.value,214);assert.equal(f.ui.visibleInputHeight.value,144);
   f.ui.settleEditorLayout();assert.equal(f.timers.size,1);const timer=[...f.timers.values()][0];assert.equal(timer.ms,220);f.c.contentTarget.value='';timer.fn();f.flush();assert.equal(f.c.contentTarget.value,'example-composer-input');
 });
 
 test('收起、快速重开及卸载阻止旧聚焦和旧动画回写，保留同一电脑草稿只恢复订阅',()=>{
   const f=fixture();f.expand(true);const old=[...f.timers.values()][0].fn;f.c.keyboardInset.value=260;f.expand(false);f.flush();old();f.flush();
   assert.equal(f.c.focused.value,false);assert.equal(f.c.keyboardInset.value,0);assert.equal(f.timers.size,0);assert.equal(f.c.contentTarget.value,'');
-  assert.equal(f.c.native.value.watching,false);assert.equal(f.c.native.value.draftId,'same-native-draft');assert.equal(f.c.draft.value.text,'保留的手机草稿');
+  assert.equal(f.c.native.value.watching,false);assert.equal(f.c.native.value.draftId,'same-native-draft');assert.equal(f.c.draft.value.input.text,'保留的手机草稿');
   f.ui.onLineChange({detail:{height:24}});assert.equal(f.c.draftHeight.value,64);
   f.expand(true);f.flush();assert.equal(f.c.focused.value,true);assert.equal(f.calls.filter(call=>call==='读取项目').length,2);
   assert.equal(f.c.native.value.watching,true);assert.equal(f.c.native.value.draftId,'same-native-draft');

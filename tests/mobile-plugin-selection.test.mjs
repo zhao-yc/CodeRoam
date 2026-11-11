@@ -99,10 +99,10 @@ test('插件草稿按电脑与会话隔离，失败及未知保留，旧回执�
 });
 
 test('新对话原生通道未开放插件时明确拒绝并保留选择，移除插件后才发送首条消息', async () => {
-  const f = draftFixture(), draft = f.ui.newDraft('computer-a', 'project'); draft.text = '整理需求'; draft.plugins = [{ id: 'docs@example', displayName: '文档工具' }];
+  const f = draftFixture(), draft = f.ui.newDraft('computer-a', 'project'); draft.input.text = '整理需求'; draft.plugins = [{ id: 'docs@example', displayName: '文档工具' }];
   assert.equal(f.ui.newDraft('computer-a', 'other').plugins.length, 0);
   await assert.rejects(f.ui.sendNewConversation(draft, () => {}), /原生草稿暂不支持插件/);
-  assert.deepEqual(plain(draft.plugins), [{ id: 'docs@example', displayName: '文档工具' }]); assert.equal(draft.text, '整理需求'); assert.equal(f.calls.length, 0);
+  assert.deepEqual(plain(draft.plugins), [{ id: 'docs@example', displayName: '文档工具' }]); assert.equal(draft.input.text, '整理需求'); assert.equal(f.calls.length, 0);
   draft.plugins = []; await f.ui.sendNewConversation(draft, () => {});
   assert.equal(draft.plugins.length, 0); assert.equal(f.calls.filter(call => call.method === 'thread.draft.send').length, 1);
   assert.equal(f.calls.some(call => call.method === 'thread.create' || call.method === 'turn.send'), false);

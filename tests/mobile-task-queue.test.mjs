@@ -38,7 +38,7 @@ function fixture() {
   vm.runInContext("for (const suffix of ['String','Number','Boolean']) Object.defineProperty(Object.prototype,'get'+suffix,{value:function(key){return this[key]??null;},configurable:true});\n" + stripTypeScriptTypes(code, { mode: 'transform' }) + '\nglobalThis.subject={submissionTasks,submissionVisible,acceptSubmissionSnapshot,submitTask,submitTaskCommand,submitNewConversationTask,awaitSubmissionResult,checkPendingSubmission,acknowledgePendingSubmission,refreshSubmissionTasks};', context);
   context.subject.submissionTasks.instances.push({ hostId: 'pc-a', generation: 'generation-a', supported: true, loading: false, error: '', snapshot: null, clockOffset: 0 });
   context.subject.submissionTasks.namespace = connection.cacheNamespace;
-  const draft = { hostId: 'pc-a', cacheNamespace: 'pair-a', projectId: 'project-a', choices: { model: 'model-a', effort: null }, text: '合成首条消息', images: [], files: [{ id: 'synthetic-upload-0001', name: 'example.txt', size: 3, source: 'synthetic', data: '', status: 'local', progress: 0, error: '' }], plugins: [], threadMentions: [], threadMentionRevision: 0 };
+  const draft = { hostId: 'pc-a', cacheNamespace: 'pair-a', projectId: 'project-a', choices: { model: 'model-a', effort: null }, input: { text: '合成首条消息', images: [], files: [{ id: 'synthetic-upload-0001', name: 'example.txt', size: 3, source: 'synthetic', data: '', status: 'local', progress: 0, error: '' }] }, plugins: [], threadMentions: [], threadMentionRevision: 0 };
   return { ...context.subject, bridge, calls, storage, tasks, connection, draft, loseReceipt({ missing = false } = {}) { failSubmit = true; omitTask = missing; }, failReadOnce() { failReads = 1; }, returnInvalidReceipt() { invalidReceipt = true; }, failSavingAccepted() { failAcceptedSave = true; } };
 }
 
@@ -59,7 +59,7 @@ test('任务附件先完整上传再入队，手机不创建聊天；确认后�
   assert.equal(writes.at(-1).params.kind, 'newConversation');
   assert.equal(writes.at(-1).params.payload.text, '合成首条消息');
   assert.deepEqual(writes.at(-1).params.payload.choices, { model: 'model-a', permissionMode: 'default' });
-  assert.equal(f.draft.text, ''); assert.equal(f.draft.files.length, 0);
+  assert.equal(f.draft.input.text, ''); assert.equal(f.draft.input.files.length, 0);
   assert.ok(progress.some(message => message.includes('99%')));
 });
 
@@ -91,7 +91,7 @@ test('有效入队回执不因后续本地存储失败而丢失', async () => {
   const id = await f.submitNewConversationTask(f.draft, 'desktopIpc', () => {});
   assert.equal(f.submissionTasks.pending[0].accepted, true);
   assert.equal(JSON.parse([...f.storage.values()][0])[0].id, id);
-  assert.equal(f.draft.text, '');
+  assert.equal(f.draft.input.text, '');
   assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);
 });
 
@@ -105,8 +105,8 @@ test('最后一个附件完成时切换连接，原草稿保留且不会入队',
   };
   await assert.rejects(f.submitNewConversationTask(f.draft, 'desktopIpc', () => {}), /连接目标已变化/);
   assert.equal(f.calls.some(call => call.method === 'tasks.submit'), false);
-  assert.equal(f.draft.text, '合成首条消息');
-  assert.equal(f.draft.files.length, 1);
+  assert.equal(f.draft.input.text, '合成首条消息');
+  assert.equal(f.draft.input.files.length, 1);
 });
 
 test('新聊天提交固定界面默认强度，不能因未重复点选而丢失，也不推断权限确认', async () => {
@@ -136,13 +136,13 @@ test('未解析的默认强度不能开始上传或提交', async () => {
   await assert.rejects(f.submitNewConversationTask(f.draft, 'desktopIpc', () => {},
     { model: 'model-a', effort: '', serviceTier: '', mode: 'default' }), /执行设置尚未读取完成/);
   assert.equal(f.calls.length, 0);
-  assert.equal(f.draft.text, '合成首条消息');
+  assert.equal(f.draft.input.text, '合成首条消息');
 });
 
 test('未找到的丢失回执保留本地保护和输入；重复提交被阻止直到人工核对', async () => {
   const f = fixture(); f.loseReceipt({ missing: true });
   await assert.rejects(f.submitNewConversationTask(f.draft, 'nativeDraft', () => {}), /入队尚未确认/);
-  assert.equal(f.draft.text, '合成首条消息'); assert.equal(f.draft.files.length, 1);
+  assert.equal(f.draft.input.text, '合成首条消息'); assert.equal(f.draft.input.files.length, 1);
   assert.equal(f.submissionTasks.pending[0].unknown, true);
   await assert.rejects(f.submitTask('pc-a', 'synthetic-task-0003', 'newConversation', json({})), /上次提交/);
   assert.equal(f.calls.filter(call => call.method === 'tasks.submit').length, 1);

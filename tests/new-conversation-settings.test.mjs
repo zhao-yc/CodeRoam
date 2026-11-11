@@ -71,7 +71,7 @@ async function fixture(t, effort) {
   vm.runInContext(stripTypeScriptTypes(source, { mode: 'transform' }) + '\nglobalThis.subject={newDraft,nativeDraftState,watchNativeDraft,updateNativeDraft,checkNativeDraftCommand,sendNewConversation,readNativeDraft,applyNativeDraftSnapshot};', c);
   service.on('changed', ({ snapshot }) => c.subject.applyNativeDraftSnapshot(json(plain(snapshot)), 'pc'));
   await c.subject.watchNativeDraft('pc', 'project');
-  const state = c.subject.nativeDraftState('pc', 'project'), draft = c.subject.newDraft('pc', 'project'); draft.text = '合成的新任务';
+  const state = c.subject.nativeDraftState('pc', 'project'), draft = c.subject.newDraft('pc', 'project'); draft.input.text = '合成的新任务';
   return { ...c.subject, desktop, journal, service, state, draft, calls, send: () => c.subject.sendNewConversation(draft, () => {}) };
 }
 
@@ -82,13 +82,13 @@ test('原生草稿空强度与明确强度均按电脑回读展示，首条发�
     assert.equal(await f.send(), '00000000-0000-4000-8000-000000000001');
     assert.deepEqual(f.desktop.calls.map(call => call.action), ['open', 'send']);
     assert.deepEqual(f.desktop.calls.find(call => call.action === 'send').input, { text: '合成的新任务', images: [], attachments: [] });
-    assert.equal(f.draft.text, ''); assert.equal(f.calls.some(call => ['thread.create', 'thread.settings.update', 'turn.send'].includes(call.method)), false);
+    assert.equal(f.draft.input.text, ''); assert.equal(f.calls.some(call => ['thread.create', 'thread.settings.update', 'turn.send'].includes(call.method)), false);
   }
 });
 
 test('PNG data URI 通过真实原生服务直达原生输入，不经文档上传且Journal不记录图片参数', async t => {
   const f = await fixture(t), image = 'data:image/png;base64,' + fs.readFileSync('apps/mobile/static/icons/check-dark.png').toString('base64');
-  f.draft.images = [{ id: 'example-image', src: image }];
+  f.draft.input.images = [{ id: 'example-image', src: image }];
   await f.send();
   assert.deepEqual(f.desktop.calls.find(call => call.action === 'send').input.images, [image]);
   assert.equal(f.calls.some(call => call.method.startsWith('attachment.')), false);
@@ -99,12 +99,12 @@ test('PNG data URI 通过真实原生服务直达原生输入，不经文档上�
 test('JPEG data URI 遵守现有320KiB单张上限，超限保留手机图片且不触发原生提交', async t => {
   for (const bytes of [MAX_IMAGE_BYTES, MAX_IMAGE_BYTES + 1]) {
     const f = await fixture(t), data = Buffer.alloc(bytes); data.set([255, 216, 255]);
-    const image = 'data:image/jpeg;base64,' + data.toString('base64'); f.draft.images = [{ id: 'example-image', src: image }];
+    const image = 'data:image/jpeg;base64,' + data.toString('base64'); f.draft.input.images = [{ id: 'example-image', src: image }];
     if (bytes === MAX_IMAGE_BYTES) {
       await f.send(); assert.deepEqual(f.desktop.calls.find(call => call.action === 'send').input.images, [image]);
     } else {
       await assert.rejects(f.send(), /图片过大|超出大小限制/);
-      assert.equal(f.desktop.calls.some(call => call.action === 'send'), false); assert.equal(f.draft.images[0].src, image);
+      assert.equal(f.desktop.calls.some(call => call.action === 'send'), false); assert.equal(f.draft.input.images[0].src, image);
     }
     assert.equal(f.calls.some(call => call.method.startsWith('attachment.')), false);
   }
@@ -126,7 +126,7 @@ test('真实原生修订冲突保留手机草稿，Journal done+error 核对后�
   const f = await fixture(t);
   f.desktop.state.settings.effort = 'high'; f.desktop.state.revision++;
   await assert.rejects(f.updateNativeDraft(f.state, { effort: 'medium' }), /已经变化|已变化/);
-  assert.equal(f.draft.text, '合成的新任务'); assert.equal(f.state.snapshot.settings.effort, 'medium');
+  assert.equal(f.draft.input.text, '合成的新任务'); assert.equal(f.state.snapshot.settings.effort, 'medium');
   const commandId = f.state.pendingCommandId, status = f.journal.status('phone', commandId);
   assert.equal(status.state, 'done'); assert.equal(status.error.code, 'DRAFT_CHANGED');
   assert.equal(f.desktop.calls.some(call => call.action === 'send' || call.action === 'update'), false);

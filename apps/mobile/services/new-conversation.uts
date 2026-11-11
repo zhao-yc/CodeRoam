@@ -9,7 +9,8 @@ import { NativeDraftState, nativeDraftState, watchNativeDraft, readNativeDraft, 
 
 export type NewProject = { id: string, label: string, cwd: string }
 export type NewDraftChoices = { model?: string, effort?: string | null, serviceTier?: string, mode?: string, permissionMode?: string, confirmedFullAccess?: boolean }
-export type NewDraft = { hostId: string, projectId: string, cacheNamespace: string, choices: NewDraftChoices, text: string, images: DraftImage[], files: DraftFile[], plugins: SelectedPlugin[], threadMentions: SelectedThreadMention[], threadMentionRevision: number, attachmentDraftId: string, threadId: string, pendingAction: string, pendingCommandId: string }
+export type NewDraftInput = { text: string, images: DraftImage[], files: DraftFile[], attachmentDraftId: string }
+export type NewDraft = { hostId: string, projectId: string, cacheNamespace: string, choices: NewDraftChoices, input: NewDraftInput, plugins: SelectedPlugin[], threadMentions: SelectedThreadMention[], threadMentionRevision: number, threadId: string, pendingAction: string, pendingCommandId: string }
 const drafts = reactive<NewDraft[]>([])
 const submitting = new Set<string>()
 type NewDraftSubmission = { text: string, imageIds: string[], fileIds: string[], threadMentionRevision: number }
@@ -26,35 +27,27 @@ export function newDraft(hostId: string, projectId: string): NewDraft {
   const found = drafts.find((draft: NewDraft): boolean => draft.hostId == hostId && draft.projectId == projectId && draft.cacheNamespace == cacheNamespace)
   if (found != null) return found
   try { uni.removeStorageSync('codex-mobile-new-' + hostId + '-' + projectId) } catch (_) {}
-  const draft: NewDraft = { hostId, projectId, cacheNamespace, choices: {} as NewDraftChoices, text: '', images: [] as DraftImage[], files: [] as DraftFile[], plugins: [] as SelectedPlugin[], threadMentions: [] as SelectedThreadMention[], threadMentionRevision: 0, attachmentDraftId: '', threadId: '', pendingAction: '', pendingCommandId: '' }
+  // 同一配对和电脑共用编辑内容；项目只绑定设置、引用和提交记录。
+  const input = drafts.find((draft: NewDraft): boolean => draft.hostId == hostId && draft.cacheNamespace == cacheNamespace)?.input ?? { text: '', images: [] as DraftImage[], files: [] as DraftFile[], attachmentDraftId: '' } as NewDraftInput
+  const draft: NewDraft = { hostId, projectId, cacheNamespace, choices: {} as NewDraftChoices, input, plugins: [] as SelectedPlugin[], threadMentions: [] as SelectedThreadMention[], threadMentionRevision: 0, threadId: '', pendingAction: '', pendingCommandId: '' }
   drafts.push(draft)
   return drafts[drafts.length - 1]
 }
 
-// 首次选项目接住未分配的文字、附件和已有插件选择。
+// 首次选项目时，仅把尚未归属项目的插件和引用分配给选中的目标。
 export function assignUnselectedDraft(hostId: string, projectId: string) {
   const source = newDraft(hostId, ''), target = newDraft(hostId, projectId)
-  if (target.text.length == 0 && target.images.length == 0 && target.files.length == 0 && target.plugins.length == 0 && target.threadMentions.length == 0 && target.threadId.length == 0) {
-    target.text = source.text; target.images = source.images; target.files = source.files; target.plugins = source.plugins
-    source.text = ''; source.images = [] as DraftImage[]; source.files = [] as DraftFile[]; source.plugins = [] as SelectedPlugin[]
-    target.threadMentions = source.threadMentions; target.threadMentionRevision++; source.threadMentions = [] as SelectedThreadMention[]; source.threadMentionRevision++
+  if (source != target && target.plugins.length == 0 && target.threadMentions.length == 0 && target.threadId.length == 0) {
+    target.plugins = source.plugins
+    source.plugins = [] as SelectedPlugin[]
+    target.threadMentions = source.threadMentions; target.threadMentionRevision++
+    source.threadMentions = [] as SelectedThreadMention[]; source.threadMentionRevision++
   }
 }
 
-// 改选项目时只转移可重新编辑的输入，附件在新项目发送时重新绑定。
-export function moveNewDraftInput(source: NewDraft, target: NewDraft): boolean {
-  if (source == target || source.hostId != target.hostId || source.cacheNamespace != target.cacheNamespace ||
-      target.text.length > 0 || target.images.length > 0 || target.files.length > 0 ||
-      target.plugins.length > 0 || target.threadMentions.length > 0) return false
-  target.text = source.text
-  target.images = source.images
-  target.files = source.files
-  for (const file of target.files) { file.status = 'local'; file.progress = 0; file.error = '' }
-  target.attachmentDraftId = ''
-  source.text = ''
-  source.images = [] as DraftImage[]
-  source.files = [] as DraftFile[]
-  return true
+// 同一份输入改选项目后，原发送回执仍须在原项目核对。
+export function findOtherNewDraft(draft: NewDraft, matches: (candidate: NewDraft) => boolean): NewDraft | null {
+  return drafts.find((candidate: NewDraft): boolean => candidate != draft && candidate.input == draft.input && matches(candidate)) ?? null
 }
 
 function assertDraftDestination(draft: NewDraft, state: NativeDraftState, draftId: string) {
@@ -85,9 +78,9 @@ function assertNewDraftChoices(state: NativeDraftState, choices: NewDraftChoices
 
 // 草稿范围变化后必须重新上传，已完成的附件不能跨原生草稿复用。
 function bindDraftAttachments(draft: NewDraft, draftId: string) {
-  if (draft.attachmentDraftId == draftId) return
-  draft.attachmentDraftId = draftId
-  for (const file of draft.files) { file.status = 'local'; file.progress = 0; file.error = '' }
+  if (draft.input.attachmentDraftId == draftId) return
+  draft.input.attachmentDraftId = draftId
+  for (const file of draft.input.files) { file.status = 'local'; file.progress = 0; file.error = '' }
 }
 
 // 文档文件使用草稿分片上传，协议参数只有 draftId，不携带 threadId。
@@ -118,14 +111,14 @@ async function uploadDraftAttachment(draft: NewDraft, state: NativeDraftState, d
 export function finishNewDraft(draft: NewDraft) {
   const key = JSON.stringify([draft.cacheNamespace, draft.hostId, draft.projectId]), sent = newSubmissions.get(key)
   if (sent != null) {
-    if (draft.text.trim() == sent.text) draft.text = ''
-    draft.images = draft.images.filter((image: DraftImage): boolean => sent.imageIds.indexOf(image.id) < 0)
-    draft.files = draft.files.filter((file: DraftFile): boolean => sent.fileIds.indexOf(file.id) < 0)
+    if (draft.input.text.trim() == sent.text) draft.input.text = ''
+    draft.input.images = draft.input.images.filter((image: DraftImage): boolean => sent.imageIds.indexOf(image.id) < 0)
+    draft.input.files = draft.input.files.filter((file: DraftFile): boolean => sent.fileIds.indexOf(file.id) < 0)
     if (draft.threadMentionRevision == sent.threadMentionRevision) { draft.threadMentions = [] as SelectedThreadMention[]; draft.threadMentionRevision++ }
     draft.choices = {} as NewDraftChoices
     newSubmissions.delete(key)
   }
-  draft.attachmentDraftId = ''; draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''
+  draft.input.attachmentDraftId = ''; draft.threadId = ''; draft.pendingAction = ''; draft.pendingCommandId = ''
 }
 
 // promotion 只订阅正式聊天，不接管空会话、不重写执行设置、更不补发消息。
@@ -136,9 +129,9 @@ export async function openPromotedConversation(draft: NewDraft, preserveInput: b
   if (threadId.length == 0) throw new Error('尚未取得电脑聊天编号')
   if (preserveInput) {
     // 正式聊天已有本地输入时不覆盖；原项目草稿也继续保留。
-    if (readDraft(draft.hostId, threadId).length == 0) saveDraft(draft.hostId, threadId, draft.text)
-    if (readDraftImages(draft.hostId, threadId).length == 0) saveDraftImages(draft.hostId, threadId, draft.images.slice())
-    if (readDraftFiles(draft.hostId, threadId).length == 0) saveDraftFiles(draft.hostId, threadId, draft.files.map((file: DraftFile): DraftFile => ({ ...file, status: 'local', progress: 0, error: '' } as DraftFile)))
+    if (readDraft(draft.hostId, threadId).length == 0) saveDraft(draft.hostId, threadId, draft.input.text)
+    if (readDraftImages(draft.hostId, threadId).length == 0) saveDraftImages(draft.hostId, threadId, draft.input.images.slice())
+    if (readDraftFiles(draft.hostId, threadId).length == 0) saveDraftFiles(draft.hostId, threadId, draft.input.files.map((file: DraftFile): DraftFile => ({ ...file, status: 'local', progress: 0, error: '' } as DraftFile)))
     if (readDraftPlugins(draft.hostId, threadId).length == 0) saveDraftPlugins(draft.hostId, threadId, draft.plugins.slice())
     if (draft.threadMentions.length > 0 && readDraftThreadMentions(draft.hostId, threadId).length == 0) saveDraftThreadMentions(draft.hostId, threadId, draft.threadMentions)
   }
@@ -161,7 +154,7 @@ export async function sendNewConversation(draft: NewDraft, progress: (message: s
     if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
     if (connection.hostId != draft.hostId || (connection.cacheNamespace ?? '') != draft.cacheNamespace || !connection.connected) throw new Error('电脑连接已变化，请重新连接后发送')
     if (state.snapshot?.status == 'promoted') throw new Error('电脑已发送此草稿，请打开对应聊天；手机输入已保留')
-    const text = draft.text.trim(), images = draft.images.slice(), files = draft.files.slice(), plugins = draft.plugins.slice()
+    const text = draft.input.text.trim(), images = draft.input.images.slice(), files = draft.input.files.slice(), plugins = draft.plugins.slice()
     const choices = { ...draft.choices } as NewDraftChoices
     const mentions = draft.threadMentions.length > 0 ? copyThreadMentions(draft.threadMentions) : [] as SelectedThreadMention[], threadMentionRevision = draft.threadMentionRevision
     if (text.length == 0 && images.length == 0 && files.length == 0) throw new Error('请先输入内容或添加附件')

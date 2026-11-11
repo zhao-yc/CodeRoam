@@ -225,12 +225,12 @@ test('新建输入同样保留光标后正文，取消不删触发片段，迟�
     c.draft = computed(() => c.newDraft('pc', c.projectId.value)); c.native = computed(() => c.nativeDraftState('pc', c.projectId.value));
     vm.runInContext(compile(between(newEditor, 'function threadMentionContext(', 'function closeMenus(') + between(newEditor, 'function updateText(', '// 附件和长文本')), c);
     const text = '开始 @检索 保留结尾'; c.updateText({ detail: { value: text, cursor: text.indexOf(' 保留结尾') } }); assert.equal(c.mentionOpen.value, true);
-    if (action === 'cancel') { c.closeThreadMentions(); assert.equal(c.draft.value.text, text); assert.equal(c.mentionCursor.value, text.indexOf(' 保留结尾')); continue; }
-    if (action === 'changed' || action === 'reverted') { c.draft.value.text = '异步正文'; watches[0](); if (action === 'reverted') { c.draft.value.text = text; watches[0](); } }
+    if (action === 'cancel') { c.closeThreadMentions(); assert.equal(c.draft.value.input.text, text); assert.equal(c.mentionCursor.value, text.indexOf(' 保留结尾')); continue; }
+    if (action === 'changed' || action === 'reverted') { c.draft.value.input.text = '异步正文'; watches[0](); if (action === 'reverted') { c.draft.value.input.text = text; watches[0](); } }
     if (action === 'project') c.projectId.value = 'other';
-    const before = c.draft.value.text; c.selectThreadMentions([mention('a')]);
-    if (action === 'confirm') { assert.equal(c.draft.value.text, '开始  保留结尾'); assert.equal(c.mentionCursor.value, 3); assert.equal(c.draft.value.threadMentions[0].id, 'a'); }
-    else { assert.equal(c.draft.value.text, before); assert.equal(c.draft.value.threadMentions.length, 0); }
+    const before = c.draft.value.input.text; c.selectThreadMentions([mention('a')]);
+    if (action === 'confirm') { assert.equal(c.draft.value.input.text, '开始  保留结尾'); assert.equal(c.mentionCursor.value, 3); assert.equal(c.draft.value.threadMentions[0].id, 'a'); }
+    else { assert.equal(c.draft.value.input.text, before); assert.equal(c.draft.value.threadMentions.length, 0); }
   }
 });
 
@@ -238,23 +238,23 @@ test('新建首条消息携带引用编号和图片附件，按电脑及项目�
   const f = newFixture(), draft = await f.open(); f.c.setNewDraftThreadMentions(draft, [mention('a'), mention('a')]);
   assert.equal(f.c.newDraft('other', 'project').threadMentions.length, 0); assert.equal(f.c.newDraft('pc', 'other').threadMentions.length, 0);
   await assert.rejects(f.c.sendNewConversation(draft, () => {}), /输入内容或添加附件/); assert.equal(f.calls.some(x => x.method === 'thread.draft.send'), false);
-  draft.text = '合成首条'; draft.images = [{ id: 'image', src: 'data:image/png;base64,synthetic' }];
+  draft.input.text = '合成首条'; draft.input.images = [{ id: 'image', src: 'data:image/png;base64,synthetic' }];
   await f.c.sendNewConversation(draft, () => {});
   const sent = f.calls.find(x => x.method === 'thread.draft.send'); assert.deepEqual(sent.params.threadMentionIds, ['a']); assert.equal(sent.params.images.length, 1); assert.equal(draft.threadMentions.length, 0);
   assert.equal(f.calls.filter(x => x.method === 'thread.draft.send').length, 1); assert.equal(f.calls.some(x => x.method === 'turn.send'), false);
 });
 
 test('首条失败及未知保留原选择，成功旧回执不清理发送中新增的引用和正文', async () => {
-  const failed = newFixture(), draft = await failed.open(); draft.text = '保留首条'; failed.c.setNewDraftThreadMentions(draft, [mention('a')]); failed.setSendHook(() => { throw Error('结果未知'); });
-  await assert.rejects(failed.c.sendNewConversation(draft, () => {}), /结果未知/); assert.equal(draft.threadMentions.length, 1); assert.equal(draft.text, '保留首条');
-  const f = newFixture(), next = await f.open(), wait = deferred(); next.text = '发送正文'; f.c.setNewDraftThreadMentions(next, [mention('a')]); f.setSendHook(() => wait.promise);
-  const sending = f.c.sendNewConversation(next, () => {}); await tick(); next.text = '后续正文'; f.c.setNewDraftThreadMentions(next, [mention('next')]); wait.resolve(); await sending;
-  assert.deepEqual(plain(next.threadMentions), [mention('next')]); assert.equal(next.text, '后续正文');
+  const failed = newFixture(), draft = await failed.open(); draft.input.text = '保留首条'; failed.c.setNewDraftThreadMentions(draft, [mention('a')]); failed.setSendHook(() => { throw Error('结果未知'); });
+  await assert.rejects(failed.c.sendNewConversation(draft, () => {}), /结果未知/); assert.equal(draft.threadMentions.length, 1); assert.equal(draft.input.text, '保留首条');
+  const f = newFixture(), next = await f.open(), wait = deferred(); next.input.text = '发送正文'; f.c.setNewDraftThreadMentions(next, [mention('a')]); f.setSendHook(() => wait.promise);
+  const sending = f.c.sendNewConversation(next, () => {}); await tick(); next.input.text = '后续正文'; f.c.setNewDraftThreadMentions(next, [mention('next')]); wait.resolve(); await sending;
+  assert.deepEqual(plain(next.threadMentions), [mention('next')]); assert.equal(next.input.text, '后续正文');
   assert.deepEqual(plain(f.c.readDraftThreadMentions('pc', 'created')), [mention('next')]); assert.equal(f.c.readDraft('pc', 'created'), '后续正文');
 });
 
 test('项目分配与电脑已发送迁移完整保留引用，正式聊天已有标签不覆盖', async () => {
-  const f = newFixture(), initial = f.c.newDraft('pc', ''); initial.text = '未分配正文'; f.c.setNewDraftThreadMentions(initial, [mention('a')]); f.c.assignUnselectedDraft('pc', 'project');
+  const f = newFixture(), initial = f.c.newDraft('pc', ''); initial.input.text = '未分配正文'; f.c.setNewDraftThreadMentions(initial, [mention('a')]); f.c.assignUnselectedDraft('pc', 'project');
   const draft = await f.open(); assert.equal(draft.threadMentions.length, 1); assert.equal(initial.threadMentions.length, 0);
   const state = f.c.nativeDraftState('pc', 'project'); state.snapshot.status = 'promoted'; state.snapshot.threadId = 'desktop-sent';
   await f.c.openPromotedConversation(draft); assert.deepEqual(plain(f.c.readDraftThreadMentions('pc', 'desktop-sent')), [mention('a')]); assert.equal(draft.threadMentions.length, 1);
@@ -265,10 +265,10 @@ test('项目分配与电脑已发送迁移完整保留引用，正式聊天已�
 });
 
 test('首条再次核对能力，旧原生草稿不静默发送引用，保留现有插件限制', async () => {
-  const f = newFixture(), draft = await f.open(); draft.text = '合成正文'; f.c.setNewDraftThreadMentions(draft, [mention('a')]);
+  const f = newFixture(), draft = await f.open(); draft.input.text = '合成正文'; f.c.setNewDraftThreadMentions(draft, [mention('a')]);
   f.c.nativeDraftState('pc', 'project').snapshot.supportsThreadMentions = false;
   await assert.rejects(f.c.sendNewConversation(draft, () => {}), /更新电脑连接服务/); assert.equal(draft.threadMentions.length, 1); assert.equal(f.calls.some(x => x.method === 'thread.draft.send'), false);
-  const changed = newFixture(), next = await changed.open(); next.text = '合成正文'; changed.c.setNewDraftThreadMentions(next, [mention('a')]);
+  const changed = newFixture(), next = await changed.open(); next.input.text = '合成正文'; changed.c.setNewDraftThreadMentions(next, [mention('a')]);
   await assert.rejects(changed.c.sendNewConversation(next, message => { if (message === '正在发送…') changed.c.nativeDraftState('pc', 'project').snapshot.supportsThreadMentions = false; }), /更新电脑连接服务/);
   assert.equal(changed.calls.some(x => x.method === 'thread.draft.send'), false); assert.equal(next.threadMentions.length, 1);
 });

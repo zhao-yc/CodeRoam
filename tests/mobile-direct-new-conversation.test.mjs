@@ -71,7 +71,7 @@ function fixture(t) {
     } };
     const context = vm.createContext({ connection, bridge, uni, reactive: value => value, FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj' });
     vm.runInContext(source + '\nglobalThis.subject={sendDirectNewConversation,checkDirectNewConversation,directNewConversationState,acknowledgeDirectNewConversation};', context);
-    const draft = { hostId: connection.hostId, cacheNamespace: connection.cacheNamespace, projectId: 'project-a', text, images: [], files: [], plugins: [], threadMentions: [], threadMentionRevision: 0, choices: {} };
+    const draft = { hostId: connection.hostId, cacheNamespace: connection.cacheNamespace, projectId: 'project-a', input: { text, images: [], files: [] }, plugins: [], threadMentions: [], threadMentionRevision: 0, choices: {} };
     const subject = context.subject;
     return { ...subject, connection, draft, state: subject.directNewConversationState(draft), send: () => subject.sendDirectNewConversation(draft, () => {}), check: () => subject.checkDirectNewConversation(draft) };
   };
@@ -81,8 +81,8 @@ function fixture(t) {
 test('单开旧路径按原桌面设置、权限、附件与插件发送一次', async t => {
   const f = fixture(t);
   f.draft.choices = { model: 'model-b', effort: 'high', serviceTier: 'priority', mode: 'plan', permissionMode: 'read-only' };
-  f.draft.images = [{ id: 'image', src: 'data:image/png;base64,AA==' }];
-  f.draft.files = [{ id: 'file-upload-example', source: '合成文件', name: 'example.txt', size: 3, data: '' }];
+  f.draft.input.images = [{ id: 'image', src: 'data:image/png;base64,AA==' }];
+  f.draft.input.files = [{ id: 'file-upload-example', source: '合成文件', name: 'example.txt', size: 3, data: '' }];
   f.draft.plugins = [{ id: 'docs@example' }];
   assert.equal(await f.send(), threadId);
   const writes = f.calls.filter(call => call.commandId);
@@ -92,11 +92,11 @@ test('单开旧路径按原桌面设置、权限、附件与插件发送一次',
   assert.deepEqual(writes.at(-1).firstMessageGuard, { permissionRevision: 'permissions-b', confirmedFullAccess: false });
   assert.equal(f.calls.filter(call => call.method.startsWith('attachment.')).every(call => call.params.threadId === threadId && !('draftId' in call.params)), true);
   assert.deepEqual(f.calls.at(-1).params, { threadId, text, images: ['data:image/png;base64,AA=='], attachments: ['file-upload-example'], pluginIds: ['docs@example'] });
-  assert.equal(f.draft.text, '');
+  assert.equal(f.draft.input.text, '');
   assert.equal([...f.storage.values()].some(value => value.includes(text) || value.includes('docs@example')), false);
   const restored = f.make();
   assert.equal(await restored.check(), threadId);
-  assert.equal(restored.draft.text, text, '刷新后已恢复的结果不消费新的本地输入');
+  assert.equal(restored.draft.input.text, text, '刷新后已恢复的结果不消费新的本地输入');
   restored.acknowledgeDirectNewConversation(restored.draft, threadId);
   assert.equal(f.make().state.threadId, '');
   assert.equal(f.calls.filter(call => call.method === 'turn.send').length, 1);
@@ -126,7 +126,7 @@ test('明确失败只解除对应发送命令，重试继续使用已经创建�
   await assert.rejects(f.send(), /合成拒绝/);
   assert.equal(f.state.outcomeUnknown, false);
   assert.equal(f.state.threadId, threadId);
-  assert.equal(f.draft.text, text);
+  assert.equal(f.draft.input.text, text);
   f.desktop.hooks.delete('turn.send');
   assert.equal(await f.send(), threadId);
   assert.equal(f.calls.filter(call => call.method === 'thread.create').length, 1);
@@ -163,7 +163,7 @@ test('收到成功回执后本地保存失败，刷新后只核对原账本并�
     return { ok: true, commandId };
   });
   await assert.rejects(f.send(), /本地存储失败/);
-  assert.equal(f.draft.text, text);
+  assert.equal(f.draft.input.text, text);
   assert.equal(f.state.outcomeUnknown, true);
   const commandId = f.state.pendingCommandId;
   assert.equal(f.journal.status('phone', commandId).state, 'done');
@@ -197,7 +197,7 @@ test('发送期间切换电脑，迟到成功只结算原草稿，不能给新�
   respond();
   await rejected;
   assert.equal(f.state.completedThreadId, threadId);
-  assert.equal(f.draft.text, '');
+  assert.equal(f.draft.input.text, '');
   assert.equal(f.connection.activeThreadId, newThreadId);
   assert.equal(f.connection.snapshot, newSnapshot);
   assert.equal(f.directNewConversationState({ ...f.draft, hostId: 'pc-b' }).completedThreadId, '');
@@ -244,7 +244,7 @@ test('旧回执保留重新选择的同一引用，未知发送与查账期间�
   assert.equal(await f.send(), threadId);
   assert.equal(f.draft.threadMentions[0].title, '重新选择的引用');
   f.acknowledgeDirectNewConversation(f.draft, threadId);
-  f.draft.text = '待核对的合成正文';
+  f.draft.input.text = '待核对的合成正文';
   f.desktop.hooks.set('turn.send', () => { throw new BridgeError('OUTCOME_UNKNOWN', '合成发送超时', true); });
   await assert.rejects(f.send(), /核对/);
   await assert.rejects(f.check(), /尚未确认/);
@@ -271,6 +271,6 @@ test('原会话已被桌面使用时保留草稿，不向已有轮次追加，�
   const f = fixture(t);
   f.desktop.used = true;
   await assert.rejects(f.send(), /电脑已使用原聊天/);
-  assert.equal(f.draft.text, text);
+  assert.equal(f.draft.input.text, text);
   assert.deepEqual(f.calls.filter(call => call.commandId).map(call => call.method), ['thread.create']);
 });

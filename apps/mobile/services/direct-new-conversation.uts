@@ -106,9 +106,9 @@ async function directProject(draft: NewDraft, target: DirectTarget, requireThrea
 function consumeDirectSubmission(draft: NewDraft, state: DirectNewConversationState) {
   const sent = directSubmissions.get(state.key)
   if (sent == null) return
-  if (draft.text.trim() == sent.text) draft.text = ''
-  draft.images = draft.images.filter((image: DraftImage): boolean => !sent.images.some((item: DraftImage): boolean => item.id == image.id))
-  draft.files = draft.files.filter((file: DraftFile): boolean => !sent.files.some((item: DraftFile): boolean => item.id == file.id))
+  if (draft.input.text.trim() == sent.text) draft.input.text = ''
+  draft.input.images = draft.input.images.filter((image: DraftImage): boolean => !sent.images.some((item: DraftImage): boolean => item.id == image.id))
+  draft.input.files = draft.input.files.filter((file: DraftFile): boolean => !sent.files.some((item: DraftFile): boolean => item.id == file.id))
   draft.plugins = draft.plugins.filter((plugin: SelectedPlugin): boolean => !sent.plugins.some((item: SelectedPlugin): boolean => item.id == plugin.id))
   // 核对成功只消费提交时的引用，迟到回执不能清除重新选择的同一标签。
   if (sent.threadMentionIds.length > 0 && draft.threadMentionRevision == sent.threadMentionRevision) {
@@ -273,7 +273,7 @@ export async function sendDirectNewConversation(draft: NewDraft, progress: (mess
   if (state.outcomeUnknown) throw new Error('上次操作结果需要核对，请勿重复提交')
   if (draft.projectId.length == 0) throw new Error('请先选择项目')
   const submission: DirectSubmission = {
-    text: draft.text.trim(), images: draft.images.slice(), files: draft.files.slice(), plugins: draft.plugins.slice(),
+    text: draft.input.text.trim(), images: draft.input.images.slice(), files: draft.input.files.slice(), plugins: draft.plugins.slice(),
     choices: { ...draft.choices } as NewDraftChoices,
     threadMentionIds: copyThreadMentions(draft.threadMentions).map((mention: SelectedThreadMention): string => mention.id),
     threadMentionRevision: draft.threadMentionRevision
@@ -303,6 +303,8 @@ export async function sendDirectNewConversation(draft: NewDraft, progress: (mess
     await prepareDirectPermissions(target, state, project, submission.choices, true)
     assertDirectThread(target, state, project)
     progress('正在准备附件…')
+    // 文件状态由本次会话上传更新，之后走原生草稿时必须重新绑定。
+    if (submission.files.length > 0) draft.input.attachmentDraftId = ''
     for (const file of submission.files) await uploadDirectFile(target, state, project, file)
     await prepareDirectSettings(target, state, project, submission, false)
     const permissionRevision = await prepareDirectPermissions(target, state, project, submission.choices, false)
