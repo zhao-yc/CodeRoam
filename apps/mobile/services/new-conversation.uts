@@ -41,6 +41,22 @@ export function assignUnselectedDraft(hostId: string, projectId: string) {
   }
 }
 
+// 改选项目时只转移可重新编辑的输入，附件在新项目发送时重新绑定。
+export function moveNewDraftInput(source: NewDraft, target: NewDraft): boolean {
+  if (source == target || source.hostId != target.hostId || source.cacheNamespace != target.cacheNamespace ||
+      target.text.length > 0 || target.images.length > 0 || target.files.length > 0 ||
+      target.plugins.length > 0 || target.threadMentions.length > 0) return false
+  target.text = source.text
+  target.images = source.images
+  target.files = source.files
+  for (const file of target.files) { file.status = 'local'; file.progress = 0; file.error = '' }
+  target.attachmentDraftId = ''
+  source.text = ''
+  source.images = [] as DraftImage[]
+  source.files = [] as DraftFile[]
+  return true
+}
+
 function assertDraftDestination(draft: NewDraft, state: NativeDraftState, draftId: string) {
   assertNativeDraftReady(state, true)
   if (connection.hostId != draft.hostId || (connection.cacheNamespace ?? '') != draft.cacheNamespace || state.projectId != draft.projectId || state.draftId != draftId) throw new Error('草稿目标已切换，附件和输入已保留')

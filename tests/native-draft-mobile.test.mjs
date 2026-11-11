@@ -50,7 +50,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
       const run = async () => {
         if (hooks.has(method)) return hooks.get(method)(params, hostId);
         if (method === 'projects.list') return { supportsDirectMessageChoices:true, supportsNativeNewDraft: true, projects: [{ id: 'project-a', label: '示例项目', cwd: '/example' }], selectedProjectId: 'project-a' };
-        if (method === 'thread.create.settings') { const { settings, models } = snapshot(params.projectId); return { settings, models }; }
+        if (method === 'thread.create.settings' || method === 'thread.settings.read') { const { settings, models } = snapshot(params.projectId); return { settings, models }; }
         if (method === 'thread.permissions.read') return snapshot().permissions;
         if (method === 'thread.draft.open') {
           let value = [...backend.values()].find(entry => entry.hostId === hostId && entry.projectId === params.projectId && entry.status !== 'promoted');
@@ -104,6 +104,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
     setTimeout: () => 1, clearTimeout() {},
     uni: { removeStorageSync: key => storage.delete(key), getStorageSync: key => storage.get(key) ?? '', setStorageSync: (key, value) => storage.set(key, value), getWindowInfo: () => ({ windowWidth: 390, windowHeight: 760 }), hideKeyboard() {}, showToast() {} },
     FILE_CHUNK_BYTES: 3, readFileBase64: async () => 'YWJj', computerIcon: () => 'laptop', bindImagePaste: () => () => {},
+    submissionTasks: { pending: [] },
   });
   let source = ['apps/mobile/services/composer.uts', 'apps/mobile/services/native-draft.uts', 'apps/mobile/services/new-conversation.uts', 'apps/mobile/services/execution-settings.uts'].map(read).join('\n');
   if (component) source += '\n' + read('apps/mobile/services/thread-mentions.uts') + '\n' + read('apps/mobile/services/direct-new-conversation.uts') + '\n' + read('apps/mobile/components/new-conversation/new-conversation.uvue').match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1];
@@ -111,7 +112,7 @@ function fixture({ component = false, storage = new Map(), taskQueue = false } =
   vm.runInContext(compile(source) + '\nglobalThis.subject={' + names + (component ? ',syncEditorVisibility,loadProjects,loadSettings,chooseProject,selectSetting,selectPermission,composerAction,followPromotion,checkDraftOutcome,openCompletedConversation,send,projectId,draft,native,direct,settings,canSend,focused,error,newConversationMode,mentionsAvailable,mentionOpen,updateText,selectThreadMentions' : '') + '};', context);
   state = context.subject;
   const current = () => backend.get(connection.hostId + ':' + state.nativeDraftState(connection.hostId, 'project-a').draftId);
-  return { ...state, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
+  return { ...state, bridge, connection, props, calls, hooks, backend, watches, emitted, unmounts, current, storage,
     async open(hostId = 'pc-a', projectId = 'project-a') { connection.hostId = hostId; await state.watchNativeDraft(hostId, projectId); return state.nativeDraftState(hostId, projectId); },
     event(value, hostId = connection.hostId) { state.applyNativeDraftSnapshot(json(plain(value)), hostId); },
   };
@@ -649,9 +650,9 @@ test('发送中换电脑时不发出原聊天事件，回到原电脑可以交�
 });
 
 /** 同一电脑的两个合成项目，使用只读设置回执验证焦点与草稿隔离。 */
-async function projectPickerFixture() {
+async function projectPickerFixture(mode = 'nativeDraft') {
   const f=fixture({component:true});
-  f.hooks.set('projects.list',()=>({supportsNativeNewDraft:true,projects:[
+  f.hooks.set('projects.list',()=>({newConversationMode:mode,projects:[
     {id:'project-a',label:'示例项目甲',cwd:'/example/a'},
     {id:'project-b',label:'示例项目乙',cwd:'/example/b'},
   ],selectedProjectId:'project-a'}));
@@ -677,6 +678,58 @@ test('选择项目确认成功后聚焦，切回原项目仍保留各自草稿�
   assert.equal(f.focused.value,true);assert.equal(f.draft.value.text,'项目甲合成草稿');
   assert.equal(f.calls.some(call=>['thread.draft.send','turn.send','turn.steer'].includes(call.method)),false);
 });
+
+test('两种新聊天模式改选项目时保留正文和附件，直到发送才向目标电脑提交', async () => {
+  for (const mode of ['desktopIpc', 'nativeDraft']) {
+    const f = await projectPickerFixture(mode);
+    const source = f.draft.value;
+    source.text = '改选项目的合成正文';
+    source.images = [{ id: 'example-image', src: pngImage }];
+    source.files = [{ id: 'example-file', name: 'example.txt', size: 3, data: 'YWJj', status: 'ready', progress: 100, error: '' }];
+    source.choices = { mode: 'plan', permissionMode: 'full-access', confirmedFullAccess: true };
+    source.threadMentions = [{ id: 'example-thread', title: '示例引用' }];
+    f.chooseProject('project-b'); await tick();
+    assert.equal(f.draft.value.projectId, 'project-b', mode);
+    assert.equal(f.draft.value.text, '改选项目的合成正文', mode);
+    assert.equal(f.draft.value.images[0].src, pngImage, mode);
+    assert.equal(f.draft.value.files[0].data, 'YWJj', mode);
+    assert.equal(f.draft.value.files[0].status, 'local', mode);
+    assert.deepEqual(plain(f.draft.value.choices), {}, mode);
+    assert.equal(f.draft.value.threadMentions.length, 0, mode);
+    assert.equal(source.threadMentions.length, 1, mode);
+    assert.equal(source.text, '', mode);
+    assert.equal(source.images.length + source.files.length, 0, mode);
+    assert.equal(f.canSend.value, true, mode);
+    assert.equal(f.calls.some(call => call.write), false, mode);
+
+    const openCreatedThread = f.bridge.openCreatedThread.bind(f.bridge);
+    f.bridge.openCreatedThread = async threadId => {
+      await openCreatedThread(threadId);
+      f.connection.snapshot.cwd = '/example/b';
+    };
+    await f.send();
+    const createMethod = mode === 'desktopIpc' ? 'thread.create' : 'thread.draft.open';
+    const sendMethod = mode === 'desktopIpc' ? 'turn.send' : 'thread.draft.send';
+    assert.equal(f.calls.find(call => call.method === createMethod)?.params.projectId, 'project-b', mode);
+    const sent = f.calls.filter(call => call.method === sendMethod);
+    assert.equal(sent.length, 1, mode + '：' + (f.error.value || f.direct.value.error || f.native.value.error));
+    assert.equal(sent[0].params.text, '改选项目的合成正文', mode);
+    assert.deepEqual(sent[0].params.images, [pngImage], mode);
+    assert.deepEqual(sent[0].params.attachments, ['example-file'], mode);
+  }
+});
+
+test('原项目提交结果待核对时，切换项目不会移动可能已发送的内容', async () => {
+  const f = await projectPickerFixture();
+  const source = f.draft.value;
+  source.text = '待核对的合成正文';
+  f.native.value.outcomeUnknown = true;
+  f.chooseProject('project-b'); await tick();
+  assert.equal(f.draft.value.text, '');
+  assert.equal(source.text, '待核对的合成正文');
+  assert.equal(f.nativeDraftState('pc-a', 'project-a').outcomeUnknown, true);
+});
+
 test('项目加载失败、收起、换电脑或再次选择后，迟到回执不恢复输入焦点',async()=>{
   for(const change of ['失败','收起','电脑','项目','断线']){
     const f=await projectPickerFixture(),wait=deferred(),value=snapshot('project-b','draft-b');

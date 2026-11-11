@@ -9,6 +9,7 @@
       <view v-if="props.expanded && (operationBusy || editorError.length > 0 || connection.error.length > 0)" class="editor-feedback"><text v-if="operationBusy" class="editor-note">{{ busy ? progress : '正在同步电脑草稿…' }}</text><text v-else class="editor-error">{{ editorError.length > 0 ? editorError : connection.error }}</text></view>
       <view v-if="props.expanded && (!operationBusy && editorError.length > 0 && !outcomeUnknown && !projectsLoading || reloading)" class="retry-button inline-progress-button"><action-progress :busy="reloading" /><text class="inline-progress-caption" style="font-size: 13px; color: #4546bd;">重新读取</text><button class="inline-progress-hitbox" :disabled="reloading" :aria-label="reloading ? '正在重新读取' : '重新读取'" @click="runDraftRead"></button></view>
       <text v-if="props.expanded && existingDraft?.hasDesktopText == true" class="editor-note">电脑草稿已有内容，请先在电脑处理；手机输入会保留。</text>
+      <text v-if="props.expanded && projectReady && !settingsLoading && settings != null && draft.images.length > 0 && !modelSupportsImages" class="editor-note">图片已保留，请选择支持图片的模型后发送。</text>
       <text v-if="props.expanded && newConversationMode == 'nativeDraft' && draft.plugins.length > 0" class="editor-note">原生草稿暂不支持插件，请先移除插件后发送；已选插件会保留。</text>
       <text v-if="props.expanded && newConversationMode == 'desktopIpc' && !mentionsAvailable && draft.threadMentions.length > 0" class="editor-note">当前电脑连接方式暂不支持引用聊天，请先移除引用后发送。</text>
       <button v-if="props.expanded && newConversationMode == 'nativeDraft' && projectReady && !operationBusy && !outcomeUnknown && native.snapshot?.status != 'promoted' && native.draftId.length > 0 && native.error.length > 0" class="retry-button" @click="resetDraftBinding">下次发送时打开新草稿</button>
@@ -57,7 +58,7 @@ import { setNewDraftThreadMentions } from '../../services/new-conversation.uts'
 import PluginPicker from '../plugin-picker/plugin-picker.uvue'
 import type { SelectedPlugin } from '../../services/plugins.uts'
 import { bridge, connection, computerIcon, Computer } from '../../services/bridge.uts'
-import { NewProject, NewDraft, newDraft, assignUnselectedDraft, sendNewConversation, finishNewDraft } from '../../services/new-conversation.uts'
+import { NewProject, NewDraft, newDraft, assignUnselectedDraft, moveNewDraftInput, sendNewConversation, finishNewDraft } from '../../services/new-conversation.uts'
 import { DraftImage, DraftFile } from '../../services/composer.uts'
 import { ExecutionSettings, ModelOption, SettingsResponse, effortLabel, shortModelLabel } from '../../services/execution-settings.uts'
 import { nativeDraftState, watchNativeDraft, closeNativeDraft, resetNativeDraftBinding, checkNativeDraftCommand } from '../../services/native-draft.uts'
@@ -66,7 +67,7 @@ import { openPromotedConversation } from '../../services/new-conversation.uts'
 import { prepareImage } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
 import { validateFile } from '../../services/files.uts'
-import { supportsSubmissionTasks } from '../../services/submission-task-state.uts'
+import { PendingSubmission, submissionTasks, supportsSubmissionTasks } from '../../services/submission-task-state.uts'
 import { submitNewConversationTask } from '../../services/submission-tasks.uts'
 
 const props = withDefaults(defineProps<{ expanded?: boolean, paneWidth?: number, paneLeft?: number }>(), { expanded: false, paneWidth: 0, paneLeft: 0 })
@@ -285,10 +286,31 @@ async function loadProjects() {
   }, (reason: Error) => { if (current()) { projectsLoading.value = false; newConversationMode.value = ''; error.value = reason.message + '，请确认电脑连接服务已更新' } })
 }
 function chooseComputer(id: string) { if (busy.value) return; try { if (id != connection.hostId) closeNativeDraft(connection.hostId, projectId.value); bridge.selectComputer(id); closeMenus() } catch (reason) { notify((reason as Error).message) } }
+
+// 已绑定正式聊天或仍在核对的输入要留在原项目，避免把同一条消息发两次。
+function canMoveDraftInput(target: NewDraft): boolean {
+  const state = nativeDraftState(target.hostId, target.projectId)
+  const ipc = directNewConversationState(target)
+  return !state.busy && !state.outcomeUnknown && state.pendingCommandId.length == 0 && state.snapshot?.status != 'promoted' &&
+    !ipc.busy && !ipc.outcomeUnknown && ipc.pendingCommandId.length == 0 && ipc.threadId.length == 0 && ipc.completedThreadId.length == 0
+}
+
 function chooseProject(id: string) {
   if (busy.value || !projects.value.some((project: NewProject): boolean => project.id == id)) return
-  if (projectId.value.length == 0) assignUnselectedDraft(connection.hostId, id)
-  if (id != projectId.value) { closeNativeDraft(connection.hostId, projectId.value); projectSettings.value = null }
+  if (imageBusy.value) { notify('附件正在处理，请稍后切换项目'); return }
+  if (id != projectId.value) {
+    const source = draft.value, target = newDraft(connection.hostId, id)
+    const hasInput = source.text.length > 0 || source.images.length > 0 || source.files.length > 0
+    const pendingTask = submissionTasks.pending.some((item: PendingSubmission): boolean => item.hostId == source.hostId && item.kind == 'newConversation' && !item.accepted)
+    const movable = !pendingTask && canMoveDraftInput(source) && canMoveDraftInput(target)
+    if (source.projectId.length == 0) {
+      if (movable) assignUnselectedDraft(source.hostId, id)
+    } else if (hasInput && (!movable || !moveNewDraftInput(source, target))) {
+      notify('输入已保留在原项目')
+    }
+    closeNativeDraft(source.hostId, source.projectId)
+    projectSettings.value = null
+  }
   projectId.value = id; settingsRequest++; settingsLoading.value = false; closeMenus(); error.value = ''
   try { uni.setStorageSync('codex-mobile-new-project-' + connection.hostId, id) } catch (_) {}
   loadSettings(true)
@@ -342,7 +364,7 @@ function chooseImages(source: string) {
   // 获取原图后统一处理大小，避免系统预压缩与发送压缩叠加损伤文字。
   uni.chooseImage({ count: remaining(), sourceType: source == 'camera' ? ['camera'] : ['album'], sizeType: ['original'], success: (result) => { acceptImages(target, result.tempFilePaths) } })
 }
-// 固定粘贴时的电脑与项目草稿，处理期间切换目标也不会串入其他草稿。
+// 固定粘贴时的电脑与项目草稿，处理结束后才允许改选项目。
 async function pasteImages(paths: string[]) {
   if (!alive || !props.expanded || busy.value || imageBusy.value) return
   if (!modelSupportsImages.value) { notify('当前模型不支持图片，请切换模型'); return }
