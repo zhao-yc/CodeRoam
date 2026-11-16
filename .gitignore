@@ -17,6 +17,8 @@ node_modules/
 *.mobileprovision
 apps/mobile/unpackage/
 apps/mobile/.hbuilderx/
+/native/android/.gradle/
+/native/android/build/
 coverage/
 apps/desktop-manager/dist/
 apps/desktop-manager/out/
