@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {normalizeConversation} from '../apps/bridge/conversation.mjs';
+import {historicalSnapshot} from '../apps/bridge/history-reader.mjs';
 
 /** 运行实际 UTS 分组与页面脚本，防止验收逻辑复制实现。 */
 function fixture(){
@@ -142,4 +143,24 @@ test('同轮多份报告过程独立开关，前插历史不会改变已展开�
 test('最后一份总结后的消息继续展示，运行中的多总结轮次不提前折叠',()=>{
  const f=fixture(),state=multipleReports();state.messages.push({id:'tail',role:'assistant',phase:'commentary',text:'后续过程',turnId:'turn',status:'completed'});assert.equal(f.reportTimeline(state,[]).at(-1).id,'tail');
  state.turns[0].status='inProgress';state.activeTurnId='turn';assert.equal(f.reportTimeline(state,[]).some(e=>e.role==='process'),false);
+});
+
+test('桌面补记在完成事件之后的命令默认收起，展开恢复原顺序', () => {
+  const event = (type, item) => ({ type: 'event_msg', payload: { type, turn_id: 'turn', item } });
+  const records = [
+    event('task_started'),
+    event('item_completed', { id: 'u', type: 'UserMessage', content: '用户提问' }),
+    event('item_completed', { id: 'final', type: 'AgentMessage', phase: 'final_answer', text: '任务完成' }),
+    event('task_complete'),
+    event('item_completed', { id: 'late', type: 'CommandExecution', status: 'failed', command: ['node', 'worker.mjs'] }),
+    event('item_completed', { id: 'next', type: 'AgentMessage', phase: 'commentary', text: '后续消息' }),
+    event('item_completed', { id: 'next-command', type: 'CommandExecution', command: ['node', '--version'] }),
+  ];
+  const f = fixture(), state = historicalSnapshot({ id: 'thread' }, records);
+  const ids = expanded => plain(f.reportTimeline(state, expanded).map(entry => entry.id));
+  assert.equal(state.turns[0].status, 'completed');
+  assert.deepEqual(ids([]), ['u', 'process:turn:final', 'final', 'next', 'execution:next-command']);
+  assert.deepEqual(ids(['process:turn:final']), ['u', 'process:turn:final', 'final', 'execution:late', 'next', 'execution:next-command']);
+  state.activeTurnId = 'turn';
+  assert.deepEqual(ids([]), ['u', 'final', 'execution:late', 'next', 'execution:next-command']);
 });

@@ -17,6 +17,13 @@ function reportFinalIndexes(messages: ChatMessage[]): number[] {
   return indexes
 }
 
+// 桌面可能在轮次完成后才补记命令结果，只将紧跟最后一份报告的工具记录纳入该报告。
+function reportExecutionTailEnd(messages: ChatMessage[], finalIndex: number): number {
+  let end = finalIndex + 1
+  while (end < messages.length && messages[end].role == 'tool' && (messages[end].kind == 'commandExecution' || messages[end].kind == 'fileChange')) end++
+  return end
+}
+
 // 只有同一轮的完成状态、报告和过程阶段都明确时，才允许默认隐藏过程。
 export function reportTurnIds(snapshot: Conversation | null): string[] {
   if (snapshot == null) return [] as string[]
@@ -34,12 +41,14 @@ export function reportTurnIds(snapshot: Conversation | null): string[] {
     if (messages.slice(first, first + group.length).some((message: ChatMessage): boolean => message.turnId != turn.turnId)) return
     if (group.some((message: ChatMessage): boolean => message.role == 'assistant' && message.kind != 'imageGeneration' && message.phase != 'commentary' && message.phase != 'final_answer')) return
     let start = 0
-    const hasProcess = reportFinalIndexes(group).some((finalIndex: number): boolean => {
+    const finals = reportFinalIndexes(group)
+    const hasProcess = finals.some((finalIndex: number): boolean => {
       const promptEnd = reportPromptEnd(group, start, finalIndex)
       start = finalIndex + 1
       return finalIndex > promptEnd
     })
-    if (hasProcess) result.push(turn.turnId)
+    const lastFinal = finals.length > 0 ? finals[finals.length - 1] : -1
+    if (hasProcess || (lastFinal >= 0 && reportExecutionTailEnd(group, lastFinal) > lastFinal + 1)) result.push(turn.turnId)
   })
   return result
 }
@@ -80,11 +89,13 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
       let start = 0
       finals.forEach((finalIndex: number) => {
         const promptEnd = reportPromptEnd(group, start, finalIndex)
+        const tailStart = finalIndex + 1
+        const tailEnd = finalIndex == finals[finals.length - 1] ? reportExecutionTailEnd(group, finalIndex) : tailStart
         entries.push(...executionTimeline(group.slice(start, promptEnd)))
-        if (finalIndex > promptEnd) {
-          // 以最终消息编号标识过程段，前插历史后仍能保留各段独立的阅读选择。
-          const processId = 'process:' + turnId + ':' + group[finalIndex].id
-          const expanded = expandedReports.indexOf(processId) >= 0
+        // 以最终消息编号标识过程段，前插历史后仍能保留各段独立的阅读选择。
+        const processId = 'process:' + turnId + ':' + group[finalIndex].id
+        const expanded = expandedReports.indexOf(processId) >= 0
+        if (finalIndex > promptEnd || tailEnd > tailStart) {
           // 多份报告共享底层轮次总耗时，不能将总耗时冒充每段耗时。
           const durationLabel = reportProcessDurationLabel(finals.length == 1 ? group[finalIndex].workedMs ?? turn?.durationMs ?? null : null)
           entries.push({ id: processId, role: 'process', text: '', turnId, executions: [] as ChatMessage[], label: reportProcessLabel(durationLabel, expanded), durationLabel })
@@ -93,9 +104,10 @@ export function reportTimeline(snapshot: Conversation | null, expandedReports: s
         entries.push(...executionTimeline(group.slice(finalIndex, finalIndex + 1)))
         // 生成图片属于交付内容，过程收起时仍显示在对应最终回复下方，展开后不重复。
         entries.push(...executionTimeline(group.slice(promptEnd, finalIndex).filter((message: ChatMessage): boolean => message.kind == 'imageGeneration')))
-        start = finalIndex + 1
+        if (expanded && tailEnd > tailStart) entries.push(...executionTimeline(group.slice(tailStart, tailEnd)))
+        start = tailEnd
       })
-      // 最终回复之后的新消息尚不属于已完成报告，必须继续完整显示。
+      // 后续正文及其执行记录仍按原顺序显示。
       entries.push(...executionTimeline(group.slice(start)))
     }
     cursor = end
