@@ -2,10 +2,10 @@ import { historyThreadTitle, migrateHistoryTitles } from './history-thread-title
 import { createHash } from 'node:crypto';
 import { BridgeError, WRITE_METHODS, requestFingerprint } from '../../packages/protocol/contracts.mjs';
 import { validateTaskRequest } from '../../packages/protocol/tasks.mjs';
+import { isCommandOutcomeUnknown } from './journal.mjs';
 
 const FINISHED = ['succeeded', 'failed', 'canceled', 'skipped'];
 const DAY = 86400000;
-const unknownError = error => error?.outcomeUnknown === true || /超时|连接已关闭|not-connected|timeout/i.test(error?.message ?? '');
 const parse = (value, fallback = null) => value ? JSON.parse(value) : fallback;
 
 /** 每个实例使用自己的 SQLite 任务队列；传输回执与桌面执行彼此独立。 */
@@ -248,7 +248,7 @@ export class TaskQueue {
         const result = await this.execute(this.internal(this.row(row.device_id, row.id)), this.context(row));
         this.finish(row, 'succeeded', result);
       } catch (error) {
-        const state = unknownError(error) ? 'unknown' : 'failed';
+        const state = isCommandOutcomeUnknown(error) ? 'unknown' : 'failed';
         this.finish(row, state, null, { code: state === 'unknown' ? 'OUTCOME_UNKNOWN' : error?.code ?? 'TASK_FAILED', message: state === 'unknown' ? '执行结果需要核对，不会自动重发' : String(error?.message ?? '任务执行失败').slice(0, 2000), outcomeUnknown: state === 'unknown' });
       }
     }
@@ -278,7 +278,7 @@ export class TaskQueue {
           const result = await operation(commandId(name));
           this.db.prepare("UPDATE submission_task_steps SET state='succeeded',result=?,updated_at=? WHERE task_position=? AND name=?").run(JSON.stringify(result ?? null), this.now(), row.position, name); this.notify(); return result;
         } catch (error) {
-          this.db.prepare('UPDATE submission_task_steps SET state=?,updated_at=? WHERE task_position=? AND name=?').run(unknownError(error) ? 'unknown' : 'failed', this.now(), row.position, name); throw error;
+          this.db.prepare('UPDATE submission_task_steps SET state=?,updated_at=? WHERE task_position=? AND name=?').run(isCommandOutcomeUnknown(error) ? 'unknown' : 'failed', this.now(), row.position, name); throw error;
         }
       },
     };

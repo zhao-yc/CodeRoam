@@ -5,6 +5,8 @@ import { WebSocket } from 'ws';
 import { createRelay } from '../apps/relay/server.mjs';
 import { BridgeAgent } from '../apps/bridge/agent.mjs';
 import { InstanceHub } from '../apps/bridge/instance-hub.mjs';
+import { Journal } from '../apps/bridge/journal.mjs';
+import { TaskQueue } from '../apps/bridge/task-queue.mjs';
 import { tokenHash } from '../packages/protocol/contracts.mjs';
 import { createRequestDiagnostics } from '../packages/protocol/request-diagnostics.mjs';
 
@@ -149,4 +151,66 @@ test('实例路由尚未找到目标也记录电脑接收和失败，不能形�
   assert.equal(response.error.code, 'INSTANCE_OFFLINE');
   assert.deepEqual(rows.map(row => row.event), ['bridge.received', 'bridge.completed']);
   assert.equal(rows[0].trace, rows[1].trace);
+});
+
+test('Windows 核验原因写入执行记录，原始管道、实例和异常内容不会进入日志', async t => {
+  const rows = [], diagnostics = createRequestDiagnostics({ component: 'bridge', write: line => rows.push(JSON.parse(line)) });
+  const id = 'synthetic-private-instance', nativePipe = 'synthetic-private-pipe', rawError = 'synthetic-private-error';
+  const desktop = { pid: 101, startedAt: 1, nativePipe, soleIpc: true };
+  const wrongPipeOwner = { ...desktop, soleIpc: false };
+  const hub = Object.assign(Object.create(InstanceHub.prototype), { diagnostics, runtimes: new Map(), publish() {} });
+  const journal = new Journal();
+  const queue = new TaskQueue({
+    journal,
+    execute: ({ deviceId, commandId, payload }) => journal.execute(deviceId, commandId, payload.method, payload.params,
+      () => hub.verifyWindowsInstance(hub.runtimes.get(id).instance)),
+  });
+  t.after(async () => { await queue.close(); journal.close(); });
+  const cases = [
+    ['SESSION_PIPE_TIMEOUT', 'Windows 会话管道探测超时', { rows: [wrongPipeOwner], windowsProbe: { sessionPipe: 'timeout' } }],
+    ['SESSION_PIPE_OWNER_MISMATCH', 'Windows 会话管道归属不匹配', { rows: [wrongPipeOwner], windowsProbe: { sessionPipe: 'owner_mismatch' } }],
+    ['TOOL_PIPE_TIMEOUT', 'Windows 工具管道探测超时', { rows: [], windowsProbe: { toolPipeTimeouts: [nativePipe] } }],
+    ['DESKTOP_NOT_FOUND', '未找到所选 Windows 实例', { rows: [], windowsProbe: { toolPipeTimeouts: ['synthetic-other-pipe'] } }],
+    ['INSTANCE_NOT_READY', 'Windows 实例未就绪', { rows: [desktop] }, { ready: false }],
+    ['DISCOVERY_FAILED', 'Windows 实例扫描失败', new Error(rawError)],
+    ['ROUTER_CLIENT_MISSING', 'Windows 实例未就绪，本机管道尚未连接', null, { directIpc: false, routerManaged: true, routerClientIds: () => new Set() }, 'router'],
+    ['INSTANCE_NOT_READY', 'Windows 实例未就绪', null, { directIpc: false, ready: false }, 'bound'],
+  ];
+  for (const [reason, message, scan, state, mode = 'direct'] of cases) {
+    const instance = { ...desktop, id, alive: true, ready: true, directIpc: true, ...state };
+    hub.runtimes.set(id, { instance });
+    hub.discover = async () => {
+      if (scan instanceof Error) throw scan;
+      assert.ok(scan, '非直连模式不启动额外扫描');
+      return scan;
+    };
+    const taskId = randomUUID();
+    queue.submit('synthetic-phone', { taskId, kind: 'command', payload: { method: 'turn.send', params: { threadId: 'synthetic-thread', text: '合成消息' } } });
+    await queue.pump();
+    await assert.rejects(queue.wait('synthetic-phone', taskId), { code: 'INSTANCE_NOT_READY', message });
+    for (const view of ['active', 'history']) {
+      const snapshot = queue.list('synthetic-phone', { view });
+      const task = snapshot.tasks.find(row => row.id === taskId);
+      assert.equal(snapshot.paused, true);
+      assert.equal(task.state, 'failed');
+      assert.equal(task.error, message);
+    }
+    assert.equal(instance.ready, false);
+    const log = rows.at(-1);
+    assert.equal(log.event, 'instance.verification_failed');
+    assert.equal(log.reason, reason);
+    assert.equal(log.mode, mode);
+    assert.equal(log.errorCode, 'INSTANCE_NOT_READY');
+    assert.ok(log.elapsedMs >= 0);
+    queue.resume();
+  }
+  const ready = { ...desktop, id, alive: true, ready: true, directIpc: true };
+  hub.runtimes.set(id, { instance: ready });
+  hub.discover = async () => ({ rows: [desktop] });
+  await hub.verifyWindowsInstance(ready);
+  assert.equal(rows.length, cases.length);
+  diagnostics.record('instance.verification_failed', null, { reason: rawError, mode: rawError });
+  assert.equal(rows.at(-1).reason, 'OTHER');
+  assert.equal(rows.at(-1).mode, undefined);
+  for (const value of [id, nativePipe, rawError]) assert.equal(JSON.stringify(rows).includes(value), false);
 });
