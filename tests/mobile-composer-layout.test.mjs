@@ -11,7 +11,7 @@ const helpers=stripTypeScriptTypes(fs.readFileSync('apps/mobile/services/compose
 /** 执行实际页面的布局、测量和焦点方法，使用可控布局帧复现迟到回调。 */
 function fixture(){
   const ref=value=>({value}),frames=[],timers=new Map(),watches=[],unloads=[];let timerId=0;
-  const c={composerInstanceId:'example-composer',computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
+  const c={composerInstanceId:'example-composer',computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},canWrite:ref(true),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
   Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
   Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([]),mentionOpen:ref(false),draftMentions:ref([])});
   Object.assign(c,{pendingAction:ref(''),connection:{pendingCommands:[]},timeline:ref([])});
@@ -97,7 +97,8 @@ test('发送及入队后等待期间隐藏全部占位文字，完成或失败�
   f.c.timeline.value=[{kind:'message',label:'running'}];
   assert.equal(f.ui.composerPlaceholderHidden.value,false);
   scope.readOnly=true;scope.activating=true;
-  assert.equal(vm.runInNewContext(placeholder,scope),'正在连接聊天…');
+  assert.equal(vm.runInNewContext(placeholder,scope),'问问 Codex');
+  assert.match(tag,/v-if="activating"[^>]*>正在连接聊天…/);
 });
 
 test('预测按真实排版高度取整并限制六行，编辑态保持原有高度范围',()=>{

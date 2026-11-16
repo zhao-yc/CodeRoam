@@ -1,7 +1,7 @@
 <template>
   <view class="permission-control">
     <!-- 常规权限入口与加号、清空图标共用深色，完全访问保留警示色。 -->
-    <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || !available || busy || loading ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'dark'" /><button class="permission-trigger-hit" :disabled="disabled || !available || busy" :aria-label="'选择权限，当前' + label" @click.stop="openMenu"></button></view>
+    <view :id="triggerId" class="permission-trigger" :style="{ opacity: disabled || (!available && prepare == null) || busy || loading ? 0.45 : 1 }"><app-icon :name="permissionIcon(mode)" :size="22" :tone="mode == 'full-access' ? 'warning' : 'dark'" /><button class="permission-trigger-hit" :disabled="disabled || (!available && prepare == null) || busy || preparing" :aria-label="'选择权限，当前' + label" @click.stop="requestMenu"></button></view>
     <view v-if="opened" class="permission-overlay" :style="{ left: paneLeft + 'px', right: paneWidth > 0 ? 'auto' : '0px', width: paneWidth > 0 ? paneWidth + 'px' : 'auto' }" @click="closeMenu">
       <view class="permission-panel" :style="{ left: panelLeft + 'px', bottom: panelBottom + 'px', width: panelWidth + 'px' }" @click.stop>
         <view class="permission-heading"><text class="permission-title">应如何批准 ChatGPT 操作?</text><view class="permission-close"><app-icon name="close" :size="20" /><button class="permission-close-hit" :disabled="busy" aria-label="关闭权限选择" @click="closeMenu"></button></view></view>
@@ -29,14 +29,15 @@
   </view>
 </template>
 <script setup lang="uts">
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionOption, PermissionState, permissionDescription, permissionLabel } from '../../services/permissions.uts'
 import { savePermissionPreference } from '../../services/permission-preferences.uts'
 import { submissionTasks } from '../../services/submission-task-state.uts'
-const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, deferChanges?: boolean, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', deferChanges: false, disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
+const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, deferChanges?: boolean, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number, prepare?: () => Promise<boolean> }>(), { threadId: '', projectId: '', selectedMode: '', deferChanges: false, disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
 const emit = defineEmits<{ select: [mode: string, confirmed: boolean, revision: string], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
+const preparing = ref(false)
 const manualRetry = ref(false), pendingMode = ref('')
 const pendingPermissionCommand = ref(''), pendingQueued = ref(false)
 const opened = ref(false), loading = ref(false), busy = ref(false), error = ref(''), state = ref<PermissionState | null>(null)
@@ -89,6 +90,20 @@ async function load(manual: boolean = false) {
 }
 // 菜单重试只在原按钮显示进度，自动读取继续使用面板提示。
 function retry() { load(true) }
+// 历史详情先取得实时权限能力，再沿用原菜单读取和确认。
+async function requestMenu() {
+  if (props.disabled || preparing.value || !props.active) return
+  const prepare = props.prepare
+  if (prepare == null) { openMenu(); return }
+  const revision = bridge.foregroundRevision
+  preparing.value = true
+  try {
+    const ready = await prepare()
+    if (!ready) return
+    await nextTick()
+    if (alive && props.active && bridge.foreground && revision == bridge.foregroundRevision) openMenu()
+  } finally { preparing.value = false }
+}
 function openMenu() {
   if (props.disabled || props.nativeBusy || !available.value) return
   const info = uni.getWindowInfo(), rect = uni.getElementById(triggerId.value)?.getBoundingClientRect()

@@ -22,7 +22,7 @@ function fixture() {
     clearCommand(id) { if (context.connection.pendingCommandId === id) context.connection.pendingCommandId = ''; },
     pendingCommand() { return context.connection.pendingCommandId; },
   };
-  Object.assign(context, { removalSubmissionId: { value: '' }, removalReturnStarted: { value: false }, removeArchivedThread() {}, notify: message => context.notices.push(message), closeActions() {}, getCurrentPages: () => [{}, {}], isCurrentPage: () => context.connection.hostId === context.pageHostId.value && context.connection.activeThreadId === context.pageThreadId.value, acceptPlanReceipt: () => false, settleSubmission() {}, refresh() {} });
+  Object.assign(context, { removalSubmissionId: { value: '' }, removalReturnStarted: { value: false }, removeArchivedThread() {}, notify: message => context.notices.push(message), closeActions() {}, runLiveAction(action) { if (context.canWrite.value) action(); }, getCurrentPages: () => [{}, {}], isCurrentPage: () => context.connection.hostId === context.pageHostId.value && context.connection.activeThreadId === context.pageThreadId.value, acceptPlanReceipt: () => false, settleSubmission() {}, refresh() {} });
   const notices = fs.readFileSync('apps/mobile/services/page-notices.uts', 'utf8').replace(/\bexport /g, '');
   Object.assign(context, {props:{target:{cacheNamespace:'synthetic-pair'}},fileCacheClears:[],clearFileReportCache(...args){context.fileCacheClears.push(args);},clearTimeout(){}});
   vm.runInNewContext(stripTypeScriptTypes(notices + '\n' + methods, { mode: 'transform' }) + '\nglobalThis.subject={archiveFromMenu};', componentScope(context));

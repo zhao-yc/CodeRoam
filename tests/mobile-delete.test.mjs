@@ -24,7 +24,7 @@ function fixture(storage = new Map()) {
     ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }),
     pageHostId: { value: 'pc' }, pageThreadId: { value: 'root' }, pageVisible: { value: true }, busy: { value: false }, operationError: { value: '' }, archivePromptOpen: false, removalSubmissionId: { value: '' }, removalReturnStarted: { value: false },
     cachedDetail: { value: null }, cacheDirty: false, cacheWriteTimer: 0, historyRequest: 0, historyPage: { value: { messages: ['合成历史'] } }, historyError: { value: '' },
-    closeActions() {}, notify: message => notices.push(message), onHide: fn => { life.hide = fn; }, onUnload: fn => { life.unload = fn; }, getCurrentPages: () => [{}, {}], returned: 0,
+    closeActions() {}, runLiveAction(action) { if (c.canWrite.value) action(); }, notify: message => notices.push(message), onHide: fn => { life.hide = fn; }, onUnload: fn => { life.unload = fn; }, getCurrentPages: () => [{}, {}], returned: 0,
   };
   c.isCurrentPage = () => c.connection.hostId === c.pageHostId.value && c.connection.activeThreadId === c.pageThreadId.value;
   c.canWrite = { get value() { return c.connection.connected && !c.busy.value && !c.connection.pendingCommands.some(e => e.hostId === c.pageHostId.value && e.threadId === c.pageThreadId.value); } };

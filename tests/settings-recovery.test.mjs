@@ -103,11 +103,11 @@ test('迟到读取不能覆盖快照中明确的新强度，也不能跨模型�
 test('目录失败后已有模型也会在打开菜单时补读，重复打开不重复请求', async () => {
   const f = fixture(), c = f.context;
   c.settings.value = { ...initial };
-  c.openComposerMenu('settings'); c.openComposerMenu('models');
+  c.showComposerMenu('settings'); c.showComposerMenu('models');
   assert.equal(f.pending.length, 1);
   await f.fail();
   assert.equal(f.timers.size, 1);
-  c.openComposerMenu('settings');
+  c.showComposerMenu('settings');
   assert.equal(f.pending.length, 1); assert.equal(f.timers.size, 0);
   await f.reply();
   assert.equal(c.settingsError.value, ''); assert.equal(c.models.value.length, 1);

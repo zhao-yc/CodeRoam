@@ -165,6 +165,28 @@ test('快速从A切到B再返回A时，第一轮A的迟到回执不能恢复图�
   }
 });
 
+test('按需操作共享在途只读订阅，激活过程中保留聊天正文',async()=>{
+  const f=connectedFixture();
+  const background=f.bridge.watch('thread');
+  const waiting=f.bridge.watch('thread');
+  assert.equal(f.sent.length,1);
+  assert.equal(waiting,background);
+  respond(f,f.sent[0],{snapshot:{threadId:'thread',title:'合成历史',messages:[],readOnly:true},epoch:'current',seq:1});
+  await waiting;
+
+  const history=f.connection.snapshot;
+  const activation=f.bridge.activate('thread');
+  assert.equal(f.sent.at(-1).params.activate,true);
+  assert.equal(f.connection.snapshot,history);
+  await f.bridge.watch('thread');
+  assert.equal(f.sent.length,2,'激活中被动读取不能覆盖激活请求');
+  respond(f,f.sent[1],{snapshot:{threadId:'thread',title:'合成实时正文',messages:[],readOnly:false},epoch:'current',seq:2});
+  await activation;
+  assert.equal(f.connection.snapshot.readOnly,false);
+  assert.equal(f.connection.subscribedThreadId,'thread');
+  assert.equal(f.bridge.syncingThread,'');
+});
+
 test('主动打开应用快照后发起新读取，旧成功结算不能清除新读取的同步锁',async()=>{
   const f=connectedFixture(),apply=f.bridge.applySnapshot.bind(f.bridge);
   f.bridge.applySnapshot=(...args)=>{apply(...args);f.bridge.syncingThread='';f.bridge.watch('thread');};

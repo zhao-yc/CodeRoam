@@ -136,6 +136,7 @@ class MobileBridge {
   socket: SocketTask | null = null
   pending = new Map<string, PendingReply>()
   foreground = true
+  foregroundRevision = 0
   backgroundNotificationsEnabled = false
   activePreview: ConversationPreviewRequest | null = null
 
@@ -156,6 +157,7 @@ class MobileBridge {
   openingRevision = 0
   subscriptionRequestRevision = 0
   syncingThread = ''
+  private conversationWatch: Promise<void> | null = null
   listingHost = ''
   listingRevision = 0
   conversationUpdateRevision = 0
@@ -280,7 +282,7 @@ class MobileBridge {
   }
 
   resume() { this.foreground = true; if (this.config != null && !connection.connected) this.connect() }
-  background() { this.foreground = false; if (!this.backgroundNotificationsEnabled) { this.disconnect(); connection.status = '返回后恢复连接' } }
+  background() { this.foreground = false; this.foregroundRevision++; if (!this.backgroundNotificationsEnabled) { this.disconnect(); connection.status = '返回后恢复连接' } }
 
   connect() {
     const config = this.config
@@ -718,7 +720,7 @@ class MobileBridge {
     if (connection.connected) this.refreshThreads(); else this.resume()
   }
 
-  // 只有用户点击调用此入口；刷新和重连仍走只读 watch，不重放导航。
+  // 新建聊天走此入口切换订阅；同一聊天按需连接使用 activate，以保留当前正文。
   openThread(threadId: string): Promise<UTSJSONObject> {
     if (!connection.connected) return new Promise<UTSJSONObject>((_resolve, reject) => { reject(new Error('请先恢复连接')) })
     const pendingId = this.pendingCommand(connection.hostId, threadId)
@@ -765,7 +767,7 @@ class MobileBridge {
     return this.activate(threadId)
   }
 
-  // 点击继续只请求桌面加载并读取快照；成功后仍需用户主动发送消息。
+  // 为当前聊天加载实时所有者，同时保留历史快照和正文基线。
   activate(threadId: string): Promise<UTSJSONObject> {
     const hostId = connection.hostId
     const subscriptionRequest = ++this.subscriptionRequestRevision
@@ -773,15 +775,20 @@ class MobileBridge {
     const params: UTSJSONObject = { threadId, activate: true }
     if (base != null) params['contentRevision'] = base.revision
     const preview = this.beginConversationPreview(hostId, threadId, params, base)
+    this.conversationWatch = null
+    this.syncingThread = threadId
     return this.request('thread.watch', params).then(async (result: UTSJSONObject): Promise<UTSJSONObject> => {
       // 保持既有继续接口的结算方式；过期回执不应用，也不能确认图片订阅。
       if (subscriptionRequest != this.subscriptionRequestRevision || connection.hostId != hostId || connection.activeThreadId != threadId) return result
       const snapshot = result['snapshot'] as UTSJSONObject | null
       if (snapshot == null || snapshot['readOnly'] == true) throw new Error('电脑连接服务尚未完成加载，请稍后重试或更新电脑连接服务')
       this.finishConversationPreview(preview)
-      if (this.applySnapshot(result, hostId, threadId, preview?.base ?? base) === false) { await this.watch(threadId, true) }
+      if (this.applySnapshot(result, hostId, threadId, preview?.base ?? base) === false) { this.syncingThread = ''; await this.watch(threadId, true) }
       return result
-    }).finally(() => { this.finishConversationPreview(preview) })
+    }).finally(() => {
+      this.finishConversationPreview(preview)
+      if (subscriptionRequest == this.subscriptionRequestRevision && connection.hostId == hostId && connection.activeThreadId == threadId) this.syncingThread = ''
+    })
   }
 
   cancelOpen(threadId: string) { if (connection.activeThreadId == threadId) { this.clearConversationSubscription(); this.openingRevision++; this.syncingThread = ''; connection.activeThreadId = ''; connection.conversationError = ''; this.syncPendingCommand(); connection.snapshot = null; connection.preview = null; connection.contentRevision = ''; connection.epoch = ''; connection.sequence = 0; this.request('thread.unwatch', { threadId }).then((_: UTSJSONObject) => {}, (_: Error) => {}) } }
@@ -870,7 +877,7 @@ class MobileBridge {
   }
 
   // 连接就绪后仍需确认当前聊天的实时订阅。
-  clearConversationSubscription() { this.subscriptionRequestRevision++; this.activePreview = null; connection.subscribedHostId = ''; connection.subscribedThreadId = '' }
+  clearConversationSubscription() { this.subscriptionRequestRevision++; this.activePreview = null; this.syncingThread = ''; this.conversationWatch = null; connection.subscribedHostId = ''; connection.subscribedThreadId = '' }
 
   // 电脑确认移除后清除当前页面正文，并废弃实时和在途订阅。
   invalidateRemovedConversation(hostId: string, threadId: string) {
@@ -893,12 +900,18 @@ class MobileBridge {
     this.watch(threadId, true)
   }
 
-  async watch(threadId: string, forceFull: boolean = false): Promise<void> {
+  watch(threadId: string, forceFull: boolean = false): Promise<void> {
+    if (this.syncingThread == threadId) return this.conversationWatch ?? Promise.resolve()
+    const reading = this.readConversation(threadId, forceFull)
+    this.conversationWatch = reading
+    return reading
+  }
+
+  private async readConversation(threadId: string, forceFull: boolean): Promise<void> {
     const hostId = connection.hostId
-    if (this.syncingThread == threadId) return
-    this.syncingThread = threadId
     const previous = connection.activeThreadId
     if (previous != threadId) this.clearConversationSubscription()
+    this.syncingThread = threadId
     const subscriptionRequest = ++this.subscriptionRequestRevision
     if (previous.length > 0 && previous != threadId && connection.connected) this.request('thread.unwatch', { threadId: previous }).then((_: UTSJSONObject) => {}, (_: Error) => {})
     connection.activeThreadId = threadId
@@ -928,7 +941,7 @@ class MobileBridge {
     if (this.syncingThread == threadId) this.syncingThread = ''
     this.finishConversationPreview(preview)
     if (this.applySnapshot(result, hostId, threadId, preview?.base ?? base) === false) {
-      if (!forceFull) await this.watch(threadId, true)
+      if (!forceFull) await this.readConversation(threadId, true)
       else connection.conversationError = '聊天正文同步失败，请重试'
     }
   }

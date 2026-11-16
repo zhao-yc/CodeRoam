@@ -144,7 +144,7 @@ test('详情回车只采纳预测或发送内容，空输入不触发停止和�
   const parent = fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue', 'utf8');
   const calls = [], ref = value => ({value});
   const c = {canWrite: ref(true), imageBusy: ref(false), filesReady: ref(true), draft: ref(''), visiblePrediction: ref('合成预测'),
-    draftImages: ref([]), draftFiles: ref([]), send: () => calls.push('发送'),
+    draftImages: ref([]), draftFiles: ref([]), submitDraft: () => { if (c.canWrite.value && !c.imageBusy.value && c.filesReady.value) calls.push('发送'); },
     acceptPrediction: () => { calls.push('采纳'); c.draft.value = c.visiblePrediction.value; c.visiblePrediction.value = ''; }};
   vm.runInNewContext(stripTypeScriptTypes(parent.match(/function applyComposerEnter\(\) \{[^]*?\n\}/)[0]) + '\nglobalThis.submit=applyComposerEnter;', c);
   const input = fixture({onSubmit: () => c.submit()}), enter = () => input.ui.onKeydown({key: 'Enter', preventDefault() {}});

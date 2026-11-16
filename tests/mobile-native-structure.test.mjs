@@ -6,7 +6,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 
-test('历史浏览实际计算发送禁用态，原会话实时同步后恢复操作',()=>{
+test('历史快照不能直接写入，原会话实时同步后恢复操作',()=>{
   const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8').match(/^const (?:readOnly|canWrite|subscriptionReady|goalHostOnline|liveConversation) = .+$/gm).join('\n');
   const snapshot={threadId:'thread',readOnly:true};
   const context=componentContext({cacheOnly:false,connection:{connected:true,snapshot,hostId:'pc',activeThreadId:'thread',subscribedHostId:'pc',subscribedThreadId:'thread',computers:[{id:'pc',online:true}],pendingCommandId:''},busy:{value:false},checking:{value:false},activating:{value:false},pageHostId:{value:'pc'},pageThreadId:{value:'thread'},computed:fn=>({get value(){return fn();}})});
@@ -40,14 +40,17 @@ test('手机端原生button只包含文字，不嵌套图标或布局组件',()=
 });
 
 /** 使用页面真实入口，确认禁用态不会发送、停止或关闭菜单。 */
-test('主操作和菜单停止在禁用态无副作用，启用后保留发送与停止',()=>{
+test('停止动作等待实时状态，已经更换的轮次不会停止',()=>{
   const source=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
-  const methods=['primaryAction','stopFromMenu'].map(name=>source.split(/\r?\n/).find(line=>line.startsWith('function '+name+'('))).join('\n');
-  const calls=[];
-  const context={canWrite:{value:false},imageBusy:{value:false},filesReady:{value:true},draftFiles:{value:[]},draftMentions:{value:[]},draftImages:{value:[]},draft:{value:'继续'},activeTurnId:{value:'turn'},send:()=>calls.push('发送'),stop:()=>calls.push('停止'),closeActions:()=>calls.push('关闭菜单')};
-  vm.runInNewContext(methods+'\nprimaryAction(); stopFromMenu();', componentScope(context));assert.deepEqual(calls,[]);
-  context.canWrite.value=true;vm.runInNewContext(methods+'\nprimaryAction();', componentScope(context));assert.deepEqual(calls,['发送']);
-  context.draft.value='';vm.runInNewContext(methods+'\nprimaryAction(); stopFromMenu();', componentScope(context));assert.deepEqual(calls,['发送','停止','关闭菜单','停止']);
-  context.draftImages.value=[{id:'image'}];vm.runInNewContext(methods+'\nprimaryAction();', componentScope(context));assert.equal(calls.at(-1),'发送');
-  context.imageBusy.value=true;const count=calls.length;vm.runInNewContext(methods+'\nprimaryAction();', componentScope(context));assert.equal(calls.length,count);
+  const method=source.slice(source.indexOf('function stopFromMenu('),source.indexOf('// 原生返回'));
+  const calls=[], pending=[];
+  const context={activeTurnId:{value:'turn'},closeActions:()=>calls.push('关闭菜单'),stop:()=>calls.push('停止'),runLiveAction:action=>pending.push(action)};
+  vm.runInNewContext(method+'\nstopFromMenu();',componentScope(context));
+  assert.deepEqual(calls,['关闭菜单']);
+  context.activeTurnId.value='other';
+  pending.shift()();
+  assert.deepEqual(calls,['关闭菜单']);
+  vm.runInNewContext(method+'\nstopFromMenu();',componentScope(context));
+  pending.shift()();
+  assert.deepEqual(calls,['关闭菜单','关闭菜单','停止']);
 });

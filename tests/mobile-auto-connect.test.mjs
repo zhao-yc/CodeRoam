@@ -1,3 +1,4 @@
+
 import {componentContext} from './helpers/component-context.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -5,68 +6,118 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 
-/** 执行详情页真实的菜单同步入口，验证导航只来自显式点击。 */
-function fixture() {
-  const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
-  const refs=['operationError','activating','activationSource','pageVisible','pageHostId','pageThreadId','liveConversation','goalHostOnline','subscriptionReady'];
-  const declarations=page.split(/\r?\n/).filter(line=>refs.some(name=>line.startsWith('const '+name+' ='))||line.startsWith('let activationRequest =')||line.startsWith('let pageAlive =')||line.startsWith('const readOnly =')||line.startsWith('const canWrite =')||line.startsWith('function isCurrentPage()')).join('\n');
-  const readMethod=(start,end)=>page.slice(page.indexOf(start),page.indexOf(end,page.indexOf(start)));
-  const methods=readMethod('function retryDesktopOpen(', '// 只标记用户点击')+'\n'+readMethod('function refreshFromMenu(', '// 取消只收起编辑区');
-  const hint=readMethod('const conversationConnectionHint =','const openingTitle =');
-  const requests=[],loaders=[],calls=[];
-  const connection={hostId:'pc',activeThreadId:'thread',subscribedHostId:'pc',subscribedThreadId:'thread',epoch:'e',sequence:1,connected:true,pendingCommandId:'',error:'',computers:[{id:'pc',online:true}],snapshot:{threadId:'thread',readOnly:true,messages:[]}};
-  const context=componentContext({connection,ref:value=>({value}),computed:get=>({get value(){return get();}}),busy:{value:false},closeActions:()=>calls.push('关闭菜单'),notify:text=>calls.push(text),bridge:{resume:()=>calls.push('恢复连接'),openThread:id=>{requests.push(id);return new Promise((resolve,reject)=>loaders.push({resolve,reject}));}}});
-  vm.runInContext(stripTypeScriptTypes(declarations+'\n'+hint+'\n'+methods,{mode:'transform'})+'\nglobalThis.subject={operationError,activating,pageVisible,pageHostId,pageThreadId,canWrite,conversationConnectionHint,refreshFromMenu};',context);
-  const f=context.subject;f.pageHostId.value='pc';f.pageThreadId.value='thread';f.pageVisible.value=true;
-  return {page,context,connection,f,requests,loaders,calls};
-}
+const page=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
+const read=(start,end)=>page.slice(page.indexOf(start),page.indexOf(end,page.indexOf(start)));
 const flush=()=>new Promise(setImmediate);
 
-test('历史浏览提示菜单同步，点击才加载一次，成功后开放操作且不发送草稿',async()=>{
-  const t=fixture();assert.equal(t.requests.length,0);assert.equal(t.f.canWrite.value,false);
-  assert.match(t.f.conversationConnectionHint.value,/右上角菜单重新同步/);
-  t.f.refreshFromMenu();t.f.refreshFromMenu();assert.deepEqual(t.requests,['thread']);
-  assert.equal(t.f.activating.value,true);assert.equal(t.f.conversationConnectionHint.value,'正在同步聊天…');
-  t.connection.snapshot.readOnly=false;t.loaders[0].resolve({});await flush();
-  assert.equal(t.f.canWrite.value,true);assert.equal(t.f.activating.value,false);
+function fixture() {
+  const declarations=[
+    read('const activating =','const actionsVisible ='),
+    ...page.match(/^const (?:readOnly|canWrite|canBeginLiveAction|subscriptionReady|goalHostOnline|liveConversation) = .+$/gm),
+    page.match(/^function isCurrentPage\(\).+$/m)[0],
+  ].join('\n');
+  const methods=read('// 前台意图只属于','// 只标记用户点击')+
+    read('const hasSendableDraft =','function stopFromMenu(')+
+    page.match(/^function onComposerFocus\(\).+$/m)[0]+'\n'+
+    read('function applyComposerEnter() {','// 追加和取消');
+  const ref=value=>({value}), requests=[], loaders=[], calls=[];
+  const connection={hostId:'pc',activeThreadId:'thread',subscribedHostId:'pc',subscribedThreadId:'thread',connected:true,pendingCommandId:'',computers:[{id:'pc',online:true,instanceGeneration:'instance'}],snapshot:{threadId:'thread',readOnly:true,messages:[{id:'history'}]}};
+  const bridge={
+    foreground:true, foregroundRevision:0, generation:1, syncingThread:'',
+    watch(id){calls.push('读取:'+id);return Promise.resolve();},
+    activate(id){requests.push(id);return new Promise((resolve,reject)=>loaders.push({resolve,reject}));},
+    resume(){calls.push('恢复连接');},
+  };
+  const context=componentContext({
+    bridge, connection, ref, computed:get=>({get value(){return get();}}),
+    pageAlive:true, pageVisible:ref(true), pageHostId:ref('pc'), pageThreadId:ref('thread'), busy:ref(false), watch(){},
+    operationError:ref(''), composerSending:ref(false), inputFocused:ref(false), composerBlurTimer:0,
+    clearTimeout(){}, dismissGoal(){}, queueEditing:ref(false), imageBusy:ref(false), filesReady:ref(true),
+    activeTurnId:ref(''), retryTurnId:ref(''), canRetryTurn:()=>false, visiblePrediction:ref(''),
+    mentionDraftRevision:0, messageChoicesRevision:()=>0, draft:ref('合成草稿'), draftImages:ref([]),
+    draftFiles:ref([{id:'synthetic-file'}]), draftPlugins:ref([]), draftMentions:ref([]),
+    notify:message=>calls.push(message),
+    send(){calls.push('发送');context.busy.value=true;},
+  });
+  vm.runInContext(stripTypeScriptTypes(declarations+'\n'+methods,{mode:'transform'})+
+    '\nglobalThis.subject={canWrite,activating,onComposerFocus,applyComposerEnter,primaryAction,runLiveAction};',context);
+  return {connection,context,bridge,ui:context.subject,requests,loaders,calls,
+    live(){connection.snapshot.readOnly=false;loaders[0].resolve({});}};
+}
+
+test('被动浏览继续显示历史，移除提示和手动打开入口；首次编辑只连接一次',async()=>{
+  const t=fixture();
+  assert.doesNotMatch(page,/conversationConnectionHint|@click="refreshFromMenu"|重试打开聊天/);
+  assert.equal(t.requests.length,0);
+  assert.equal(t.ui.canWrite.value,false);
+  t.ui.onComposerFocus();t.ui.onComposerFocus();
+  assert.deepEqual(t.requests,['thread']);
+  assert.equal(t.connection.snapshot.messages[0].id,'history');
+  t.live();await flush();
+  assert.equal(t.ui.canWrite.value,true);
+  assert.deepEqual(t.calls,[]);
 });
 
-test('已有实时会话也可显式同步，后台状态变化不重放桌面导航',async()=>{
-  const t=fixture();t.connection.snapshot.readOnly=false;t.connection.sequence++;
-  assert.equal(t.requests.length,0);t.f.refreshFromMenu();assert.equal(t.requests.length,1);
-  t.loaders[0].resolve({});await flush();t.connection.snapshot.readOnly=true;t.connection.sequence++;
-  assert.equal(t.requests.length,1);assert.equal(t.f.activating.value,false);
+test('后台读取已有实时状态时不打开电脑页面，操作入口继续执行',async()=>{
+  const t=fixture();t.connection.snapshot=null;t.bridge.syncingThread='thread';
+  let finish;
+  t.bridge.watch=()=>new Promise(resolve=>{finish=resolve;});
+  t.ui.runLiveAction(()=>t.calls.push('打开附件菜单'));
+  t.ui.runLiveAction(()=>t.calls.push('重复操作'));
+  assert.deepEqual(t.requests,[]);
+  t.connection.snapshot={threadId:'thread',readOnly:false};
+  finish();await flush();
+  assert.deepEqual(t.requests,[]);
+  assert.deepEqual(t.calls,['打开附件菜单']);
 });
 
-test('断线、电脑离线、待核对和隐藏页面阻止导航，恢复后仍需重新点击',()=>{
-  for(const reason of ['网络','电脑','待核对','隐藏']) {
-    const t=fixture();
-    if(reason==='网络')t.connection.connected=false;
-    if(reason==='电脑')t.connection.computers[0].online=false;
-    if(reason==='待核对')t.connection.pendingCommandId='unknown';
-    if(reason==='隐藏')t.f.pageVisible.value=false;
-    t.f.refreshFromMenu();assert.equal(t.requests.length,0,reason);
-    if(reason==='网络')assert.ok(t.calls.includes('恢复连接'));
-    t.connection.connected=true;t.connection.computers[0].online=true;t.connection.pendingCommandId='';t.f.pageVisible.value=true;
-    assert.equal(t.requests.length,0,reason);t.f.refreshFromMenu();assert.equal(t.requests.length,1,reason);
+test('同步中点击发送和回车合并为一次，保留附件并在实时确认后提交',async()=>{
+  const t=fixture();t.ui.onComposerFocus();
+  t.ui.primaryAction();t.ui.applyComposerEnter();
+  assert.deepEqual(t.requests,['thread']);assert.deepEqual(t.calls,[]);
+  t.live();await flush();
+  assert.deepEqual(t.calls,['发送']);
+  assert.equal(t.context.draftFiles.value[0].id,'synthetic-file');
+});
+
+test('同步时编辑草稿或变更附件，成功后仍保留原操作确认',async()=>{
+  for(const edit of [t=>{t.context.mentionDraftRevision++;t.context.draft.value='修改后';},t=>{t.context.draftFiles.value=[];}]){
+    const t=fixture();t.ui.primaryAction();edit(t);t.live();await flush();
+    assert.deepEqual(t.calls,['草稿已更新，请确认后发送']);
+    t.ui.primaryAction();assert.equal(t.calls.at(-1),'发送');
   }
 });
 
-test('同步失败保留原状态和草稿，不自动循环；再次点击可重试',async()=>{
-  const t=fixture(),snapshot=t.connection.snapshot;snapshot.draft='合成草稿';
-  t.f.refreshFromMenu();t.loaders[0].reject(new Error('电脑加载超时'));await flush();
-  assert.equal(t.f.operationError.value,'电脑加载超时');assert.equal(t.connection.error,'');assert.equal(t.connection.snapshot,snapshot);assert.equal(snapshot.draft,'合成草稿');assert.equal(t.f.canWrite.value,false);
-  t.connection.sequence++;assert.equal(t.requests.length,1);assert.equal(t.f.activating.value,false);
-  t.f.refreshFromMenu();assert.equal(t.requests.length,2);t.connection.snapshot.readOnly=false;t.loaders[1].resolve({});await flush();assert.equal(t.f.canWrite.value,true);
+test('同步失败保留草稿和历史，只在重新发起操作时重试',async()=>{
+  const t=fixture();const snapshot=t.connection.snapshot;
+  t.ui.primaryAction();t.loaders[0].reject(new Error('电脑加载超时'));await flush();
+  assert.equal(t.context.operationError.value,'电脑加载超时');
+  assert.equal(t.connection.snapshot,snapshot);
+  assert.equal(t.context.draft.value,'合成草稿');
+  assert.deepEqual(t.requests,['thread']);
+  assert.deepEqual(t.calls,['读取:thread']);
+  t.ui.primaryAction();assert.deepEqual(t.requests,['thread','thread']);
+  t.connection.snapshot.readOnly=false;t.loaders[1].resolve({});await flush();
+  assert.equal(t.calls.at(-1),'发送');
 });
 
-test('切换会话、电脑及卸载后，迟到同步回执不改写新页面',async()=>{
-  for(const reason of ['会话','电脑','卸载']) {
-    const t=fixture();t.f.refreshFromMenu();
-    if(reason==='会话')t.connection.activeThreadId='other';
-    if(reason==='电脑')t.connection.hostId='other';
-    if(reason==='卸载')vm.runInContext('activationRequest++;pageAlive=false;',t.context);
-    t.f.operationError.value='新页面的提示';t.loaders[0].reject(new Error('迟到失败'));await flush();
-    assert.equal(t.f.operationError.value,'新页面的提示');assert.equal(t.requests.length,1);
+test('切换会话、换电脑、退到后台或换代后，迟到回执不会继续提交',async()=>{
+  for(const invalidate of [
+    t=>{t.connection.activeThreadId='other';},
+    t=>{t.connection.hostId='other';},
+    t=>{t.bridge.foregroundRevision++;},
+    t=>{t.connection.computers[0].instanceGeneration='other';},
+    t=>{t.context.pageVisible.value=false;},
+  ]){
+    const t=fixture();t.ui.primaryAction();invalidate(t);t.live();await flush();
+    assert.deepEqual(t.calls,[]);
   }
+});
+
+test('离线自动请求恢复连接，待核对时阻止激活或提交',async()=>{
+  const t=fixture();t.connection.connected=false;t.ui.primaryAction();await flush();
+  assert.deepEqual(t.calls,['恢复连接']);assert.deepEqual(t.requests,[]);
+  t.connection.connected=true;t.connection.pendingCommandId='pending';
+  t.ui.onComposerFocus();t.ui.primaryAction();
+  assert.deepEqual(t.requests,[]);
 });

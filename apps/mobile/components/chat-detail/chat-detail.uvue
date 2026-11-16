@@ -16,12 +16,10 @@
       <view v-if="liquidGlass" class="icon-button glass-header-action"><liquid-glass-control symbol="ellipsis" label="聊天菜单" @activate="showActions" /></view>
       <view v-else class="icon-button round-button action-frame"><app-icon name="more" :size="24" /><button class="action-hitbox" hover-class="action-pressed" aria-label="聊天菜单" @click="showActions"></button></view>
     </view>
-    <view v-if="readOnly" class="notice"><text class="notice-text">{{ conversationConnectionHint }}</text></view>
     <view v-if="!connection.connected" class="connection-notice"><view class="connection-dot offline"></view><text class="connection-note">{{ connection.status }}，草稿仍可编辑</text><view class="text-button inline-progress-button"><action-progress :busy="refreshSource == 'connection' && reconnecting" /><text class="inline-progress-caption" style="color: #4546bd; font-size: 12px;">重连</text><button class="inline-progress-hitbox" @click="refreshButton('connection')" :disabled="refreshSource == 'connection' && reconnecting" :aria-label="(refreshSource == 'connection' && reconnecting) ? '正在重新连接' : '重连'"></button></view></view>
     <view v-if="detailError.length > 0" class="notice"><text class="notice-text">{{ detailError }}</text></view>
     <view v-if="pendingRetryCommand.length > 0" class="notice pending-notice"><text class="notice-text">重试结果需要核对，请勿重复提交。</text><view class="check button-secondary inline-progress-button"><action-progress :busy="pendingAction == 'check-retry'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">核对重试结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || busy || (pendingAction == 'check-retry')" @click="checkRetryOutcome" :aria-label="(pendingAction == 'check-retry') ? '正在核对重试结果' : '核对重试结果'"></button></view></view>
     <view v-if="pageDeleteTask != null" class="notice pending-notice"><text class="notice-text">{{ pageDeleteTask!.state == 'running' ? '正在删除，可以返回' : pageDeleteTask!.error }}</text><view v-if="pageDeleteTask!.state != 'running' && pageDeleteTask!.state != 'failed'" class="check button-secondary inline-progress-button"><action-progress :busy="pageDeleteTask?.checking == true" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">核对删除结果</text><button class="inline-progress-hitbox" :disabled="!connection.connected || pageDeleteTask!.checking" @click="checkDeleteOutcome" :aria-label="(pageDeleteTask?.checking == true) ? '正在核对删除结果' : '核对删除结果'"></button></view></view>
-    <view v-if="connection.desktopNavigationError.length > 0 || activationSource == 'desktop'" class="notice pending-notice"><text class="notice-text">{{ connection.desktopNavigationError }}</text><view class="check button-secondary inline-progress-button"><action-progress :busy="activationSource == 'desktop'" /><text class="inline-progress-caption" style="color: #1a2135; font-size: 12px;">重试打开聊天</text><button class="inline-progress-hitbox" :disabled="!connection.connected || activating || connection.pendingCommandId.length > 0 || (activationSource == 'desktop')" @click="retryDesktopOpen" :aria-label="(activationSource == 'desktop') ? '正在打开聊天' : '重试打开聊天'"></button></view></view>
     <view class="timeline-region" @click="dismissGoal">
       <scroll-view id="conversation-timeline" direction="vertical" class="timeline" :scroll-into-view="scrollTarget" :scroll-top="historyScrollTop" :upper-threshold="60" @scrolltoupper="onHistoryTop" @scroll="onTimelineScroll" @touchstart="beginTimelineTouch" @touchend="endTimelineTouch" @touchcancel="endTimelineTouch" @wheel="onTimelineWheel">
         <view id="timeline-content" class="timeline-content" :style="{ minHeight: readingFloor + 'px' }">
@@ -53,14 +51,14 @@
             <app-icon class="turn-failure-icon" name="alert-circle" :size="16" tone="warning" />
             <view class="turn-failure-copy">
               <text class="turn-failure-text" selectable>{{ entry.text }}</text>
-              <text v-if="entry.turnId == displayFailureTurnId && connection.snapshot?.supportsTurnRetry != true && !showingPreview" class="turn-failure-hint">更新电脑连接服务后可重试</text>
+              <text v-if="entry.turnId == displayFailureTurnId && subscriptionReady && !readOnly && connection.snapshot?.supportsTurnRetry != true" class="turn-failure-hint">更新电脑连接服务后可重试</text>
               <view v-if="entry.kind == 'reviewStopped' && entry.turnId == displayReviewTurnId" class="turn-continue inline-progress-button">
                 <action-progress :busy="pendingAction == 'continue:review' && reviewContinueSubmitted(entry.turnId)" />
                 <text class="inline-progress-caption" style="color: #68534c; font-size: 13px;">{{ reviewContinueSubmitted(entry.turnId) && pendingAction != 'continue:review' ? '已提交' : '继续' }}</text>
-                <button class="inline-progress-hitbox" :disabled="!canContinueReviewTurn(entry.turnId)" aria-label="继续当前聊天" @click="continueReviewTurn(entry.turnId)"></button>
+                <button class="inline-progress-hitbox" :disabled="subscriptionReady && !readOnly ? !canContinueReviewTurn(entry.turnId) : !canBeginLiveAction" aria-label="继续当前聊天" @click="continueReviewFromTimeline(entry.turnId)"></button>
               </view>
             </view>
-            <view v-if="entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="!canRetryTurn(entry.turnId) || (pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId))" aria-label="重试失败任务" @click="retryTurn(entry.turnId)"></button></view>
+            <view v-if="entry.turnId == displayFailureTurnId" class="turn-retry inline-progress-button"><action-progress :busy="pendingAction == 'retry:timeline' && retrySubmitting(entry.turnId)" /><text class="inline-progress-caption" style="color: #68534c; font-size: 12px;">重试</text><button class="inline-progress-hitbox" :disabled="subscriptionReady && !readOnly ? !canRetryTurn(entry.turnId) : !canBeginLiveAction" aria-label="重试失败任务" @click="retryFromTimeline(entry.turnId)"></button></view>
           </view>
           <view v-else-if="entry.role == 'process'" class="process-toggle action-frame">
             <text class="process-label">{{ showProcessDurationOnly && (entry.durationLabel ?? '').length > 0 ? entry.durationLabel : entry.label }}</text>
@@ -159,19 +157,20 @@
       <message-composer :instance-id="composerInstanceId" :reset-key="pageHostId + ':' + pageThreadId" :cursor="mentionCursor" :model-label="modelLabel" :service-tier="composerSettings?.serviceTier ?? ''" :layout-width="props.paneWidth"
         :active="pageVisible" :text="draft" :expanded="composerExpanded" :input-height="composerHeight" :focus="predictionFocus"
         :images="draftImages" :files="draftFiles" :plugins="draftPlugins" :mentions="draftMentions"
-        :disabled="readOnly || queueEditing" :chips-disabled="!canWrite" :images-disabled="busy || imageBusy || connection.pendingCommandId.length > 0" :files-disabled="busy || connection.pendingCommandId.length > 0"
-        :add-disabled="!canWrite" :primary-disabled="!primaryAvailable" :primary-pending-label="pendingAction == 'send' ? '正在发送' : pendingAction == 'stop' ? '正在停止任务' : pendingAction == 'retry:composer' ? '正在提交重试' : ''"
+        :disabled="queueEditing" :chips-disabled="!canWrite" :images-disabled="busy || imageBusy || connection.pendingCommandId.length > 0" :files-disabled="busy || connection.pendingCommandId.length > 0"
+        :add-disabled="!canBeginLiveAction" :primary-disabled="!primaryAvailable" :primary-pending-label="pendingAction == 'send' ? '正在发送' : pendingAction == 'stop' ? '正在停止任务' : pendingAction == 'retry:composer' ? '正在提交重试' : ''"
         :primary-icon="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? 'stop' : 'send'"
         :primary-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? '停止任务' : '发送指令'"
-        :settings-disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" :plan-enabled="planEnabled" :plan-disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'"
-        :prediction="composerPlaceholderHidden ? '' : visiblePrediction" :placeholder="composerPlaceholderHidden ? '' : readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
-        :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retrying-file-ids="retryingFileIds" :retry-disabled="!canWrite"
+        :settings-disabled="!canBeginLiveAction || (subscriptionReady && !readOnly && connection.snapshot?.supportsExecutionSettings != true)" :plan-enabled="planEnabled" :plan-disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'"
+        :prediction="composerPlaceholderHidden ? '' : visiblePrediction" :placeholder="composerPlaceholderHidden ? '' : '问问 Codex'"
+        :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retrying-file-ids="retryingFileIds" :retry-disabled="!canBeginLiveAction"
         @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange"
         @syncinput="syncComposerText" @submit="applyComposerEnter" @acceptprediction="acceptPrediction(false)" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
         @retryfile="retryFile" @interact="dismissGoal" @layout="updateComposerGeometry"
         @removeimage="removeImage" @previewimage="previewImage" @removefile="removeFile" @removeplugin="removePlugin" @removemention="removeThreadMention">
-        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :thread-id="pageThreadId" :defer-changes="!settingsRunning" :selected-mode="settingsRunning ? '' : messageChoices.permissionMode ?? ''" :disabled="!canWrite || settingsBusy" @select="selectDraftPermission" @busy="onPermissionBusy" @visibility="onPermissionVisibility" @applied="onPermissionApplied" /></template>
+        <template #permissions><permissions-control :pane-left="props.paneLeft" :pane-width="props.paneWidth" :thread-id="pageThreadId" :defer-changes="!settingsRunning" :selected-mode="settingsRunning ? '' : messageChoices.permissionMode ?? ''" :active="pageVisible" :disabled="!canBeginLiveAction || settingsBusy || (subscriptionReady && !readOnly && connection.snapshot?.supportsPermissionSettings != true)" :prepare="ensureLiveConversation" @select="selectDraftPermission" @busy="onPermissionBusy" @visibility="onPermissionVisibility" @applied="onPermissionApplied" /></template>
         <template #feedback>
+          <text v-if="activating" class="composer-caption">正在连接聊天…</text>
           <text v-if="imageBusy" class="image-processing">正在处理附件…</text>
           <text v-if="composerExpanded && executionSettingsUnavailable" class="composer-caption">更新电脑连接服务后可选择模型和计划模式</text>
           <text v-if="composerExpanded && pendingSetting.length > 0 && composerMenu.length == 0" class="composer-caption">{{ pendingSetting }}</text>
@@ -179,11 +178,11 @@
         </template>
       </message-composer>
     </view>
-      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ left: menuLeft + 'px', bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" :note="readOnly ? '历史浏览模式，请先继续此聊天' : '附件最多3个；不可用选项需更新或刷新电脑连接服务'" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
+      <view v-if="composerMenu.length > 0" class="composer-options-anchor" :style="{ left: menuLeft + 'px', bottom: menuBottom + 'px' }"><composer-options :section="composerMenu" :settings="composerSettings" :models="models" :loading="settingsLoading" :busy="settingsBusy" :pending-choice="settingsBusy ? settingChoice : ''" :error="settingsError" :width="menuWidth" :height="menuHeight" :images-enabled="canWrite && !imageBusy && modelSupportsImages && connection.snapshot?.supportsImages == true && draftImages.length + draftFiles.length < 3" :files-enabled="canWrite && !imageBusy && connection.snapshot?.supportsAttachments == true && draftImages.length + draftFiles.length < 3" :settings-enabled="canWrite && settings != null && connection.snapshot?.supportsExecutionSettings == true" :plan-disabled="activeTurnId.length > 0 || connection.snapshot?.status == 'active'" note="附件最多3个；不可用选项需更新电脑连接服务" @section="changeComposerSection" @action="composerAction" @select="selectSetting" @dismiss="closeComposerMenu" @retry="loadSettings" /></view>
     <view v-if="keyboardInset == 0" class="bottom-safe-area"></view>
     <view v-if="selectedExecution != null" class="execution-overlay" @click="closeExecution"><view class="execution-sheet" @click.stop><view class="sheet-grip"></view><view class="sheet-header"><text class="sheet-title">{{ selectedExecution?.kind == 'fileChange' ? '文件更改' : '执行详情' }}</text><view class="icon-button action-frame"><app-icon name="close" :size="22" /><button class="action-hitbox" hover-class="action-pressed" aria-label="关闭执行详情" @click="closeExecution"></button></view></view><text class="sheet-caption">命令与输出</text><scroll-view direction="vertical" class="sheet-output"><text v-if="executionDetailLoading" class="sheet-note">正在读取执行详情…</text><view v-if="executionDetailError.length > 0"><text class="sheet-note">{{ executionDetailError }}</text><button @click="readExecutionDetail">重新读取</button></view><text v-if="executionDetailText.length > 0" class="execution-text" selectable>{{ executionDetailText }}</text></scroll-view><text class="sheet-note">仅展示这条记录的详细内容</text><view class="sheet-actions"><view class="sheet-copy action-frame"><app-icon name="copy" :size="18" /><text class="sheet-copy-label">复制记录</text><button class="action-hitbox" hover-class="action-pressed" @click="copyText(executionDetailText)" :disabled="executionDetailLoading || executionDetailText.length == 0" aria-label="复制记录"></button></view></view><view class="bottom-safe-area"></view></view></view>
-    <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text><view class="menu-item action-frame"><app-icon name="refresh" :size="19" /><text class="menu-label">重新同步</text><button class="action-hitbox" hover-class="action-pressed" @click="refreshFromMenu" aria-label="重新同步"></button></view>
-        <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="unansweredQuestionGroups.length > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ unansweredQuestionGroups.length }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="unansweredApprovalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ unansweredApprovalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: (!canWrite) ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canWrite" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
+    <view v-if="actionsVisible" class="menu-overlay" @click="closeActions"><view class="status-spacer"></view><view class="menu-top-space"></view><view class="menu-panel" @click.stop><text class="menu-caption">聊天操作</text>
+        <view class="menu-item action-frame"><app-icon name="copy" :size="19" /><text class="menu-label">复制最新回复</text><button class="action-hitbox" hover-class="action-pressed" @click="copyLatestReply" aria-label="复制最新回复"></button></view><view v-if="unansweredQuestionGroups.length > 0" class="menu-item action-frame"><text class="menu-label">回答问题（{{ unansweredQuestionGroups.length }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showQuestions" aria-label="回答问题"></button></view><view v-if="unansweredApprovalCount > 0" class="menu-item action-frame"><text class="menu-label">处理审批（{{ unansweredApprovalCount }}）</text><button class="action-hitbox" hover-class="action-pressed" @click="showApprovals" aria-label="处理审批"></button></view><view class="menu-item action-frame"><app-icon name="folder" :size="19" /><text class="menu-label">聊天信息</text><button class="action-hitbox" hover-class="action-pressed" @click="showConversationInfo" aria-label="聊天信息"></button></view><view v-if="activeTurnId.length > 0" class="menu-item action-frame" :style="{ opacity: !canBeginLiveAction ? 0.45 : 1 }"><app-icon name="stop" :size="19" /><text class="menu-label">停止任务</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canBeginLiveAction" @click="stopFromMenu" aria-label="停止任务"></button></view><view class="menu-item action-frame" :style="{ opacity: !canBeginLiveAction ? 0.45 : 1 }"><view class="archive-icon"><view class="archive-lid"></view><view class="archive-slot"></view></view><text class="menu-label archive-label">归档</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canBeginLiveAction" @click="archiveFromMenu" aria-label="归档聊天"></button></view><view class="menu-item action-frame" :style="{ opacity: !canBeginLiveAction ? 0.45 : 1 }"><view class="delete-icon"><view class="delete-handle"></view><view class="delete-lid"></view><view class="delete-bin"><view class="delete-line"></view><view class="delete-line"></view></view></view><text class="menu-label archive-label">永久删除</text><button class="action-hitbox" hover-class="action-pressed" :disabled="!canBeginLiveAction" @click="deleteFromMenu" aria-label="永久删除聊天"></button></view><view class="menu-item action-frame"><app-icon name="close" :size="19" /><text class="menu-label">取消</text><button class="action-hitbox" hover-class="action-pressed" @click="closeActions" aria-label="取消"></button></view></view></view>
     <delete-confirmation v-if="deleteFinalVisible" :content="deleteFinalContent" @confirm="answerDeleteFinal(true)" @cancel="answerDeleteFinal(false)" />
     <file-change-sheet v-if="selectedFileReport != null" :host-id="pageHostId" :thread-id="pageThreadId" :report="selectedFileReport!" :file-id="selectedChangedFileId" :connected="connection.connected && !showingPreview" @close="closeFileReport" />
     <annotation-sheet v-if="selectedAnnotationId.length > 0" :items="selectedAnnotations" @close="closeAnnotations" />
@@ -375,7 +374,9 @@ const reconnect = useManualReconnect((pending: boolean) => { reconnecting.value 
 const refreshSource = ref('')
 let refreshRevision = 0
 const activating = ref(false)
-const activationSource = ref('')
+let liveConnection: Promise<boolean> | null = null
+let liveActionPending = false
+const waitingToSend = ref(false)
 const retryingFileIds = ref<string[]>([])
 let activationRequest = 0
 const actionsVisible = ref(false)
@@ -548,15 +549,9 @@ const hostIcon = computed((): string => computerIcon(connection.computers.find((
 // 与标题共用当前电脑和会话的身份限制，加载期间不显示其他会话的项目。
 const projectName = computed((): string => conversationProjectName(listProjectName.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.cwd ?? '' : previewConversation.value?.cwd ?? ''))
 // 后台历史只用于浏览，写操作须有原桌面的实时所有者和快照。
-const readOnly = computed((): boolean => connection.snapshot?.readOnly == true)
+const readOnly = computed((): boolean => liveConversation.value?.readOnly == true)
 const goalContentHeight = computed((): number => Math.max(60, Math.min(200, goalViewportHeight.value - keyboardInset.value - 360)))
 const goalUnavailableReason = computed((): string => !connection.connected || !goalHostOnline.value ? '电脑连接已断开，恢复连接后可操作目标。' : readOnly.value ? '历史浏览期间只能查看目标。' : connection.snapshot?.supportsGoalControl != true ? '更新 Windows 电脑连接服务后可操作目标。' : connection.pendingCommandId.length > 0 && !goalBusy.value ? '操作正在提交，请稍候。' : '')
-const conversationConnectionHint = computed((): string => {
-  if (activating.value) return '正在同步聊天…'
-  if (connection.pendingCommandId.length > 0) return '操作正在提交，请稍后从右上角菜单重新同步。'
-  if (!connection.connected) return '连接恢复后可从右上角菜单重新同步，历史内容和草稿已保留。'
-  return '当前为历史浏览；需要继续操作时，请从右上角菜单重新同步。'
-})
 const openingTitle = computed((): string => conversationOpeningTitle(connection.snapshot != null, detailError.value, connection.connected))
 // 仅使用当前电脑和会话的快照名称；加载、断线或空名称均保留列表标题。
 const displayTitle = computed((): string => conversationDisplayTitle(listTitle.value, connection.hostId == pageHostId.value && connection.snapshot?.threadId == pageThreadId.value ? connection.snapshot?.title ?? '' : previewConversation.value?.title ?? '', openingTitle.value))
@@ -568,6 +563,7 @@ const reviewContinueTurnId = computed((): string => reviewContinueTarget(liveCon
 const pendingRetryCommand = computed((): string => connection.pendingCommands.find((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && entry.method == 'turn.retry')?.id ?? '')
 const retryTurnId = computed((): string => retryTarget(liveConversation.value))
 const canWrite = computed((): boolean => !readOnly.value && !activating.value && subscriptionReady.value && goalHostOnline.value && !busy.value && connection.pendingCommandId.length == 0)
+const canBeginLiveAction = computed((): boolean => !busy.value && connection.pendingCommandId.length == 0)
 const interactionScope = computed((): string => JSON.stringify([props.target.cacheNamespace, pageHostId.value, pageThreadId.value]))
 const conversationInteractions = computed((): InteractionSubmission[] => interactionSubmissions.filter((entry: InteractionSubmission): boolean => entry.scope == interactionScope.value))
 const interactionInProgress = computed((): boolean => conversationInteractions.value.some((entry: InteractionSubmission): boolean => entry.state == 'sending'))
@@ -657,17 +653,64 @@ function notify(message: string) { uni.showToast({ title: message, icon: 'none' 
 // 原页面卸载后仍结算提交记录，但异步回执不再修改首页提示或重新同步。
 function showActions() { dismissGoal(); closeComposerMenu(); actionsVisible.value = !actionsVisible.value; uni.hideKeyboard() }
 function refresh() { operationError.value = '';  if (!connection.connected) bridge.resume(); else if (connection.activeThreadId.length > 0) bridge.watch(connection.activeThreadId) }
-// 只有明确同步才加载桌面聊天；重复点击和迟到回执不能影响新的页面。
-function retryDesktopOpen() {
-  if (!isCurrentPage() || !pageVisible.value || activating.value || !connection.connected || !goalHostOnline.value || connection.pendingCommandId.length > 0) return
-  const request = ++activationRequest
-  activating.value = true; activationSource.value = 'desktop'; operationError.value = ''
-  bridge.openThread(pageThreadId.value).then((_: UTSJSONObject) => {
-    if (request != activationRequest || !isCurrentPage()) return
-    activating.value = false; activationSource.value = ''
-  }, (error: Error) => {
-    if (request != activationRequest || !isCurrentPage()) return
-    activating.value = false; activationSource.value = ''; operationError.value = error.message
+// 前台意图只属于当前配对、电脑和聊天，离开页面后不能继续执行。
+function liveActionScope(): string {
+  const generation = connection.computers.find((computer: Computer): boolean => computer.id == pageHostId.value)?.instanceGeneration ?? ''
+  return JSON.stringify([activationRequest, pageHostId.value, pageThreadId.value, bridge.foregroundRevision, bridge.generation, connection.configurationRevision, generation])
+}
+watch(goalHostOnline, (online: boolean) => { if (!online) activationRequest++ }, { flush: 'sync' })
+function liveActionCurrent(scope: string): boolean {
+  return isCurrentPage() && pageVisible.value && bridge.foreground && liveActionScope() == scope
+}
+async function connectForAction(scope: string): Promise<boolean> {
+  let requestedActivation = false
+  try {
+    // 先等在途后台读取，已有实时所有者时无需切换电脑页面。
+    if (!subscriptionReady.value || bridge.syncingThread == pageThreadId.value) await bridge.watch(pageThreadId.value)
+    if (!liveActionCurrent(scope) || !canBeginLiveAction.value || !connection.connected || !goalHostOnline.value) return false
+    if (subscriptionReady.value && !readOnly.value) return true
+    requestedActivation = true
+    await bridge.activate(pageThreadId.value)
+    if (!liveActionCurrent(scope)) return false
+    if (!subscriptionReady.value || readOnly.value) throw new Error('未取得实时聊天状态，请重试原操作')
+    return true
+  } catch (reason) {
+    if (liveActionCurrent(scope)) {
+      operationError.value = (reason as Error).message
+      if (requestedActivation && connection.connected && goalHostOnline.value) bridge.watch(pageThreadId.value)
+    }
+    return false
+  }
+}
+function ensureLiveConversation(): Promise<boolean> {
+  if (!isCurrentPage() || !pageVisible.value || !bridge.foreground || !canBeginLiveAction.value) return Promise.resolve(false)
+  if (liveConnection != null) return liveConnection!
+  if (!connection.connected || !goalHostOnline.value) {
+    if (!connection.connected) bridge.resume()
+    operationError.value = connection.connected ? '电脑离线，草稿已保留' : '正在恢复连接，草稿已保留'
+    return Promise.resolve(false)
+  }
+  if (canWrite.value) return Promise.resolve(true)
+  const scope = liveActionScope()
+  activating.value = true
+  operationError.value = ''
+  const pending = connectForAction(scope).then((ready: boolean): boolean => {
+    liveConnection = null
+    activating.value = false
+    return ready && liveActionCurrent(scope) && canWrite.value
+  })
+  liveConnection = pending
+  return pending
+}
+// 输入可独立等待连接，操作入口只延续一次明确的动作。
+function runLiveAction(action: () => void) {
+  if (liveActionPending || !isCurrentPage() || !pageVisible.value || !bridge.foreground) return
+  if (canWrite.value) { action(); return }
+  const scope = liveActionScope()
+  liveActionPending = true
+  ensureLiveConversation().then((ready: boolean) => {
+    liveActionPending = false
+    if (ready && liveActionCurrent(scope) && canWrite.value) action()
   })
 }
 // 只标记用户点击的同步入口，回执交给现有会话订阅处理。
@@ -686,14 +729,6 @@ async function refreshButton(source: string) {
 }
 watch((): string => [connection.hostId, connection.activeThreadId].join(':'), () => { refreshRevision++; refreshSource.value = '' })
 watch((): boolean => reconnecting.value, (pending: boolean) => { if (!pending) refreshSource.value = '' })
-// 菜单同步是显式桌面加载入口；断线恢复不排队重放导航意图。
-function refreshFromMenu() {
-  closeActions()
-  if (!connection.connected) { bridge.resume(); notify('正在恢复连接，连接后请再次重新同步'); return }
-  if (!goalHostOnline.value) { notify('电脑离线，请待电脑在线后重新同步'); return }
-  if (connection.pendingCommandId.length > 0) { notify('操作正在提交，请稍后重新同步'); return }
-  retryDesktopOpen()
-}
 // 取消只收起编辑区，重新进入时保留尚未发送的意见。
 function editPlan() { if (!interactionDisabled.value && planInteraction.value == null) planEditing.value = true }
 function cancelPlanFeedback() { if (!busy.value && !interactionCoolingDown.value && planInteraction.value == null) planEditing.value = false }
@@ -744,7 +779,8 @@ watch(pageDeletionRevision, () => {
 
 let archivePromptOpen = false
 
-function deleteFromMenu() {
+function deleteFromMenu() { closeActions(); runLiveAction(confirmDeleteFromMenu) }
+function confirmDeleteFromMenu() {
   closeActions()
   if (!canWrite.value || deletePromptOpen || archivePromptOpen) return
   const hostId = pageHostId.value; const threadId = pageThreadId.value
@@ -792,8 +828,8 @@ let archiveLoading = false
 // 仅关闭本页发起的归档加载框，避免迟到回执关闭其他页面的提示。
 function hideArchiveLoading() { if (!archiveLoading) return; archiveLoading = false; uni.hideLoading() }
 // 确认框返回时重新核对页面和连接，避免切换会话后误归档。
-function archiveFromMenu() {
-  closeActions()
+function archiveFromMenu() { closeActions(); runLiveAction(confirmArchiveFromMenu) }
+function confirmArchiveFromMenu() {
   if (!canWrite.value || archivePromptOpen) return
   if (connection.snapshot?.status != 'idle' || activeTurnId.value.length > 0 || approvalCount.value > 0) { notify('请先完成或停止当前任务，再归档聊天'); return }
   const hostId = pageHostId.value
@@ -1055,7 +1091,7 @@ function confirmVisibleRead() {
     if (current?.supportsReadState != true || current?.hasUnreadTurn != true) { readRequestKey = ''; return }
     bridge.request('thread.read', { threadId: pageThreadId.value }).then((result: UTSJSONObject) => {
       if (isCurrentPage() && readRequestKey == key && result.getString('threadId') == pageThreadId.value && result.getBoolean('read') == true && connection.snapshot != null) { readRequestKey = ''; connection.snapshot!.hasUnreadTurn = false }
-    }, (_: Error) => { if (isCurrentPage() && readRequestKey == key) operationError.value = '已读状态同步失败，可从右上角菜单重新同步后重试' })
+    }, (_: Error) => { if (isCurrentPage() && readRequestKey == key) operationError.value = '已读状态同步失败' })
   })
 }
 watch((): string => [pageVisible.value.toString(), (connection.connected == true).toString(), (connection.subscriptionRevision ?? 0).toString(), (liveConversation.value?.hasUnreadTurn ?? false).toString(), (liveConversation.value?.supportsReadState ?? false).toString(), liveConversation.value?.latestTurn?.turnId ?? ''].join(':'), () => { confirmVisibleRead() }, { immediate: true })
@@ -1206,8 +1242,8 @@ watch((): string => taskNotifications.focusRevision + ':' + pageVisible.value + 
     jumpTo(results.length > 0 ? entryAnchor(results[results.length - 1]) : 'timeline-bottom')
   })
 })
-function showApprovals() { jumpTo('approvals-anchor') }
-function showQuestions() { const groups = unansweredQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }
+function showApprovals() { runLiveAction(() => { jumpTo('approvals-anchor') }) }
+function showQuestions() { runLiveAction(() => { const groups = unansweredQuestionGroups.value; if (groups.length > 0 && expandedQuestionIds.value.indexOf(groups[0].id) < 0) expandedQuestionIds.value.push(groups[0].id); jumpTo('questions-anchor') }) }
 // 输入事件先保存正文，再捕获实际光标；选择器取消不改正文。
 // 恢复同一聊天的编辑焦点；不会采纳预测或发送草稿。
 function focusComposerInput() {
@@ -1221,7 +1257,7 @@ function focusComposerInput() {
 }
 
 // 回车先同步原生输入框的最新值，避免节流回调尚未到达时发送旧正文。
-function syncComposerText(text: string) { if (canWrite.value && draft.value != text) { saveDraft(pageHostId.value, pageThreadId.value, text); mentionCursor.value = -1 } }
+function syncComposerText(text: string) { if (isCurrentPage() && pageVisible.value && !queueEditing.value && draft.value != text) { saveDraft(pageHostId.value, pageThreadId.value, text); mentionCursor.value = -1 } }
 function threadMentionContext(): string { return [pageHostId.value, pageThreadId.value, connection.hostId, connection.configurationRevision.toString()].join(':') }
 
 function updateDraft(event: UniInputEvent) {
@@ -1347,8 +1383,10 @@ function loadSettings() {
 }
 
 
-function openComposerMenu(section: string) {
+function openComposerMenu(section: string) { runLiveAction(() => { showComposerMenu(section) }) }
+function showComposerMenu(section: string) {
   if (!canWrite.value) return
+  if (section == 'settings' && connection.snapshot?.supportsExecutionSettings != true) { notify('请更新电脑连接服务后选择模型'); return }
   actionsVisible.value = false
   if (composerMenu.value == section) { closeComposerMenu(); return }
   changeComposerSection(section)
@@ -1497,6 +1535,9 @@ function chooseFiles() {
 }
 
 function retryFile(id: string) {
+  runLiveAction(() => { retryLiveFile(id) })
+}
+function retryLiveFile(id: string) {
   if (!canWrite.value) return
   const file = draftFiles.value.find((item: DraftFile): boolean => item.id == id)
   if (file == null || file.status == 'uploading') return
@@ -1816,9 +1857,8 @@ function submittedMessageStatus(state: string): string {
 }
 // 回车先采纳占位预测；已有草稿才提交，空输入不会触发停止任务。
 function applyComposerEnter() {
-  if (!canWrite.value || imageBusy.value || !filesReady.value) return
-  if (draft.value.length == 0 && visiblePrediction.value.length > 0) { acceptPrediction(false); return }
-  if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send()
+  if (canWrite.value && draft.value.length == 0 && visiblePrediction.value.length > 0) { acceptPrediction(false); return }
+  if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) submitDraft()
 }
 
 // 追加和取消都指向电脑保存的同一条消息，避免手机重传正文形成重复指令。
@@ -1882,7 +1922,7 @@ function reply(id: string, turnId: string, decision: string) {
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
 // 聚焦只展开编辑面板并收起目标表单，不采纳或发送预测。
-function onComposerFocus() { if (composerSending.value) return; clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
+function onComposerFocus() { if (composerSending.value) return; clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal(); if (!canWrite.value) ensureLiveConversation() }
 function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
 function operateGoal(action: string, objective: string, revision: string) {
   if (!canWrite.value || !goalHostOnline.value || goalBusy.value || connection.snapshot?.supportsGoalControl != true) return
@@ -1902,9 +1942,46 @@ function operateGoal(action: string, objective: string, revision: string) {
 }
 
 // 主按钮随上下文切换：有草稿发送，空草稿运行中停止。
-const primaryAvailable = computed((): boolean => canWrite.value && !imageBusy.value && filesReady.value && (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0 || (draftMentions.value.length == 0 && (activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value)))))
-function primaryAction() { if (!canWrite.value || imageBusy.value || !filesReady.value) return; if (draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0) send(); else if (draftMentions.value.length > 0) return; else if (activeTurnId.value.length > 0) stop(); else retryTurn(retryTurnId.value, true) }
-function stopFromMenu() { if (!canWrite.value) return; closeActions(); stop(false) }
+const hasSendableDraft = computed((): boolean => draft.value.trim().length > 0 || draftImages.value.length > 0 || draftFiles.value.length > 0)
+const primaryAvailable = computed((): boolean => !waitingToSend.value && !queueEditing.value && !imageBusy.value && filesReady.value && (hasSendableDraft.value ? canBeginLiveAction.value : canWrite.value && draftMentions.value.length == 0 && (activeTurnId.value.length > 0 || canRetryTurn(retryTurnId.value))))
+// 草稿和附件可在同步期间修改。只有原发送意图对应的内容才能继续提交。
+function sendDraftIdentity(): string {
+  return JSON.stringify([
+    mentionDraftRevision,
+    draftImages.value.map((image: DraftImage): string => image.id),
+    draftFiles.value.map((file: DraftFile): string => file.id),
+    draftPlugins.value.map((plugin: SelectedPlugin): string => plugin.id),
+    draftMentions.value.map((mention: SelectedThreadMention): string => mention.id),
+    messageChoicesRevision(pageHostId.value, pageThreadId.value)
+  ])
+}
+function submitDraft() {
+  if (!hasSendableDraft.value || !primaryAvailable.value || !isCurrentPage() || !pageVisible.value || !bridge.foreground) return
+  if (canWrite.value) { send(); return }
+  const scope = liveActionScope()
+  const identity = sendDraftIdentity()
+  waitingToSend.value = true
+  ensureLiveConversation().then((ready: boolean) => {
+    waitingToSend.value = false
+    if (!ready || !liveActionCurrent(scope) || !canWrite.value || !primaryAvailable.value) return
+    if (sendDraftIdentity() != identity) { notify('草稿已更新，请确认后发送'); return }
+    send()
+  })
+}
+function retryFromTimeline(turnId: string) { runLiveAction(() => { retryTurn(turnId) }) }
+function continueReviewFromTimeline(turnId: string) { runLiveAction(() => { continueReviewTurn(turnId) }) }
+function primaryAction() {
+  if (!primaryAvailable.value) return
+  if (hasSendableDraft.value) submitDraft()
+  else if (activeTurnId.value.length > 0) stop()
+  else retryTurn(retryTurnId.value, true)
+}
+function stopFromMenu() {
+  const turnId = activeTurnId.value
+  closeActions()
+  runLiveAction(() => { if (turnId.length > 0 && activeTurnId.value == turnId) stop(false) })
+}
+
 // 原生返回优先关闭当前浮层，再交给页面导航；不会丢失会话草稿。
 function handleBack(): boolean {
   const handle = (): boolean => { if (mentionOpen.value) { closeThreadMentions(); return true }; if (deleteFinalVisible.value) { answerDeleteFinal(false); return true }; if (selectedPlanId.value.length > 0) { closePlan(); return true }; if (selectedFileReport.value != null) { closeFileReport(); return true }; if (selectedAnnotationId.value.length > 0) { closeAnnotations(); return true }; if (goalExpanded.value) { dismissGoal(); uni.hideKeyboard(); return true }; if (composerMenu.value.length > 0) { closeComposerMenu(); return true }; if (selectedExecutionId.value.length > 0) { closeExecution(); return true }; if (actionsVisible.value) { closeActions(); return true }; return false }
@@ -1915,7 +1992,7 @@ function handleBack(): boolean {
 function syncPaneVisibility(active: boolean) {
   (active ? paneShowCallbacks : paneHideCallbacks).forEach((callback: () => void) => { callback() })
   if (active && connection.hostId == pageHostId.value && connection.activeThreadId != pageThreadId.value) bridge.watch(pageThreadId.value)
-  if (!active) { resetPrediction(); inputFocused.value = false; predictionFocus.value = false; closeActions(); closeComposerMenu(); dismissGoal() }
+  if (!active) { activationRequest++; resetPrediction(); inputFocused.value = false; predictionFocus.value = false; closeActions(); closeComposerMenu(); dismissGoal() }
 }
 function goBack() { if (handleBack()) return; uni.hideKeyboard(); emit('close') }
 

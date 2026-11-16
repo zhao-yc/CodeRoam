@@ -76,12 +76,12 @@ test('卡片重新挂载从原提交恢复选项和长答案，其他实例不�
 
 /** 执行页面实际计算与监听，供问题提醒及状态清理回归共用。 */
 function pageFixture() {
-  const watches=[],connection={hostId:'pc',snapshot:{threadId:'thread',messages:[],approvals:[],questionGroups:[{id:'answered',state:'answered'},{id:'pending',state:'pending'},{id:'expired',state:'expired'},{id:'other',state:'pending'}],cwd:'',activeTurnId:''},computers:[],activeThreadId:'thread'};
-  const context=componentContext({setTimeout:()=>0,connection,bridge:{},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
+  const watches=[],connection={hostId:'pc',snapshot:{threadId:'thread',messages:[],approvals:[],questionGroups:[{id:'answered',state:'answered'},{id:'pending',state:'pending'},{id:'expired',state:'expired'},{id:'other',state:'pending'}],cwd:'',activeTurnId:''},computers:[{id:'pc',online:true}],activeThreadId:'thread',subscribedHostId:'pc',subscribedThreadId:'thread',pendingCommandId:'',connected:true};
+  const context=componentContext({setTimeout:()=>0,connection,bridge:{foreground:true},ref:value=>({value}),computed:get=>({get value(){return get();}}),watch:(source,callback)=>watches.push({source,callback}),onLoad:()=>{},onUnload:()=>{},onShow:()=>{},onHide:()=>{},onBackPress:()=>{},onResize:()=>{},readDraft:()=>'',executionTimeline:()=>[],nextTick:callback=>callback(),uni:{getElementById:()=>null,getWindowInfo:()=>({windowWidth:393}),hideKeyboard:()=>{}}});
   const pageSource=fs.readFileSync('apps/mobile/components/chat-detail/chat-detail.uvue','utf8');
   const source=pageSource.match(/<script setup lang="uts">([\s\S]*?)<\/script>/)[1].replace(/^import .*\r?\n/gm,'');
   vm.runInContext(stripTypeScriptTypes(source,{mode:'transform'})+'\nglobalThis.subject={pendingQuestionGroups,pendingQuestionCount,expandedQuestionIds,showQuestions,scrollTarget,following,pageVisible,pageHostId,pageThreadId};',context);
-  context.subject.pageHostId.value='pc';context.subject.pageThreadId.value='thread';connection.hostId='pc';
+  context.subject.pageHostId.value='pc';context.subject.pageThreadId.value='thread';context.subject.pageVisible.value=true;connection.hostId='pc';
   return {pageSource,page:context.subject,connection,watches,plain:value=>JSON.parse(JSON.stringify(value))};
 }
 
