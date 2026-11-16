@@ -77,7 +77,7 @@
             <!-- 方案可能不在当前消息窗口，仍使用桌面提供的原文显示独立预览。 -->
         <view v-if="pendingPlanOutsideTimeline && pendingPlan != null" class="plan-fallback"><plan-preview :source="pendingPlan!.text" @open="openPlan(pendingPlan!.id, pendingPlan!.text)" /></view>
         <!-- 提交中保留原布局，状态层覆盖失去操作能力的表单。 -->
-        <view v-if="pendingPlan != null && (hiddenPlanId != pendingPlan.id || planInteraction != null)" id="notice-plan" class="plan-confirm">
+        <view v-if="pendingPlan != null && (hiddenPlanId != pendingPlan.id || planInteraction != null) && (planInteraction == null || interactionStatusVisible(planInteraction!))" id="notice-plan" class="plan-confirm">
           <view class="plan-confirm-header">
             <text class="plan-confirm-title">{{ planEditing && planInteraction == null ? '修改方案' : '确认方案' }}</text>
             <button v-if="planEditing && planInteraction == null" class="plan-cancel" :disabled="busy || interactionCoolingDown" @click="cancelPlanFeedback">取消</button>
@@ -115,10 +115,11 @@
             </template>
           </view>
           <view class="interaction-shell">
-            <view v-show="expandedQuestionIds.indexOf(group.id) >= 0 && showInteractionForm('question', group.id, group.turnId)" :class="interactionSending('question', group.id, group.turnId) ? 'interaction-underlay' : ''" :aria-hidden="interactionSending('question', group.id, group.turnId)">
-              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview' || interactionFor('question', group.id, group.turnId) != null" @submit="submitAnswers" />
+            <!-- 提交及待核对期间保留原卡片草稿，只锁定编辑，状态提示放在正文之后。 -->
+            <view v-show="expandedQuestionIds.indexOf(group.id) >= 0">
+              <question-card :group="group" :disabled="interactionDisabled || group.kind == 'preview'" :read-only="interactionFor('question', group.id, group.turnId) != null" :submitted-drafts="interactionFor('question', group.id, group.turnId)?.questionDrafts" @submit="submitAnswers" />
             </view>
-            <view v-if="interactionFor('question', group.id, group.turnId) != null" :class="interactionSending('question', group.id, group.turnId) ? 'interaction-cover' : ''">
+            <view v-if="interactionFor('question', group.id, group.turnId) != null">
               <interaction-status :entry="interactionFor('question', group.id, group.turnId)!" :disabled="!canCheckInteraction" @check="checkInteraction(interactionFor('question', group.id, group.turnId)!)" />
             </view>
           </view>
@@ -163,7 +164,7 @@
         :primary-icon="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? 'stop' : 'send'"
         :primary-label="activeTurnId.length > 0 && draft.trim().length == 0 && draftImages.length == 0 && draftFiles.length == 0 && draftMentions.length == 0 ? '停止任务' : '发送指令'"
         :settings-disabled="!canWrite || connection.snapshot?.supportsExecutionSettings != true" :plan-enabled="planEnabled" :plan-disabled="!canWrite || settingsBusy || activeTurnId.length > 0 || connection.snapshot?.status == 'active'"
-        :prediction="visiblePrediction" :placeholder="readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
+        :prediction="composerPlaceholderHidden ? '' : visiblePrediction" :placeholder="composerPlaceholderHidden ? '' : readOnly ? (activating ? '正在连接聊天…' : '连接聊天后即可发送') : '问问 Codex'"
         :max-content-height="Math.max(144, props.paneHeight - keyboardInset - 300)" :retry-files="true" :retrying-file-ids="retryingFileIds" :retry-disabled="!canWrite"
         @input="updateDraft" @focus="onComposerFocus" @blur="onDraftBlur" @linechange="onDraftLineChange" @keyboardheightchange="onKeyboardChange"
         @syncinput="syncComposerText" @submit="applyComposerEnter" @acceptprediction="acceptPrediction(false)" @primary="primaryAction" @add="openComposerMenu('add')" @settings="openComposerMenu('settings')" @toggleplan="togglePlan"
@@ -211,12 +212,12 @@ import { readDraft, saveDraft, readDraftImages, saveDraftImages, DraftImage, rea
 import { shouldExpandComposer, composerInputHeight } from '../../services/composer-layout.uts'
 import { prepareImage, MAX_COMPOSER_IMAGES } from '../../services/images.uts'
 import { bindImagePaste } from '../../services/image-paste.uts'
-import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, QuestionPreview, QuestionPreviewItem, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
+import { bridge, connection, ChatMessage, Computer, ThreadSummary, Question, QuestionOption, QuestionPreview, QuestionPreviewItem, QuestionAnswer, QuestionGroup, Approval, PendingPlan, conversationTaskState, computerIcon } from '../../services/bridge.uts'
 import { removeArchivedThread } from '../../services/thread-list.uts'
 import { clearFileReportCache } from '../../services/file-report-cache.uts'
 import { submissionTasks, supportsSubmissionTasks } from '../../services/submission-task-state.uts'
 import { newSubmissionId, submitTask, awaitSubmissionResult, acknowledgePendingSubmission } from '../../services/submission-tasks.uts'
-import { InteractionSubmission, interactionSubmissions } from '../../services/interaction-submissions.uts'
+import { InteractionSubmission, QuestionSubmissionDraft, interactionSubmissions, interactionStatusVisible } from '../../services/interaction-submissions.uts'
 import { queueArchiveSuccessNotice, consumeArchiveSuccessNotice } from '../../services/page-notices.uts'
 import { deletionTasks, deletionTask, deletedThread, startDeletion, checkDeletion } from '../../services/delete-tasks.uts'
 import type { PendingCommand } from '../../services/bridge.uts'
@@ -1563,7 +1564,11 @@ function onDraftLineChange(event: UniTextareaLineChangeEvent) {
   if (draft.value.length > 0) draftHeight.value = Math.max(64, Math.min(144, event.detail.height))
   updateComposerGeometry()
 }
-const composerExpanded = computed((): boolean => shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || mentionOpen.value || draftPlugins.value.length > 0 || draftMentions.value.length > 0, attachmentBusy: imageBusy.value }))
+// 发送回执到达前仍保留原草稿，但发送态优先收起；只匹配本实例、本聊天的消息提交。
+const composerSending = computed((): boolean => pendingAction.value == 'send' || connection.pendingCommands.some((entry: PendingCommand): boolean => entry.hostId == pageHostId.value && entry.threadId == pageThreadId.value && (entry.method == 'turn.send' || entry.method == 'turn.steer')))
+// 入队回执可能先清空草稿；消息仍在等待或发送时，单行输入框也不显示预测或占位提示。
+const composerPlaceholderHidden = computed((): boolean => composerSending.value || timeline.value.some((entry: TimelineEntry): boolean => entry.kind == 'submittedMessage' && (entry.label == 'queued' || entry.label == 'running')))
+const composerExpanded = computed((): boolean => !composerSending.value && shouldExpandComposer({ focused: inputFocused.value, draft: draft.value, prediction: visiblePrediction.value, imageCount: draftImages.value.length, fileCount: draftFiles.value.length, menuOpen: composerMenu.value.length > 0 || permissionMenuOpen.value || pluginOpen.value || mentionOpen.value || draftPlugins.value.length > 0 || draftMentions.value.length > 0, attachmentBusy: imageBusy.value }))
 const composerHeight = computed((): number => composerInputHeight(composerExpanded.value, visiblePrediction.value, predictionHeight.value, draftHeight.value))
 // 高度由一行工具栏及编辑空间组成，数值过渡期间两端按钮始终贴住底边。
 const composerStageHeight = computed((): number => composerExpanded.value ? composerHeight.value + 58 : 44)
@@ -1618,7 +1623,7 @@ function interactionAttached(entry: InteractionSubmission): boolean {
   return liveApprovals.value.some((approval: Approval): boolean => approval.id == entry.id && approval.turnId == entry.turnId)
 }
 function detachedInteractions(kind: string): InteractionSubmission[] {
-  const entries = conversationInteractions.value.filter((entry: InteractionSubmission): boolean => entry.kind == kind && !interactionAttached(entry))
+  const entries = conversationInteractions.value.filter((entry: InteractionSubmission): boolean => entry.kind == kind && interactionStatusVisible(entry) && !interactionAttached(entry))
   // 题组消失后只显示仍需等待或核对的状态，已完成的记录继续用于防止重复提交。
   if (kind == 'question') return entries.filter((entry: InteractionSubmission): boolean => entry.state == 'sending' || entry.state == 'unknown')
   const latest = entries.length > 0 ? entries[entries.length - 1] : null
@@ -1634,6 +1639,10 @@ function holdInteractionLayout() {
   interactionUnlockTimer = setTimeout(() => { interactionCoolingDown.value = false }, 550)
 }
 watch((): string => conversationInteractions.value.map((entry: InteractionSubmission): string => entry.commandId + ':' + interactionAttached(entry)).join('|'), (value: string, previous: string) => {
+  // 只有原会话的实时快照确认题组结束时才清理展示副本，断线和切换实例不能误删。
+  if (liveConversation.value != null) conversationInteractions.value.forEach((entry: InteractionSubmission) => {
+    if (entry.kind == 'question' && !interactionAttached(entry)) entry.questionDrafts = [] as QuestionSubmissionDraft[]
+  })
   if (value != previous && (value.length > 0 || previous.length > 0)) holdInteractionLayout()
 })
 
@@ -1657,7 +1666,7 @@ function settleInteraction(entry: InteractionSubmission, hostId: string, state: 
 }
 
 // 先同步登记操作再发请求，旧 DOM 中已经排队的点击也会在入口被拦住。
-function sendInteraction(kind: string, id: string, turnId: string, action: string, method: string, params: UTSJSONObject) {
+function sendInteraction(kind: string, id: string, turnId: string, action: string, method: string, params: UTSJSONObject, questionDrafts: QuestionSubmissionDraft[] = []) {
   if (!isCurrentPage() || interactionDisabled.value || Date.now() < interactionUnlockAt || interactionFor(kind, id, turnId) != null) return
   const hostId = pageHostId.value
   const commandId = newSubmissionId()
@@ -1666,7 +1675,7 @@ function sendInteraction(kind: string, id: string, turnId: string, action: strin
     const previous = interactionSubmissions[index]
     if (previous.scope == scope && previous.kind == kind && (previous.state == 'done' || previous.state == 'resolved') && !interactionAttached(previous)) interactionSubmissions.splice(index, 1)
   }
-  interactionSubmissions.push({ scope, kind, id, turnId, action, commandId, state: 'sending', checking: false } as InteractionSubmission)
+  interactionSubmissions.push({ scope, kind, id, turnId, action, commandId, state: 'sending', checking: false, questionDrafts } as InteractionSubmission)
   const entry = interactionSubmissions[interactionSubmissions.length - 1]
   busy.value = true; pendingAction.value = 'interaction:' + commandId; operationError.value = ''
   pauseFollowing(); holdInteractionLayout(); uni.hideKeyboard()
@@ -1700,9 +1709,15 @@ async function checkInteraction(entry: InteractionSubmission) {
 }
 
 // 缓存只用于展示，写入目标必须是当前实时快照中仍待回答的原题组。
-function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[]) {
-  if (!liveConversation.value?.questionGroups.some((group: QuestionGroup): boolean => group.id == questionGroupId && group.turnId == turnId && group.state == 'pending')) return
-  sendInteraction('question', questionGroupId, turnId, '', 'question.reply', { threadId: pageThreadId.value, questionGroupId, turnId, answers })
+function submitAnswers(questionGroupId: string, turnId: string, answers: QuestionAnswer[], customQuestionIds: string[] = []) {
+  const group = liveConversation.value?.questionGroups.find((item: QuestionGroup): boolean => item.id == questionGroupId && item.turnId == turnId && item.state == 'pending')
+  if (group == null) return
+  // 用实时题目的保密标记过滤展示副本；自定义答案即使与选项同文，也保留“其他答案”选中态。
+  const questionDrafts = group.questions.map((question: Question): QuestionSubmissionDraft => {
+    const text = answers.find((answer: QuestionAnswer): boolean => answer.questionId == question.id)?.text ?? ''
+    return { questionId: question.id, text: question.isSecret ? '' : text, custom: customQuestionIds.indexOf(question.id) >= 0 || !question.options.some((option: QuestionOption): boolean => option.label == text) } as QuestionSubmissionDraft
+  })
+  sendInteraction('question', questionGroupId, turnId, '', 'question.reply', { threadId: pageThreadId.value, questionGroupId, turnId, answers }, questionDrafts)
 }
 // 继续指令与输入框草稿独立，已提交和未知结果都保留轮次占位，避免重复发送。
 function reviewContinueSubmitted(turnId: string): boolean { return submittedReviewContinueKey.value == pageHostId.value + ':' + pageThreadId.value + ':' + turnId }
@@ -1782,6 +1797,9 @@ function send() {
   if (hasMessageChoices(choices)) params['choices'] = messageChoicesParams(choices)
   if (queue) params['queueAction'] = 'enqueue'
   if (steer) params['expectedTurnId'] = activeTurnId.value
+  // 提交时结束本次编辑，成功清稿后继续保持单行；失败仍可展示保留的草稿。
+  clearTimeout(composerBlurTimer); inputFocused.value = false; predictionFocus.value = false
+  closeComposerMenu(); uni.hideKeyboard()
   const request = bridge.request(method, params, true)
   const commandId = connection.pendingCommandId
   rememberSubmission(hostId, threadId, commandId, text)
@@ -1864,7 +1882,7 @@ function reply(id: string, turnId: string, decision: string) {
 // 目标表单与聊天草稿独立，提交仅使用编辑开始时捕获的目标版本。
 function goalExpansion(value: boolean) { goalExpanded.value = value; if (value) closeComposerMenu() }
 // 聚焦只展开编辑面板并收起目标表单，不采纳或发送预测。
-function onComposerFocus() { clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
+function onComposerFocus() { if (composerSending.value) return; clearTimeout(composerBlurTimer); inputFocused.value = true; dismissGoal() }
 function goalKeyboard(height: number) { goalViewportHeight.value = uni.getWindowInfo().windowHeight; const resized = Math.max(0, baseWindowHeight - uni.getWindowInfo().windowHeight); keyboardInset.value = height > 0 ? Math.max(0, height - resized) : 0 }
 function operateGoal(action: string, objective: string, revision: string) {
   if (!canWrite.value || !goalHostOnline.value || goalBusy.value || connection.snapshot?.supportsGoalControl != true) return

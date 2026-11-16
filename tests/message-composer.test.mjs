@@ -6,6 +6,38 @@ import {stripTypeScriptTypes} from 'node:module';
 
 const source = fs.readFileSync('apps/mobile/components/message-composer/message-composer.uvue', 'utf8');
 
+test('图片删除控件仅在可编辑时渲染，提交失败后恢复且实例之间独立', () => {
+  const control = source.match(/<view v-if="([^"]+)" class="remove-image action-frame">([\s\S]*?)<\/view>/);
+  assert.ok(control, '显隐条件应覆盖整个图片删除控件');
+  const visible = props => vm.runInNewContext(control[1], props);
+  for (const active of [false, true]) {
+    for (const disabled of [false, true]) {
+      for (const imagesDisabled of [false, true]) {
+        assert.equal(visible({active, disabled, imagesDisabled}), active && !disabled && !imagesDisabled);
+      }
+    }
+  }
+  for (const page of ['chat-detail', 'new-conversation']) {
+    const parent = fs.readFileSync(`apps/mobile/components/${page}/${page}.uvue`, 'utf8');
+    const binding = parent.match(/:images-disabled="([^"]+)"/)[1];
+    const ordinary = {active: true, disabled: false, imagesDisabled: false};
+    const other = {...ordinary};
+    const state = {busy: false, imageBusy: false, connection: {pendingCommandId: ''}};
+    const sync = () => { ordinary.imagesDisabled = vm.runInNewContext(binding, state); };
+    sync(); assert.equal(visible(ordinary), true);
+    state.busy = true; sync(); assert.equal(visible(ordinary), false);
+    assert.equal(visible(other), true);
+    state.busy = false; sync(); assert.equal(visible(ordinary), true);
+    const images = [{id: 'synthetic-image'}];
+    const click = control[2].match(/@click="([^"]+)"/)[1];
+    vm.runInNewContext(click, {image: images[0], emit(name, id) {
+      assert.equal(name, 'removeimage');
+      images.splice(images.findIndex(image => image.id === id), 1);
+    }});
+    assert.equal(images.length, 0);
+  }
+});
+
 /** 执行真实组件脚本，区分 Web 与原生条件编译，并控制迟到布局回调。 */
 function fixture({web = true, id = 'composer-a', onSubmit = () => {}} = {}) {
   const events = [], frames = [], timers = new Map(), unmounts = [], reads = [];
@@ -88,7 +120,8 @@ test('新聊天回车与按钮共用创建流程，提交中不重复创建，�
     connection: {configurationRevision: 1}, newConversationMode: ref('nativeDraft'), outcomeUnknown: ref(false),
     hasCompletedConversation: ref(false), direct: ref({threadId: ''}), mentionsAvailable: ref(true),
     busy: ref(false), pendingNewAction: ref(''), imageBusy: ref(false), settingsLoading: ref(false), settings: ref({model:'model-a',effort:'high'}),
-    draft: ref({input: {text: '保留的合成草稿', images: [], files: []}, threadMentions: []}), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
+    draft: ref({input: {text: '保留的合成草稿', images: [], files: []}, threadMentions: [], choices: {}}),
+    rememberedPermission: ref('default'), supportsDirectChoices: ref(false), modelSupportsImages: ref(true), error: ref(''), progress: ref(''), alive: true,
     findOtherNewDraft: () => null,
     computed: read => ({get value() { return read(); }}), closeMenus() {}, uni: {hideKeyboard() {}},
     emit: (...event) => events.push(event), sendNewConversation: () => new Promise((resolve, reject) => pending.push({resolve, reject}))};

@@ -14,10 +14,11 @@ function fixture(){
   const c={composerInstanceId:'example-composer',computed:fn=>({get value(){return fn();}}),inputFocused:ref(false),draft:ref(''),visiblePrediction:ref(''),draftImages:ref([]),draftFiles:ref([]),composerMenu:ref(''),permissionMenuOpen:ref(false),imageBusy:ref(false),draftHeight:ref(64),predictionHeight:ref(24),predictionFocus:ref(false),pageHostId:ref('host'),pageThreadId:ref('thread'),composerBlurTimer:0,composerMeasureRevision:0,pageAlive:true,following:ref(false),measuredHeight:72,geometry:[],uni:{getElementById:()=>({getBoundingClientRect:()=>({height:c.measuredHeight})})},nextTick:fn=>frames.push(fn),watch:(read,run)=>watches.push({read,run}),onResize:fn=>{c.resize=fn;},onUnload:fn=>unloads.push(fn),updateMenuHeight:()=>c.geometry.push('菜单'),scrollLatest:()=>c.geometry.push('最新消息'),updateTimelinePosition:()=>c.geometry.push('消息位置'),dismissGoal(){},setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
   Object.assign(c,{composerAnimationTimer:0,composerAnimationRevision:0});
   Object.assign(c,{pluginOpen:ref(false),draftPlugins:ref([]),mentionOpen:ref(false),draftMentions:ref([])});
+  Object.assign(c,{pendingAction:ref(''),connection:{pendingCommands:[]},timeline:ref([])});
   const layout=page.slice(page.indexOf('function updateComposerGeometry()'),page.indexOf('// 键盘由输入区处理'));
   const blur=page.slice(page.indexOf('function onDraftBlur()'),page.indexOf('function updateMenuHeight()'));
   const focus=page.match(/function onComposerFocus\(\) \{[^\n]*\}/)[0];
-  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}), componentScope(c));
+  vm.runInNewContext(stripTypeScriptTypes(helpers+layout+blur+focus+';globalThis.ui={composerExpanded,composerPlaceholderHidden,composerHeight,composerStageHeight,settleComposerAnimation,onDraftBlur,onComposerFocus,onPermissionVisibility,onDraftLineChange,measureComposerPrediction,updateComposerGeometry};',{mode:'transform'}), componentScope(c));
   return {c,ui:c.ui,watches,unloads,timers,flush(){while(frames.length)frames.shift()();},blur(){for(const [id,fn] of [...timers]){timers.delete(id);fn();}}};
 }
 
@@ -33,6 +34,70 @@ test('草稿、预测、附件、工具菜单、权限菜单和选择附件期�
     const f=fixture();f.ui.onComposerFocus();f.c[key].value=value;f.ui.onDraftBlur();f.blur();assert.equal(f.ui.composerExpanded.value,true,key);
     f.c[key].value=Array.isArray(value)?[]:typeof value==='boolean'?false:'';assert.equal(f.ui.composerExpanded.value,false,key);
   }
+});
+
+test('发送中的多行草稿与附件保持单行，入队及迟到焦点不展开，失败恢复编辑高度',()=>{
+  const f=fixture();
+  f.c.draft.value='第一行\n第二行\n第三行';
+  f.c.draftImages.value=[{id:'synthetic-image'}];
+  f.c.draftHeight.value=120;
+  f.ui.onComposerFocus();
+  f.c.pendingAction.value='send';
+  f.c.inputFocused.value=false;
+  assert.equal(f.ui.composerExpanded.value,false);
+  assert.equal(f.ui.composerHeight.value,24);
+  assert.equal(f.ui.composerStageHeight.value,44);
+  f.c.connection.pendingCommands.push({hostId:'host',threadId:'thread',method:'turn.send'});
+  f.c.pendingAction.value='';
+  f.ui.onComposerFocus();f.ui.onDraftLineChange({detail:{height:120}});f.flush();
+  assert.equal(f.ui.composerExpanded.value,false);
+  assert.equal(f.c.draft.value,'第一行\n第二行\n第三行');
+  assert.equal(f.c.draftImages.value.length,1);
+  assert.equal(f.c.inputFocused.value,false);
+  f.c.connection.pendingCommands.length=0;
+  assert.equal(f.ui.composerExpanded.value,true);
+  assert.equal(f.ui.composerHeight.value,120);
+});
+
+test('普通启动和多实例按实例及聊天匹配发送，其他操作不触发收起',()=>{
+  for(const method of ['turn.send','turn.steer']){
+    const f=fixture();f.c.draft.value='合成草稿';
+    const command={hostId:'other-host',threadId:'thread',method};
+    f.c.connection.pendingCommands.push(command);
+    assert.equal(f.ui.composerExpanded.value,true);
+    command.hostId='host';command.threadId='other-thread';
+    assert.equal(f.ui.composerExpanded.value,true);
+    command.threadId='thread';assert.equal(f.ui.composerExpanded.value,false);
+    command.method='thread.settings.update';assert.equal(f.ui.composerExpanded.value,true);
+  }
+});
+
+test('发送及入队后等待期间隐藏全部占位文字，完成或失败后恢复提示',()=>{
+  const f=fixture();
+  const tag=page.slice(page.indexOf('<message-composer'),page.indexOf('</message-composer>'));
+  const prediction=tag.match(/:prediction="([^"]+)"/)[1];
+  const placeholder=tag.match(/:placeholder="([^"]+)"/)[1];
+  const scope={get composerPlaceholderHidden(){return f.ui.composerPlaceholderHidden.value;},visiblePrediction:'合成预测',readOnly:false,activating:false};
+  assert.equal(f.ui.composerPlaceholderHidden.value,false);
+  assert.equal(vm.runInNewContext(placeholder,scope),'问问 Codex');
+  assert.equal(vm.runInNewContext(prediction,scope),'合成预测');
+  f.c.pendingAction.value='send';
+  assert.equal(vm.runInNewContext(placeholder,scope),'');
+  assert.equal(vm.runInNewContext(prediction,scope),'');
+  f.c.pendingAction.value='';
+  for(const label of ['queued','running']){
+    f.c.timeline.value=[{kind:'submittedMessage',label}];
+    assert.equal(vm.runInNewContext(placeholder,scope),'');
+    assert.equal(vm.runInNewContext(prediction,scope),'');
+  }
+  for(const label of ['succeeded','failed','unknown']){
+    f.c.timeline.value=[{kind:'submittedMessage',label}];
+    assert.equal(vm.runInNewContext(placeholder,scope),'问问 Codex');
+  }
+  f.c.timeline.value=[{kind:'message',label:'running'}];
+  assert.equal(f.ui.composerPlaceholderHidden.value,false);
+  scope.readOnly=true;scope.activating=true;
+  assert.equal(vm.runInNewContext(placeholder,scope),'正在连接聊天…');
 });
 
 test('预测按真实排版高度取整并限制六行，编辑态保持原有高度范围',()=>{

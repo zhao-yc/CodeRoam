@@ -33,6 +33,7 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import AppIcon from '../app-icon/app-icon.uvue'
 import { bridge, connection } from '../../services/bridge.uts'
 import { PermissionOption, PermissionState, permissionDescription, permissionLabel } from '../../services/permissions.uts'
+import { savePermissionPreference } from '../../services/permission-preferences.uts'
 import { submissionTasks } from '../../services/submission-task-state.uts'
 const props = withDefaults(defineProps<{ threadId?: string, projectId?: string, selectedMode?: string, deferChanges?: boolean, disabled?: boolean, active?: boolean, draftId?: string, nativeDraft?: boolean, nativeState?: PermissionState | null, nativeStatus?: string, nativeBusy?: boolean, paneLeft?: number, paneWidth?: number }>(), { threadId: '', projectId: '', selectedMode: '', deferChanges: false, disabled: false, active: true, draftId: '', nativeDraft: false, nativeState: null, nativeStatus: '', nativeBusy: false, paneLeft: 0, paneWidth: 0 })
 const emit = defineEmits<{ select: [mode: string, confirmed: boolean, revision: string], busy: [value: boolean], visibility: [value: boolean], applied: [hostId: string, threadId: string], refresh: [] }>()
@@ -105,12 +106,18 @@ function closeMenu() { if (!busy.value) opened.value = false }
 // 每次切入完全访问都先确认；确认弹窗返回后再次检查目标和权限版本。
 async function choose(value: string) {
   if (props.disabled || props.nativeBusy || busy.value || loading.value || state.value == null || !available.value || !menuOptions.value.some((option): boolean => option.id == value && option.enabled)) return
-  if (value == mode.value) { closeMenu(); return }
+  if (value == mode.value) {
+    try { savePermissionPreference(connection.cacheNamespace ?? '', connection.hostId, value); closeMenu() }
+    catch (reason) { error.value = (reason as Error).message }
+    return
+  }
   const key = context.value, id = request, revision = state.value!.revision
   if (value == 'full-access') {
     const confirmed = await new Promise<boolean>((resolve) => { uni.showModal({ title: '启用完全访问权限', content: '将允许 Codex 访问电脑文件和网络，沙箱限制将解除。是否为此聊天启用？', confirmText: '确认启用', cancelText: '取消', success: (answer) => { resolve(answer.confirm) }, fail: (_) => { resolve(false) } }) })
     if (!confirmed || !current(key, id) || props.disabled || props.nativeBusy || !available.value || state.value?.revision != revision) return
   }
+  try { savePermissionPreference(connection.cacheNamespace ?? '', connection.hostId, value) }
+  catch (reason) { error.value = (reason as Error).message; return }
   if (isNative.value || props.threadId.length == 0 || props.deferChanges) { emit('select', value, value == 'full-access', revision); closeMenu(); return }
   let applied = false
   pendingMode.value = value; pendingQueued.value = false; busy.value = true; emit('busy', true); error.value = ''
