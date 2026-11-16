@@ -5,13 +5,33 @@ import { DesktopAdapter } from '../apps/bridge/desktop-adapter.mjs';
 import fs from 'node:fs';
 
 class DesktopFixture extends EventEmitter {
-  constructor(){super();this.socket={writable:true};this.calls=[];this.state={id:'thread',title:'验收',turns:[{turnId:'turn',status:'completed',items:[]}],requests:[],threadRuntimeStatus:{type:'idle'}};}
+  constructor(){super();this.socket={writable:true};this.calls=[];this.snapshotVersion=11;this.state={id:'thread',title:'验收',turns:[{turnId:'turn',status:'completed',items:[]}],requests:[],threadRuntimeStatus:{type:'idle'}};}
   async connect(){}
   async findOwner(_thread,hostId){return hostId==='local'?{clientId:'desktop',hostId}:null;}
-  broadcast(method,params){if(method==='thread-stream-following-changed'&&params.following)queueMicrotask(()=>this.emit('broadcast',{method:'thread-stream-state-changed',version:11,sourceClientId:'desktop',params:{conversationId:'thread',hostId:'local',change:{type:'snapshot',revision:1,conversationState:this.state}}}));}
+  broadcast(method,params){if(method==='thread-stream-following-changed'&&params.following)queueMicrotask(()=>this.emit('broadcast',{method:'thread-stream-state-changed',version:this.snapshotVersion,sourceClientId:'desktop',params:{conversationId:'thread',hostId:'local',change:{type:'snapshot',revision:1,conversationState:this.state}}}));}
   async request(method,params,version,options){this.calls.push({method,params,version,options});return{resultType:'success',result:{ok:true}};}
   close(){}
 }
+
+test('桌面快照和补丁依据结构、归属与修订号同步，兼容 IPC 版本递增', async t=>{
+  const client=new DesktopFixture();
+  client.snapshotVersion=13;
+  const adapter=new DesktopAdapter({client});
+  t.after(()=>adapter.close());
+  await adapter.watch('thread','phone',{snapshotTimeoutMs:100});
+  const entry=adapter.conversations.get('thread');
+  const event={method:'thread-stream-state-changed',version:14,sourceClientId:'desktop',params:{
+    conversationId:'thread',hostId:'local',
+    change:{type:'patches',baseRevision:1,revision:2,patches:[{op:'replace',path:['title'],value:'同步后'}]},
+  }};
+  client.emit('broadcast',{...event,sourceClientId:'other'});
+  client.emit('broadcast',{...event,params:{...event.params,hostId:'durable'}});
+  assert.equal(entry.revision,1);
+  assert.equal(entry.state.title,'验收');
+  client.emit('broadcast',event);
+  assert.equal(entry.revision,2);
+  assert.equal(entry.state.title,'同步后');
+});
 
 test('图文和纯图片通过原所有者发送，追加图片保留轮次核对及可恢复附件',async()=>{
   const image='data:image/png;base64,'+fs.readFileSync('apps/mobile/static/icons/check-dark.png').toString('base64');

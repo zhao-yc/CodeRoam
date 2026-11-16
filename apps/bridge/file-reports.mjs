@@ -8,6 +8,7 @@ import {fileReportExpression} from './file-report-expression.mjs';
 import {fileReportSource} from './file-report-source.mjs';
 import {NativeFileReportRuntime} from './native-report-runtime.mjs';
 import {usesWindowsIpcWithoutPage} from './windows-ipc-mode.mjs';
+import {reportFromDiffs} from './file-report-diff.mjs';
 
 /** 从已核验的原桌面安装包定位现成模块，只读取索引，不执行或复制安装包源码。 */
 export function desktopDiffModules(executable) {
@@ -48,22 +49,35 @@ export async function evaluateNativeFileReport(url,expression) {
 
 /** 按电脑实例、会话和报告读取汇总；差异正文仅按文件请求返回，不进入快照或操作账本。 */
 export class DesktopFileReportReader extends ComposerPredictionReader {
-  constructor({evaluateNative=evaluateNativeFileReport,resolveModules=desktopDiffModules,nativeRuntime=new NativeFileReportRuntime(),...options}={}){super(options);this.evaluateNative=evaluateNative;this.resolveModules=resolveModules;this.nativeRuntime=nativeRuntime;this.cache=new Map();this.pendingReports=new Map();}
+  constructor({evaluateNative=evaluateNativeFileReport,resolveModules=desktopDiffModules,nativeRuntime=new NativeFileReportRuntime(),platform=process.platform,...options}={}){super(options);this.evaluateNative=evaluateNative;this.resolveModules=resolveModules;this.nativeRuntime=nativeRuntime;this.platform=platform;this.cache=new Map();this.pendingReports=new Map();}
   /** 仅使用实例发现器已核验的安装位置，手机和历史内容不能指定原生代码来源。 */
   nativeExecutable(adapter) {
     const instance=adapter.client?.instance;
     return instance?.alive===true&&instance.ready===true?instance.executable:null;
   }
-  /** 普通启动复用官方离线计算能力；其它启动模式继续保留原有页面接口。 */
+  /** Windows 可从结构化差异生成汇总，能力不依赖桌面资源版本和启动方式。 */
   supports(adapter) {
     if(this.closed)return false;
-    return this.nativeRuntime.supports(this.nativeExecutable(adapter))||process.platform==='win32'&&!usesWindowsIpcWithoutPage(adapter.client?.instance);
+    const instance=adapter.client?.instance;
+    return this.platform==='win32'&&(!instance||instance.alive===true&&instance.ready===true);
   }
-  /** 优先在隔离线程执行同版本原生算法，兼容既有页面调用，不修改桌面会话。 */
+  /** 优先使用官方计算路径，未提供兼容模块时解析桌面保存的差异数据。 */
   async nativeReport(adapter,source) {
     const executable=this.nativeExecutable(adapter);
-    if(this.nativeRuntime.supports(executable))return this.nativeRuntime.calculate(executable,source.batches);
-    if(usesWindowsIpcWithoutPage(adapter.client?.instance))throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
+    if(this.nativeRuntime.supports(executable)){
+      try{return await this.nativeRuntime.calculate(executable,source.batches);}
+      catch(error){if(error.code!=='REPORT_UNAVAILABLE')throw error;}
+    }
+    if(!usesWindowsIpcWithoutPage(adapter.client?.instance)){
+      try{return await this.pageReport(adapter,source);}
+      catch(error){if(this.platform!=='win32')throw error;}
+    }
+    if(!this.supports(adapter))throw new BridgeError('REPORT_UNAVAILABLE','电脑连接尚未就绪，暂时无法读取文件汇总');
+    return reportFromDiffs(source.batches);
+  }
+
+  /** 只读取已核验实例的原生页面，页面能力缺失时交由差异解析处理。 */
+  async pageReport(adapter,source) {
     if(!adapter.native?.processId)await adapter.native?.connect();
     const ports=(await this.endpoints()).filter(port=>port.pid===adapter.native?.processId);
     if(ports.length!==1)throw new BridgeError('REPORT_UNAVAILABLE','电脑原生文件汇总暂不可用，请确认桌面端正在运行');
@@ -85,8 +99,6 @@ export class DesktopFileReportReader extends ComposerPredictionReader {
     let source=entry.state?fileReportSource(entry.state,reportId):null;
     if(!source&&adapter.index?.readHistory){const saved=await adapter.index.readHistory(threadId,{reportId,rawTurns:true});source=fileReportSource(saved,reportId);}
     if(!current())throw new BridgeError('SUBSCRIPTION_CANCELED','这条聊天的文件查看已取消');
-    // 安装包原地升级后也要重新确认能力，不能从旧报告缓存绕过版本核验。
-    if(usesWindowsIpcWithoutPage(instance)&&!this.supports(adapter))throw new BridgeError('REPORT_UNAVAILABLE','当前桌面版本的原生文件汇总暂不可用，请更新电脑连接服务');
     if(!source)throw new BridgeError('REPORT_NOT_FOUND','这份报告的修改记录暂不可用');
     if(!source.batches.length)return {report:null};
     const revision=createHash('sha256').update(JSON.stringify(source.batches)).digest('hex'),key=JSON.stringify([ownerId,threadId,reportId,revision]);

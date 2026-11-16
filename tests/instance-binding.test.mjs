@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
 import { bindInstanceClients, bindBackendOwners, InstanceIpcClient, instancePages, instanceProbeExpression, readInstanceOwnership } from '../apps/bridge/instance-binding.mjs';
+import { parseInstanceBindingModules } from '../apps/bridge/instance-binding-modules.mjs';
 
 const modules = { kind: 'webpack', entry: '123456.abcdef1234.js', servicesModule: 'TestService' };
 const resolveModules = () => modules;
@@ -56,6 +57,29 @@ test('旧版服务导出继续完成同一只读探针，未知资源或导出�
   for (const invalid of [{ ...modules, entry: '../escape.js' }, { ...modules, servicesModule: 'bad/id' }, { ...modules, servicesModule: undefined }, { ...legacy, services: 'a.b' }, { ...legacy, services: undefined }, { kind: 'unknown' }]) {
     assert.throws(() => instanceProbeExpression(nonce, invalid), { code: 'INSTANCE_NOT_READY' });
   }
+});
+
+test('共享模块名及导出名变化后，已加载入口仍按协调能力完成握手', async () => {
+  const entry='webview/assets/index-abc123.js', shared='webview/assets/app-shared-def456.js';
+  const files=new Map([
+    ['webview/index.html','<script type="module" src="./assets/index-abc123.js"></script>'],
+    [entry,'/* 合成入口 */ import { service } from "./app-shared-def456.js";'],
+    [shared,'export { something as service };'],
+  ]);
+  const reader={files,text:name=>files.get(name)};
+  const located=parseInstanceBindingModules(reader);
+  assert.deepEqual(located,{kind:'esm',entry:'index-abc123.js',shared:'app-shared-def456.js'});
+  const nonce=randomUUID(), calls=[];
+  const service={clientCoordination:{threadStreamFollowingStatusRequested:params=>calls.push(params)},appServerManagers:{open(){}}};
+  const expression=instanceProbeExpression(nonce,located).replace(/await import\("[^"]+"\)/g,'await loadModule()');
+  const document={readyState:'complete',scripts:[{type:'module',src:'app://-/assets/index-abc123.js'}]};
+  const run=(syntheticExports, activeDocument=document)=>vm.runInNewContext(expression,{document:activeDocument,loadModule:async()=>syntheticExports});
+  assert.equal(await run({renamed:service,alias:service,unrelated:{}}),true);
+  assert.equal(calls[0].conversationId,nonce);
+  await assert.rejects(run({renamed:service,other:{...service}}),/INSTANCE_UNSUPPORTED/);
+  await assert.rejects(run({renamed:service},{...document,scripts:[]}),/INSTANCE_UNSUPPORTED/);
+  files.set(entry,'const lazy = () => import("./app-shared-def456.js");');
+  assert.throws(()=>parseInstanceBindingModules(reader),{code:'INSTANCE_NOT_READY'});
 });
 
 test('后台归属查询复用同一定位结果，只接纳固定主机和有效会话编号', async () => {

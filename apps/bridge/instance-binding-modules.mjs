@@ -37,14 +37,23 @@ function servicesFactory(source, filename) {
   return match?.groups?.runtime === runtimeName && match.groups.exports === exportsName ? moduleId : null;
 }
 
-/** 旧 ESM 布局仅接受已审核的完整包，避免首次导入未知模块触发顶层初始化。 */
-function legacyModules(reader) {
+/** 旧布局优先使用页面入口的直接静态依赖，入口执行完成后该依赖已初始化。 */
+function legacyModules(reader, entries) {
   const names = [...reader.files.keys()].filter(name => /^webview\/assets\/app-shared-[a-f0-9]+\.js$/.test(name));
   if (names.length !== 1) throw unsupported();
+  const shared = path.posix.basename(names[0]);
+  for (const entry of entries) {
+    // 只扫描入口开头连续的静态导入，函数里的懒加载或源码字符串不能作为依赖证明。
+    const imports = reader.text(entry).matchAll(/(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*import\s*(?:[^"'();]+\s*from\s*)?(["'])(\.\/[A-Za-z0-9._-]+\.js)\1[ \t]*(?:;|(?=\r?\n|$))/gy);
+    if ([...imports].some(match => match[2] === './' + shared)) {
+      return { kind: 'esm', entry: path.posix.basename(entry), shared };
+    }
+  }
+  // 旧包经间接引用时，可使用先前核验过的模块入口。
   const source = reader.text(names[0]);
   const exports = [...source.matchAll(/export\s*\{([^}]*)\}/g)].map(match => '{' + match[1] + '}').join(',');
   if (createHash('sha256').update(source).digest('hex') === oldSharedHash && /\bas\s+Vct\b/.test(exports)) {
-    return { kind: 'esm', shared: path.posix.basename(names[0]), services: 'Vct' };
+    return { kind: 'esm', shared, services: 'Vct' };
   }
   throw unsupported();
 }
@@ -54,7 +63,7 @@ export function parseInstanceBindingModules(reader) {
   try {
     const entries = entryModules(reader);
     const runtimes = entries.filter(name => /export\s*\{[^}]*\bas\s+__webpack_require__\s*(?=[,}])/.test(reader.text(name)));
-    if (!runtimes.length) return Object.freeze(legacyModules(reader));
+    if (!runtimes.length) return Object.freeze(legacyModules(reader, entries));
     if (runtimes.length !== 1) throw unsupported();
     const candidates = [...reader.files].filter(([name, metadata]) => /^webview\/assets\/async\/\d{1,10}\.[a-f0-9]{6,64}\.js$/.test(name) && Number.isSafeInteger(metadata.size) && metadata.size > 0 && metadata.size <= 4096);
     if (candidates.length > 8192 || candidates.reduce((bytes, [, metadata]) => bytes + metadata.size, 0) > 8 * 1024 * 1024) throw unsupported();

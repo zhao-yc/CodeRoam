@@ -17,8 +17,11 @@ export function fileReportSource(state, reportId) {
     let bytes=0;
     for(const item of items.slice(start,end)){
       if(item.type!=='fileChange'||item.status!=='completed')continue;
-      if((item.changes??[]).some(change=>typeof change.path!=='string'||typeof change.diff!=='string'||!['add','update','delete'].includes(change.kind?.type)))throw new BridgeError('REPORT_INCOMPLETE','这份旧记录未保留完整差异，请在电脑端查看');
-      const changes=(item.changes??[]).filter(change=>typeof change.path==='string'&&typeof change.diff==='string'&&['add','update','delete'].includes(change.kind?.type));
+      const changes=item.changes??[];
+      if(!Array.isArray(changes)||changes.some(change=>typeof change?.path!=='string'||!change.path||typeof change.diff!=='string'||
+        !['add','update','delete'].includes(change.kind?.type)||(change.kind.move_path!=null&&typeof change.kind.move_path!=='string'))) {
+        throw new BridgeError('REPORT_INCOMPLETE','这份旧记录未保留完整差异，请在电脑端查看');
+      }
       bytes+=Buffer.byteLength(JSON.stringify(changes));
       if(bytes>1024*1024)throw new BridgeError('REPORT_TOO_LARGE','这份报告的差异过大，请在电脑端查看');
       if(changes.length)batches.push({changes,cwd:turn.params?.cwd??state.cwd??null});

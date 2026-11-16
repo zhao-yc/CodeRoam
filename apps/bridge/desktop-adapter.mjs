@@ -248,14 +248,16 @@ export class DesktopAdapter extends EventEmitter {
 
   onBroadcast(message) {
     if(message.method==='thread-read-state-changed'){this.native?.schedule([message.params?.conversationId].filter(Boolean));return;}
-    if(message.method!=='thread-stream-state-changed'||message.version!==11) return;
+    // 官方 IPC 版本可独立递增，按会话归属和已知的快照、补丁结构处理。
+    if(message.method!=='thread-stream-state-changed') return;
     const entry=this.conversations.get(message.params?.conversationId);
     if(!entry?.owner||message.sourceClientId!==entry.owner.clientId||message.params.hostId!==entry.owner.hostId) return;
     const change=message.params.change;
+    if((change?.type!=='snapshot'&&change?.type!=='patches')||change.revision==null) return;
     const previousAttention=JSON.stringify([entry.state?.hasUnreadTurn,entry.state?.threadRuntimeStatus]);
     try {
       if(change.type==='snapshot') { entry.state=change.conversationState; entry.revision=change.revision; }
-      else if(change.type==='patches'&&entry.state&&entry.revision===change.baseRevision) { applyPatches(entry.state,change.patches); entry.revision=change.revision; }
+      else if(change.type==='patches'&&entry.state&&entry.revision===change.baseRevision&&Array.isArray(change.patches)) { applyPatches(entry.state,change.patches); entry.revision=change.revision; }
       else { entry.state=null; this.client.broadcast('thread-stream-following-changed',{hostId:entry.owner.hostId,conversationId:message.params.conversationId,following:true},1,[entry.owner.clientId]);return; }
       if(entry.state?.id!==message.params.conversationId)throw new BridgeError('HISTORY_ID_MISMATCH','桌面聊天快照编号不一致');
       if(previousAttention!==JSON.stringify([entry.state?.hasUnreadTurn,entry.state?.threadRuntimeStatus]))this.native?.schedule([message.params.conversationId]);
@@ -366,7 +368,7 @@ export class DesktopAdapter extends EventEmitter {
   /** 只读刷新原生未读记录，失败保留未知，不猜测已读。 */
   async refreshReadState(ids){try{await this.native?.refresh(ids);}catch{}}
 
-  /** 文件汇总能力由已核验的本机原生算法或页面通道决定。 */
+  /** 连接服务根据当前实例和可用的差异数据来源声明文件汇总能力。 */
   get supportsFileReports() { return this.nativeFileReportAvailable?.()??(process.platform==='win32'&&!usesWindowsIpcWithoutPage(this.client.instance)); }
   /** 目标控制能力由本机帮助程序决定，历史记录不能声明实时目标操作能力。 */
   snapshot(state,options) {

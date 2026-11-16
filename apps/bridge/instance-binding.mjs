@@ -31,7 +31,24 @@ export function instanceServicesExpression(modules) {
           typeof services?.appServerManagers?.open !== 'function') throw Error('INSTANCE_UNSUPPORTED');
     `;
   }
-  throw new BridgeError('INSTANCE_NOT_READY', '当前桌面版本的实例入口暂不兼容');
+  if (modules?.kind === 'esm' && asset(modules.entry) && asset(modules.shared)) {
+    const entry = JSON.stringify('app://-/assets/' + modules.entry);
+    const shared = JSON.stringify('app://-/assets/' + modules.shared);
+    return `
+      if (typeof document === 'undefined' || document.readyState !== 'complete' ||
+          !Array.from(document.scripts).some(script => script.type === 'module' && script.src === ${entry})) {
+        throw Error('INSTANCE_UNSUPPORTED');
+      }
+      await import(${entry});
+      const exports = await import(${shared});
+      const candidates = new Set(Object.values(exports).filter(value =>
+        typeof value?.clientCoordination?.threadStreamFollowingStatusRequested === 'function' &&
+        typeof value?.appServerManagers?.open === 'function'));
+      if (candidates.size !== 1) throw Error('INSTANCE_UNSUPPORTED');
+      const [services] = candidates;
+    `;
+  }
+  throw new BridgeError('INSTANCE_NOT_READY', '当前桌面实例的协调入口暂不兼容');
 }
 
 /** 只调用已加载桌面的固定只读协调查询，不建立第二个 AppHost、不写页面状态。 */

@@ -68,15 +68,14 @@ test('服务工厂编号和文件编号必须一致，模块键不能携带路�
   }
 });
 
-test('未审核的旧 ESM 即使包含相似服务对象也拒绝导入', () => {
+test('旧 ESM 只定位静态依赖，源码中相似导出或导入字符串不能作为依赖证明', () => {
   const files = {
     'webview/index.html': '<script type="module" src="/assets/app-initial-abcdef.js"></script>',
-    'webview/assets/app-initial-abcdef.js': 'import "./app-shared-abcdef.js";',
+    'webview/assets/app-initial-abcdef.js': '/*\nimport "./app-shared-abcdef.js";\n*/ window.synthetic=true;',
     'webview/assets/app-shared-abcdef.js': 'const state={clientCoordination:coordination,appServerManagers:managers};export{state as RenamedServices};',
   };
   assert.throws(() => parseInstanceBindingModules(reader(files)), unsupported);
-  files['webview/assets/app-shared-abcdef.js'] += 'new DesktopHost();';
-  // 相似导出不能证明模块已经加载，也不能掩盖顶层初始化。
+  files['webview/assets/app-initial-abcdef.js'] = 'const delayed = () => import("./app-shared-abcdef.js");';
   assert.throws(() => parseInstanceBindingModules(reader(files)), unsupported);
 });
 

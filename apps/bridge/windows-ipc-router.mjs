@@ -76,8 +76,9 @@ export class WindowsIpcRouter extends EventEmitter {
     }
   }
 
-  #initialize(peer, { requestId, version, params }) {
-    if (!validKey(requestId) || (version ?? 0) !== 0 || !validKey(params?.clientType)) return;
+  #initialize(peer, { requestId, params }) {
+    // 握手使用已知的字段结构，实例身份仍由本机管道核验。
+    if (!validKey(requestId) || !validKey(params?.clientType)) return;
     const first = peer.id == null;
     if (first) {
       clearTimeout(peer.initializeTimer);

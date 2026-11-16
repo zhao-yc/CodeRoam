@@ -29,8 +29,8 @@ function attach(router, pid, startedAt = 100) {
   };
 }
 
-async function initialize(peer, requestId = 'init') {
-  peer.send({ type: 'request', requestId, method: 'initialize', version: 0, params: { clientType: 'codex-test', pid: 999, startedAt: 999 } });
+async function initialize(peer, requestId = 'init', version = 0) {
+  peer.send({ type: 'request', requestId, method: 'initialize', version, params: { clientType: 'codex-test', pid: 999, startedAt: 999 } });
   const response = await peer.take(message => message.type === 'response' && message.requestId === requestId);
   assert.equal(response.resultType, 'success');
   assert.equal(response.method, 'initialize');
@@ -53,7 +53,7 @@ test('按宿主核验的进程启动时间绑定多个客户端，同 PID 旧身
   router.on('clientsChanged', identity => observed.push(identity));
   const first = attach(router, 20), another = attach(router, 20), reused = attach(router, 20, 101);
   assert.deepEqual(router.clientIds({ pid: 20, startedAt: 100 }), new Set());
-  const ids = [await initialize(first), await initialize(another)];
+  const ids = [await initialize(first), await initialize(another, 'init', 2)];
   assert.equal(await initialize(first, 'repeat-init'), ids[0]);
   const newId = await initialize(reused);
   assert.deepEqual(router.clientIds({ pid: 20, startedAt: 100 }), new Set(ids));

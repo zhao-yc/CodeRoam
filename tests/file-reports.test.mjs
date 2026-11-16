@@ -75,16 +75,50 @@ test('切换会话后丢弃在途原生汇总，不向新订阅返回旧代码',
   await assert.rejects(pending,/已取消/);assert.equal(reader.cache.size,0);reader.close();
 });
 
-test('未经验证的普通启动版本不声明原生文件汇总',async()=>{
+test('官方资源变化后普通启动和多实例仍从该聊天的差异读取文件汇总',async t=>{
+  for(const mode of [{directIpc:true},{routerManaged:true,port:9000}])await t.test(mode.directIpc?'普通启动':'多实例',async()=>{
+    const instance={...mode,alive:true,ready:true,generation:'first',executable:'合成安装位置'};
+    const entry={watchers:new Set(['phone']),state:state([{
+      type:'fileChange',status:'completed',changes:[
+        {path:'src/demo.uts',kind:{type:'add'},diff:'一\r\n二\r\n'},
+        {path:'src/demo.uts',kind:{type:'update'},diff:'@@ -1,2 +1,2 @@\n---旧\n+++新\n \n'},
+        {path:'src/旧.uts',kind:{type:'delete'},diff:'旧'},
+        {path:'old.uts',kind:{type:'update',move_path:'new.uts'},diff:'diff --git a/old.uts b/new.uts\nsimilarity index 100%\nrename from old.uts\nrename to new.uts\n'},
+        {path:'image.png',kind:{type:'update'},diff:'diff --git a/image.png b/image.png\nBinary files a/image.png and b/image.png differ\n'},
+      ],
+    },final('report')])};
+    const adapter={client:{instance},conversations:new Map([['thread',entry]])};
+    const reader=new DesktopFileReportReader({platform:'win32',nativeRuntime:{supports:()=>false,close(){}},
+      discover:async()=>{assert.equal(mode.directIpc,undefined);return[];}});
+    try {
+      assert.equal(reader.supports(adapter),true);
+      const {report}=await reader.read(adapter,{threadId:'thread',reportId:'report'},'phone');
+      assert.deepEqual([report.fileCount,report.additions,report.deletions],[4,3,2]);
+      assert.deepEqual(report.files.map(file=>[file.path,file.kind,file.additions,file.deletions,file.binary]),[
+        ['src/demo.uts','add',3,1,false],['src/旧.uts','delete',0,1,false],['new.uts','update',0,0,false],['image.png','update',0,0,true],
+      ]);
+      const {file}=await reader.read(adapter,{threadId:'thread',reportId:'report',fileId:report.files[0].id},'phone');
+      assert.match(file.diffs[0],/\+一\n\+二\n$/);
+      assert.match(file.diffs[1],/---旧\n\+\+\+新\n \n$/);
+      entry.state.turns[0].items[0].changes[1].diff='@@ -1,2 +1,2 @@\n-旧\n+新\n';
+      await assert.rejects(reader.read(adapter,{threadId:'thread',reportId:'report'},'phone'),{code:'REPORT_INCOMPLETE'});
+      instance.ready=false;
+      assert.equal(reader.supports(adapter),false);
+      await assert.rejects(reader.read(adapter,{threadId:'thread',reportId:'report'},'phone'),{code:'SUBSCRIPTION_CANCELED'});
+    }finally{reader.close();}
+  });
+});
+
+test('未就绪的普通启动实例不声明文件汇总能力',async()=>{
   const client=new EventEmitter();
   client.instance={directIpc:true}; client.connect=async()=>{}; client.close=()=>{};
   const adapter=new DesktopAdapter({client,index:{readHistory:()=>({threadId:'thread',supportsFileReports:true})}});
   adapter.discoverOwner=async()=>null;
-  const reader=new DesktopFileReportReader({discover:async()=>assert.fail('普通启动不扫描页面')});
+  const reader=new DesktopFileReportReader({platform:'win32',discover:async()=>assert.fail('普通启动不扫描页面')});
   try {
     assert.equal((await adapter.watch('thread','phone')).supportsFileReports,false);
     assert.equal(adapter.snapshot({id:'thread',turns:[]}).supportsFileReports,false);
-    await assert.rejects(reader.nativeReport(adapter,{}),{code:'REPORT_UNAVAILABLE',message:/更新电脑连接服务/});
+    await assert.rejects(reader.nativeReport(adapter,{batches:[]}),{code:'REPORT_UNAVAILABLE',message:/尚未就绪/});
   } finally {
     reader.close();
     adapter.close();
@@ -98,7 +132,7 @@ test('已核验的普通启动实例使用官方离线算法，并向历史与�
   const adapter=new DesktopAdapter({client,index:{readHistory:()=>({threadId:'thread'})}});
   adapter.discoverOwner=async()=>null;
   let reads=0,closed=false,supported=true;
-  const reader=new DesktopFileReportReader({discover:async()=>assert.fail('普通启动不需要页面端口'),nativeRuntime:{
+  const reader=new DesktopFileReportReader({platform:'win32',discover:async()=>assert.fail('普通启动不需要页面端口'),nativeRuntime:{
     supports:value=>supported&&value===executable,
     calculate:async(value,batches)=>{assert.equal(value,executable);assert.equal(batches.length,1);reads++;return {additions:1,deletions:1,files:[{path:'src/demo.uts',kind:'update',additions:1,deletions:1,binary:false,diffs:['合成原生差异']}]};},
     close:()=>{closed=true;},
@@ -111,7 +145,7 @@ test('已核验的普通启动实例使用官方离线算法，并向历史与�
     assert.equal((await reader.read(adapter,{threadId:'thread',reportId:'report'},'phone')).report.additions,1);
     assert.equal(reads,1);
     supported=false;
-    await assert.rejects(reader.read(adapter,{threadId:'thread',reportId:'report'},'phone'),{code:'REPORT_UNAVAILABLE'});
+    assert.equal((await reader.read(adapter,{threadId:'thread',reportId:'report'},'phone')).report.additions,1);
     supported=true;
     instance.ready=false;
     assert.equal(reader.supports(adapter),false);
